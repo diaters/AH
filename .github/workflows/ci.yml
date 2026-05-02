@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  docs-check:
+    name: 文档检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 markdownlint
+        run: npm install -g markdownlint-cli
+
+      - name: 运行 markdownlint
+        run: markdownlint '**/*.md' --ignore node_modules
+
+  code-check:
+    name: 代码检查
+    runs-on: ubuntu-latest
+    # 仅在存在 Rust 代码时运行
+    if: hashFiles('**/*.rs') != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存 cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --all-features
