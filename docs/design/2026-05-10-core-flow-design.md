@@ -4,27 +4,37 @@
 
 ---
 
-## 一、入口机制
+## 一、入口与出口机制
 
 ### 架构
 
+采用对称设计，输入输出均通过 channel 与外部线程通信：
+
 ```
-┌─────────────────┐     channel      ┌──────────────────────┐
-│  输入线程        │ ──────────────▶ │  ECS 主循环           │
-│  (stdin/网络)   │                  │  Signal Ingest System │
-└─────────────────┘                  └──────────────────────┘
+┌─────────────────┐     channel      ┌──────────────────────┐     channel      ┌─────────────────┐
+│  输入线程        │ ──────────────▶ │  ECS 主循环           │ ──────────────▶ │  输出线程        │
+│  (stdin/网络)   │                  │  Signal/UserOutput   │                  │  (stdout/网络)  │
+└─────────────────┘                  └──────────────────────┘                  └─────────────────┘
 ```
 
-### 实现要点
+### 输入机制
 
 1. **独立输入线程** — 阻塞式读取 stdin 或监听网络端口
 2. **线程安全通道** — 使用 `crossbeam_channel::unbounded`
 3. **ECS 资源包装** — 将 `Receiver` 包装为 Bevy Resource
 4. **System 消费** — 每帧轮询 Receiver，有数据则生成 Signal
 
+### 输出机制
+
+1. **UserOutputSystem** — 将 UserOutput Message 转发到输出 channel
+2. **独立输出线程** — 从 channel 接收并处理（stdout/网络）
+3. **对称设计** — 与输入机制架构一致
+
 ### 代码结构
 
 ```rust
+// === 输入 ===
+
 // 资源定义
 struct InputReceiver(Receiver<UserInput>);
 
@@ -46,13 +56,42 @@ fn signal_ingest_system(
         commands.spawn(Signal::new_user_input(input));
     }
 }
+
+// === 输出 ===
+
+// 资源定义
+struct OutputSender(Sender<OutputMessage>);
+
+// 启动时 spawn 输出线程
+fn setup_output_thread(mut commands: Commands) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    std::thread::spawn(move || {
+        while let Ok(msg) = rx.recv() {
+            println!("{}", msg.content);  // 或写入网络
+        }
+    });
+    commands.insert_resource(OutputSender(tx));
+}
+
+// System 发送
+fn user_output_system(
+    mut messages: Query<(Entity, &MessageContent), With<MessageKind::UserOutput>>,
+    tx: Res<OutputSender>,
+    mut commands: Commands,
+) {
+    for (entity, content) in messages.iter() {
+        tx.0.send(OutputMessage { content: content.0.clone() }).ok();
+        commands.entity(entity).despawn();  // 删除已处理的 Message
+    }
+}
 ```
 
 ### 设计优势
 
-- 输入线程与 ECS 主循环完全解耦
+- 输入/输出线程与 ECS 主循环完全解耦
+- 对称架构，易于理解和扩展
 - 不阻塞 Bevy 的帧调度
-- 可扩展为多来源（stdin + gRPC + WebSocket）
+- 可扩展为多来源/多目标（stdin + gRPC + WebSocket）
 
 ---
 
