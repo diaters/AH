@@ -34,6 +34,19 @@
 
 ## 待办
 
+### MVP 实现（极简）
+
+- [ ] 确定输出机制（stdout / 日志 / 其他）
+- [ ] 确定 LLM SDK 选型
+- [ ] 确定 Bevy 版本
+- [ ] 初始化 Rust 项目结构
+- [ ] 实现 SignalIngestSystem
+- [ ] 实现 UserMessageToTaskSystem
+- [ ] 实现 TaskDispatchSystem（直接 LLM 调用）
+- [ ] 实现 LlmResponseSystem
+- [ ] 实现 UserOutputSystem
+- [ ] 集成测试：单轮对话闭环
+
 ### GitHub 仓库配置
 
 - [ ] 创建 GitHub 远程仓库
@@ -44,15 +57,22 @@
   - 禁止删除
   - 必须通过 PR 审核
 
-### 架构设计（剩余）
+### Phase 2: Brain Agent 调度
 
-- [ ] 确定项目目标与范围（明确 MVP 边界）
-- [ ] 模块组织方式（目录结构、crate 划分）
-- [ ] Bevy ECS 模式约定（命名规范、查询模式）
-- [ ] 配置系统设计（Agent 配置、LLM 配置）
-- [ ] 日志与监控设计
+- [ ] 新增 BrainDispatchSystem
+- [ ] 新增 BrainDecisionSystem
+- [ ] 定义 Brain prompt 模板
+- [ ] 定义 Brain 决策结果解析
+- [ ] 改造 TaskDispatchSystem 接收 Brain 决策
 
-### 后续阶段
+### Phase 3: 多 Agent 支持
+
+- [ ] 新增 AgentFactorySystem
+- [ ] Agent 配置文件加载
+- [ ] 任务型 Agent 创建/销毁逻辑
+- [ ] Agent 能力匹配逻辑
+
+### Phase 4: 高级功能
 
 - [ ] Memory 实体设计
 - [ ] Tool / ToolCall 设计

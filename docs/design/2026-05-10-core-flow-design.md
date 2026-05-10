@@ -329,7 +329,105 @@ sequenceDiagram
 
 ---
 
-## 八、待后续设计
+## 八、MVP 范围定义
+
+### 极简 MVP 目标
+
+验证核心流程可行性，实现单轮对话闭环。
+
+### 包含功能
+
+| 功能 | 说明 |
+|------|------|
+| 用户输入 | stdin 读取，channel 注入 ECS |
+| Task 创建 | UserInput Message → Task |
+| LLM 调用 | TaskDispatchSystem 直接调用 LLM（跳过 Brain Agent） |
+| 结果输出 | LlmOutput → Task 更新 → UserOutput → stdout |
+| 错误处理 | 网络错误重试，失败通知用户 |
+
+### 不包含
+
+| 功能 | 原因 |
+|------|------|
+| Brain Agent | 极简 MVP 直接调用 LLM |
+| 多 Agent | 单 Agent 足够验证流程 |
+| 任务型 Agent | 无调度需求 |
+| Memory | 后续扩展 |
+| Tool | 后续扩展 |
+
+### 极简 MVP 流程
+
+```
+用户输入 → Signal → Message → Task → LLM → Message → Task → 输出
+```
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant InputThread
+    participant SignalIngest
+    participant UserMsgToTask
+    participant TaskDispatch
+    participant LLM
+    participant LlmResponse
+    participant UserOutput
+
+    User->>InputThread: 输入事件
+    InputThread->>SignalIngest: channel 发送
+    SignalIngest->>UserMsgToTask: 生成 UserInput Message
+    UserMsgToTask->>UserMsgToTask: 写入 Task 并删除 Message
+    UserMsgToTask->>TaskDispatch: Task 进入 Ready
+    TaskDispatch->>LLM: 直接发起异步请求
+    LLM->>LlmResponse: 注入 LlmOutput Message
+    LlmResponse->>LlmResponse: 更新 Task 并删除 Message
+    LlmResponse->>UserOutput: 生成 UserOutput Message
+    UserOutput->>User: 输出结果
+```
+
+---
+
+## 九、后续扩展待办
+
+### Phase 2: Brain Agent 调度
+
+| 待办项 | 改动类型 | 难度 |
+|--------|---------|------|
+| 新增 `BrainDispatchSystem` | 新建 | 🟢 低 |
+| 新增 `BrainDecisionSystem` | 新建 | 🟢 低 |
+| 定义 Brain prompt 模板 | 新建 | 🟡 中 |
+| 定义 Brain 决策结果解析 | 新建 | 🟡 中 |
+| 改造 `TaskDispatchSystem` 接收 Brain 决策 | 改造 | 🟡 中 |
+
+改造说明：
+- `TaskDispatchSystem` 从"直接调 LLM"改为"根据 BrainDecision 执行"
+- 新增 System 插入到 `UserMessageToTaskSystem` 和 `TaskDispatchSystem` 之间
+
+### Phase 3: 多 Agent 支持
+
+| 待办项 | 改动类型 | 难度 |
+|--------|---------|------|
+| 新增 `AgentFactorySystem` | 新建 | 🟢 低 |
+| Agent 配置文件加载 | 新建 | 🟢 低 |
+| 任务型 Agent 创建/销毁逻辑 | 新建 | 🟢 低 |
+| Agent 能力匹配逻辑（Brain prompt 中） | 扩展 | 🟢 低 |
+
+改造说明：
+- Agent 实体已定义，直接启用
+- 无需改动现有 System
+
+### Phase 4: 高级功能
+
+| 待办项 | 依赖 |
+|--------|------|
+| Memory 实体设计 | Phase 2 完成 |
+| Tool / ToolCall 设计 | Phase 2 完成 |
+| Session 概念设计 | Phase 3 完成 |
+| Planner 模块设计 | Phase 3 完成 |
+| 多轮对话上下文管理 | Memory + Session 完成 |
+
+---
+
+## 十、待后续设计
 
 以下内容在当前阶段暂不细化，预留接口：
 
