@@ -36,9 +36,6 @@
 
 ### MVP 实现（极简）
 
-- [ ] 确定输出机制（stdout / 日志 / 其他）
-- [ ] 确定 LLM SDK 选型
-- [ ] 确定 Bevy 版本
 - [ ] 初始化 Rust 项目结构
 - [ ] 实现 SignalIngestSystem
 - [ ] 实现 UserMessageToTaskSystem

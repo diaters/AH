@@ -4,6 +4,21 @@
 
 ---
 
+## 技术选型
+
+| 依赖 | 版本/选择 | 说明 |
+|------|----------|------|
+| Bevy | 最新稳定版 | ECS 框架 |
+| Tokio | 1.x | 异步运行时，LLM SDK 依赖 |
+| async-openai | 最新版 | OpenAI API 兼容的 LLM 调用 |
+| crossbeam | 最新版 | 线程安全 channel |
+| uuid | 1.x | Task/Agent ID |
+| tracing | 0.1.x | 日志（项目规范要求） |
+| thiserror | 1.x | 库错误定义（项目规范要求） |
+| anyhow | 1.x | 应用错误处理（项目规范要求） |
+
+---
+
 ## 一、入口与出口机制
 
 ### 架构
