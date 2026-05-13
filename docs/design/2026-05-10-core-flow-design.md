@@ -215,6 +215,21 @@ struct AgentExecutionResult {
 }
 ```
 
+### AgentExecutor Trait
+
+为解耦 `TaskDispatchSystem` 与具体 LLM SDK，定义统一的执行器接口：
+
+```rust
+type ExecutorFuture = Pin<Box<dyn Future<Output = Result<String, ExecutionError>> + Send>>;
+
+trait AgentExecutor: Send + Sync {
+    /// 执行一次 Agent 请求并返回异步结果。
+    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture;
+}
+```
+
+MVP 阶段提供 `OpenAiExecutor` 实现，后续可扩展其他 provider 或 mock 实现。
+
 ### 执行链路
 
 1. `TaskDispatchSystem` 选择可用 Agent
@@ -507,7 +522,9 @@ enum SignalType {
 }
 ```
 
-### MessageKind
+### Message 类型
+
+伪代码中使用 `MessageKind` 枚举表达消息类型：
 
 ```rust
 enum MessageKind {
@@ -520,6 +537,31 @@ enum MessageKind {
     UserOutputError,
     ToolOutput,
 }
+```
+
+**Bevy 落地约束**：实际实现采用独立的 Component 而非统一枚举，原因：
+
+- Bevy Query 无法按枚举变体直接过滤（`With<MessageKind::UserOutput>` 不合法）
+- 独立 Component 允许更精确的 Query 约束
+- 避免 match 分支带来的额外复杂度
+
+实际定义：
+
+```rust
+#[derive(Component)]
+struct UserInputMessage { content: String }
+
+#[derive(Component)]
+struct RetryReadyMessage { task_id: TaskId }
+
+#[derive(Component)]
+struct AgentExecutionRequestMessage { request: AgentExecutionRequest }
+
+#[derive(Component)]
+struct AgentExecutionResultMessage { result: AgentExecutionResult }
+
+#[derive(Component)]
+struct UserOutputMessage { content: String }
 ```
 
 ### 完整 Task 结构
@@ -561,40 +603,97 @@ enum AgentStatus {
 }
 ```
 
+### Resource 定义
+
+ECS 中用于跨 system 共享状态的资源：
+
+| Resource | 用途 |
+|----------|------|
+| `InputReceiver` | 外部输入 channel 接收端（`crossbeam_channel::Receiver`） |
+| `OutputSender` | 外部输出 channel 发送端（`crossbeam_channel::Sender`） |
+| `AsyncRuntime` | Tokio runtime 包装，用于 spawn 异步任务 |
+| `ExecutorHandle` | `Arc<dyn AgentExecutor>`，执行器 trait 对象 |
+| `ExecutionResultSender` | 异步执行结果发送端（`tokio::sync::mpsc::UnboundedSender`） |
+| `ExecutionResultReceiver` | 异步执行结果接收端（`tokio::sync::mpsc::UnboundedReceiver`） |
+| `HarnessSettings` | 运行配置（Agent 名称、最大重试次数等） |
+| `Clock` | 统一时间源，避免直接调用系统时间 |
+| `ShutdownState` | 关闭状态管理，标记是否收到关闭请求 |
+
+```rust
+#[derive(Resource)]
+struct InputReceiver(Receiver<ExternalInput>);
+
+#[derive(Resource)]
+struct OutputSender(Sender<OutputMessage>);
+
+#[derive(Resource)]
+struct AsyncRuntime(Arc<Runtime>);
+
+#[derive(Resource)]
+struct ExecutorHandle(Arc<dyn AgentExecutor>);
+
+#[derive(Resource)]
+struct ExecutionResultSender(mpsc::UnboundedSender<AgentExecutionResult>);
+
+#[derive(Resource)]
+struct ExecutionResultReceiver(mpsc::UnboundedReceiver<AgentExecutionResult>);
+
+#[derive(Resource)]
+struct HarnessSettings(HarnessConfig);
+
+#[derive(Resource)]
+struct Clock(DateTime<Utc>);
+
+#[derive(Resource, Default)]
+struct ShutdownState { requested: bool }
+```
+
 ***
 
 ## 七、System 与 SystemSet 设计
 
-### System 列表
+### System 列表（按阶段）
 
-| System                    | 职责                                          |
-| ------------------------- | ------------------------------------------- |
-| `InputIngressSystem`      | 外部输入 channel -> `Signal`                    |
-| `SignalIngestSystem`      | `Signal` -> `Message`                       |
-| `UserMessageToTaskSystem` | `UserInput Message` -> `Task`               |
-| `BrainDispatchSystem`     | `Ready Task` -> `BrainDecision Message`     |
-| `BrainDecisionSystem`     | `BrainDecision Message` -> 任务分派信息           |
-| `TaskDispatchSystem`      | `Task` -> `AgentExecutionRequest Message`   |
-| `AgentExecutionSystem`    | 执行请求 -> 异步 Agent 执行                         |
-| `LlmResponseSystem`       | `AgentExecutionResult Message` -> `Task` 更新 |
-| `RetryWakeupSystem`       | 到时任务 -> `RetryWakeup Signal`                |
-| `RetryReadySystem`        | `RetryReady Message` -> `TaskStatus::Ready` |
-| `UserOutputSystem`        | `UserOutput Message` -> 外部输出                |
-| `AgentFactorySystem`      | Agent 创建与销毁                                 |
+#### MVP 阶段（已实现）
+
+| System | 职责 |
+| ------ | ---- |
+| `tick_clock_system` | 更新 `Clock` 资源为当前时间 |
+| `input_ingress_system` | 外部输入 channel -> `Signal` |
+| `retry_wakeup_system` | 到时任务 -> `RetryWakeup Signal` |
+| `signal_ingest_system` | `Signal` -> `Message` |
+| `ingest_execution_results_system` | 异步结果 channel -> `AgentExecutionResultMessage` |
+| `user_message_to_task_system` | `UserInputMessage` -> `Task` |
+| `retry_ready_system` | `RetryReadyMessage` -> `Task` 置为 Ready |
+| `llm_response_system` | `AgentExecutionResultMessage` -> `Task` 更新 |
+| `task_dispatch_system` | `Task` -> `AgentExecutionRequestMessage` |
+| `agent_execution_system` | 执行请求 -> 异步 Agent 执行 |
+| `user_output_system` | `UserOutputMessage` -> 外部输出 |
+| `spawn_default_agent_system` | 启动时创建默认 Agent 实体 |
+| `agent_factory_system` | Agent 创建与销毁（MVP 为占位实现） |
+
+#### Phase 2（预留接口）
+
+| System | 职责 |
+| ------ | ---- |
+| `brain_dispatch_system` | `Ready Task` -> `BrainDecision Message` |
+| `brain_decision_system` | `BrainDecision Message` -> 任务分派信息 |
 
 ### SystemSet 设计
 
 建议按固定顺序组织 Bevy 调度：
 
-| SystemSet        | 作用                        | 包含 System                                                                                 |
-| ---------------- | ------------------------- | ----------------------------------------------------------------------------------------- |
-| `IngressSet`     | 引入外部事件                    | `InputIngressSystem`                                                                      |
-| `SignalSet`      | 消费 Signal                 | `SignalIngestSystem`, `RetryWakeupSystem`                                                 |
-| `TransformSet`   | 在 `Message` 和 `Task` 间做转换 | `UserMessageToTaskSystem`, `BrainDecisionSystem`, `RetryReadySystem`, `LlmResponseSystem` |
-| `DispatchSet`    | 基于任务状态产出执行请求              | `BrainDispatchSystem`, `TaskDispatchSystem`                                               |
-| `ExecutionSet`   | 执行 Agent 请求并回注异步结果        | `AgentExecutionSystem`                                                                    |
-| `OutputSet`      | 将输出发送到外部                  | `UserOutputSystem`                                                                        |
-| `MaintenanceSet` | 生命周期与清理                   | `AgentFactorySystem`                                                                      |
+| SystemSet | 作用 | 包含 System |
+| --------- | ---- | ----------- |
+| `IngressSet` | 引入外部事件 | `tick_clock_system`, `input_ingress_system` |
+| `SignalSet` | 消费 Signal | `retry_wakeup_system`, `signal_ingest_system` |
+| `TransformSet` | 在 `Message` 和 `Task` 间做转换 | `ingest_execution_results_system`, `user_message_to_task_system`, `retry_ready_system`, `llm_response_system` |
+| `DispatchSet` | 基于任务状态产出执行请求 | `task_dispatch_system`（Phase 2 加入 `brain_dispatch_system`） |
+| `ExecutionSet` | 执行 Agent 请求 | `agent_execution_system` |
+| `OutputSet` | 将输出发送到外部 | `user_output_system` |
+| `MaintenanceSet` | 生命周期与清理 | `agent_factory_system` |
+
+**Startup System**：`spawn_default_agent_system` 在应用启动时执行一次，创建默认 Agent 实体。
 
 ### 调度顺序
 
@@ -614,8 +713,9 @@ flowchart LR
 - `SignalSet` 必须早于 `TransformSet`
 - `TransformSet` 必须早于 `DispatchSet`
 - `DispatchSet` 必须早于 `ExecutionSet`
-- `LlmResponseSystem` 放在 `TransformSet`，确保异步结果先落 `Task`，再由后续 system 决定是否输出
-- `RetryWakeupSystem` 放在 `SignalSet`，确保唤醒逻辑也走标准 `Signal -> Message -> Task` 路径
+- `llm_response_system` 依赖 `ingest_execution_results_system` 的输出，需用 `.after()` 显式声明
+- `retry_wakeup_system` 放在 `SignalSet`，确保唤醒逻辑也走标准 `Signal -> Message -> Task` 路径
+- `tick_clock_system` 为后续 system 提供统一时间源，必须最先执行
 
 ### Bevy 落地约束
 
