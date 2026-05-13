@@ -2,7 +2,7 @@
 
 本文档记录项目当前状态和待完成任务。
 
----
+***
 
 ## 已完成
 
@@ -24,25 +24,27 @@
 - [x] Agent 架构设计（Brain Agent + Factory 模式）
 - [x] 实体字段细化（ID 类型、状态枚举）
 
----
+***
 
 ## 进行中
 
 - [ ] 架构设计文档评审
+- [ ] 真实 OpenAI 联调验证
 
----
+***
 
 ## 待办
 
 ### MVP 实现（极简）
 
-- [ ] 初始化 Rust 项目结构
-- [ ] 实现 SignalIngestSystem
-- [ ] 实现 UserMessageToTaskSystem
-- [ ] 实现 TaskDispatchSystem（直接 LLM 调用）
-- [ ] 实现 LlmResponseSystem
-- [ ] 实现 UserOutputSystem
-- [ ] 集成测试：单轮对话闭环
+- [x] 初始化 Rust 项目结构
+- [x] 实现 SignalIngestSystem
+- [x] 实现 UserMessageToTaskSystem
+- [x] 实现 TaskDispatchSystem（产出 AgentExecutionRequest）
+- [x] 实现 AgentExecutionSystem（异步 LLM 执行）
+- [x] 实现 LlmResponseSystem
+- [x] 实现 UserOutputSystem
+- [x] 集成测试：单轮对话闭环
 
 ### GitHub 仓库配置
 
@@ -77,10 +79,11 @@
 - [ ] Planner 模块设计
 - [ ] 多轮对话上下文管理
 
----
+***
 
 ## 备注
 
 - 当前阶段：文档先行，代码在文档完善后开始编写
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
+

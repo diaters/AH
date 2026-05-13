@@ -8,6 +8,13 @@ Cargo.lock
 *.swp
 *.swo
 
+# Environment
+.env
+.env.local
+
+# Claude Code local config
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -18,3 +25,8 @@ node_modules/
 # Build artifacts
 /dist/
 /build/
+
+
+# Added by cargo
+
+/target
