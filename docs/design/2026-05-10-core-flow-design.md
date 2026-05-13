@@ -77,31 +77,31 @@
 
 输入和输出继续采用对称的 channel 设计，但在 ECS 内部统一经过 `Signal`：
 
-```text
-┌─────────────────┐    channel    ┌────────────────────┐
-│ 输入线程         │ ────────────▶ │ InputIngressSystem │
-│ stdin / 网络     │               └─────────┬──────────┘
-└─────────────────┘                         │
-                                            ▼
-                                      Signal Entity
-                                            │
-                                            ▼
-                                   SignalIngestSystem
-                                            │
-                                            ▼
-                                      Message Entity
-                                            │
-                                            ▼
-                                        ECS 主流程
-                                            │
-                                            ▼
-                                    UserOutputSystem
-                                            │
-                                            ▼
-┌─────────────────┐    channel    ┌────────────────────┐
-│ 输出线程         │ ◀──────────── │ OutputSender       │
-│ stdout / 网络    │               └────────────────────┘
-└─────────────────┘
+```mermaid
+flowchart TB
+    subgraph External["外部线程"]
+        Input["输入线程<br/>stdin / 网络"]
+        Output["输出线程<br/>stdout / 网络"]
+    end
+
+    subgraph ECS["ECS 主循环"]
+        Ingress["InputIngressSystem"]
+        Signal["Signal Entity"]
+        Ingest["SignalIngestSystem"]
+        Message["Message Entity"]
+        Main["ECS 主流程"]
+        UserOut["UserOutputSystem"]
+        Sender["OutputSender"]
+    end
+
+    Input -- "channel" --> Ingress
+    Ingress --> Signal
+    Signal --> Ingest
+    Ingest --> Message
+    Message --> Main
+    Main --> UserOut
+    UserOut --> Sender
+    Sender -- "channel" --> Output
 ```
 
 ### 输入机制
@@ -456,17 +456,11 @@ struct AgentCapabilities {
 
 ### Agent 生命周期
 
-```text
-BrainDecision
-    |
-    v
-AgentFactorySystem
-    |
-    v
-Agent Entity
-    |
-    v
-TaskDispatchSystem
+```mermaid
+flowchart TB
+    A["BrainDecision"] --> B["AgentFactorySystem"]
+    B --> C["Agent Entity"]
+    C --> D["TaskDispatchSystem"]
 ```
 
 ***
@@ -811,8 +805,16 @@ sequenceDiagram
 
 ### 极简 MVP 流程
 
-```text
-用户输入 -> Signal -> Message -> Task -> AgentExecutionRequest -> LLM Agent -> Message -> Task -> 输出
+```mermaid
+flowchart LR
+    A["用户输入"] --> B["Signal"]
+    B --> C["Message"]
+    C --> D["Task"]
+    D --> E["AgentExecutionRequest"]
+    E --> F["LLM Agent"]
+    F --> G["Message"]
+    G --> H["Task"]
+    H --> I["输出"]
 ```
 
 ```mermaid
