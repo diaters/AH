@@ -1,0 +1,102 @@
+use std::{sync::Arc, thread, time::Duration};
+
+use crossbeam_channel::unbounded;
+use harness::{
+    build_harness_app, AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture,
+    ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus,
+};
+use tokio::runtime::Runtime;
+
+/// 模拟 Brain Agent 决策 + LLM Agent 执行的 Mock 执行器。
+struct BrainMockExecutor;
+
+impl AgentExecutor for BrainMockExecutor {
+    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        match request.request_kind {
+            harness::AgentRequestKind::BrainDecision => {
+                let decision = r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"请处理这个任务","reasoning":"测试用例"}"#;
+                Box::pin(async move { Ok(decision.to_string()) })
+            }
+            harness::AgentRequestKind::LlmCompletion => {
+                Box::pin(async move { Ok(format!("echo: {}", request.prompt)) })
+            }
+        }
+    }
+}
+
+fn brain_config() -> HarnessConfig {
+    HarnessConfig {
+        default_agent_name: "default-llm-agent".to_string(),
+        max_retries: 3,
+        llm: harness::LlmProviderConfig {
+            provider: harness::LlmProviderKind::OpenAi,
+            model: "gpt-4.1-mini".to_string(),
+            api_key: "test-api-key".to_string(),
+            api_base: None,
+            org_id: None,
+            project_id: None,
+        },
+        brain: Some(BrainConfig {
+            enabled: true,
+            model: "test-brain-model".to_string(),
+            agent_name: "brain".to_string(),
+        }),
+    }
+}
+
+/// 验证 Brain 启用时，用户输入经过 Brain 决策后交给 Agent 执行。
+#[test]
+fn completes_brain_dispatch_flow() {
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
+    let (input_tx, input_rx) = unbounded();
+    let (output_tx, output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(brain_config(), runtime, executor, input_rx, output_tx);
+
+    input_tx
+        .send(ExternalInput::Text("你好，Harness".to_string()))
+        .expect("input should be accepted");
+
+    for _ in 0..16 {
+        app.update();
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let output = output_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("output should be produced");
+    assert_eq!(output.content, "echo: 请处理这个任务");
+
+    let tasks: Vec<Task> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Task>();
+        query.iter(world).cloned().collect()
+    };
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].status, TaskStatus::Done);
+}
+
+/// 验证 Brain 不启用时，MVP 流程不受影响。
+#[test]
+fn mvp_flow_unchanged_when_brain_disabled() {
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
+    let (input_tx, input_rx) = unbounded();
+    let (output_tx, output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(HarnessConfig::default(), runtime, executor, input_rx, output_tx);
+
+    input_tx
+        .send(ExternalInput::Text("你好，Harness".to_string()))
+        .expect("input should be accepted");
+
+    for _ in 0..8 {
+        app.update();
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let output = output_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("output should be produced");
+    assert_eq!(output.content, "echo: 你好，Harness");
+}

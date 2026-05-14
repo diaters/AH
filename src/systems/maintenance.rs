@@ -20,6 +20,23 @@ pub(crate) fn spawn_default_agent_system(mut commands: Commands, settings: Res<H
             description: "默认 LLM Agent，负责消费 MVP 执行请求".to_string(),
         },
     });
+
+    if let Some(brain_config) = &settings.0.brain {
+        if brain_config.enabled {
+            commands.spawn(Agent {
+                id: Uuid::new_v4(),
+                profile: AgentProfile {
+                    name: brain_config.agent_name.clone(),
+                    model: brain_config.model.clone(),
+                },
+                status: AgentStatus::Idle,
+                capabilities: AgentCapabilities {
+                    tags: vec!["brain".to_string(), "dispatcher".to_string()],
+                    description: "Brain Agent，负责调度决策".to_string(),
+                },
+            });
+        }
+    }
 }
 
 /// 为后续多 Agent 生命周期管理保留维护入口。

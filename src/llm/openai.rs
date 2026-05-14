@@ -4,7 +4,10 @@ use anyhow::Result;
 use async_openai::{
     Client,
     config::OpenAIConfig,
-    types::chat::{ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs},
+    types::chat::{
+        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+        CreateChatCompletionRequestArgs,
+    },
 };
 
 use crate::domain::{AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture};
@@ -52,14 +55,25 @@ impl AgentExecutor for OpenAiExecutor {
         let model = self.model.clone();
 
         Box::pin(async move {
+            let mut messages = Vec::new();
+
+            if let Some(system_prompt) = &request.system_prompt {
+                let system_message = ChatCompletionRequestSystemMessageArgs::default()
+                    .content(system_prompt.as_str())
+                    .build()
+                    .map_err(|error| ExecutionError::Unknown(error.to_string()))?;
+                messages.push(system_message.into());
+            }
+
             let user_message = ChatCompletionRequestUserMessageArgs::default()
                 .content(request.prompt)
                 .build()
                 .map_err(|error| ExecutionError::Unknown(error.to_string()))?;
+            messages.push(user_message.into());
 
             let completion_request = CreateChatCompletionRequestArgs::default()
                 .model(model)
-                .messages([user_message.into()])
+                .messages(messages)
                 .build()
                 .map_err(|error| ExecutionError::Unknown(error.to_string()))?;
 

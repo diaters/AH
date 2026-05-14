@@ -13,27 +13,53 @@ use crate::{
     },
     llm::LlmProviderConfig,
     systems::{
-        agent_execution_system, agent_factory_system, ingest_execution_results_system,
-        input_ingress_system, llm_response_system, retry_ready_system, retry_wakeup_system,
-        signal_ingest_system, spawn_default_agent_system, task_dispatch_system, tick_clock_system,
+        agent_execution_system, agent_factory_system, brain_decision_system,
+        brain_dispatch_system, ingest_execution_results_system, input_ingress_system,
+        llm_response_system, retry_ready_system, retry_wakeup_system, signal_ingest_system,
+        spawn_default_agent_system, task_dispatch_system, tick_clock_system,
         user_message_to_task_system, user_output_system, HarnessSet,
     },
 };
+
+#[derive(Debug, Clone)]
+pub struct BrainConfig {
+    pub enabled: bool,
+    pub model: String,
+    pub agent_name: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub default_agent_name: String,
     pub max_retries: u32,
     pub llm: LlmProviderConfig,
+    pub brain: Option<BrainConfig>,
 }
 
 impl HarnessConfig {
     /// 从环境变量加载运行配置，并补齐 MVP 默认值。
     pub fn from_env() -> Result<Self> {
+        let llm = LlmProviderConfig::from_env("gpt-4.1-mini")?;
+
+        let brain = if std::env::var("HARNESS_BRAIN_ENABLED")
+            .is_ok_and(|v| v.to_lowercase() == "true")
+        {
+            Some(BrainConfig {
+                enabled: true,
+                model: std::env::var("HARNESS_BRAIN_MODEL")
+                    .unwrap_or_else(|_| llm.model.clone()),
+                agent_name: std::env::var("HARNESS_BRAIN_AGENT_NAME")
+                    .unwrap_or_else(|_| "brain".to_string()),
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             default_agent_name: "default-llm-agent".to_string(),
             max_retries: 3,
-            llm: LlmProviderConfig::from_env("gpt-4.1-mini")?,
+            llm,
+            brain,
         })
     }
 }
@@ -52,6 +78,7 @@ impl Default for HarnessConfig {
                 org_id: None,
                 project_id: None,
             },
+            brain: None,
         }
     }
 }
@@ -136,11 +163,17 @@ pub fn build_harness_app(
             retry_wakeup_system.in_set(HarnessSet::Signal),
             signal_ingest_system.in_set(HarnessSet::Signal),
             ingest_execution_results_system.in_set(HarnessSet::Transform),
+            brain_decision_system
+                .in_set(HarnessSet::Transform)
+                .after(ingest_execution_results_system),
             user_message_to_task_system.in_set(HarnessSet::Transform),
             retry_ready_system.in_set(HarnessSet::Transform),
             llm_response_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
+            brain_dispatch_system
+                .in_set(HarnessSet::Dispatch)
+                .before(task_dispatch_system),
             task_dispatch_system.in_set(HarnessSet::Dispatch),
             agent_execution_system.in_set(HarnessSet::Execution),
             user_output_system.in_set(HarnessSet::Output),

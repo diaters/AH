@@ -37,6 +37,15 @@
 - [x] 设计文档评审与同步
 - [x] 真实 LLM 联调验证（DeepSeek API）
 
+### Phase 2: Brain Agent 调度
+
+- [x] 新增 brain_dispatch_system
+- [x] 新增 brain_decision_system
+- [x] 定义 Brain prompt 模板与决策结果解析
+- [x] Brain 配置（环境变量启用/关闭）
+- [x] 集成测试：Brain 调度闭环
+- [x] 真实 LLM 联调验证（Brain + DeepSeek API）
+
 ***
 
 ## 进行中
@@ -57,14 +66,6 @@
   - 禁止删除
   - 必须通过 PR 审核
 
-### Phase 2: Brain Agent 调度
-
-- [ ] 新增 BrainDispatchSystem
-- [ ] 新增 BrainDecisionSystem
-- [ ] 定义 Brain prompt 模板
-- [ ] 定义 Brain 决策结果解析
-- [ ] 改造 TaskDispatchSystem 接收 Brain 决策
-
 ### Phase 3: 多 Agent 支持
 
 - [ ] 新增 AgentFactorySystem
@@ -84,7 +85,7 @@
 
 ## 备注
 
-- 当前阶段：MVP 主链路已完成联调验证，准备进入 Phase 2
+- 当前阶段：Phase 2 Brain Agent 调度已完成，准备进入 Phase 3
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 

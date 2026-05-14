@@ -1,6 +1,6 @@
 # 配置说明
 
-本文档说明 Harness 当前 MVP 阶段的运行配置，重点覆盖 LLM provider 相关环境变量与推荐用法。
+本文档说明 Harness 当前的运行配置，覆盖 LLM provider 和 Brain Agent 相关环境变量。
 
 ## 配置来源
 
@@ -24,6 +24,16 @@
 | `HARNESS_LLM_API_BASE` | 条件必填 | OpenAI 兼容接口的基础地址 |
 | `HARNESS_LLM_ORG_ID` | 否 | 可选组织 ID |
 | `HARNESS_LLM_PROJECT_ID` | 否 | 可选项目 ID |
+
+### Brain Agent 变量
+
+| 变量名 | 必填 | 默认值 | 说明 |
+|------|------|------|------|
+| `HARNESS_BRAIN_ENABLED` | 否 | `false` | 是否启用 Brain Agent 调度 |
+| `HARNESS_BRAIN_MODEL` | 否 | 与 `HARNESS_MODEL` 相同 | Brain Agent 使用的 LLM 模型 |
+| `HARNESS_BRAIN_AGENT_NAME` | 否 | `brain` | Brain Agent 名称标识 |
+
+Brain 启用后，系统会在启动时创建 Brain Agent 实体，用户输入会先经过 Brain 决策再分派给具体 Agent 执行。Brain 不启用时行为与 MVP 完全一致。
 
 ### 兼容回退变量
 
@@ -76,6 +86,16 @@ export HARNESS_LLM_PROVIDER=openai-compatible
 export HARNESS_MODEL=deepseek-chat
 export HARNESS_LLM_API_KEY=sk-xxxx
 export HARNESS_LLM_API_BASE=https://example.com/v1
+```
+
+### Brain Agent 启用
+
+```bash
+export HARNESS_LLM_PROVIDER=openai-compatible
+export HARNESS_MODEL=deepseek-v4-flash
+export HARNESS_LLM_API_KEY=sk-xxxx
+export HARNESS_LLM_API_BASE=https://api.deepseek.com/v1
+export HARNESS_BRAIN_ENABLED=true
 ```
 
 ## 本地开发建议

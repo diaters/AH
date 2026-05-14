@@ -4,7 +4,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::{AsyncRuntime, Clock, ExecutionResultSender, ExecutorHandle},
-    domain::{AgentExecutionRequestMessage, AgentExecutionResult, Task},
+    domain::{AgentExecutionRequestMessage, AgentExecutionResult, AgentRequestKind, Task},
 };
 
 /// 消费执行请求并把任务提交给异步运行时。
@@ -24,7 +24,9 @@ pub(crate) fn agent_execution_system(
 
         for mut task in &mut tasks {
             if task.id == request.task_id {
-                task.mark_running(clock.0);
+                if request.request_kind != AgentRequestKind::BrainDecision {
+                    task.mark_running(clock.0);
+                }
                 break;
             }
         }
@@ -34,6 +36,7 @@ pub(crate) fn agent_execution_system(
             let _ = sender.send(AgentExecutionResult {
                 task_id: request.task_id,
                 agent_id: request.agent_id,
+                request_kind: request.request_kind,
                 result,
             });
         });

@@ -159,6 +159,7 @@ pub struct Agent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentRequestKind {
     LlmCompletion,
+    BrainDecision,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,12 +168,14 @@ pub struct AgentExecutionRequest {
     pub agent_id: AgentId,
     pub request_kind: AgentRequestKind,
     pub prompt: String,
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentExecutionResult {
     pub task_id: TaskId,
     pub agent_id: AgentId,
+    pub request_kind: AgentRequestKind,
     pub result: Result<String, ExecutionError>,
 }
 
@@ -222,6 +225,13 @@ impl Task {
     pub fn mark_waiting_for_agent(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
         self.delegate = Some(agent_id);
         self.status = TaskStatus::Waiting(WaitingReason::Agent);
+        self.updated_at = now;
+    }
+
+    /// 将任务标记为等待 Brain 决策状态。
+    pub fn mark_waiting_for_brain(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
+        self.delegate = Some(agent_id);
+        self.status = TaskStatus::Waiting(WaitingReason::Brain);
         self.updated_at = now;
     }
 
@@ -347,4 +357,21 @@ impl ExecutionError {
 pub trait AgentExecutor: Send + Sync {
     /// 执行一次 Agent 请求并返回异步结果。
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrainDecisionOutput {
+    pub selected_agent_name: String,
+    pub delegate_prompt: String,
+    pub reasoning: String,
+}
+
+#[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BrainDecisionError {
+    #[error("brain decision parse failed: {0}")]
+    ParseFailed(String),
+    #[error("brain selected unknown agent: {0}")]
+    UnknownAgent(String),
+    #[error("brain returned empty response")]
+    EmptyResponse,
 }
