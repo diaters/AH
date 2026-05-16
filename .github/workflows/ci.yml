@@ -8,7 +8,6 @@ on:
 
 jobs:
   docs-check:
-    name: 文档检查
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +19,6 @@ jobs:
         run: markdownlint '**/*.md' --ignore node_modules
 
   code-check:
-    name: 代码检查
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
