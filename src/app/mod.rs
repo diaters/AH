@@ -16,10 +16,10 @@ use crate::{
     systems::{
         HarnessSet, agent_execution_system, agent_factory_system, brain_decision_system,
         brain_dispatch_system, continue_task_system, evaluation_result_system,
-        evaluation_trigger_system, ingest_execution_results_system, input_ingress_system,
-        llm_response_system, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        task_dispatch_system, task_termination_system, tick_clock_system,
-        user_input_routing_system, user_message_to_task_system, user_output_system,
+        evaluation_trigger_system, init_agent_memory_system, ingest_execution_results_system,
+        input_ingress_system, llm_response_system, memory_compression_system, retry_ready_system,
+        retry_wakeup_system, signal_ingest_system, task_dispatch_system, task_termination_system,
+        tick_clock_system, user_input_routing_system, user_message_to_task_system, user_output_system,
     },
 };
 
@@ -212,7 +212,15 @@ pub fn build_harness_app(
             evaluation_trigger_system.in_set(HarnessSet::Dispatch),
             agent_execution_system.in_set(HarnessSet::Execution),
             user_output_system.in_set(HarnessSet::Output),
+        ),
+    );
+
+    app.add_systems(
+        Update,
+        (
             agent_factory_system.in_set(HarnessSet::Maintenance),
+            memory_compression_system.in_set(HarnessSet::Maintenance),
+            init_agent_memory_system.in_set(HarnessSet::Maintenance),
         ),
     );
 

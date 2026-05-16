@@ -3,6 +3,7 @@ mod evaluation;
 mod execution;
 mod ingress;
 mod maintenance;
+mod memory;
 mod output;
 mod routing;
 mod transform;
@@ -14,6 +15,7 @@ pub(crate) use evaluation::{evaluation_result_system, evaluation_trigger_system}
 pub(crate) use execution::agent_execution_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
 pub(crate) use maintenance::agent_factory_system;
+pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
 pub(crate) use output::user_output_system;
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
 pub(crate) use transform::{
