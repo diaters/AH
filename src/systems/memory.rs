@@ -8,7 +8,11 @@ use crate::{
 /// 记忆压缩系统：检测容量并触发摘要
 pub(crate) fn memory_compression_system(
     config: Res<MemoryConfig>,
-    mut tasks: Query<(&crate::domain::Task, &mut ShortTermMemory, Option<&mut LongTermMemory>)>,
+    mut tasks: Query<(
+        &crate::domain::Task,
+        &mut ShortTermMemory,
+        Option<&mut LongTermMemory>,
+    )>,
 ) {
     for (_task, mut short_term, long_term) in &mut tasks {
         // 检查是否需要压缩

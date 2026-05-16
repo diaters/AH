@@ -1,12 +1,14 @@
 # Phase 4.1 多轮对话与双层记忆 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> __For agentic workers:__ REQUIRED SUB-SKILL: Use subagent-driven-development
+> (recommended) or executing-plans to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 实现多轮对话能力，包括 Task 多轮状态机、双层记忆架构、评估器机制和记忆传承流程。
+__Goal:__ 实现多轮对话能力，包括 Task 多轮状态机、双层记忆架构、评估器机制和记忆传承流程。
 
-**Architecture:** 基于 Bevy ECS，扩展现有 domain 实体和 systems。短期记忆作为 Task 的 Component，长期记忆作为 Agent 的 Component。新增评估器和记忆传承相关 systems。
+__Architecture:__ 基于 Bevy ECS，扩展现有 domain 实体和 systems。短期记忆作为 Task 的 Component，长期记忆作为 Agent 的 Component。新增评估器和记忆传承相关 systems。
 
-**Tech Stack:** Rust, Bevy ECS, Tokio, chrono, serde, uuid
+__Tech Stack:__ Rust, Bevy ECS, Tokio, chrono, serde, uuid
 
 ---
 
@@ -30,11 +32,12 @@
 
 ## Task 1: 定义记忆实体
 
-**Files:**
+__Files:__
+
 - Create: `src/domain/memory.rs`
 - Modify: `src/domain/mod.rs`
 
-- [ ] **Step 1: 编写记忆实体的单元测试**
+- [ ] __Step 1: 编写记忆实体的单元测试__
 
 在 `src/domain/memory.rs` 中编写测试：
 
@@ -76,12 +79,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [ ] __Step 2: 运行测试确认失败__
 
 Run: `cargo test domain::memory::tests --no-run`
 Expected: 编译失败，模块不存在
 
-- [ ] **Step 3: 实现记忆实体**
+- [ ] __Step 3: 实现记忆实体__
 
 创建 `src/domain/memory.rs`：
 
@@ -188,7 +191,7 @@ impl LongTermMemory {
 }
 ```
 
-- [ ] **Step 4: 修改 mod.rs 导出新实体**
+- [ ] __Step 4: 修改 mod.rs 导出新实体__
 
 修改 `src/domain/mod.rs`，在文件开头添加：
 
@@ -200,12 +203,12 @@ pub use memory::{
 };
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [ ] __Step 5: 运行测试确认通过__
 
 Run: `cargo test domain::memory::tests`
 Expected: 4 tests passed
 
-- [ ] **Step 6: 提交**
+- [ ] __Step 6: 提交__
 
 ```bash
 git add src/domain/memory.rs src/domain/mod.rs
@@ -227,10 +230,11 @@ EOF
 
 ## Task 2: 扩展 WaitingReason 枚举
 
-**Files:**
+__Files:__
+
 - Modify: `src/domain/mod.rs`
 
-- [ ] **Step 1: 编写测试验证新状态**
+- [ ] __Step 1: 编写测试验证新状态__
 
 在 `src/domain/mod.rs` 的 `#[cfg(test)]` 模块中添加：
 
@@ -243,12 +247,12 @@ fn waiting_reason_has_user_and_evaluator() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [ ] __Step 2: 运行测试确认失败__
 
 Run: `cargo test domain::tests::waiting_reason_has_user_and_evaluator`
 Expected: 编译错误 `no associated item named \`User\``
 
-- [ ] **Step 3: 扩展 WaitingReason 枚举**
+- [ ] __Step 3: 扩展 WaitingReason 枚举__
 
 在 `src/domain/mod.rs` 中找到 `WaitingReason` 枚举，修改为：
 
@@ -264,7 +268,7 @@ pub enum WaitingReason {
 
 注意：移除 `Brain` 变体（Brain 决策在 Task 创建前完成）。
 
-- [ ] **Step 4: 更新引用 Brain 变体的代码**
+- [ ] __Step 4: 更新引用 Brain 变体的代码__
 
 搜索并修复所有使用 `WaitingReason::Brain` 的地方：
 
@@ -272,7 +276,7 @@ Run: `grep -r "WaitingReason::Brain" src/`
 
 如果有引用，将其替换为适当的处理逻辑（Brain 决策应该在 Task 创建前完成）。
 
-- [ ] **Step 5: 运行测试确认通过**
+- [ ] __Step 5: 运行测试确认通过__
 
 Run: `cargo test domain::tests::waiting_reason_has_user_and_evaluator`
 Expected: test passed
@@ -280,7 +284,7 @@ Expected: test passed
 Run: `cargo test`
 Expected: all tests passed
 
-- [ ] **Step 6: 提交**
+- [ ] __Step 6: 提交__
 
 ```bash
 git add src/domain/mod.rs
@@ -300,11 +304,12 @@ EOF
 
 ## Task 3: 定义评估器实体
 
-**Files:**
+__Files:__
+
 - Create: `src/domain/evaluation.rs`
 - Modify: `src/domain/mod.rs`
 
-- [ ] **Step 1: 实现评估器实体**
+- [ ] __Step 1: 实现评估器实体__
 
 创建 `src/domain/evaluation.rs`：
 
@@ -384,7 +389,7 @@ pub enum OffTrackPolicy {
 }
 ```
 
-- [ ] **Step 2: 导出新实体**
+- [ ] __Step 2: 导出新实体__
 
 修改 `src/domain/mod.rs`，添加：
 
@@ -397,12 +402,12 @@ pub use evaluation::{
 };
 ```
 
-- [ ] **Step 3: 运行测试确认编译通过**
+- [ ] __Step 3: 运行测试确认编译通过__
 
 Run: `cargo build`
 Expected: 编译成功
 
-- [ ] **Step 4: 提交**
+- [ ] __Step 4: 提交__
 
 ```bash
 git add src/domain/evaluation.rs src/domain/mod.rs
@@ -423,11 +428,12 @@ EOF
 
 ## Task 4: 定义记忆传承实体
 
-**Files:**
+__Files:__
+
 - Create: `src/domain/contribution.rs`
 - Modify: `src/domain/mod.rs`
 
-- [ ] **Step 1: 实现记忆传承实体**
+- [ ] __Step 1: 实现记忆传承实体__
 
 创建 `src/domain/contribution.rs`：
 
@@ -484,7 +490,7 @@ pub struct MemoryAbsorptionMessage {
 }
 ```
 
-- [ ] **Step 2: 导出新实体**
+- [ ] __Step 2: 导出新实体__
 
 修改 `src/domain/mod.rs`，添加：
 
@@ -497,12 +503,12 @@ pub use contribution::{
 };
 ```
 
-- [ ] **Step 3: 运行测试确认编译通过**
+- [ ] __Step 3: 运行测试确认编译通过__
 
 Run: `cargo build`
 Expected: 编译成功
 
-- [ ] **Step 4: 提交**
+- [ ] __Step 4: 提交__
 
 ```bash
 git add src/domain/contribution.rs src/domain/mod.rs
@@ -523,10 +529,11 @@ EOF
 
 ## Task 5: 定义用户输入路由消息
 
-**Files:**
+__Files:__
+
 - Modify: `src/domain/mod.rs`
 
-- [ ] **Step 1: 添加路由消息**
+- [ ] __Step 1: 添加路由消息__
 
 在 `src/domain/mod.rs` 中，在消息定义区域添加：
 
@@ -545,12 +552,12 @@ pub struct ContinueTaskMessage {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认编译通过**
+- [ ] __Step 2: 运行测试确认编译通过__
 
 Run: `cargo build`
 Expected: 编译成功
 
-- [ ] **Step 3: 提交**
+- [ ] __Step 3: 提交__
 
 ```bash
 git add src/domain/mod.rs
@@ -569,10 +576,11 @@ EOF
 
 ## Task 6: 定义记忆配置 Resource
 
-**Files:**
+__Files:__
+
 - Modify: `src/app/mod.rs`
 
-- [ ] **Step 1: 添加 MemoryConfig Resource**
+- [ ] __Step 1: 添加 MemoryConfig Resource__
 
 在 `src/app/mod.rs` 中添加：
 
@@ -599,7 +607,7 @@ impl Default for MemoryConfig {
 }
 ```
 
-- [ ] **Step 2: 在 build_harness_app 中注册 Resource**
+- [ ] __Step 2: 在 build_harness_app 中注册 Resource__
 
 在 `build_harness_app` 函数中添加：
 
@@ -608,12 +616,12 @@ app.insert_resource(MemoryConfig::default());
 app.insert_resource(TaskEvaluationConfig::default());
 ```
 
-- [ ] **Step 3: 运行测试确认编译通过**
+- [ ] __Step 3: 运行测试确认编译通过__
 
 Run: `cargo build`
 Expected: 编译成功
 
-- [ ] **Step 4: 提交**
+- [ ] __Step 4: 提交__
 
 ```bash
 git add src/app/mod.rs
@@ -632,12 +640,13 @@ EOF
 
 ## Task 7: 实现用户输入路由系统
 
-**Files:**
+__Files:__
+
 - Create: `src/systems/routing.rs`
 - Modify: `src/systems/mod.rs`
 - Modify: `src/app/mod.rs`
 
-- [ ] **Step 1: 编写用户输入路由系统的测试**
+- [ ] __Step 1: 编写用户输入路由系统的测试__
 
 创建 `tests/multi_turn_routing.rs`：
 
@@ -741,12 +750,12 @@ fn user_input_continues_waiting_task() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [ ] __Step 2: 运行测试确认失败__
 
 Run: `cargo test multi_turn_routing`
 Expected: 测试失败或编译错误（系统未实现）
 
-- [ ] **Step 3: 实现用户输入路由系统**
+- [ ] __Step 3: 实现用户输入路由系统__
 
 创建 `src/systems/routing.rs`：
 
@@ -804,7 +813,7 @@ pub(crate) fn continue_task_system(
 }
 ```
 
-- [ ] **Step 4: 导出新系统**
+- [ ] __Step 4: 导出新系统__
 
 修改 `src/systems/mod.rs`，添加：
 
@@ -814,7 +823,7 @@ mod routing;
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
 ```
 
-- [ ] **Step 5: 注册系统**
+- [ ] __Step 5: 注册系统__
 
 修改 `src/app/mod.rs`，在 `add_systems` 中添加：
 
@@ -823,12 +832,12 @@ user_input_routing_system.in_set(HarnessSet::Transform),
 continue_task_system.in_set(HarnessSet::Transform),
 ```
 
-- [ ] **Step 6: 运行测试确认通过**
+- [ ] __Step 6: 运行测试确认通过__
 
 Run: `cargo test multi_turn_routing`
 Expected: 测试通过
 
-- [ ] **Step 7: 提交**
+- [ ] __Step 7: 提交__
 
 ```bash
 git add src/systems/routing.rs src/systems/mod.rs src/app/mod.rs tests/multi_turn_routing.rs
@@ -849,12 +858,13 @@ EOF
 
 ## Task 8: 实现评估器触发系统
 
-**Files:**
+__Files:__
+
 - Create: `src/systems/evaluation.rs`
 - Modify: `src/systems/mod.rs`
 - Modify: `src/app/mod.rs`
 
-- [ ] **Step 1: 编写评估器触发测试**
+- [ ] __Step 1: 编写评估器触发测试__
 
 在 `tests/multi_turn_routing.rs` 中添加：
 
@@ -920,12 +930,12 @@ fn evaluation_triggered_on_turn_limit() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [ ] __Step 2: 运行测试确认失败__
 
 Run: `cargo test evaluation_triggered_on_turn_limit`
 Expected: 编译错误或测试失败
 
-- [ ] **Step 3: 实现评估器触发系统**
+- [ ] __Step 3: 实现评估器触发系统__
 
 创建 `src/systems/evaluation.rs`：
 
@@ -1013,7 +1023,7 @@ pub(crate) fn evaluation_result_system(
 }
 ```
 
-- [ ] **Step 4: 导出新系统**
+- [ ] __Step 4: 导出新系统__
 
 修改 `src/systems/mod.rs`，添加：
 
@@ -1023,7 +1033,7 @@ mod evaluation;
 pub(crate) use evaluation::{evaluation_result_system, evaluation_trigger_system};
 ```
 
-- [ ] **Step 5: 注册系统**
+- [ ] __Step 5: 注册系统__
 
 修改 `src/app/mod.rs`，在 `add_systems` 中添加：
 
@@ -1032,7 +1042,7 @@ evaluation_trigger_system.in_set(HarnessSet::Dispatch),
 evaluation_result_system.in_set(HarnessSet::Transform),
 ```
 
-- [ ] **Step 6: 运行测试确认通过**
+- [ ] __Step 6: 运行测试确认通过__
 
 Run: `cargo test evaluation_triggered_on_turn_limit`
 Expected: 测试通过
@@ -1040,7 +1050,7 @@ Expected: 测试通过
 Run: `cargo test`
 Expected: 所有测试通过
 
-- [ ] **Step 7: 提交**
+- [ ] __Step 7: 提交__
 
 ```bash
 git add src/systems/evaluation.rs src/systems/mod.rs src/app/mod.rs tests/multi_turn_routing.rs
@@ -1060,12 +1070,13 @@ EOF
 
 ## Task 9: 实现记忆压缩系统
 
-**Files:**
+__Files:__
+
 - Create: `src/systems/memory.rs`
 - Modify: `src/systems/mod.rs`
 - Modify: `src/app/mod.rs`
 
-- [ ] **Step 1: 实现记忆压缩系统**
+- [ ] __Step 1: 实现记忆压缩系统__
 
 创建 `src/systems/memory.rs`：
 
@@ -1135,7 +1146,7 @@ pub(crate) fn init_agent_memory_system(
 }
 ```
 
-- [ ] **Step 2: 导出新系统**
+- [ ] __Step 2: 导出新系统__
 
 修改 `src/systems/mod.rs`，添加：
 
@@ -1145,7 +1156,7 @@ mod memory;
 pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
 ```
 
-- [ ] **Step 3: 注册系统**
+- [ ] __Step 3: 注册系统__
 
 修改 `src/app/mod.rs`，在 `add_systems` 中添加：
 
@@ -1154,12 +1165,12 @@ memory_compression_system.in_set(HarnessSet::Maintenance),
 init_agent_memory_system.in_set(HarnessSet::Maintenance),
 ```
 
-- [ ] **Step 4: 运行测试确认编译通过**
+- [ ] __Step 4: 运行测试确认编译通过__
 
 Run: `cargo test`
 Expected: 所有测试通过
 
-- [ ] **Step 5: 提交**
+- [ ] __Step 5: 提交__
 
 ```bash
 git add src/systems/memory.rs src/systems/mod.rs src/app/mod.rs
@@ -1179,12 +1190,13 @@ EOF
 
 ## Task 10: 实现记忆传承系统
 
-**Files:**
+__Files:__
+
 - Create: `src/systems/contribution.rs`
 - Modify: `src/systems/mod.rs`
 - Modify: `src/app/mod.rs`
 
-- [ ] **Step 1: 实现记忆传承系统**
+- [ ] __Step 1: 实现记忆传承系统__
 
 创建 `src/systems/contribution.rs`：
 
@@ -1314,7 +1326,7 @@ pub(crate) fn memory_absorption_system(
 }
 ```
 
-- [ ] **Step 2: 导出新系统**
+- [ ] __Step 2: 导出新系统__
 
 修改 `src/systems/mod.rs`，添加：
 
@@ -1326,7 +1338,7 @@ pub(crate) use contribution::{
 };
 ```
 
-- [ ] **Step 3: 注册系统**
+- [ ] __Step 3: 注册系统__
 
 修改 `src/app/mod.rs`，在 `add_systems` 中添加：
 
@@ -1336,12 +1348,12 @@ memory_contribution_system.in_set(HarnessSet::Execution),
 memory_absorption_system.in_set(HarnessSet::Maintenance),
 ```
 
-- [ ] **Step 4: 运行测试确认编译通过**
+- [ ] __Step 4: 运行测试确认编译通过__
 
 Run: `cargo build`
 Expected: 编译成功
 
-- [ ] **Step 5: 提交**
+- [ ] __Step 5: 提交__
 
 ```bash
 git add src/systems/contribution.rs src/systems/mod.rs src/app/mod.rs
@@ -1361,10 +1373,11 @@ EOF
 
 ## Task 11: 更新 agent_factory_system 为 Agent 添加记忆
 
-**Files:**
+__Files:__
+
 - Modify: `src/systems/maintenance.rs`
 
-- [ ] **Step 1: 修改 agent_factory_system**
+- [ ] __Step 1: 修改 agent_factory_system__
 
 在 `src/systems/maintenance.rs` 的 `handle_spawn_request` 函数中，创建 Agent 后添加：
 
@@ -1375,12 +1388,12 @@ EOF
 
 确保任务型 Agent 创建时已经可以接收 LongTermMemory。
 
-- [ ] **Step 2: 运行测试确认通过**
+- [ ] __Step 2: 运行测试确认通过__
 
 Run: `cargo test`
 Expected: 所有测试通过
 
-- [ ] **Step 3: 提交**
+- [ ] __Step 3: 提交__
 
 ```bash
 git add src/systems/maintenance.rs
@@ -1399,10 +1412,11 @@ EOF
 
 ## Task 12: 集成测试
 
-**Files:**
+__Files:__
+
 - Create: `tests/multi_turn_flow.rs`
 
-- [ ] **Step 1: 编写完整的多轮对话集成测试**
+- [ ] __Step 1: 编写完整的多轮对话集成测试__
 
 创建 `tests/multi_turn_flow.rs`：
 
@@ -1575,17 +1589,17 @@ fn agent_has_long_term_memory() {
 }
 ```
 
-- [ ] **Step 2: 运行测试确认通过**
+- [ ] __Step 2: 运行测试确认通过__
 
 Run: `cargo test multi_turn_flow`
 Expected: 所有测试通过
 
-- [ ] **Step 3: 运行所有测试**
+- [ ] __Step 3: 运行所有测试__
 
 Run: `cargo test`
 Expected: 所有测试通过
 
-- [ ] **Step 4: 提交**
+- [ ] __Step 4: 提交__
 
 ```bash
 git add tests/multi_turn_flow.rs
@@ -1605,10 +1619,11 @@ EOF
 
 ## Task 13: 更新文档
 
-**Files:**
+__Files:__
+
 - Modify: `docs/TODO.md`
 
-- [ ] **Step 1: 更新 TODO 列表**
+- [ ] __Step 1: 更新 TODO 列表__
 
 修改 `docs/TODO.md`，将 Phase 4 相关项目标记为进行中或已完成：
 
@@ -1622,7 +1637,7 @@ EOF
 - [x] 多轮对话上下文管理
 ```
 
-- [ ] **Step 2: 提交**
+- [ ] __Step 2: 提交__
 
 ```bash
 git add docs/TODO.md

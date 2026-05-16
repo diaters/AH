@@ -1,11 +1,9 @@
 use bevy::prelude::*;
 use tracing::info;
 
-use crate::{
-    domain::{
-        Agent, AgentKind, LongTermMemory, MemoryAbsorptionMessage,
-        MemoryContributionRequestMessage, Task, TaskTerminatedMessage, TaskSummary,
-    },
+use crate::domain::{
+    Agent, AgentKind, LongTermMemory, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    Task, TaskSummary, TaskTerminatedMessage,
 };
 
 /// Agent 终止系统：检测任务型 Agent 销毁，生成贡献请求

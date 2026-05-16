@@ -3,9 +3,9 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    build_harness_app, Agent, AgentCapabilities, AgentExecutor, AgentExecutionRequest,
-    AgentKind, AgentProfile, ExecutorFuture, HarnessConfig, LongTermMemory,
-    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
+    ExecutorFuture, HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task,
+    TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -276,7 +276,8 @@ fn memory_contribution_on_agent_termination() {
     });
 
     // Trigger termination by spawning TaskTerminatedMessage
-    app.world_mut().spawn(harness::TaskTerminatedMessage { task_id });
+    app.world_mut()
+        .spawn(harness::TaskTerminatedMessage { task_id });
 
     // Run frames to allow systems to process
     for _ in 0..10 {

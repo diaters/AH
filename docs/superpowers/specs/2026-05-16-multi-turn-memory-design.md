@@ -8,11 +8,11 @@
 
 ### 核心目标
 
-1. **Task 作为目标载体** — 一个 Task 代表一个目标，多轮对话围绕目标展开，Task 不在每轮结束时进入终态
-2. **双层记忆架构** — 短期记忆绑定 Task，长期记忆绑定 Agent
-3. **统一 Agent 模型** — 所有 Agent 遵循相同逻辑，差异仅来自位置和特权
-4. **评估器机制** — 判定任务结束或执行偏离
-5. **缓存友好** — 上下文组织支持 LLM Provider 的缓存命中优化
+1. __Task 作为目标载体__ — 一个 Task 代表一个目标，多轮对话围绕目标展开，Task 不在每轮结束时进入终态
+2. __双层记忆架构__ — 短期记忆绑定 Task，长期记忆绑定 Agent
+3. __统一 Agent 模型__ — 所有 Agent 遵循相同逻辑，差异仅来自位置和特权
+4. __评估器机制__ — 判定任务结束或执行偏离
+5. __缓存友好__ — 上下文组织支持 LLM Provider 的缓存命中优化
 
 ### Phase 4.1 范围
 
@@ -32,7 +32,7 @@
 
 ### 核心原则
 
-**所有 Agent 遵循相同逻辑，差异仅来自位置和特权。**
+__所有 Agent 遵循相同逻辑，差异仅来自位置和特权。__
 
 ### 统一能力
 
@@ -48,7 +48,7 @@
 
 ### 差异来源
 
-差异不由类型硬编码，而是由**位置**和**特权**决定：
+差异不由类型硬编码，而是由__位置__和__特权__决定：
 
 | 维度 | 持久性 Agent | 任务型 Agent |
 |------|-------------|-------------|
@@ -59,19 +59,21 @@
 
 ### 行为推导
 
-**持久性 Agent：**
+__持久性 Agent：__
+
 - 无父 Agent → 长期记忆不会被贡献出去 → 知识沉淀
 - 不销毁 → 持续接收子 Agent 贡献 → 知识富集
 - 可配置不执行任务 → 成为组织者/管理者
 
-**任务型 Agent：**
+__任务型 Agent：__
+
 - 有父 Agent → 销毁时贡献知识 → 知识向上流动
 - 绑定 Task → 执行具体任务 → 产生知识
 - 销毁后记忆传承 → 形成知识树
 
 ### 知识流动方向
 
-```
+```text
 持久性 Agent (顶级，无父)
     ▲
     │ 最终归宿
@@ -85,7 +87,7 @@
     │ 贡献
     │
 任务型 Agent A1-1 (A1 的子 Agent)
-```
+```text
 
 知识始终向上流动，最终汇聚到无父的顶级 Agent。
 
@@ -99,18 +101,21 @@
 
 ### 统一状态流转
 
-**执行状态：**
-- **Ready** — 任务就绪，等待执行
-- **Running** — Agent 正在执行
+__执行状态：__
 
-**等待状态：**
-- **Waiting(User)** — 等待用户输入
-- **Waiting(Evaluator)** — 等待评估器判定
-- **Waiting(RetryBackoff)** — 重试退避
+- __Ready__ — 任务就绪，等待执行
+- __Running__ — Agent 正在执行
 
-**终态：**
-- **Done** — 任务完成
-- **Failed** — 任务失败
+__等待状态：__
+
+- __Waiting(User)__ — 等待用户输入
+- __Waiting(Evaluator)__ — 等待评估器判定
+- __Waiting(RetryBackoff)__ — 重试退避
+
+__终态：__
+
+- __Done__ — 任务完成
+- __Failed__ — 任务失败
 
 ### 状态转换规则
 
@@ -130,7 +135,7 @@
 
 ### "由谁执行"的决策时机
 
-决策发生在 **Task 创建时**，而非状态机中：
+决策发生在 __Task 创建时__，而非状态机中：
 
 | Task 来源 | 执行者决策 |
 |-----------|-----------|
@@ -148,9 +153,9 @@ pub enum WaitingReason {
     Evaluator,    // 等待评估器判定（新增）
     RetryBackoff, // 重试退避（现有）
 }
-```
+```text
 
-> **注意**：移除 `Waiting(Brain)`。Brain 决策发生在 Task 创建前，不进入 Task 状态机。
+> __注意__：移除 `Waiting(Brain)`。Brain 决策发生在 Task 创建前，不进入 Task 状态机。
 
 ---
 
@@ -160,7 +165,8 @@ pub enum WaitingReason {
 
 记忆作为 Component 嵌入 Task/Agent，而非独立 Entity。
 
-**理由：**
+__理由：__
+
 - 生命周期强绑定：短期记忆与 Task 共存亡，长期记忆与 Agent 共存亡
 - 查询简洁：执行时直接通过 Task/Agent 获取记忆
 - 清理简单：Task/Agent despawn 时记忆自动清理
@@ -185,7 +191,7 @@ pub struct ShortTermMemory {
     /// 最后一次缓存命中的 token 数（用于监控）
     pub last_cached_tokens: Option<u32>,
 }
-```
+```text
 
 ### LongTermMemory
 
@@ -194,7 +200,7 @@ pub struct ShortTermMemory {
 pub struct LongTermMemory {
     pub entries: Vec<MemoryEntry>,
 }
-```
+```text
 
 ### MemoryEntry
 
@@ -222,7 +228,7 @@ pub struct EntryMetadata {
     pub reasoning: Option<String>,
     pub keywords: Vec<String>,
 }
-```
+```text
 
 ### ToolCall
 
@@ -234,12 +240,12 @@ pub struct ToolCall {
     pub output: String,
     pub timestamp: DateTime<Utc>,
 }
-```
+```text
 
 ### Task 与记忆的关联
 
-- **Task Entity** 同时拥有 `Task` 和 `ShortTermMemory` 两个 Component
-- **Agent Entity** 同时拥有 `Agent` 和 `LongTermMemory` 两个 Component
+- __Task Entity__ 同时拥有 `Task` 和 `ShortTermMemory` 两个 Component
+- __Agent Entity__ 同时拥有 `Agent` 和 `LongTermMemory` 两个 Component
 - Task 创建时自动添加 `ShortTermMemory::default()`
 - 任务型 Agent 创建时自动添加 `LongTermMemory::default()`
 - 持久性 Agent 从配置加载时添加 `LongTermMemory::default()`
@@ -267,11 +273,11 @@ pub struct ToolCall {
 | Anthropic | System prompt + 对话开头 | 前缀匹配 |
 | DeepSeek | 类似 OpenAI | 前缀匹配 |
 
-**核心原理**：对话越早期的内容越稳定，越适合缓存。
+__核心原理__：对话越早期的内容越稳定，越适合缓存。
 
 ### 上下文结构
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                      Context Window                          │
 │                                                             │
@@ -296,7 +302,7 @@ pub struct ToolCall {
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
-```
+```text
 
 ### 构建上下文方法
 
@@ -338,19 +344,19 @@ impl ShortTermMemory {
         messages
     }
 }
-```
+```text
 
 ### 缓存命中优化策略
 
-1. **摘要替换时保持前缀**：
+1. __摘要替换时保持前缀__：
    - 早期对话压缩为摘要后，摘要放在固定位置
    - 新对话追加，不影响已缓存的前缀
 
-2. **分批追加**：
+2. __分批追加__：
    - 每轮对话完成后追加到 entries
    - 不修改已有 entry
 
-3. **摘要触发时机**：
+3. __摘要触发时机__：
    - 轮数达到阈值时触发摘要
    - 摘要替换前 N 轮，保留后 M 轮原文
 
@@ -378,7 +384,7 @@ pub struct MemoryConfig {
     /// 摘要覆盖轮数（默认 5）
     pub summary_window: u32,
 }
-```
+```text
 
 ### 摘要生成流程
 
@@ -428,7 +434,7 @@ pub enum EvaluationTrigger {
     TurnLimitReached,
     UserRequested,
 }
-```
+```text
 
 ### 评估结果结构
 
@@ -453,7 +459,7 @@ pub enum EvaluationDecision {
     Failed,
     OffTrack,
 }
-```
+```text
 
 ### Task 评估配置
 
@@ -472,7 +478,7 @@ pub enum OffTrackPolicy {
     AskUser,
     Fail,
 }
-```
+```text
 
 ### 评估器 Agent 选择
 
@@ -484,7 +490,7 @@ fn find_evaluator_agent(agents: &Query<&Agent>, name: &str) -> Option<AgentId> {
         .find(|a| a.profile.name == name)
         .map(|a| a.id)
 }
-```
+```text
 
 评估器可以是持久性 Agent（共享评估经验）或任务型 Agent（隔离评估上下文）。
 
@@ -492,9 +498,9 @@ fn find_evaluator_agent(agents: &Query<&Agent>, name: &str) -> Option<AgentId> {
 
 Agent 在回复中使用特殊标记请求评估：
 
-```
+```text
 [EVALUATE]
-```
+```text
 
 `llm_response_system` 检测到此标记后，生成 `EvaluationRequestMessage`，触发为 `AgentRequested`。
 
@@ -540,13 +546,13 @@ pub struct TaskSummary {
     pub goal: String,
     pub outcome: String,
 }
-```
+```text
 
 ### LLM 评估
 
 父 Agent 收到贡献请求后，构造 prompt 让 LLM 评估：
 
-```
+```text
 你是 Agent 的记忆管理者。以下是子 Agent 完成任务后的记忆贡献，请评估哪些内容值得保留到你的长期记忆中。
 
 任务目标: {goal}
@@ -570,7 +576,7 @@ pub struct TaskSummary {
 - 可复用的经验
 - 重要的实体信息
 - 忽略任务特定的临时细节
-```
+```text
 
 ### 评估结果
 
@@ -592,7 +598,7 @@ pub struct DiscardedMemory {
     pub content: String,
     pub reason: String,
 }
-```
+```text
 
 ### 持久性 Agent 的自然处理
 
@@ -611,7 +617,7 @@ pub struct DiscardedMemory {
 pub struct CreateTaskMessage {
     pub content: String,
 }
-```
+```text
 
 ### ContinueTaskMessage
 
@@ -623,17 +629,17 @@ pub struct ContinueTaskMessage {
     pub task_id: TaskId,
     pub user_input: String,
 }
-```
+```text
 
 ### 消息流转
 
-```
+```text
 UserInputMessage
     │
     ├── 无 Waiting(User) 的 Task → CreateTaskMessage → 新建 Task
     │
     └── 有 Waiting(User) 的 Task → ContinueTaskMessage → 追加到现有 Task
-```
+```text
 
 ---
 
@@ -662,7 +668,7 @@ UserInputMessage
 
 ### 核心实现示例
 
-**user_input_routing_system：**
+__user_input_routing_system：__
 
 ```rust
 fn user_input_routing_system(
@@ -688,9 +694,9 @@ fn user_input_routing_system(
         commands.entity(entity).despawn();
     }
 }
-```
+```text
 
-**evaluation_trigger_system：**
+__evaluation_trigger_system：__
 
 ```rust
 fn evaluation_trigger_system(
@@ -721,7 +727,7 @@ fn evaluation_trigger_system(
         }
     }
 }
-```
+```text
 
 ---
 
@@ -751,7 +757,7 @@ pub struct EvaluationConfig {
     /// 偏离处理策略
     pub offtrack_policy: OffTrackPolicy,
 }
-```
+```text
 
 ### 配置文件示例
 
@@ -766,7 +772,7 @@ enabled = true
 max_turns = 20
 evaluator_agent = "evaluator"
 offtrack_policy = "AskUser"
-```
+```text
 
 ---
 
