@@ -320,7 +320,7 @@ fn memory_contribution_on_agent_termination() {
         contribution_requests > 0
             || absorption_messages > 0
             || !child_exists
-            || parent_memory.map_or(false, |len| len > 0),
+            || parent_memory.is_some_and(|len| len > 0),
         "contribution flow should have processed: requests={}, absorptions={}, child_exists={}, parent_memory={:?}",
         contribution_requests,
         absorption_messages,
