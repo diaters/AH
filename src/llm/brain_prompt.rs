@@ -63,20 +63,16 @@ pub fn parse_brain_decision(raw: &str) -> Result<BrainDecisionOutput, BrainDecis
 fn extract_json_block(raw: &str) -> &str {
     let trimmed = raw.trim();
 
-    if let Some(start) = trimmed.find("```json") {
-        if let Some(end) = trimmed.rfind("```") {
-            let json_start = start + 7;
-            return trimmed[json_start..end].trim();
-        }
+    if let (Some(start), Some(end)) = (trimmed.find("```json"), trimmed.rfind("```")) {
+        let json_start = start + 7;
+        return trimmed[json_start..end].trim();
     }
 
-    if let Some(start) = trimmed.find("```") {
-        if let Some(end) = trimmed.rfind("```") {
-            if start != end {
-                let json_start = start + 3;
-                return trimmed[json_start..end].trim();
-            }
-        }
+    if let (Some(start), Some(end)) = (trimmed.find("```"), trimmed.rfind("```"))
+        && start != end
+    {
+        let json_start = start + 3;
+        return trimmed[json_start..end].trim();
     }
 
     trimmed

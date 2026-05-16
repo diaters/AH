@@ -12,6 +12,7 @@ use crate::{
     },
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn agent_factory_system(
     mut commands: Commands,
     clock: Res<Clock>,

@@ -191,13 +191,13 @@ fn task_scoped_agent_lifecycle() {
 /// 验证 tags 子集校验：子 Agent tags 超出父 Agent 时拒绝创建。
 #[test]
 fn tags_subset_validation_rejects_invalid_spawn() {
-    let parent_tags = vec!["llm".to_string(), "code".to_string()];
-    let child_tags = vec!["llm".to_string(), "code".to_string(), "web".to_string()];
+    let parent_tags = ["llm".to_string(), "code".to_string()];
+    let child_tags = ["llm".to_string(), "code".to_string(), "web".to_string()];
 
     let is_valid = child_tags.iter().all(|tag| parent_tags.contains(tag));
     assert!(!is_valid, "child tags exceeding parent should be rejected");
 
-    let valid_child_tags = vec!["llm".to_string()];
+    let valid_child_tags = ["llm".to_string()];
     let is_valid = valid_child_tags.iter().all(|tag| parent_tags.contains(tag));
     assert!(is_valid, "child tags that are a subset should be accepted");
 }
