@@ -145,6 +145,19 @@ pub struct UserOutputMessage {
     pub content: String,
 }
 
+/// 创建新任务消息
+#[derive(Debug, Clone, Component)]
+pub struct CreateTaskMessage {
+    pub content: String,
+}
+
+/// 继续现有任务消息
+#[derive(Debug, Clone, Component)]
+pub struct ContinueTaskMessage {
+    pub task_id: TaskId,
+    pub user_input: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCapabilities {
     pub tags: Vec<String>,
