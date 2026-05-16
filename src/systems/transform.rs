@@ -4,8 +4,8 @@ use crate::{
     app::{Clock, ExecutionResultReceiver, HarnessSettings},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
-        AgentRequestKind, BrainDecisionError, FailureReason, RetryReadyMessage, Signal,
-        SignalPayload, Task, TaskStatus, TaskTerminatedMessage, UserInputMessage,
+        AgentRequestKind, BrainDecisionError, CreateTaskMessage, FailureReason, RetryReadyMessage,
+        Signal, SignalPayload, Task, TaskStatus, TaskTerminatedMessage, UserInputMessage,
         UserOutputMessage,
     },
     llm::parse_brain_decision,
@@ -32,7 +32,7 @@ pub(crate) fn signal_ingest_system(mut commands: Commands, signals: Query<(Entit
 pub(crate) fn user_message_to_task_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
-    messages: Query<(Entity, &UserInputMessage)>,
+    messages: Query<(Entity, &CreateTaskMessage)>,
 ) {
     for (entity, message) in &messages {
         commands.spawn(Task::from_user_input(

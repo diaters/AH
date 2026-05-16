@@ -15,10 +15,10 @@ use crate::{
     llm::LlmProviderConfig,
     systems::{
         HarnessSet, agent_execution_system, agent_factory_system, brain_decision_system,
-        brain_dispatch_system, ingest_execution_results_system, input_ingress_system,
-        llm_response_system, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        task_dispatch_system, task_termination_system, tick_clock_system,
-        user_message_to_task_system, user_output_system,
+        brain_dispatch_system, continue_task_system, ingest_execution_results_system,
+        input_ingress_system, llm_response_system, retry_ready_system, retry_wakeup_system,
+        signal_ingest_system, task_dispatch_system, task_termination_system, tick_clock_system,
+        user_input_routing_system, user_message_to_task_system, user_output_system,
     },
 };
 
@@ -189,7 +189,13 @@ pub fn build_harness_app(
             brain_decision_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
-            user_message_to_task_system.in_set(HarnessSet::Transform),
+            user_input_routing_system.in_set(HarnessSet::Transform),
+            user_message_to_task_system
+                .in_set(HarnessSet::Transform)
+                .after(user_input_routing_system),
+            continue_task_system
+                .in_set(HarnessSet::Transform)
+                .after(user_input_routing_system),
             retry_ready_system.in_set(HarnessSet::Transform),
             llm_response_system
                 .in_set(HarnessSet::Transform)

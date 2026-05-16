@@ -1,0 +1,111 @@
+use std::sync::Arc;
+
+use bevy::prelude::*;
+use crossbeam_channel::unbounded;
+use harness::{
+    AgentExecutionRequest, AgentExecutor, ExecutorFuture, ExternalInput, HarnessConfig,
+    OutputMessage, Task, TaskStatus, WaitingReason, build_harness_app,
+};
+use tokio::runtime::Runtime;
+
+struct EchoExecutor;
+
+impl AgentExecutor for EchoExecutor {
+    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
+        Box::pin(async move { Ok("echo".to_string()) })
+    }
+}
+
+fn test_config() -> HarnessConfig {
+    HarnessConfig::default()
+}
+
+#[test]
+fn user_input_creates_new_task_when_no_waiting_task() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    input_tx
+        .send(ExternalInput::Text("new task".to_string()))
+        .unwrap();
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    let task_count = app.world_mut().query::<&Task>().iter(app.world()).count();
+
+    assert!(task_count >= 1, "should create at least one task");
+}
+
+#[test]
+fn user_input_continues_waiting_task() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    // Create a task in Waiting(User) state
+    let task_id = uuid::Uuid::new_v4();
+    app.world_mut().spawn(Task {
+        id: task_id,
+        content: "existing task".to_string(),
+        creator: uuid::Uuid::nil(),
+        delegate: None,
+        status: TaskStatus::Waiting(WaitingReason::User),
+        input_summary: "existing task".to_string(),
+        result_summary: String::new(),
+        priority: 0,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        retry_count: 0,
+        max_retries: 3,
+        next_retry_at: None,
+        last_error: None,
+    });
+
+    // Simulate user input
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "continue input".to_string(),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // Should have exactly ONE task (the continued one, not a new one)
+    let task_count = app.world_mut().query::<&Task>().iter(app.world()).count();
+    assert_eq!(
+        task_count, 1,
+        "should have exactly one task, not create a new one"
+    );
+
+    let task = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .find(|t| t.id == task_id)
+        .cloned();
+
+    assert!(task.is_some(), "original waiting task should still exist");
+    // Task should NOT be in Waiting(User) state anymore - it was continued
+    let task = task.unwrap();
+    assert_ne!(
+        task.status,
+        TaskStatus::Waiting(WaitingReason::User),
+        "task should have moved out of Waiting(User) state after user input, got {:?}",
+        task.status
+    );
+    // Task should be in a non-terminal state or successfully completed
+    assert!(
+        !task.status.is_terminal() || matches!(task.status, TaskStatus::Done),
+        "task should not have failed, got {:?}",
+        task.status
+    );
+}
