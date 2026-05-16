@@ -1,3 +1,4 @@
+mod evaluation;
 mod memory;
 
 use std::{future::Future, pin::Pin, time::Duration};
@@ -8,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use evaluation::{
+    EvaluationDecision, EvaluationRequestMessage, EvaluationResult, EvaluationResultMessage,
+    EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
+};
 pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
 };
