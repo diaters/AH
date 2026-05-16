@@ -80,17 +80,20 @@
 
 ### Phase 4: 高级功能
 
-- [ ] Memory 实体设计
+- [x] Memory 实体设计（ShortTermMemory / LongTermMemory）
+- [x] 多轮对话上下文管理
+- [x] 记忆传承机制（子 Agent 向父 Agent 贡献）
+- [x] 评估器 Agent 设计
 - [ ] Tool / ToolCall 设计
 - [ ] Session 概念设计
 - [ ] Planner 模块设计
-- [ ] 多轮对话上下文管理
 
 ---
 
 ## 备注
 
-- 当前阶段：Phase 3 多 Agent 支持已完成，准备进入 Phase 4
+- 当前阶段：Phase 4.1 多轮对话与双层记忆已完成
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 - Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`
+- Phase 4.1 设计文档：`docs/superpowers/specs/2026-05-16-multi-turn-memory-design.md`
