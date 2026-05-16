@@ -1,0 +1,11 @@
+[[agent]]
+name = "default-llm-agent"
+model = "gpt-4.1-mini"
+tags = ["llm", "default", "general"]
+description = "默认 LLM Agent，处理通用任务"
+
+[[agent]]
+name = "brain"
+model = "gpt-4.1-mini"
+tags = ["brain", "dispatcher"]
+description = "Brain Agent，负责调度决策"

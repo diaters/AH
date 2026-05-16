@@ -8,15 +8,16 @@ use tokio::{runtime::Runtime, sync::mpsc};
 
 use crate::{
     domain::{
-        AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor, OutputMessage,
-        RetryReadyMessage, Signal, Task, UserInputMessage, UserOutputMessage,
+        AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
+        AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, Task,
+        TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     systems::{
         agent_execution_system, agent_factory_system, brain_decision_system,
         brain_dispatch_system, ingest_execution_results_system, input_ingress_system,
         llm_response_system, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        spawn_default_agent_system, task_dispatch_system, tick_clock_system,
+        task_dispatch_system, task_termination_system, tick_clock_system,
         user_message_to_task_system, user_output_system, HarnessSet,
     },
 };
@@ -30,14 +31,13 @@ pub struct BrainConfig {
 
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
-    pub default_agent_name: String,
     pub max_retries: u32,
     pub llm: LlmProviderConfig,
     pub brain: Option<BrainConfig>,
+    pub agents_config_path: String,
 }
 
 impl HarnessConfig {
-    /// 从环境变量加载运行配置，并补齐 MVP 默认值。
     pub fn from_env() -> Result<Self> {
         let llm = LlmProviderConfig::from_env("gpt-4.1-mini")?;
 
@@ -55,20 +55,21 @@ impl HarnessConfig {
             None
         };
 
+        let agents_config_path = std::env::var("HARNESS_AGENTS_CONFIG")
+            .unwrap_or_else(|_| "agents.toml".to_string());
+
         Ok(Self {
-            default_agent_name: "default-llm-agent".to_string(),
             max_retries: 3,
             llm,
             brain,
+            agents_config_path,
         })
     }
 }
 
 impl Default for HarnessConfig {
-    /// 提供适用于测试和本地组装的默认配置。
     fn default() -> Self {
         Self {
-            default_agent_name: "default-llm-agent".to_string(),
             max_retries: 3,
             llm: LlmProviderConfig {
                 provider: crate::llm::LlmProviderKind::OpenAi,
@@ -79,6 +80,7 @@ impl Default for HarnessConfig {
                 project_id: None,
             },
             brain: None,
+            agents_config_path: "agents.toml".to_string(),
         }
     }
 }
@@ -108,7 +110,6 @@ pub struct HarnessSettings(pub HarnessConfig);
 pub struct Clock(pub DateTime<Utc>);
 
 impl Default for Clock {
-    /// 为调度系统提供统一时间源。
     fn default() -> Self {
         Self(Utc::now())
     }
@@ -119,7 +120,6 @@ pub struct ShutdownState {
     pub requested: bool,
 }
 
-/// 构造符合 MVP 设计的 Harness 应用实例。
 pub fn build_harness_app(
     config: HarnessConfig,
     runtime: Arc<Runtime>,
@@ -154,7 +154,6 @@ pub fn build_harness_app(
             .chain(),
     );
 
-    app.add_systems(Startup, spawn_default_agent_system);
     app.add_systems(
         Update,
         (
@@ -171,6 +170,9 @@ pub fn build_harness_app(
             llm_response_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
+            task_termination_system
+                .in_set(HarnessSet::Transform)
+                .after(llm_response_system),
             brain_dispatch_system
                 .in_set(HarnessSet::Dispatch)
                 .before(task_dispatch_system),
@@ -184,7 +186,6 @@ pub fn build_harness_app(
     app
 }
 
-/// 判断应用是否已经没有活跃任务与暂存消息。
 pub fn app_is_idle(world: &mut World) -> bool {
     let active_tasks = world
         .query::<&Task>()
@@ -197,6 +198,8 @@ pub fn app_is_idle(world: &mut World) -> bool {
     let pending_requests = world.query::<&AgentExecutionRequestMessage>().iter(world).count();
     let pending_results = world.query::<&AgentExecutionResultMessage>().iter(world).count();
     let pending_outputs = world.query::<&UserOutputMessage>().iter(world).count();
+    let pending_spawn_requests = world.query::<&AgentSpawnRequestMessage>().iter(world).count();
+    let pending_terminated = world.query::<&TaskTerminatedMessage>().iter(world).count();
 
     active_tasks == 0
         && pending_signals == 0
@@ -205,4 +208,6 @@ pub fn app_is_idle(world: &mut World) -> bool {
         && pending_requests == 0
         && pending_results == 0
         && pending_outputs == 0
+        && pending_spawn_requests == 0
+        && pending_terminated == 0
 }

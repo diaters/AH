@@ -10,9 +10,24 @@ use tokio::runtime::Runtime;
 struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
-    /// 在测试中模拟一个立即返回的 LLM 执行器。
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         Box::pin(async move { Ok(format!("echo: {}", request.prompt)) })
+    }
+}
+
+fn test_config() -> HarnessConfig {
+    HarnessConfig {
+        max_retries: 3,
+        llm: harness::LlmProviderConfig {
+            provider: harness::LlmProviderKind::OpenAi,
+            model: "gpt-4.1-mini".to_string(),
+            api_key: "test-api-key".to_string(),
+            api_base: None,
+            org_id: None,
+            project_id: None,
+        },
+        brain: None,
+        agents_config_path: "agents.toml".to_string(),
     }
 }
 
@@ -23,7 +38,7 @@ fn completes_single_turn_conversation_flow() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (input_tx, input_rx) = unbounded();
     let (output_tx, output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(HarnessConfig::default(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
 
     input_tx
         .send(ExternalInput::Text("你好，Harness".to_string()))

@@ -58,9 +58,9 @@
 
 ### GitHub 仓库配置
 
-- [ ] 创建 GitHub 远程仓库
-- [ ] 推送代码到远程
-- [ ] 配置分支保护规则：
+- [x] 创建 GitHub 远程仓库
+- [x] 推送代码到远程
+- [x] 配置分支保护规则：
   - 禁止直接推送
   - 禁止强制推送
   - 禁止删除
@@ -68,10 +68,15 @@
 
 ### Phase 3: 多 Agent 支持
 
-- [ ] 新增 AgentFactorySystem
-- [ ] Agent 配置文件加载
-- [ ] 任务型 Agent 创建/销毁逻辑
-- [ ] Agent 能力匹配逻辑
+- [x] Agent 无状态化（移除 AgentStatus）
+- [x] 新增 AgentKind（Persistent / TaskScoped）
+- [x] TOML 配置文件加载持久性 Agent
+- [x] 重写 AgentFactorySystem（配置加载 + 动态创建 + 销毁）
+- [x] 任务型 Agent 动态创建（AgentSpawnRequestMessage）
+- [x] 任务型 Task 终态自动销毁（TaskTerminatedMessage）
+- [x] Agent tags 匹配逻辑
+- [x] tags 子集权限继承校验
+- [x] 集成测试
 
 ### Phase 4: 高级功能
 
@@ -85,7 +90,8 @@
 
 ## 备注
 
-- 当前阶段：Phase 2 Brain Agent 调度已完成，准备进入 Phase 3
+- 当前阶段：Phase 3 多 Agent 支持已完成，准备进入 Phase 4
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
+- Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`
 

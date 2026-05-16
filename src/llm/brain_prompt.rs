@@ -85,7 +85,7 @@ fn extract_json_block(raw: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AgentCapabilities, AgentProfile, AgentStatus};
+    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile};
     use uuid::Uuid;
 
     fn test_task(content: &str) -> Task {
@@ -99,11 +99,13 @@ mod tests {
                 name: name.to_string(),
                 model: "test-model".to_string(),
             },
-            status: AgentStatus::Idle,
             capabilities: AgentCapabilities {
                 tags: vec!["test".to_string()],
                 description: format!("{name} agent for testing"),
             },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
         }
     }
 

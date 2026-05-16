@@ -10,11 +10,12 @@ use bevy::ecs::schedule::SystemSet;
 pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system};
 pub(crate) use execution::agent_execution_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
-pub(crate) use maintenance::{agent_factory_system, spawn_default_agent_system};
+pub(crate) use maintenance::agent_factory_system;
 pub(crate) use output::user_output_system;
 pub(crate) use transform::{
     brain_decision_system, ingest_execution_results_system, llm_response_system,
-    retry_ready_system, signal_ingest_system, user_message_to_task_system,
+    retry_ready_system, signal_ingest_system, task_termination_system,
+    user_message_to_task_system,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
