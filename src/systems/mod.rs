@@ -1,3 +1,4 @@
+mod contribution;
 mod dispatch;
 mod evaluation;
 mod execution;
@@ -10,6 +11,9 @@ mod transform;
 
 use bevy::ecs::schedule::SystemSet;
 
+pub(crate) use contribution::{
+    agent_termination_system, memory_absorption_system, memory_contribution_system,
+};
 pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system};
 pub(crate) use evaluation::{evaluation_result_system, evaluation_trigger_system};
 pub(crate) use execution::agent_execution_system;
