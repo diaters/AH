@@ -36,13 +36,14 @@ pub(crate) fn retry_wakeup_system(clock: Res<Clock>, mut commands: Commands, tas
             continue;
         }
 
-        if let Some(next_retry_at) = task.next_retry_at {
-            if next_retry_at <= clock.0 {
-                commands.spawn(Signal {
-                    kind: crate::domain::SignalType::RetryWakeup,
-                    payload: SignalPayload::RetryWakeup(task.id),
-                });
-            }
+        if task
+            .next_retry_at
+            .is_some_and(|next_retry_at| next_retry_at <= clock.0)
+        {
+            commands.spawn(Signal {
+                kind: crate::domain::SignalType::RetryWakeup,
+                payload: SignalPayload::RetryWakeup(task.id),
+            });
         }
     }
 }

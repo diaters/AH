@@ -14,9 +14,7 @@ impl LlmProviderKind {
     pub fn parse(raw: &str) -> Result<Self> {
         match raw.trim().to_lowercase().as_str() {
             "openai" => Ok(Self::OpenAi),
-            "openai-compatible" | "openai_compatible" | "compatible" => {
-                Ok(Self::OpenAiCompatible)
-            }
+            "openai-compatible" | "openai_compatible" | "compatible" => Ok(Self::OpenAiCompatible),
             other => bail!(
                 "unsupported HARNESS_LLM_PROVIDER value: {other}; expected openai or openai-compatible"
             ),
@@ -106,8 +104,7 @@ mod tests {
             LlmProviderKind::OpenAi
         );
         assert_eq!(
-            LlmProviderKind::parse("openai-compatible")
-                .expect("openai-compatible should parse"),
+            LlmProviderKind::parse("openai-compatible").expect("openai-compatible should parse"),
             LlmProviderKind::OpenAiCompatible
         );
         assert_eq!(

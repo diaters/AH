@@ -3,25 +3,24 @@ use bevy::prelude::*;
 use crate::{
     app::{Clock, HarnessSettings},
     domain::{
-        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentRequestKind,
-        AgentStatus, Task, TaskStatus,
+        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
+        Task, TaskStatus,
     },
     llm::brain_system_prompt,
 };
 
-/// 将 Ready 任务转换为 Agent 执行请求。
 pub(crate) fn task_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
     mut tasks: Query<&mut Task>,
-    mut agents: Query<&mut Agent>,
+    agents: Query<&Agent>,
 ) {
     for mut task in &mut tasks {
         if task.status != TaskStatus::Ready {
             continue;
         }
 
-        let Some(mut agent) = agents.iter_mut().find(|agent| agent.status == AgentStatus::Idle) else {
+        let Some(agent) = select_agent(agents.iter(), &task.content) else {
             continue;
         };
 
@@ -33,13 +32,11 @@ pub(crate) fn task_dispatch_system(
             system_prompt: None,
         };
 
-        agent.status = AgentStatus::Busy;
         task.mark_waiting_for_agent(agent.id, clock.0);
         commands.spawn(AgentExecutionRequestMessage { request });
     }
 }
 
-/// 将 Ready 任务提交给 Brain Agent 进行调度决策。
 pub(crate) fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
@@ -54,18 +51,17 @@ pub(crate) fn brain_dispatch_system(
         return;
     }
 
-    // 先收集 agent 快照，避免可变借用冲突
-    let agent_snapshots: Vec<AgentSnapshot> = agents
-        .iter()
-        .filter(|agent| agent.profile.name == brain_config.agent_name && agent.status == AgentStatus::Idle)
-        .map(|agent| AgentSnapshot {
-            id: agent.id,
-            name: agent.profile.name.clone(),
-        })
-        .collect();
+    let brain_agent = agents.iter().find(|a| {
+        a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string())
+    });
+
+    let Some(brain_agent) = brain_agent else {
+        return;
+    };
 
     let all_agent_descriptions: Vec<AgentDescription> = agents
         .iter()
+        .filter(|a| a.kind == AgentKind::Persistent)
         .map(|agent| AgentDescription {
             name: agent.profile.name.clone(),
             model: agent.profile.model.clone(),
@@ -79,33 +75,19 @@ pub(crate) fn brain_dispatch_system(
             continue;
         }
 
-        let Some(brain_snapshot) = agent_snapshots.first() else {
-            continue;
-        };
-
-        let prompt = brain_user_prompt_from_descriptions(
-            &task.content,
-            &all_agent_descriptions,
-            &brain_config.agent_name,
-        );
+        let prompt = brain_user_prompt_from_descriptions(&task.content, &all_agent_descriptions);
 
         let request = AgentExecutionRequest {
             task_id: task.id,
-            agent_id: brain_snapshot.id,
+            agent_id: brain_agent.id,
             request_kind: AgentRequestKind::BrainDecision,
             prompt,
             system_prompt: Some(brain_system_prompt()),
         };
 
-        task.mark_waiting_for_brain(brain_snapshot.id, clock.0);
+        task.mark_waiting_for_brain(brain_agent.id, clock.0);
         commands.spawn(AgentExecutionRequestMessage { request });
     }
-}
-
-struct AgentSnapshot {
-    id: crate::domain::AgentId,
-    #[allow(dead_code)]
-    name: String,
 }
 
 struct AgentDescription {
@@ -115,15 +97,10 @@ struct AgentDescription {
     description: String,
 }
 
-/// 从 Agent 描述快照构建 Brain user prompt，避免持有 Query 引用。
-fn brain_user_prompt_from_descriptions(
-    task_content: &str,
-    agents: &[AgentDescription],
-    brain_agent_name: &str,
-) -> String {
+fn brain_user_prompt_from_descriptions(task_content: &str, agents: &[AgentDescription]) -> String {
     let agent_descriptions: Vec<String> = agents
         .iter()
-        .filter(|agent| agent.name != brain_agent_name)
+        .filter(|agent| !agent.tags.contains(&"brain".to_string()))
         .map(|agent| {
             format!(
                 "- name: \"{}\"\n  model: \"{}\"\n  tags: {:?}\n  description: \"{}\"",
@@ -142,4 +119,24 @@ Select the best agent for this task and provide a delegate prompt."#,
         task_content,
         agent_descriptions.join("\n"),
     )
+}
+
+fn select_agent<'a>(
+    agents: impl Iterator<Item = &'a Agent>,
+    task_content: &str,
+) -> Option<&'a Agent> {
+    agents
+        .filter(|a| a.kind == AgentKind::Persistent)
+        .filter(|a| !a.capabilities.tags.contains(&"brain".to_string()))
+        .max_by_key(|a| match_score(a, task_content))
+}
+
+fn match_score(agent: &Agent, task_content: &str) -> usize {
+    let lower = task_content.to_lowercase();
+    agent
+        .capabilities
+        .tags
+        .iter()
+        .filter(|tag| lower.contains(&tag.to_lowercase()))
+        .count()
 }

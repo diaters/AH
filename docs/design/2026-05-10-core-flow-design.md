@@ -9,23 +9,23 @@
 - 将 `TaskDispatchSystem` 与具体 LLM SDK 解耦
 - 将“伪代码示意”和“Bevy 落地约束”分开描述
 
-***
+---
 
 ## 技术选型
 
-| 依赖                | 版本/选择        | 说明                          |
-| ----------------- | ------------ | --------------------------- |
-| Bevy              | 最新稳定版（>0.18） | ECS 框架                      |
-| Tokio             | 最新稳定版        | 异步运行时，执行 Agent 与 LLM SDK 依赖 |
-| async-openai      | 最新版          | OpenAI API 兼容的 LLM 调用       |
-| crossbeam-channel | 最新版          | 输入输出线程通信                    |
-| tokio::sync::mpsc | Tokio 内置     | 异步执行结果回传                    |
-| uuid              | 最新稳定版        | Task 和 Agent 标识             |
-| tracing           | 最新稳定版        | 日志                          |
-| thiserror         | 最新稳定版        | 库错误定义                       |
-| anyhow            | 最新稳定版        | 应用错误处理                      |
+| 依赖                | 版本/选择           | 说明                             |
+|--------------------|-------------------|----------------------------------|
+| Bevy               | 最新稳定版（>0.18）  | ECS 框架                         |
+| Tokio              | 最新稳定版         | 异步运行时，执行 Agent 与 LLM SDK 依赖 |
+| async-openai       | 最新版             | OpenAI API 兼容的 LLM 调用        |
+| crossbeam-channel  | 最新版             | 输入输出线程通信                  |
+| tokio::sync::mpsc  | Tokio 内置        | 异步执行结果回传                  |
+| uuid               | 最新稳定版         | Task 和 Agent 标识               |
+| tracing            | 最新稳定版         | 日志                             |
+| thiserror          | 最新稳定版         | 库错误定义                        |
+| anyhow             | 最新稳定版         | 应用错误处理                      |
 
-***
+---
 
 ## 一、核心原则
 
@@ -69,7 +69,7 @@
 - `ExecutionResult -> Message`
 - `Message -> Output`
 
-***
+---
 
 ## 二、入口与出口机制
 
@@ -175,7 +175,7 @@ fn user_output_system(
 - 外部线程与 ECS 只通过 channel 通信，避免线程直接操作 `World`
 - 输入线程、输出线程和 runtime 需要纳入应用生命周期管理，预留优雅退出机制
 
-***
+---
 
 ## 三、异步 Agent 执行集成
 
@@ -299,21 +299,21 @@ fn llm_response_system(
 - 回注 ECS 时优先回到 `Message` 层，而不是让异步任务直接修改 `Task`
 - 如果未来接入 Tool Agent、Browser Agent、Code Agent，应继续复用 `AgentExecutionRequest`
 
-***
+---
 
 ## 四、错误处理与重试机制
 
 ### 错误处理原则
 
-| 错误类型       | 处理方式                    |
-| ---------- | ----------------------- |
-| 网络超时       | 自动重试，指数退避               |
-| 临时网络故障     | 自动重试，指数退避               |
-| Rate limit | 按 `Retry-After` 或退避策略重试 |
-| 认证错误       | 立即失败                    |
-| 配额耗尽       | 立即失败                    |
-| 用户取消       | 立即失败                    |
-| 未知错误       | 达到重试上限前可重试，否则失败         |
+| 错误类型       | 处理方式                             |
+|-------------|-----------------------------------|
+| 网络超时       | 自动重试，指数退避                        |
+| 临时网络故障     | 自动重试，指数退避                        |
+| Rate limit | 按 `Retry-After` 或退避策略重试         |
+| 认证错误       | 立即失败                             |
+| 配额耗尽       | 立即失败                             |
+| 用户取消       | 立即失败                             |
+| 未知错误       | 达到重试上限前可重试，否则失败                 |
 
 ### 重试字段
 
@@ -428,16 +428,16 @@ fn retry_wakeup_system(
 - `last_error` 保存错误详情文本，`TaskStatus::Failed` 保存结构化失败原因
 - 成功后必须清空 `next_retry_at`，避免重复唤醒
 
-***
+---
 
 ## 五、Agent 架构
 
 ### Agent 分类
 
-| 类型        | 创建时机                      | 销毁时机    |
-| --------- | ------------------------- | ------- |
-| 持久性 Agent | 系统启动时从配置文件加载              | 系统关闭    |
-| 任务型 Agent | `AgentFactorySystem` 按需创建 | 任务完成后销毁 |
+| 类型          | 创建时机                        | 销毁时机       |
+|--------------|------------------------------|------------|
+| 持久性 Agent  | 系统启动时从配置文件加载            | 系统关闭      |
+| 任务型 Agent  | `AgentFactorySystem` 按需创建 | 任务完成后销毁  |
 
 ### Brain Agent
 
@@ -463,18 +463,18 @@ flowchart TB
     C --> D["TaskDispatchSystem"]
 ```
 
-***
+---
 
 ## 六、实体定义
 
 ### ID 类型
 
-| 实体      | ID 类型        | 理由             |
-| ------- | ------------ | -------------- |
+| 实体     | ID 类型       | 理由                   |
+|---------|--------------|----------------------|
 | Signal  | `Entity`     | Bevy 内部短生命周期实体 |
 | Message | `Entity`     | Bevy 内部短生命周期实体 |
-| Task    | `uuid::Uuid` | 跨 system 稳定引用  |
-| Agent   | `uuid::Uuid` | 跨 system 稳定引用  |
+| Task    | `uuid::Uuid` | 跨 system 稳定引用    |
+| Agent   | `uuid::Uuid` | 跨 system 稳定引用    |
 
 ### TaskStatus
 
@@ -533,7 +533,7 @@ enum MessageKind {
 }
 ```
 
-**Bevy 落地约束**：实际实现采用独立的 Component 而非统一枚举，原因：
+__Bevy 落地约束__：实际实现采用独立的 Component 而非统一枚举，原因：
 
 - Bevy Query 无法按枚举变体直接过滤（`With<MessageKind::UserOutput>` 不合法）
 - 独立 Component 允许更精确的 Query 约束
@@ -642,7 +642,7 @@ struct Clock(DateTime<Utc>);
 struct ShutdownState { requested: bool }
 ```
 
-***
+---
 
 ## 七、System 与 SystemSet 设计
 
@@ -650,44 +650,47 @@ struct ShutdownState { requested: bool }
 
 #### MVP 阶段（已实现）
 
-| System | 职责 |
-| ------ | ---- |
-| `tick_clock_system` | 更新 `Clock` 资源为当前时间 |
-| `input_ingress_system` | 外部输入 channel -> `Signal` |
-| `retry_wakeup_system` | 到时任务 -> `RetryWakeup Signal` |
-| `signal_ingest_system` | `Signal` -> `Message` |
-| `ingest_execution_results_system` | 异步结果 channel -> `AgentExecutionResultMessage` |
-| `user_message_to_task_system` | `UserInputMessage` -> `Task` |
-| `retry_ready_system` | `RetryReadyMessage` -> `Task` 置为 Ready |
-| `llm_response_system` | `AgentExecutionResultMessage` -> `Task` 更新 |
-| `task_dispatch_system` | `Task` -> `AgentExecutionRequestMessage` |
-| `agent_execution_system` | 执行请求 -> 异步 Agent 执行 |
-| `user_output_system` | `UserOutputMessage` -> 外部输出 |
-| `spawn_default_agent_system` | 启动时创建默认 Agent 实体 |
-| `agent_factory_system` | Agent 创建与销毁（MVP 为占位实现） |
+| System                           | 职责                                         |
+|----------------------------------|---------------------------------------------|
+| `tick_clock_system`              | 更新 `Clock` 资源为当前时间                   |
+| `input_ingress_system`           | 外部输入 channel -> `Signal`                 |
+| `retry_wakeup_system`            | 到时任务 -> `RetryWakeup Signal`             |
+| `signal_ingest_system`           | `Signal` -> `Message`                       |
+| `ingest_execution_results_system`| 异步结果 channel -> `AgentExecutionResultMessage` |
+| `user_message_to_task_system`    | `UserInputMessage` -> `Task`                |
+| `retry_ready_system`             | `RetryReadyMessage` -> `Task` 置为 Ready    |
+| `llm_response_system`            | `AgentExecutionResultMessage` -> `Task` 更新 |
+| `task_dispatch_system`           | `Task` -> `AgentExecutionRequestMessage`    |
+| `agent_execution_system`         | 执行请求 -> 异步 Agent 执行                  |
+| `user_output_system`             | `UserOutputMessage` -> 外部输出             |
+| `spawn_default_agent_system`     | 启动时创建默认 Agent 实体                   |
+| `agent_factory_system`           | Agent 创建与销毁（MVP 为占位实现）          |
 
 #### Phase 2（预留接口）
 
-| System | 职责 |
-| ------ | ---- |
-| `brain_dispatch_system` | `Ready Task` -> `BrainDecision Message` |
-| `brain_decision_system` | `BrainDecision Message` -> 任务分派信息 |
+| System                 | 职责                                    |
+|------------------------|----------------------------------------|
+| `brain_dispatch_system`| `Ready Task` -> `BrainDecision Message`|
+| `brain_decision_system`| `BrainDecision Message` -> 任务分派信息 |
 
 ### SystemSet 设计
 
 建议按固定顺序组织 Bevy 调度：
 
-| SystemSet | 作用 | 包含 System |
-| --------- | ---- | ----------- |
-| `IngressSet` | 引入外部事件 | `tick_clock_system`, `input_ingress_system` |
-| `SignalSet` | 消费 Signal | `retry_wakeup_system`, `signal_ingest_system` |
-| `TransformSet` | 在 `Message` 和 `Task` 间做转换 | `ingest_execution_results_system`, `user_message_to_task_system`, `retry_ready_system`, `llm_response_system` |
-| `DispatchSet` | 基于任务状态产出执行请求 | `task_dispatch_system`（Phase 2 加入 `brain_dispatch_system`） |
-| `ExecutionSet` | 执行 Agent 请求 | `agent_execution_system` |
-| `OutputSet` | 将输出发送到外部 | `user_output_system` |
-| `MaintenanceSet` | 生命周期与清理 | `agent_factory_system` |
+| SystemSet        | 作用                             | 包含 System                                   |
+|------------------|----------------------------------|-----------------------------------------------|
+| `IngressSet`     | 引入外部事件                     | `tick_clock_system`, `input_ingress_system`   |
+| `SignalSet`      | 消费 Signal                      | `retry_wakeup_system`, `signal_ingest_system` |
+| `TransformSet`   | 在 `Message` 和 `Task` 间做转换  | `ingest_execution_results_system`,            |
+|                  |                                  | `user_message_to_task_system`,                |
+|                  |                                  | `retry_ready_system`, `llm_response_system`   |
+| `DispatchSet`    | 基于任务状态产出执行请求         | `task_dispatch_system`                        |
+|                  |                                  | （Phase 2 加入 `brain_dispatch_system`）      |
+| `ExecutionSet`   | 执行 Agent 请求                  | `agent_execution_system`                      |
+| `OutputSet`      | 将输出发送到外部                 | `user_output_system`                          |
+| `MaintenanceSet` | 生命周期与清理                   | `agent_factory_system`                        |
 
-**Startup System**：`spawn_default_agent_system` 在应用启动时执行一次，创建默认 Agent 实体。
+__Startup System__：`spawn_default_agent_system` 在应用启动时执行一次，创建默认 Agent 实体。
 
 ### 调度顺序
 
@@ -717,7 +720,7 @@ flowchart LR
 - 同一阶段内如果存在读写冲突，继续使用更细粒度的 `before` / `after`
 - 明确约定“同帧最多推进一到两跳”，避免一个输入在单帧中无上限连锁推进
 
-***
+---
 
 ## 八、主流程时序图
 
@@ -768,7 +771,7 @@ sequenceDiagram
     RetryReady->>TaskDispatch: Task 重新置为 Ready
 ```
 
-***
+---
 
 ## 九、MVP 范围定义
 
@@ -784,24 +787,24 @@ sequenceDiagram
 
 ### 包含功能
 
-| 功能         | 说明                                        |
-| ---------- | ----------------------------------------- |
-| 用户输入       | stdin 读取，转为 `UserInput Signal`            |
-| Task 创建    | `UserInput Message -> Task`               |
-| 单 Agent 执行 | 默认 `LlmAgent` 消费 `AgentExecutionRequest`  |
-| 异步结果回注     | `AgentExecutionResult -> Message -> Task` |
-| 错误处理       | 网络错误重试，失败通知用户                             |
-| 输出         | `UserOutput Message -> stdout`            |
+| 功能          | 说明                                             |
+|---------------|------------------------------------------------|
+| 用户输入      | stdin 读取，转为 `UserInput Signal`              |
+| Task 创建     | `UserInput Message -> Task`                    |
+| 单 Agent 执行 | 默认 `LlmAgent` 消费 `AgentExecutionRequest`    |
+| 异步结果回注  | `AgentExecutionResult -> Message -> Task`      |
+| 错误处理      | 网络错误重试，失败通知用户                        |
+| 输出          | `UserOutput Message -> stdout`                 |
 
 ### 不包含
 
-| 功能             | 原因           |
-| -------------- | ------------ |
-| Brain Agent 决策 | MVP 先用默认调度规则 |
-| 多 Agent 并发协作   | 先验证主链路       |
-| 任务型 Agent 动态创建 | 先用静态默认 Agent |
-| Memory         | 后续扩展         |
-| Tool           | 后续扩展         |
+| 功能               | 原因                 |
+|--------------------|--------------------|
+| Brain Agent 决策   | MVP 先用默认调度规则 |
+| 多 Agent 并发协作  | 先验证主链路         |
+| 任务型 Agent 动态创建 | 先用静态默认 Agent  |
+| Memory            | 后续扩展            |
+| Tool              | 后续扩展            |
 
 ### 极简 MVP 流程
 
@@ -840,19 +843,19 @@ sequenceDiagram
     UserOutput->>User: 输出结果
 ```
 
-***
+---
 
 ## 十、后续扩展待办
 
 ### Phase 2: Brain Agent 调度
 
-| 待办项                                 | 改动类型 | 难度 |
-| ----------------------------------- | ---- | -- |
-| 启用 `BrainDispatchSystem`            | 新建   | 低  |
-| 启用 `BrainDecisionSystem`            | 新建   | 低  |
-| 定义 Brain Prompt 模板                  | 新建   | 中  |
-| 定义 Brain 决策结果解析                     | 新建   | 中  |
-| 扩展 `TaskDispatchSystem` 接收 Brain 输出 | 改造   | 中  |
+| 待办项                                        | 改动类型 | 难度 |
+|----------------------------------------------|----------|------|
+| 启用 `BrainDispatchSystem`                    | 新建      | 低   |
+| 启用 `BrainDecisionSystem`                    | 新建      | 低   |
+| 定义 Brain Prompt 模板                        | 新建      | 中   |
+| 定义 Brain 决策结果解析                        | 新建      | 中   |
+| 扩展 `TaskDispatchSystem` 接收 Brain 输出     | 改造      | 中   |
 
 改造说明：
 
@@ -861,12 +864,12 @@ sequenceDiagram
 
 ### Phase 3: 多 Agent 支持
 
-| 待办项                            | 改动类型 | 难度 |
-| ------------------------------ | ---- | -- |
-| 新增更多 `AgentExecutionSystem` 实现 | 新建   | 低  |
-| Agent 配置文件加载                   | 新建   | 低  |
-| 任务型 Agent 创建和销毁                | 新建   | 低  |
-| Agent 能力匹配逻辑                   | 扩展   | 中  |
+| 待办项                           | 改动类型 | 难度 |
+|---------------------------------|----------|------|
+| 新增更多 `AgentExecutionSystem` 实现 | 新建      | 低   |
+| Agent 配置文件加载                  | 新建      | 低   |
+| 任务型 Agent 创建和销毁              | 新建      | 低   |
+| Agent 能力匹配逻辑                 | 扩展      | 中   |
 
 改造说明：
 
@@ -875,15 +878,15 @@ sequenceDiagram
 
 ### Phase 4: 高级功能
 
-| 待办项                | 依赖                  |
-| ------------------ | ------------------- |
-| Memory 实体设计        | Phase 2 完成          |
+| 待办项              | 依赖                    |
+|--------------------|------------------------|
+| Memory 实体设计     | Phase 2 完成            |
 | Tool 和 ToolCall 设计 | Phase 2 完成          |
-| Session 设计         | Phase 3 完成          |
-| Planner 模块设计       | Phase 3 完成          |
-| 多轮上下文管理            | Memory 和 Session 完成 |
+| Session 设计       | Phase 3 完成            |
+| Planner 模块设计    | Phase 3 完成            |
+| 多轮上下文管理        | Memory 和 Session 完成  |
 
-***
+---
 
 ## 十一、待后续设计
 
@@ -894,4 +897,3 @@ sequenceDiagram
 - `Session` 概念
 - `Planner` 模块
 - 多轮对话上下文管理
-

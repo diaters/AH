@@ -63,20 +63,16 @@ pub fn parse_brain_decision(raw: &str) -> Result<BrainDecisionOutput, BrainDecis
 fn extract_json_block(raw: &str) -> &str {
     let trimmed = raw.trim();
 
-    if let Some(start) = trimmed.find("```json") {
-        if let Some(end) = trimmed.rfind("```") {
-            let json_start = start + 7;
-            return trimmed[json_start..end].trim();
-        }
+    if let (Some(start), Some(end)) = (trimmed.find("```json"), trimmed.rfind("```")) {
+        let json_start = start + 7;
+        return trimmed[json_start..end].trim();
     }
 
-    if let Some(start) = trimmed.find("```") {
-        if let Some(end) = trimmed.rfind("```") {
-            if start != end {
-                let json_start = start + 3;
-                return trimmed[json_start..end].trim();
-            }
-        }
+    if let (Some(start), Some(end)) = (trimmed.find("```"), trimmed.rfind("```"))
+        && start != end
+    {
+        let json_start = start + 3;
+        return trimmed[json_start..end].trim();
     }
 
     trimmed
@@ -85,7 +81,7 @@ fn extract_json_block(raw: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AgentCapabilities, AgentProfile, AgentStatus};
+    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile};
     use uuid::Uuid;
 
     fn test_task(content: &str) -> Task {
@@ -99,11 +95,13 @@ mod tests {
                 name: name.to_string(),
                 model: "test-model".to_string(),
             },
-            status: AgentStatus::Idle,
             capabilities: AgentCapabilities {
                 tags: vec!["test".to_string()],
                 description: format!("{name} agent for testing"),
             },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
         }
     }
 
@@ -142,7 +140,8 @@ mod tests {
 
     #[test]
     fn parse_valid_json() {
-        let raw = r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
+        let raw =
+            r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
         let output = parse_brain_decision(raw).expect("should parse");
 
         assert_eq!(output.selected_agent_name, "worker");

@@ -2,12 +2,11 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    build_harness_app, AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture,
-    ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus,
+    AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture, ExternalInput,
+    HarnessConfig, OutputMessage, Task, TaskStatus, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
-/// 模拟 Brain Agent 决策 + LLM Agent 执行的 Mock 执行器。
 struct BrainMockExecutor;
 
 impl AgentExecutor for BrainMockExecutor {
@@ -24,9 +23,8 @@ impl AgentExecutor for BrainMockExecutor {
     }
 }
 
-fn brain_config() -> HarnessConfig {
+fn brain_test_config() -> HarnessConfig {
     HarnessConfig {
-        default_agent_name: "default-llm-agent".to_string(),
         max_retries: 3,
         llm: harness::LlmProviderConfig {
             provider: harness::LlmProviderKind::OpenAi,
@@ -41,6 +39,7 @@ fn brain_config() -> HarnessConfig {
             model: "test-brain-model".to_string(),
             agent_name: "brain".to_string(),
         }),
+        agents_config_path: "agents.toml".to_string(),
     }
 }
 
@@ -51,7 +50,7 @@ fn completes_brain_dispatch_flow() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
     let (input_tx, input_rx) = unbounded();
     let (output_tx, output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(brain_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(brain_test_config(), runtime, executor, input_rx, output_tx);
 
     input_tx
         .send(ExternalInput::Text("你好，Harness".to_string()))
@@ -84,7 +83,10 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
     let (input_tx, input_rx) = unbounded();
     let (output_tx, output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(HarnessConfig::default(), runtime, executor, input_rx, output_tx);
+
+    let mut no_brain_config = brain_test_config();
+    no_brain_config.brain = None;
+    let mut app = build_harness_app(no_brain_config, runtime, executor, input_rx, output_tx);
 
     input_tx
         .send(ExternalInput::Text("你好，Harness".to_string()))

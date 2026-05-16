@@ -37,6 +37,7 @@
   "MD047": true,
   "MD048": { "style": "backtick" },
   "MD049": { "style": "underscore" },
-  "MD050": { "style": "atx" },
+  "MD050": { "style": "underscore" },
+  "MD060": false,
   "MD051": true
 }

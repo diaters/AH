@@ -8,7 +8,7 @@
 
 AI Harness 是一个基于 ECS 架构的 AI harness 软件框架，使用 Rust + Bevy 构建。
 
-**当前阶段**：MVP 主链路已实现，待进行真实 OpenAI 联调验证。
+__当前阶段__：MVP 主链路已实现，待进行真实 OpenAI 联调验证。
 
 ---
 
@@ -79,10 +79,10 @@ AI Harness 是一个基于 ECS 架构的 AI harness 软件框架，使用 Rust +
 
 使用 `tracing` crate：
 
-| 环境 | 默认级别 |
-|------|----------|
-| 生产 | INFO |
-| 开发 | DEBUG |
+| 环境   | 默认级别 |
+|--------|----------|
+| 生产   | INFO     |
+| 开发   | DEBUG    |
 
 ---
 
@@ -90,11 +90,12 @@ AI Harness 是一个基于 ECS 架构的 AI harness 软件框架，使用 Rust +
 
 ### 设计评审流程
 
-```
+```text
 设计文档编写 → 自审 → 提交用户评审 → 用户确认 → 实施
 ```
 
 评审标准：
+
 - 与本规范一致性
 - 内部逻辑无矛盾
 - 技术方案合理
@@ -112,13 +113,14 @@ AI Harness 是一个基于 ECS 架构的 AI harness 软件框架，使用 Rust +
 
 采用 Conventional Commits：
 
-```
+```text
 <type>: <description>
 
 [optional body]
 ```
 
 常用类型：
+
 - `feat`: 新功能
 - `fix`: Bug 修复
 - `docs`: 文档变更
@@ -140,7 +142,7 @@ AI Harness 是一个基于 ECS 架构的 AI harness 软件框架，使用 Rust +
 
 ### 目录结构
 
-```
+```text
 docs/
 ├── design/       # 设计文档
 ├── adr/          # 架构决策记录
@@ -164,10 +166,12 @@ docs/
 
 ### 检查项
 
-**阶段一（文档）**：
+__阶段一（文档）__：
+
 - markdownlint
 
-**阶段二（代码）**：
+__阶段二（代码）__：
+
 - markdownlint
 - cargo fmt --check
 - cargo clippy

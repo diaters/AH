@@ -142,18 +142,19 @@ pub struct AgentProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AgentStatus {
-    Idle,
-    Busy,
-    Offline,
+pub enum AgentKind {
+    Persistent,
+    TaskScoped,
 }
 
 #[derive(Debug, Clone, Component)]
 pub struct Agent {
     pub id: AgentId,
     pub profile: AgentProfile,
-    pub status: AgentStatus,
     pub capabilities: AgentCapabilities,
+    pub kind: AgentKind,
+    pub parent_id: Option<AgentId>,
+    pub bound_task_id: Option<TaskId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -305,10 +306,7 @@ impl ExecutionError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Timeout(_)
-                | Self::RateLimited { .. }
-                | Self::Transport(_)
-                | Self::Unknown(_)
+            Self::Timeout(_) | Self::RateLimited { .. } | Self::Transport(_) | Self::Unknown(_)
         )
     }
 
@@ -374,4 +372,32 @@ pub enum BrainDecisionError {
     UnknownAgent(String),
     #[error("brain returned empty response")]
     EmptyResponse,
+}
+
+#[derive(Debug, Clone, Component)]
+pub struct AgentSpawnRequestMessage {
+    pub parent_agent_id: AgentId,
+    pub task_id: TaskId,
+    pub name: String,
+    pub model: String,
+    pub tags: Vec<String>,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Component)]
+pub struct TaskTerminatedMessage {
+    pub task_id: TaskId,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentConfig {
+    pub agent: Vec<AgentEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentEntry {
+    pub name: String,
+    pub model: String,
+    pub tags: Vec<String>,
+    pub description: String,
 }
