@@ -26,8 +26,8 @@ pub enum SignalType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WaitingReason {
     Agent,
-    Brain,
-    User,
+    User,      // 等待用户输入
+    Evaluator, // 等待评估器判定
     RetryBackoff,
 }
 
@@ -235,13 +235,6 @@ impl Task {
         self.updated_at = now;
     }
 
-    /// 将任务标记为等待 Brain 决策状态。
-    pub fn mark_waiting_for_brain(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
-        self.delegate = Some(agent_id);
-        self.status = TaskStatus::Waiting(WaitingReason::Brain);
-        self.updated_at = now;
-    }
-
     /// 将任务标记为运行中。
     pub fn mark_running(&mut self, now: DateTime<Utc>) {
         self.status = TaskStatus::Running;
@@ -406,4 +399,16 @@ pub struct AgentEntry {
     pub model: String,
     pub tags: Vec<String>,
     pub description: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waiting_reason_has_user_and_evaluator() {
+        use WaitingReason::*;
+        let _ = User;
+        let _ = Evaluator;
+    }
 }
