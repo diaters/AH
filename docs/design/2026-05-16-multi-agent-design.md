@@ -2,7 +2,7 @@
 
 本文档描述 Phase 3 多 Agent 支持的详细设计，包括 Agent 分类、配置加载、动态创建/销毁、权限继承和核心数据流。
 
-***
+---
 
 ## 一、设计目标
 
@@ -12,7 +12,7 @@
 - 子 Agent 的 tags 必须是父 Agent tags 的子集（权限继承约束）
 - 任意 Agent 均可创建子 Agent，不限于 Brain
 
-***
+---
 
 ## 二、核心原则
 
@@ -28,14 +28,14 @@ Agent 描述"怎么执行"（model、tags、description），不追踪"执行到
 
 保持现有 `Signal → Message → System` 的单向转换模式，Agent 创建和销毁均通过 Message 驱动。
 
-***
+---
 
 ## 三、Agent 分类
 
-| 类型 | 创建时机 | 销毁时机 | 参与通用匹配 |
-|------|---------|---------|-------------|
-| 持久性 Agent | 启动时从配置文件加载 | 系统关闭 | 是 |
-| 任务型 Agent | Agent 请求创建 | 绑定 Task 终态后自动销毁 | 否 |
+| 类型          | 创建时机                    | 销毁时机                 | 参与通用匹配 |
+|---------------|----------------------------|--------------------------|--------------|
+| 持久性 Agent  | 启动时从配置文件加载      | 系统关闭                | 是           |
+| 任务型 Agent  | Agent 请求创建            | 绑定 Task 终态后自动销毁 | 否           |
 
 ### 持久性 Agent
 
@@ -52,7 +52,7 @@ Agent 描述"怎么执行"（model、tags、description），不追踪"执行到
 - 子 Agent 也可以创建自己的子 Agent（同样受 tags 子集约束）
 - 关联 Task 到达终态（Done/Failed）后自动销毁
 
-***
+---
 
 ## 四、配置文件设计
 
@@ -105,7 +105,7 @@ struct AgentEntry {
 - Brain Agent 通过 tags 中包含 `"brain"` 标识，不再硬编码
 - 配置文件不存在时不报错，启动时不创建任何持久性 Agent
 
-***
+---
 
 ## 五、实体定义
 
@@ -160,12 +160,12 @@ pub struct TaskTerminatedMessage {
 
 ### 移除内容
 
-| 实体 | 原因 |
-|------|------|
-| `AgentStatus` 枚举 | Agent 无状态化 |
+| 实体                        | 原因               |
+|-----------------------------|--------------------|
+| `AgentStatus` 枚举         | Agent 无状态化     |
 | `spawn_default_agent_system` | 配置加载归入 Factory |
 
-***
+---
 
 ## 六、核心数据流
 
@@ -213,26 +213,26 @@ sequenceDiagram
     FactorySystem->>FactorySystem: 创建持久性 Agent Entities
 ```
 
-***
+---
 
 ## 七、System 设计
 
 ### 新增/修改 System
 
-| System | 变更类型 | 职责 |
-|--------|---------|------|
-| `agent_factory_system` | 重写 | 加载配置创建持久性 Agent；消费 SpawnRequest 创建任务型 Agent；消费 TaskTerminated 销毁任务型 Agent |
-| `task_termination_system` | 新增 | 检测 Task 终态，产出 TaskTerminatedMessage |
-| `task_dispatch_system` | 修改 | 按 tags 匹配替代 Idle 过滤，排除任务型 Agent |
-| `brain_dispatch_system` | 修改 | 移除 Idle 过滤 |
+| System                 | 变更类型 | 职责                                                         |
+|------------------------|----------|--------------------------------------------------------------|
+| `agent_factory_system` | 重写     | 加载配置创建持久性 Agent；消费 SpawnRequest 创建任务型 Agent；消费 TaskTerminated 销毁任务型 Agent |
+| `task_termination_system` | 新增  | 检测 Task 终态，产出 TaskTerminatedMessage                   |
+| `task_dispatch_system` | 修改     | 按 tags 匹配替代 Idle 过滤，排除任务型 Agent                 |
+| `brain_dispatch_system`| 修改     | 移除 Idle 过滤                                               |
 
 ### agent_factory_system
 
 三个职责：
 
-1. **启动阶段**：加载 `agents.toml`，创建持久性 Agent
-2. **运行阶段-创建**：消费 `AgentSpawnRequestMessage`，校验 tags 子集，创建任务型 Agent 并产出执行请求
-3. **运行阶段-销毁**：消费 `TaskTerminatedMessage`，查找匹配的任务型 Agent 并 despawn
+1. __启动阶段__：加载 `agents.toml`，创建持久性 Agent
+2. __运行阶段-创建__：消费 `AgentSpawnRequestMessage`，校验 tags 子集，创建任务型 Agent 并产出执行请求
+3. __运行阶段-销毁__：消费 `TaskTerminatedMessage`，查找匹配的任务型 Agent 并 despawn
 
 ```rust
 fn agent_factory_system(
@@ -353,12 +353,12 @@ fn brain_dispatch_system(
 
 ### SystemSet 归属
 
-| System | Set | 顺序说明 |
-|--------|-----|---------|
-| `task_termination_system` | TransformSet | 紧接 `llm_response_system` 之后 |
-| `agent_factory_system` | MaintenanceSet | 现有位置不变 |
+| System                 | Set           | 顺序说明                             |
+|------------------------|---------------|--------------------------------------|
+| `task_termination_system` | TransformSet | 紧接 `llm_response_system` 之后     |
+| `agent_factory_system` | MaintenanceSet | 现有位置不变                       |
 
-***
+---
 
 ## 八、权限继承
 
@@ -399,19 +399,19 @@ task.status = TaskStatus::Failed(FailureReason::AgentError);
 - Agent B（A 的子 Agent）tags: `["llm", "code"]` — 通过
 - Agent C（B 的子 Agent）tags: `["llm", "code", "web"]` — 拒绝，`"web"` 不在 B 的 tags 中
 
-***
+---
 
 ## 九、错误处理
 
-| 场景 | 处理 |
-|------|------|
-| SpawnRequest tags 超出父 Agent | 拒绝创建，回写错误到父 Agent 关联的 Task |
-| 配置文件 name 重复 | 启动时 panic（配置错误应尽早暴露） |
-| 配置文件不存在 | 不报错，无持久性 Agent |
-| 销毁时 Agent 已不存在 | 忽略（幂等） |
-| TaskTerminatedMessage 重复消费 | 幂等处理，第二次查询无匹配 Agent 时跳过 |
+| 场景                           | 处理                                         |
+|--------------------------------|----------------------------------------------|
+| SpawnRequest tags 超出父 Agent | 拒绝创建，回写错误到父 Agent 关联的 Task    |
+| 配置文件 name 重复             | 启动时 panic（配置错误应尽早暴露）          |
+| 配置文件不存在                 | 不报错，无持久性 Agent                       |
+| 销毁时 Agent 已不存在          | 忽略（幂等）                                 |
+| TaskTerminatedMessage 重复消费 | 幂等处理，第二次查询无匹配 Agent 时跳过     |
 
-***
+---
 
 ## 十、不在本次范围
 
@@ -422,7 +422,7 @@ task.status = TaskStatus::Failed(FailureReason::AgentError);
 - Task 清理机制（Task 终态后的 despawn 策略）
 - Agent 热重载（运行时修改配置文件并重新加载）
 
-***
+---
 
 ## 十一、与现有设计的兼容性
 

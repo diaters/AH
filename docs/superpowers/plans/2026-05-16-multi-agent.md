@@ -1,12 +1,18 @@
 # Phase 3: 多 Agent 支持实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> __For agentic workers:__ REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
+> (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 实现多 Agent 支持——Agent 无状态化、配置文件加载持久性 Agent、动态创建/销毁任务型 Agent、权限继承校验。
+__Goal:__ 实现多 Agent 支持——Agent 无状态化、配置文件加载持久性 Agent、
+动态创建/销毁任务型 Agent、权限继承校验。
 
-**Architecture:** Agent 从可变状态实体转为不可变配置实体。`AgentFactorySystem` 统一管理全生命周期（配置加载、创建、销毁）。新增 `TaskTerminatedMessage` 驱动任务型 Agent 销毁。`task_dispatch_system` 改为 tags 匹配。
+__Architecture:__ Agent 从可变状态实体转为不可变配置实体。
+`AgentFactorySystem` 统一管理全生命周期（配置加载、创建、销毁）。
+新增 `TaskTerminatedMessage` 驱动任务型 Agent 销毁。
+`task_dispatch_system` 改为 tags 匹配。
 
-**Tech Stack:** Rust, Bevy ECS, TOML (serde + toml crate)
+__Tech Stack:__ Rust, Bevy ECS, TOML (serde + toml crate)
 
 ---
 
@@ -15,12 +21,16 @@
 | 文件 | 操作 | 职责 |
 |------|------|------|
 | `Cargo.toml` | 修改 | 添加 `toml` 依赖 |
-| `src/domain/mod.rs` | 修改 | 移除 `AgentStatus`，Agent 新增 `kind`/`parent_id`/`bound_task_id`，新增 `AgentKind`/`AgentSpawnRequestMessage`/`TaskTerminatedMessage`/`AgentConfig`/`AgentEntry` |
-| `src/systems/maintenance.rs` | 重写 | `agent_factory_system`：加载配置 + 处理 SpawnRequest + 处理 TaskTerminated；移除 `spawn_default_agent_system` |
-| `src/systems/dispatch.rs` | 修改 | `task_dispatch_system`：tags 匹配替代 Idle 过滤；`brain_dispatch_system`：移除 Idle 过滤 |
-| `src/systems/transform.rs` | 修改 | `brain_decision_system`：移除 AgentStatus 修改；`llm_response_system`：移除 AgentStatus 修改；新增 `task_termination_system` |
-| `src/systems/mod.rs` | 修改 | 更新 pub use，新增 `task_termination_system` 导出，移除 `spawn_default_agent_system` 导出 |
-| `src/app/mod.rs` | 修改 | `HarnessConfig` 新增 `agents_config_path`；app 构建中移除 `spawn_default_agent_system`，新增 `task_termination_system`，更新 `app_is_idle` |
+| `src/domain/mod.rs` | 修改 | 移除 `AgentStatus`，Agent 新增 `kind`/`parent_id`/`bound_task_id` |
+| | | 新增 `AgentKind`/`AgentSpawnRequestMessage`/`TaskTerminatedMessage` |
+| `src/systems/maintenance.rs` | 重写 | `agent_factory_system`：加载配置 + 处理 SpawnRequest |
+| | | + 处理 TaskTerminated |
+| `src/systems/dispatch.rs` | 修改 | `task_dispatch_system`：tags 匹配替代 Idle 过滤 |
+| `src/systems/transform.rs` | 修改 | `brain_decision_system`：移除 AgentStatus 修改 |
+| | | 新增 `task_termination_system` |
+| `src/systems/mod.rs` | 修改 | 更新 pub use，新增 `task_termination_system` 导出 |
+| `src/app/mod.rs` | 修改 | `HarnessConfig` 新增 `agents_config_path` |
+| | | app 构建中新增 `task_termination_system`，更新 `app_is_idle` |
 | `agents.toml` | 新建 | 默认 Agent 配置文件 |
 | `tests/mvp_flow.rs` | 修改 | 适配无状态 Agent，测试用例改用配置文件路径 |
 | `tests/brain_dispatch_flow.rs` | 修改 | 适配无状态 Agent，移除 AgentStatus 断言 |
@@ -30,10 +40,11 @@
 
 ### Task 1: 添加 toml 依赖
 
-**Files:**
+__Files:__
+
 - Modify: `Cargo.toml`
 
-- [ ] **Step 1: 添加 toml crate 到 Cargo.toml**
+- [ ] __Step 1: 添加 toml crate 到 Cargo.toml__
 
 在 `[dependencies]` 中添加：
 
@@ -41,12 +52,12 @@
 toml = "0.8"
 ```
 
-- [ ] **Step 2: 验证编译**
+- [ ] __Step 2: 验证编译__
 
 Run: `cargo check`
 Expected: 编译成功（仅添加依赖，不影响现有代码）
 
-- [ ] **Step 3: Commit**
+- [ ] __Step 3: Commit__
 
 ```bash
 git add Cargo.toml Cargo.lock
@@ -57,10 +68,11 @@ git commit -m "chore: 添加 toml 依赖用于 Agent 配置加载"
 
 ### Task 2: 修改 domain 层——移除 AgentStatus，新增 AgentKind 和 Message 类型
 
-**Files:**
+__Files:__
+
 - Modify: `src/domain/mod.rs`
 
-- [ ] **Step 1: 移除 AgentStatus 枚举和 Agent 中的 status 字段，新增 AgentKind、parent_id、bound_task_id**
+- [ ] __Step 1: 移除 AgentStatus 枚举和 Agent 中的 status 字段，新增 AgentKind、parent_id、bound_task_id__
 
 在 `src/domain/mod.rs` 中：
 
@@ -85,7 +97,7 @@ pub struct Agent {
 }
 ```
 
-3. 在文件末尾添加新的 Message 和配置类型：
+1. 在文件末尾添加新的 Message 和配置类型：
 
 ```rust
 #[derive(Debug, Clone, Component)]
@@ -117,7 +129,7 @@ pub struct AgentEntry {
 }
 ```
 
-- [ ] **Step 2: 编译检查——修复所有编译错误**
+- [ ] __Step 2: 编译检查——修复所有编译错误__
 
 由于移除了 `AgentStatus`，需要同时修复引用它的文件。此时仅做最小修复使编译通过（标记为 `// TODO: Phase 3` 或直接删除无用代码）：
 
@@ -128,7 +140,7 @@ pub struct AgentEntry {
 Run: `cargo check`
 Expected: 编译成功
 
-- [ ] **Step 3: Commit**
+- [ ] __Step 3: Commit__
 
 ```bash
 git add src/domain/mod.rs src/systems/maintenance.rs src/systems/dispatch.rs src/systems/transform.rs
@@ -139,10 +151,11 @@ git commit -m "refactor: 移除 AgentStatus，Agent 无状态化，新增 AgentK
 
 ### Task 3: 重写 agent_factory_system
 
-**Files:**
+__Files:__
+
 - Modify: `src/systems/maintenance.rs`
 
-- [ ] **Step 1: 实现 agent_factory_system 的三个职责**
+- [ ] __Step 1: 实现 agent_factory_system 的三个职责__
 
 将 `src/systems/maintenance.rs` 完整重写为：
 
@@ -325,12 +338,12 @@ pub(crate) fn validate_tags_subset(parent_tags: &[String], child_tags: &[String]
 }
 ```
 
-- [ ] **Step 2: 编译检查**
+- [ ] __Step 2: 编译检查__
 
 Run: `cargo check`
 Expected: 可能有编译警告（`AgentSpawnRequestMessage` 的 `prompt` 暂时为空字符串），但无错误
 
-- [ ] **Step 3: Commit**
+- [ ] __Step 3: Commit__
 
 ```bash
 git add src/systems/maintenance.rs
@@ -341,10 +354,11 @@ git commit -m "feat: 重写 agent_factory_system，支持配置加载、动态�
 
 ### Task 4: 修改 task_dispatch_system 和 brain_dispatch_system
 
-**Files:**
+__Files:__
+
 - Modify: `src/systems/dispatch.rs`
 
-- [ ] **Step 1: 重写 dispatch.rs**
+- [ ] __Step 1: 重写 dispatch.rs__
 
 将 `src/systems/dispatch.rs` 完整重写为：
 
@@ -501,12 +515,12 @@ fn match_score(agent: &Agent, task_content: &str) -> usize {
 }
 ```
 
-- [ ] **Step 2: 编译检查**
+- [ ] __Step 2: 编译检查__
 
 Run: `cargo check`
 Expected: 编译成功
 
-- [ ] **Step 3: Commit**
+- [ ] __Step 3: Commit__
 
 ```bash
 git add src/systems/dispatch.rs
@@ -517,10 +531,11 @@ git commit -m "refactor: task_dispatch 按 tags 匹配，brain_dispatch 移除 I
 
 ### Task 5: 修改 transform.rs——移除 AgentStatus 引用，新增 task_termination_system
 
-**Files:**
+__Files:__
+
 - Modify: `src/systems/transform.rs`
 
-- [ ] **Step 1: 重写 transform.rs**
+- [ ] __Step 1: 重写 transform.rs__
 
 将 `src/systems/transform.rs` 完整重写为：
 
@@ -783,12 +798,12 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
 }
 ```
 
-- [ ] **Step 2: 编译检查**
+- [ ] __Step 2: 编译检查__
 
 Run: `cargo check`
 Expected: 编译成功
 
-- [ ] **Step 3: Commit**
+- [ ] __Step 3: Commit__
 
 ```bash
 git add src/systems/transform.rs
@@ -799,11 +814,12 @@ git commit -m "refactor: transform 移除 AgentStatus 引用，新增 task_termi
 
 ### Task 6: 更新 systems/mod.rs 和 app/mod.rs
 
-**Files:**
+__Files:__
+
 - Modify: `src/systems/mod.rs`
 - Modify: `src/app/mod.rs`
 
-- [ ] **Step 1: 更新 systems/mod.rs**
+- [ ] __Step 1: 更新 systems/mod.rs__
 
 ```rust
 mod dispatch;
@@ -838,7 +854,7 @@ pub enum HarnessSet {
 }
 ```
 
-- [ ] **Step 2: 更新 HarnessConfig 和 app 构建逻辑**
+- [ ] __Step 2: 更新 HarnessConfig 和 app 构建逻辑__
 
 在 `src/app/mod.rs` 中：
 
@@ -854,7 +870,7 @@ pub struct HarnessConfig {
 }
 ```
 
-2. 修改 `HarnessConfig::from_env()`：
+1. 修改 `HarnessConfig::from_env()`：
 
 ```rust
 impl HarnessConfig {
@@ -888,7 +904,7 @@ impl HarnessConfig {
 }
 ```
 
-3. 修改 `HarnessConfig::default()`：
+1. 修改 `HarnessConfig::default()`：
 
 ```rust
 impl Default for HarnessConfig {
@@ -910,7 +926,7 @@ impl Default for HarnessConfig {
 }
 ```
 
-4. 修改 `build_harness_app`：移除 `app.add_systems(Startup, spawn_default_agent_system)`，新增 `task_termination_system`：
+1. 修改 `build_harness_app`：移除 `app.add_systems(Startup, spawn_default_agent_system)`，新增 `task_termination_system`：
 
 ```rust
 // 移除: app.add_systems(Startup, spawn_default_agent_system);
@@ -944,7 +960,7 @@ app.add_systems(
 );
 ```
 
-5. 更新 `app_is_idle`，添加新 Message 类型检查：
+1. 更新 `app_is_idle`，添加新 Message 类型检查：
 
 ```rust
 pub fn app_is_idle(world: &mut World) -> bool {
@@ -974,14 +990,14 @@ pub fn app_is_idle(world: &mut World) -> bool {
 }
 ```
 
-6. 更新 `use` 导入，移除 `spawn_default_agent_system`，新增 `task_termination_system`。
+1. 更新 `use` 导入，移除 `spawn_default_agent_system`，新增 `task_termination_system`。
 
-- [ ] **Step 3: 编译检查**
+- [ ] __Step 3: 编译检查__
 
 Run: `cargo check`
 Expected: 编译成功
 
-- [ ] **Step 4: Commit**
+- [ ] __Step 4: Commit__
 
 ```bash
 git add src/systems/mod.rs src/app/mod.rs
@@ -992,12 +1008,13 @@ git commit -m "refactor: 更新 app 构建逻辑，接入 task_termination_syste
 
 ### Task 7: 创建默认配置文件并修复现有测试
 
-**Files:**
+__Files:__
+
 - Create: `agents.toml`
 - Modify: `tests/mvp_flow.rs`
 - Modify: `tests/brain_dispatch_flow.rs`
 
-- [ ] **Step 1: 创建 agents.toml**
+- [ ] __Step 1: 创建 agents.toml__
 
 ```toml
 [[agent]]
@@ -1013,7 +1030,7 @@ tags = ["brain", "dispatcher"]
 description = "Brain Agent，负责调度决策"
 ```
 
-- [ ] **Step 2: 更新 tests/mvp_flow.rs**
+- [ ] __Step 2: 更新 tests/mvp_flow.rs__
 
 测试需要指定 agents.toml 路径。修改 `HarnessConfig` 构造：
 
@@ -1085,7 +1102,7 @@ fn completes_single_turn_conversation_flow() {
 }
 ```
 
-- [ ] **Step 3: 更新 tests/brain_dispatch_flow.rs**
+- [ ] __Step 3: 更新 tests/brain_dispatch_flow.rs__
 
 ```rust
 use std::{sync::Arc, thread, time::Duration};
@@ -1192,12 +1209,12 @@ fn mvp_flow_unchanged_when_brain_disabled() {
 }
 ```
 
-- [ ] **Step 4: 运行测试**
+- [ ] __Step 4: 运行测试__
 
 Run: `cargo test`
 Expected: 所有测试通过
 
-- [ ] **Step 5: Commit**
+- [ ] __Step 5: Commit__
 
 ```bash
 git add agents.toml tests/mvp_flow.rs tests/brain_dispatch_flow.rs
@@ -1208,10 +1225,11 @@ git commit -m "feat: 创建默认 Agent 配置文件，修复现有测试适配�
 
 ### Task 8: 新增多 Agent 集成测试
 
-**Files:**
+__Files:__
+
 - Create: `tests/multi_agent_flow.rs`
 
-- [ ] **Step 1: 编写多 Agent 集成测试**
+- [ ] __Step 1: 编写多 Agent 集成测试__
 
 ```rust
 use std::{sync::Arc, thread, time::Duration};
@@ -1412,12 +1430,12 @@ fn tags_subset_validation_rejects_invalid_spawn() {
 }
 ```
 
-- [ ] **Step 2: 运行测试**
+- [ ] __Step 2: 运行测试__
 
 Run: `cargo test`
 Expected: 所有测试通过
 
-- [ ] **Step 3: Commit**
+- [ ] __Step 3: Commit__
 
 ```bash
 git add tests/multi_agent_flow.rs
@@ -1428,10 +1446,11 @@ git commit -m "test: 新增多 Agent 集成测试——配置加载、tags 匹�
 
 ### Task 9: 更新 TODO 和设计文档
 
-**Files:**
+__Files:__
+
 - Modify: `docs/TODO.md`
 
-- [ ] **Step 1: 更新 TODO.md**
+- [ ] __Step 1: 更新 TODO.md__
 
 将 Phase 3 部分从待办移到已完成：
 
@@ -1449,7 +1468,7 @@ git commit -m "test: 新增多 Agent 集成测试——配置加载、tags 匹�
 - [x] 集成测试
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] __Step 2: Commit__
 
 ```bash
 git add docs/TODO.md

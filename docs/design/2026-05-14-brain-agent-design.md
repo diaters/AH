@@ -2,7 +2,7 @@
 
 本文档描述 Phase 2 Brain Agent 调度的详细设计，包括数据流、状态转换、接口定义和实施步骤。
 
-***
+---
 
 ## 一、设计目标
 
@@ -11,7 +11,7 @@
 - Brain 不启用时行为与 MVP 完全一致
 - Brain 决策失败时具备容错能力
 
-***
+---
 
 ## 二、核心数据流
 
@@ -49,7 +49,7 @@ sequenceDiagram
 
 与当前 MVP 流程完全一致，`brain_dispatch_system` 跳过，`task_dispatch_system` 直接处理 Ready Task。
 
-***
+---
 
 ## 三、状态转换
 
@@ -72,7 +72,7 @@ stateDiagram-v2
     Waiting_RetryBackoff --> Ready: retry wakeup signal
 ```
 
-***
+---
 
 ## 四、接口变更
 
@@ -136,25 +136,25 @@ enum BrainDecisionError {
 }
 ```
 
-***
+---
 
 ## 五、System 设计
 
 ### brain_dispatch_system
 
-- **阶段**：DispatchSet（在 `task_dispatch_system` 之前）
-- **输入**：`Ready` 状态的 Task、`Idle` 状态的 Brain Agent
-- **输出**：`AgentExecutionRequestMessage(BrainDecision)`
-- **副作用**：Task 进入 `Waiting(Brain)`，Brain Agent 进入 `Busy`
-- **跳过条件**：Brain 未启用、Brain Agent 不可用
+- __阶段__：DispatchSet（在 `task_dispatch_system` 之前）
+- __输入__：`Ready` 状态的 Task、`Idle` 状态的 Brain Agent
+- __输出__：`AgentExecutionRequestMessage(BrainDecision)`
+- __副作用__：Task 进入 `Waiting(Brain)`，Brain Agent 进入 `Busy`
+- __跳过条件__：Brain 未启用、Brain Agent 不可用
 
 ### brain_decision_system
 
-- **阶段**：TransformSet（在 `ingest_execution_results_system` 之后）
-- **输入**：`AgentExecutionResultMessage` 中 `request_kind == BrainDecision` 的结果
-- **输出**：`AgentExecutionRequestMessage(LlmCompletion)`
-- **副作用**：Task 从 `Waiting(Brain)` 转为 `Waiting(Agent)`，Brain Agent 恢复 `Idle`，选定 Agent 进入 `Busy`
-- **容错**：解析失败时 Task 标记为 Failed；选定 Agent 不存在时回退到默认 Agent
+- __阶段__：TransformSet（在 `ingest_execution_results_system` 之后）
+- __输入__：`AgentExecutionResultMessage` 中 `request_kind == BrainDecision` 的结果
+- __输出__：`AgentExecutionRequestMessage(LlmCompletion)`
+- __副作用__：Task 从 `Waiting(Brain)` 转为 `Waiting(Agent)`，Brain Agent 恢复 `Idle`，选定 Agent 进入 `Busy`
+- __容错__：解析失败时 Task 标记为 Failed；选定 Agent 不存在时回退到默认 Agent
 
 ### llm_response_system 改造
 
@@ -165,7 +165,7 @@ enum BrainDecisionError {
 - 回注结果携带 `request_kind`
 - Brain 请求不调用 `task.mark_running()`
 
-***
+---
 
 ## 六、Brain Prompt 设计
 
@@ -183,17 +183,17 @@ enum BrainDecisionError {
 - 支持被 markdown code block 包裹的 JSON
 - 解析失败时返回 `BrainDecisionError::ParseFailed`
 
-***
+---
 
 ## 七、Brain 配置
 
-| 环境变量 | 必填 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `HARNESS_BRAIN_ENABLED` | 否 | `false` | 是否启用 Brain 调度 |
-| `HARNESS_BRAIN_MODEL` | 否 | 与主模型相同 | Brain 使用的 LLM 模型 |
-| `HARNESS_BRAIN_AGENT_NAME` | 否 | `brain` | Brain Agent 名称 |
+| 环境变量                  | 必填 | 默认值        | 说明                 |
+|-------------------------|------|---------------|----------------------|
+| `HARNESS_BRAIN_ENABLED` | 否   | `false`       | 是否启用 Brain 调度  |
+| `HARNESS_BRAIN_MODEL`   | 否   | 与主模型相同   | Brain 使用的 LLM 模型 |
+| `HARNESS_BRAIN_AGENT_NAME` | 否 | `brain`      | Brain Agent 名称    |
 
-***
+---
 
 ## 八、SystemSet 编排变化
 
@@ -222,28 +222,28 @@ flowchart LR
     A --> C[llm_response_system]
 ```
 
-***
+---
 
 ## 九、容错策略
 
-| 场景 | 处理方式 |
-|------|----------|
-| Brain LLM 调用网络错误 | 走标准重试流程（与 Task 重试机制一致） |
-| Brain 返回非 JSON 格式 | Task 标记 Failed(AgentError)，记录 last_error |
-| Brain 选定不存在的 Agent | 回退到默认 Agent |
-| Brain 选中自身 | 在 prompt 中排除 Brain，解析后校验 |
-| Brain Agent 不存在 | brain_dispatch_system 跳过，task_dispatch_system 接管 |
+| 场景                     | 处理方式                                         |
+|-------------------------|-------------------------------------------------|
+| Brain LLM 调用网络错误  | 走标准重试流程（与 Task 重试机制一致）         |
+| Brain 返回非 JSON 格式  | Task 标记 Failed(AgentError)，记录 last_error  |
+| Brain 选定不存在的 Agent | 回退到默认 Agent                                |
+| Brain 选中自身          | 在 prompt 中排除 Brain，解析后校验              |
+| Brain Agent 不存在      | brain_dispatch_system 跳过，task_dispatch_system 接管 |
 
-***
+---
 
 ## 十、同帧推进分析
 
-| 帧 | 推进 | 跳数 |
-|----|------|------|
-| N | Ready -> Waiting(Brain) + BrainDecision 请求 | 1 |
-| N+1 | agent_execution_system spawn 异步任务 | 1 |
-| N+K | ingest + brain_decision -> Waiting(Agent) + LlmCompletion 请求 | 2 |
-| N+K+1 | agent_execution_system spawn 异步任务 | 1 |
-| N+K+M | ingest + llm_response -> Done + UserOutput | 2 |
+| 帧   | 推进                                         | 跳数 |
+|------|---------------------------------------------|------|
+| N    | Ready -> Waiting(Brain) + BrainDecision 请求 | 1    |
+| N+1  | agent_execution_system spawn 异步任务        | 1    |
+| N+K  | ingest + brain_decision -> Waiting(Agent) + LlmCompletion 请求 | 2 |
+| N+K+1| agent_execution_system spawn 异步任务        | 1    |
+| N+K+M| ingest + llm_response -> Done + UserOutput  | 2    |
 
 每帧最多推进 2 跳，符合约束。

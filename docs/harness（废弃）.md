@@ -1,3 +1,7 @@
+# Harness Core 设计（废弃）
+
+> 此文档已废弃，新设计见 `docs/design/2026-05-10-core-flow-design.md`
+
 ## Harness Core 设计
 
 本文档描述基于 Bevy ECS 的 AI Harness `core` 层设计。

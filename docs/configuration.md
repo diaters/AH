@@ -4,7 +4,7 @@
 
 ## 配置来源
 
-当前主程序通过环境变量加载运行配置，入口位于 [main.rs](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/src/main.rs) 和 [app/mod.rs](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/src/app/mod.rs)。
+当前主程序通过环境变量加载运行配置，入口位于 `src/main.rs` 和 `src/app/mod.rs`。
 
 配置加载顺序如下：
 
@@ -16,22 +16,22 @@
 
 ### 通用变量
 
-| 变量名 | 必填 | 说明 |
-|------|------|------|
-| `HARNESS_LLM_PROVIDER` | 否 | provider 类型，默认 `openai` |
-| `HARNESS_MODEL` | 否 | 模型名称，默认 `gpt-4.1-mini` |
-| `HARNESS_LLM_API_KEY` | 条件必填 | 首选 API Key |
-| `HARNESS_LLM_API_BASE` | 条件必填 | OpenAI 兼容接口的基础地址 |
-| `HARNESS_LLM_ORG_ID` | 否 | 可选组织 ID |
-| `HARNESS_LLM_PROJECT_ID` | 否 | 可选项目 ID |
+| 变量名                  | 必填     | 说明                           |
+|-------------------------|----------|--------------------------------|
+| `HARNESS_LLM_PROVIDER`  | 否       | provider 类型，默认 `openai`   |
+| `HARNESS_MODEL`         | 否       | 模型名称，默认 `gpt-4.1-mini`  |
+| `HARNESS_LLM_API_KEY`   | 条件必填 | 首选 API Key                   |
+| `HARNESS_LLM_API_BASE`  | 条件必填 | OpenAI 兼容接口的基础地址      |
+| `HARNESS_LLM_ORG_ID`    | 否       | 可选组织 ID                    |
+| `HARNESS_LLM_PROJECT_ID`| 否       | 可选项目 ID                    |
 
 ### Brain Agent 变量
 
-| 变量名 | 必填 | 默认值 | 说明 |
-|------|------|------|------|
-| `HARNESS_BRAIN_ENABLED` | 否 | `false` | 是否启用 Brain Agent 调度 |
-| `HARNESS_BRAIN_MODEL` | 否 | 与 `HARNESS_MODEL` 相同 | Brain Agent 使用的 LLM 模型 |
-| `HARNESS_BRAIN_AGENT_NAME` | 否 | `brain` | Brain Agent 名称标识 |
+| 变量名                    | 必填 | 默认值                | 说明                        |
+|---------------------------|------|-----------------------|-----------------------------|
+| `HARNESS_BRAIN_ENABLED`   | 否   | `false`               | 是否启用 Brain Agent 调度   |
+| `HARNESS_BRAIN_MODEL`     | 否   | 与 `HARNESS_MODEL` 相同 | Brain Agent 使用的 LLM 模型 |
+| `HARNESS_BRAIN_AGENT_NAME`| 否   | `brain`               | Brain Agent 名称标识        |
 
 Brain 启用后，系统会在启动时创建 Brain Agent 实体，用户输入会先经过 Brain 决策再分派给具体 Agent 执行。Brain 不启用时行为与 MVP 完全一致。
 
@@ -55,15 +55,15 @@ Brain 启用后，系统会在启动时创建 Brain Agent 实体，用户输入�
 
 当前支持以下 provider：
 
-| 取值 | 含义 |
-|------|------|
-| `openai` | 标准 OpenAI 接口 |
-| `openai-compatible` | OpenAI 兼容协议接口 |
-| `compatible` | `openai-compatible` 的别名 |
+| 取值               | 含义                        |
+|--------------------|-----------------------------|
+| `openai`           | 标准 OpenAI 接口            |
+| `openai-compatible`| OpenAI 兼容协议接口         |
+| `compatible`       | `openai-compatible` 的别名  |
 
 ## 配置约束
 
-当前代码会执行以下校验，见 [llm/mod.rs](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/src/llm/mod.rs)：
+当前代码会执行以下校验，见 `src/llm/mod.rs`：
 
 - `HARNESS_MODEL` 不能为空
 - API Key 不能为空
