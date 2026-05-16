@@ -6,14 +6,14 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use harness::{
     ExternalInput, HarnessConfig, OutputMessage, ShutdownState, app_is_idle, build_harness_app,
     create_executor_from_config,
 };
 use tokio::runtime::Runtime;
 use tracing::error;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 /// 初始化命令行运行所需的 tracing 日志。
 fn init_tracing() {

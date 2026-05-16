@@ -144,7 +144,8 @@ mod tests {
 
     #[test]
     fn parse_valid_json() {
-        let raw = r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
+        let raw =
+            r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
         let output = parse_brain_decision(raw).expect("should parse");
 
         assert_eq!(output.selected_agent_name, "worker");

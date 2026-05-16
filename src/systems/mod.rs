@@ -14,8 +14,7 @@ pub(crate) use maintenance::agent_factory_system;
 pub(crate) use output::user_output_system;
 pub(crate) use transform::{
     brain_decision_system, ingest_execution_results_system, llm_response_system,
-    retry_ready_system, signal_ingest_system, task_termination_system,
-    user_message_to_task_system,
+    retry_ready_system, signal_ingest_system, task_termination_system, user_message_to_task_system,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]

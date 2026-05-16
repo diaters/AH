@@ -3,9 +3,9 @@ use std::{sync::Arc, thread, time::Duration};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    build_harness_app, Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, ExecutorFuture, ExternalInput, HarnessConfig, OutputMessage,
-    Task, TaskStatus, TaskTerminatedMessage,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
+    ExecutorFuture, ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus,
+    TaskTerminatedMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -50,10 +50,16 @@ fn loads_persistent_agents_from_config() {
         query.iter(world).cloned().collect()
     };
 
-    assert!(agents.len() >= 2, "should load at least 2 agents from config");
+    assert!(
+        agents.len() >= 2,
+        "should load at least 2 agents from config"
+    );
 
     let names: Vec<&str> = agents.iter().map(|a| a.profile.name.as_str()).collect();
-    assert!(names.contains(&"default-llm-agent"), "should have default agent");
+    assert!(
+        names.contains(&"default-llm-agent"),
+        "should have default agent"
+    );
     assert!(names.contains(&"brain"), "should have brain agent");
 
     for agent in &agents {
@@ -138,7 +144,10 @@ fn task_scoped_agent_lifecycle() {
     let task_scoped_count = {
         let world = app.world_mut();
         let mut query = world.query::<&Agent>();
-        query.iter(world).filter(|a| a.kind == AgentKind::TaskScoped).count()
+        query
+            .iter(world)
+            .filter(|a| a.kind == AgentKind::TaskScoped)
+            .count()
     };
     assert_eq!(task_scoped_count, 1);
 
@@ -168,9 +177,15 @@ fn task_scoped_agent_lifecycle() {
     let task_scoped_count = {
         let world = app.world_mut();
         let mut query = world.query::<&Agent>();
-        query.iter(world).filter(|a| a.kind == AgentKind::TaskScoped).count()
+        query
+            .iter(world)
+            .filter(|a| a.kind == AgentKind::TaskScoped)
+            .count()
     };
-    assert_eq!(task_scoped_count, 0, "task-scoped agent should be despawned after task termination");
+    assert_eq!(
+        task_scoped_count, 0,
+        "task-scoped agent should be despawned after task termination"
+    );
 }
 
 /// 验证 tags 子集校验：子 Agent tags 超出父 Agent 时拒绝创建。

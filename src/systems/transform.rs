@@ -80,77 +80,75 @@ pub(crate) fn brain_decision_system(
         };
 
         match &result.result {
-            Ok(content) => {
-                match parse_brain_decision(content) {
-                    Ok(decision) => {
-                        let selected_agent = agents.iter().find(|agent| {
-                            agent.profile.name == decision.selected_agent_name
+            Ok(content) => match parse_brain_decision(content) {
+                Ok(decision) => {
+                    let selected_agent = agents.iter().find(|agent| {
+                        agent.profile.name == decision.selected_agent_name
+                            && agent.kind == crate::domain::AgentKind::Persistent
+                    });
+
+                    let Some(selected_agent) = selected_agent else {
+                        let fallback = agents.iter().find(|agent| {
+                            !agent.capabilities.tags.contains(&"brain".to_string())
                                 && agent.kind == crate::domain::AgentKind::Persistent
                         });
 
-                        let Some(selected_agent) = selected_agent else {
-                            let fallback = agents.iter().find(|agent| {
-                                !agent.capabilities.tags.contains(&"brain".to_string())
-                                    && agent.kind == crate::domain::AgentKind::Persistent
-                            });
-
-                            let Some(fallback) = fallback else {
-                                task.last_error = Some(format!(
-                                    "brain selected agent '{}' but no agent available",
-                                    decision.selected_agent_name
-                                ));
-                                task.status = TaskStatus::Failed(FailureReason::AgentError);
-                                task.updated_at = clock.0;
-                                commands.entity(entity).despawn();
-                                continue;
-                            };
-
-                            let request = AgentExecutionRequest {
-                                task_id: task.id,
-                                agent_id: fallback.id,
-                                request_kind: AgentRequestKind::LlmCompletion,
-                                prompt: decision.delegate_prompt,
-                                system_prompt: None,
-                            };
-
-                            task.delegate = Some(fallback.id);
-                            task.status = TaskStatus::Waiting(crate::domain::WaitingReason::Agent);
+                        let Some(fallback) = fallback else {
+                            task.last_error = Some(format!(
+                                "brain selected agent '{}' but no agent available",
+                                decision.selected_agent_name
+                            ));
+                            task.status = TaskStatus::Failed(FailureReason::AgentError);
                             task.updated_at = clock.0;
-                            commands.spawn(AgentExecutionRequestMessage { request });
                             commands.entity(entity).despawn();
                             continue;
                         };
 
                         let request = AgentExecutionRequest {
                             task_id: task.id,
-                            agent_id: selected_agent.id,
+                            agent_id: fallback.id,
                             request_kind: AgentRequestKind::LlmCompletion,
                             prompt: decision.delegate_prompt,
                             system_prompt: None,
                         };
 
-                        task.delegate = Some(selected_agent.id);
+                        task.delegate = Some(fallback.id);
                         task.status = TaskStatus::Waiting(crate::domain::WaitingReason::Agent);
                         task.updated_at = clock.0;
                         commands.spawn(AgentExecutionRequestMessage { request });
-                    }
-                    Err(BrainDecisionError::ParseFailed(msg)) => {
-                        task.last_error = Some(format!("brain decision parse failed: {msg}"));
-                        task.status = TaskStatus::Failed(FailureReason::AgentError);
-                        task.updated_at = clock.0;
-                    }
-                    Err(BrainDecisionError::EmptyResponse) => {
-                        task.last_error = Some("brain returned empty response".to_string());
-                        task.status = TaskStatus::Failed(FailureReason::AgentError);
-                        task.updated_at = clock.0;
-                    }
-                    Err(BrainDecisionError::UnknownAgent(name)) => {
-                        task.last_error = Some(format!("brain selected unknown agent: {name}"));
-                        task.status = TaskStatus::Failed(FailureReason::AgentError);
-                        task.updated_at = clock.0;
-                    }
+                        commands.entity(entity).despawn();
+                        continue;
+                    };
+
+                    let request = AgentExecutionRequest {
+                        task_id: task.id,
+                        agent_id: selected_agent.id,
+                        request_kind: AgentRequestKind::LlmCompletion,
+                        prompt: decision.delegate_prompt,
+                        system_prompt: None,
+                    };
+
+                    task.delegate = Some(selected_agent.id);
+                    task.status = TaskStatus::Waiting(crate::domain::WaitingReason::Agent);
+                    task.updated_at = clock.0;
+                    commands.spawn(AgentExecutionRequestMessage { request });
                 }
-            }
+                Err(BrainDecisionError::ParseFailed(msg)) => {
+                    task.last_error = Some(format!("brain decision parse failed: {msg}"));
+                    task.status = TaskStatus::Failed(FailureReason::AgentError);
+                    task.updated_at = clock.0;
+                }
+                Err(BrainDecisionError::EmptyResponse) => {
+                    task.last_error = Some("brain returned empty response".to_string());
+                    task.status = TaskStatus::Failed(FailureReason::AgentError);
+                    task.updated_at = clock.0;
+                }
+                Err(BrainDecisionError::UnknownAgent(name)) => {
+                    task.last_error = Some(format!("brain selected unknown agent: {name}"));
+                    task.status = TaskStatus::Failed(FailureReason::AgentError);
+                    task.updated_at = clock.0;
+                }
+            },
             Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
                 task.schedule_retry(error, clock.0);
             }
@@ -228,10 +226,7 @@ pub(crate) fn retry_ready_system(
     }
 }
 
-pub(crate) fn task_termination_system(
-    mut commands: Commands,
-    tasks: Query<&Task, Changed<Task>>,
-) {
+pub(crate) fn task_termination_system(mut commands: Commands, tasks: Query<&Task, Changed<Task>>) {
     for task in &tasks {
         if task.status.is_terminal() {
             commands.spawn(TaskTerminatedMessage { task_id: task.id });

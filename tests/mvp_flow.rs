@@ -2,8 +2,8 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    build_harness_app, AgentExecutionRequest, AgentExecutor, ExecutorFuture, ExternalInput,
-    HarnessConfig, OutputMessage, Task, TaskStatus,
+    AgentExecutionRequest, AgentExecutor, ExecutorFuture, ExternalInput, HarnessConfig,
+    OutputMessage, Task, TaskStatus, build_harness_app,
 };
 use tokio::runtime::Runtime;
 

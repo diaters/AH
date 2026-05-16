@@ -14,11 +14,11 @@ use crate::{
     },
     llm::LlmProviderConfig,
     systems::{
-        agent_execution_system, agent_factory_system, brain_decision_system,
+        HarnessSet, agent_execution_system, agent_factory_system, brain_decision_system,
         brain_dispatch_system, ingest_execution_results_system, input_ingress_system,
         llm_response_system, retry_ready_system, retry_wakeup_system, signal_ingest_system,
         task_dispatch_system, task_termination_system, tick_clock_system,
-        user_message_to_task_system, user_output_system, HarnessSet,
+        user_message_to_task_system, user_output_system,
     },
 };
 
@@ -46,8 +46,7 @@ impl HarnessConfig {
         {
             Some(BrainConfig {
                 enabled: true,
-                model: std::env::var("HARNESS_BRAIN_MODEL")
-                    .unwrap_or_else(|_| llm.model.clone()),
+                model: std::env::var("HARNESS_BRAIN_MODEL").unwrap_or_else(|_| llm.model.clone()),
                 agent_name: std::env::var("HARNESS_BRAIN_AGENT_NAME")
                     .unwrap_or_else(|_| "brain".to_string()),
             })
@@ -55,8 +54,8 @@ impl HarnessConfig {
             None
         };
 
-        let agents_config_path = std::env::var("HARNESS_AGENTS_CONFIG")
-            .unwrap_or_else(|_| "agents.toml".to_string());
+        let agents_config_path =
+            std::env::var("HARNESS_AGENTS_CONFIG").unwrap_or_else(|_| "agents.toml".to_string());
 
         Ok(Self {
             max_retries: 3,
@@ -101,7 +100,9 @@ pub struct ExecutorHandle(pub Arc<dyn AgentExecutor>);
 pub struct ExecutionResultSender(pub mpsc::UnboundedSender<crate::domain::AgentExecutionResult>);
 
 #[derive(Resource)]
-pub struct ExecutionResultReceiver(pub mpsc::UnboundedReceiver<crate::domain::AgentExecutionResult>);
+pub struct ExecutionResultReceiver(
+    pub mpsc::UnboundedReceiver<crate::domain::AgentExecutionResult>,
+);
 
 #[derive(Resource)]
 pub struct HarnessSettings(pub HarnessConfig);
@@ -195,10 +196,19 @@ pub fn app_is_idle(world: &mut World) -> bool {
     let pending_signals = world.query::<&Signal>().iter(world).count();
     let pending_user_inputs = world.query::<&UserInputMessage>().iter(world).count();
     let pending_retry_ready = world.query::<&RetryReadyMessage>().iter(world).count();
-    let pending_requests = world.query::<&AgentExecutionRequestMessage>().iter(world).count();
-    let pending_results = world.query::<&AgentExecutionResultMessage>().iter(world).count();
+    let pending_requests = world
+        .query::<&AgentExecutionRequestMessage>()
+        .iter(world)
+        .count();
+    let pending_results = world
+        .query::<&AgentExecutionResultMessage>()
+        .iter(world)
+        .count();
     let pending_outputs = world.query::<&UserOutputMessage>().iter(world).count();
-    let pending_spawn_requests = world.query::<&AgentSpawnRequestMessage>().iter(world).count();
+    let pending_spawn_requests = world
+        .query::<&AgentSpawnRequestMessage>()
+        .iter(world)
+        .count();
     let pending_terminated = world.query::<&TaskTerminatedMessage>().iter(world).count();
 
     active_tasks == 0

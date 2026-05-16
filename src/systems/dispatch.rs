@@ -52,8 +52,7 @@ pub(crate) fn brain_dispatch_system(
     }
 
     let brain_agent = agents.iter().find(|a| {
-        a.kind == AgentKind::Persistent
-            && a.capabilities.tags.contains(&"brain".to_string())
+        a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string())
     });
 
     let Some(brain_agent) = brain_agent else {
@@ -76,10 +75,7 @@ pub(crate) fn brain_dispatch_system(
             continue;
         }
 
-        let prompt = brain_user_prompt_from_descriptions(
-            &task.content,
-            &all_agent_descriptions,
-        );
+        let prompt = brain_user_prompt_from_descriptions(&task.content, &all_agent_descriptions);
 
         let request = AgentExecutionRequest {
             task_id: task.id,
@@ -101,10 +97,7 @@ struct AgentDescription {
     description: String,
 }
 
-fn brain_user_prompt_from_descriptions(
-    task_content: &str,
-    agents: &[AgentDescription],
-) -> String {
+fn brain_user_prompt_from_descriptions(task_content: &str, agents: &[AgentDescription]) -> String {
     let agent_descriptions: Vec<String> = agents
         .iter()
         .filter(|agent| !agent.tags.contains(&"brain".to_string()))
@@ -128,7 +121,10 @@ Select the best agent for this task and provide a delegate prompt."#,
     )
 }
 
-fn select_agent<'a>(agents: impl Iterator<Item = &'a Agent>, task_content: &str) -> Option<&'a Agent> {
+fn select_agent<'a>(
+    agents: impl Iterator<Item = &'a Agent>,
+    task_content: &str,
+) -> Option<&'a Agent> {
     agents
         .filter(|a| a.kind == AgentKind::Persistent)
         .filter(|a| !a.capabilities.tags.contains(&"brain".to_string()))

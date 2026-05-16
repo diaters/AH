@@ -7,9 +7,8 @@ use uuid::Uuid;
 use crate::{
     app::{Clock, HarnessSettings},
     domain::{
-        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage,
-        AgentKind, AgentProfile, AgentSpawnRequestMessage, FailureReason, Task,
-        TaskTerminatedMessage, TaskId,
+        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
+        AgentProfile, AgentSpawnRequestMessage, FailureReason, Task, TaskId, TaskTerminatedMessage,
     },
 };
 
@@ -49,7 +48,10 @@ fn load_persistent_agents(
     let content = match fs::read_to_string(config_path) {
         Ok(content) => content,
         Err(_) => {
-            warn!("agents config file '{}' not found, no persistent agents loaded", config_path);
+            warn!(
+                "agents config file '{}' not found, no persistent agents loaded",
+                config_path
+            );
             return;
         }
     };
@@ -69,10 +71,8 @@ fn load_persistent_agents(
         }
     }
 
-    let existing_names: std::collections::HashSet<String> = agents
-        .iter()
-        .map(|(_, a)| a.profile.name.clone())
-        .collect();
+    let existing_names: std::collections::HashSet<String> =
+        agents.iter().map(|(_, a)| a.profile.name.clone()).collect();
 
     for entry in &config.agent {
         if existing_names.contains(&entry.name) {
@@ -107,9 +107,18 @@ fn handle_spawn_request(
     clock: &Clock,
     request: &AgentSpawnRequestMessage,
 ) {
-    let Some(parent_agent) = agents.iter().find(|(_, a)| a.id == request.parent_agent_id).map(|(_, a)| a) else {
+    let Some(parent_agent) = agents
+        .iter()
+        .find(|(_, a)| a.id == request.parent_agent_id)
+        .map(|(_, a)| a)
+    else {
         warn!(parent_id = %request.parent_agent_id, "parent agent not found for spawn request");
-        mark_task_failed(tasks, clock, request.task_id, "parent agent not found for spawn request");
+        mark_task_failed(
+            tasks,
+            clock,
+            request.task_id,
+            "parent agent not found for spawn request",
+        );
         return;
     };
 
@@ -158,11 +167,7 @@ fn handle_spawn_request(
     });
 }
 
-fn handle_termination(
-    commands: &mut Commands,
-    agents: &Query<(Entity, &Agent)>,
-    task_id: TaskId,
-) {
+fn handle_termination(commands: &mut Commands, agents: &Query<(Entity, &Agent)>, task_id: TaskId) {
     for (entity, agent) in agents.iter() {
         if agent.kind == AgentKind::TaskScoped && agent.bound_task_id == Some(task_id) {
             info!(name = %agent.profile.name, %task_id, "despawning task-scoped agent");

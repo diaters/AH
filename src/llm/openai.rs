@@ -25,11 +25,19 @@ impl OpenAiExecutor {
     pub(crate) fn new(config: &LlmProviderConfig) -> Result<Self> {
         let mut client_config = OpenAIConfig::new().with_api_key(config.api_key.clone());
 
-        if let Some(api_base) = config.api_base.as_ref().filter(|value| !value.trim().is_empty()) {
+        if let Some(api_base) = config
+            .api_base
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
             client_config = client_config.with_api_base(api_base.clone());
         }
 
-        if let Some(org_id) = config.org_id.as_ref().filter(|value| !value.trim().is_empty()) {
+        if let Some(org_id) = config
+            .org_id
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
             client_config = client_config.with_org_id(org_id.clone());
         }
 
@@ -115,7 +123,9 @@ fn classify_openai_error(error: async_openai::error::OpenAIError) -> ExecutionEr
         ExecutionError::QuotaExhausted(message)
     } else if lowered.contains("cancel") {
         ExecutionError::UserCancelled(message)
-    } else if lowered.contains("connect") || lowered.contains("transport") || lowered.contains("network")
+    } else if lowered.contains("connect")
+        || lowered.contains("transport")
+        || lowered.contains("network")
     {
         ExecutionError::Transport(message)
     } else {

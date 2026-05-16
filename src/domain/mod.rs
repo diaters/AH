@@ -306,10 +306,7 @@ impl ExecutionError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Timeout(_)
-                | Self::RateLimited { .. }
-                | Self::Transport(_)
-                | Self::Unknown(_)
+            Self::Timeout(_) | Self::RateLimited { .. } | Self::Transport(_) | Self::Unknown(_)
         )
     }
 
