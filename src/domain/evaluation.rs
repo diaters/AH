@@ -1,4 +1,4 @@
-use bevy::prelude::Component;
+use bevy::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 
 use super::{AgentId, TaskId};
@@ -44,7 +44,7 @@ pub enum EvaluationDecision {
 }
 
 /// 任务评估配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Resource)]
 pub struct TaskEvaluationConfig {
     pub enabled: bool,
     pub max_turns: Option<u32>,

@@ -10,7 +10,7 @@ use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
         AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, Task,
-        TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
+        TaskEvaluationConfig, TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     systems::{
@@ -121,6 +121,27 @@ pub struct ShutdownState {
     pub requested: bool,
 }
 
+/// 记忆配置
+#[derive(Debug, Clone, Resource)]
+pub struct MemoryConfig {
+    /// 近期全量保留轮数
+    pub recent_turns: u32,
+    /// 中期摘要触发阈值
+    pub compression_threshold: u32,
+    /// 摘要覆盖轮数
+    pub summary_window: u32,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            recent_turns: 5,
+            compression_threshold: 10,
+            summary_window: 5,
+        }
+    }
+}
+
 pub fn build_harness_app(
     config: HarnessConfig,
     runtime: Arc<Runtime>,
@@ -140,6 +161,8 @@ pub fn build_harness_app(
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());
+    app.insert_resource(MemoryConfig::default());
+    app.insert_resource(TaskEvaluationConfig::default());
 
     app.configure_sets(
         Update,
