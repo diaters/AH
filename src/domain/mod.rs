@@ -1,3 +1,4 @@
+mod contribution;
 mod evaluation;
 mod memory;
 
@@ -9,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use contribution::{
+    AbsorbedMemory, ContributionEvaluation, DiscardedMemory, MemoryAbsorptionMessage,
+    MemoryContributionRequestMessage, TaskSummary,
+};
 pub use evaluation::{
     EvaluationDecision, EvaluationRequestMessage, EvaluationResult, EvaluationResultMessage,
     EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
