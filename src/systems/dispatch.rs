@@ -85,7 +85,7 @@ pub(crate) fn brain_dispatch_system(
             system_prompt: Some(brain_system_prompt()),
         };
 
-        task.mark_waiting_for_brain(brain_agent.id, clock.0);
+        task.mark_waiting_for_agent(brain_agent.id, clock.0);
         commands.spawn(AgentExecutionRequestMessage { request });
     }
 }

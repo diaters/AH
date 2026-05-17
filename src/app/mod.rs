@@ -10,14 +10,17 @@ use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
         AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, Task,
-        TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
+        TaskEvaluationConfig, TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     systems::{
-        HarnessSet, agent_execution_system, agent_factory_system, brain_decision_system,
-        brain_dispatch_system, ingest_execution_results_system, input_ingress_system,
-        llm_response_system, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        task_dispatch_system, task_termination_system, tick_clock_system,
+        HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
+        brain_decision_system, brain_dispatch_system, continue_task_system,
+        evaluation_result_system, evaluation_trigger_system, ingest_execution_results_system,
+        init_agent_memory_system, input_ingress_system, llm_response_system,
+        memory_absorption_system, memory_compression_system, memory_contribution_system,
+        retry_ready_system, retry_wakeup_system, signal_ingest_system, task_dispatch_system,
+        task_termination_system, tick_clock_system, user_input_routing_system,
         user_message_to_task_system, user_output_system,
     },
 };
@@ -121,6 +124,27 @@ pub struct ShutdownState {
     pub requested: bool,
 }
 
+/// 记忆配置
+#[derive(Debug, Clone, Resource)]
+pub struct MemoryConfig {
+    /// 近期全量保留轮数
+    pub recent_turns: u32,
+    /// 中期摘要触发阈值
+    pub compression_threshold: u32,
+    /// 摘要覆盖轮数
+    pub summary_window: u32,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            recent_turns: 5,
+            compression_threshold: 10,
+            summary_window: 5,
+        }
+    }
+}
+
 pub fn build_harness_app(
     config: HarnessConfig,
     runtime: Arc<Runtime>,
@@ -140,6 +164,8 @@ pub fn build_harness_app(
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());
+    app.insert_resource(MemoryConfig::default());
+    app.insert_resource(TaskEvaluationConfig::default());
 
     app.configure_sets(
         Update,
@@ -166,7 +192,13 @@ pub fn build_harness_app(
             brain_decision_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
-            user_message_to_task_system.in_set(HarnessSet::Transform),
+            user_input_routing_system.in_set(HarnessSet::Transform),
+            user_message_to_task_system
+                .in_set(HarnessSet::Transform)
+                .after(user_input_routing_system),
+            continue_task_system
+                .in_set(HarnessSet::Transform)
+                .after(user_input_routing_system),
             retry_ready_system.in_set(HarnessSet::Transform),
             llm_response_system
                 .in_set(HarnessSet::Transform)
@@ -174,13 +206,28 @@ pub fn build_harness_app(
             task_termination_system
                 .in_set(HarnessSet::Transform)
                 .after(llm_response_system),
+            evaluation_result_system.in_set(HarnessSet::Transform),
             brain_dispatch_system
                 .in_set(HarnessSet::Dispatch)
                 .before(task_dispatch_system),
             task_dispatch_system.in_set(HarnessSet::Dispatch),
+            evaluation_trigger_system.in_set(HarnessSet::Dispatch),
             agent_execution_system.in_set(HarnessSet::Execution),
             user_output_system.in_set(HarnessSet::Output),
+        ),
+    );
+
+    app.add_systems(
+        Update,
+        (
+            agent_termination_system
+                .in_set(HarnessSet::Maintenance)
+                .before(agent_factory_system),
             agent_factory_system.in_set(HarnessSet::Maintenance),
+            memory_compression_system.in_set(HarnessSet::Maintenance),
+            init_agent_memory_system.in_set(HarnessSet::Maintenance),
+            memory_contribution_system.in_set(HarnessSet::Execution),
+            memory_absorption_system.in_set(HarnessSet::Maintenance),
         ),
     );
 
