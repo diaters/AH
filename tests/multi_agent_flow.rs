@@ -168,6 +168,7 @@ fn task_scoped_agent_lifecycle() {
             max_retries: 3,
             next_retry_at: None,
             last_error: None,
+            multi_turn: true,
         });
         world.spawn(TaskTerminatedMessage { task_id });
     }

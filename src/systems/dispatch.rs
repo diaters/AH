@@ -4,7 +4,7 @@ use crate::{
     app::{Clock, HarnessSettings},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        Task, TaskStatus,
+        EntryRole, ShortTermMemory, Task, TaskStatus,
     },
     llm::brain_system_prompt,
 };
@@ -12,10 +12,10 @@ use crate::{
 pub(crate) fn task_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
     agents: Query<&Agent>,
 ) {
-    for mut task in &mut tasks {
+    for (mut task, short_term) in &mut tasks {
         // Pending 或 Ready 状态都可以被调度
         if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;
@@ -25,11 +25,14 @@ pub(crate) fn task_dispatch_system(
             continue;
         };
 
+        // 构建带历史对话的 prompt
+        let prompt = build_prompt_with_history(&task.content, short_term);
+
         let request = AgentExecutionRequest {
             task_id: task.id,
             agent_id: agent.id,
             request_kind: AgentRequestKind::LlmCompletion,
-            prompt: task.content.clone(),
+            prompt,
             system_prompt: None,
         };
 
@@ -42,7 +45,7 @@ pub(crate) fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     mut commands: Commands,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
     agents: Query<&Agent>,
 ) {
     let Some(brain_config) = &settings.0.brain else {
@@ -71,13 +74,16 @@ pub(crate) fn brain_dispatch_system(
         })
         .collect();
 
-    for mut task in &mut tasks {
+    for (mut task, short_term) in &mut tasks {
         // Pending 或 Ready 状态都可以被调度
         if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;
         }
 
-        let prompt = brain_user_prompt_from_descriptions(&task.content, &all_agent_descriptions);
+        // 构建带历史对话的 prompt
+        let prompt_with_history = build_prompt_with_history(&task.content, short_term);
+        let prompt =
+            brain_user_prompt_from_descriptions(&prompt_with_history, &all_agent_descriptions);
 
         let request = AgentExecutionRequest {
             task_id: task.id,
@@ -141,4 +147,41 @@ fn match_score(agent: &Agent, task_content: &str) -> usize {
         .iter()
         .filter(|tag| lower.contains(&tag.to_lowercase()))
         .count()
+}
+
+/// 构建带历史对话的 prompt
+fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMemory>) -> String {
+    let Some(stm) = short_term else {
+        return task_content.to_string();
+    };
+
+    if stm.entries.is_empty() {
+        return task_content.to_string();
+    }
+
+    // 构建历史对话
+    let mut history = String::new();
+
+    // 添加摘要前缀（如果有）
+    if let Some(summary) = &stm.summary_prefix {
+        history.push_str(&format!("[Previous context summary]\n{}\n\n", summary));
+    }
+
+    // 添加对话历史
+    history.push_str("[Conversation history]\n");
+    for entry in &stm.entries {
+        let role = match entry.role {
+            EntryRole::User => "User",
+            EntryRole::Assistant => "Assistant",
+            _ => continue,
+        };
+        history.push_str(&format!("{}: {}\n", role, entry.content));
+    }
+
+    // 组合成完整 prompt
+    format!(
+        "{}\n\n[Current request]\n{}",
+        history.trim_end(),
+        task_content
+    )
 }

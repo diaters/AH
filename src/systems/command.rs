@@ -19,9 +19,9 @@ pub(crate) fn command_parse_system(
             UserCommand::NewTask { topic } => {
                 // /btw - 创建子任务承接新话题
                 // 查找当前活跃的任务作为父任务
-                let parent_task = tasks.iter().find(|t| {
-                    !t.status.is_terminal() && t.status != TaskStatus::Pending
-                });
+                let parent_task = tasks
+                    .iter()
+                    .find(|t| !t.status.is_terminal() && t.status != TaskStatus::Pending);
 
                 if let Some(parent) = parent_task {
                     info!(
@@ -31,7 +31,11 @@ pub(crate) fn command_parse_system(
                     );
                     // 创建子任务（Pending 状态）
                     let child_task = Task::from_user_input(
-                        if topic.is_empty() { &input.content } else { &topic },
+                        if topic.is_empty() {
+                            &input.content
+                        } else {
+                            &topic
+                        },
                         parent.max_retries,
                     );
                     commands.spawn((child_task, ShortTermMemory::default()));
@@ -41,6 +45,7 @@ pub(crate) fn command_parse_system(
                         content: input.content.clone(),
                     });
                 }
+                commands.entity(entity).despawn();
             }
             UserCommand::FinishCurrentTask => {
                 // /finish - 结束当前任务
@@ -51,19 +56,19 @@ pub(crate) fn command_parse_system(
                     // 触发任务终止，后续会被 contribution 系统处理
                     commands.spawn(TaskTerminatedMessage { task_id: task.id });
                 }
+                commands.entity(entity).despawn();
             }
             UserCommand::Summarize => {
                 // /summarize - 触发总结
                 // TODO: 实现总结触发
                 info!("summarize command received - to be implemented");
+                commands.entity(entity).despawn();
             }
             UserCommand::PlainText(_) => {
                 // 普通输入，交给路由系统处理
-                continue;
+                // 不 despawn，让 user_input_routing_system 处理
             }
         }
-
-        commands.entity(entity).despawn();
     }
 }
 

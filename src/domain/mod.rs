@@ -225,10 +225,12 @@ pub struct Task {
     pub max_retries: u32,
     pub next_retry_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// 是否支持多轮对话
+    pub multi_turn: bool,
 }
 
 impl Task {
-    /// 基于用户输入创建一个处于 Pending 状态的新任务。
+    /// 基于用户输入创建一个处于 Pending 状态的新任务（支持多轮对话）。
     pub fn from_user_input(content: impl Into<String>, max_retries: u32) -> Self {
         let content = content.into();
         let now = Utc::now();
@@ -248,6 +250,7 @@ impl Task {
             max_retries,
             next_retry_at: None,
             last_error: None,
+            multi_turn: true,
         }
     }
 
@@ -271,6 +274,7 @@ impl Task {
             max_retries,
             next_retry_at: None,
             last_error: None,
+            multi_turn: false,
         }
     }
 

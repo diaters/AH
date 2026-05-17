@@ -4,9 +4,9 @@ use crate::{
     app::{Clock, ExecutionResultReceiver, HarnessSettings},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
-        AgentRequestKind, BrainDecisionError, CreateTaskMessage, FailureReason, RetryReadyMessage,
-        Signal, SignalPayload, Task, TaskStatus, TaskTerminatedMessage, UserInputMessage,
-        UserOutputMessage, WaitingReason,
+        AgentRequestKind, BrainDecisionError, CreateTaskMessage, EntryMetadata, EntryRole,
+        FailureReason, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload, Task, TaskStatus,
+        TaskTerminatedMessage, UserInputMessage, UserOutputMessage, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -35,7 +35,8 @@ pub(crate) fn user_message_to_task_system(
     messages: Query<(Entity, &CreateTaskMessage)>,
 ) {
     for (entity, message) in &messages {
-        commands.spawn(Task::from_user_input(
+        // 外部输入创建单轮任务（Ready 状态）
+        commands.spawn(Task::from_user_input_ready(
             message.content.clone(),
             settings.0.max_retries,
         ));
@@ -164,7 +165,7 @@ pub(crate) fn brain_decision_system(
 pub(crate) fn llm_response_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
 ) {
     for (entity, result_message) in &results {
@@ -174,16 +175,21 @@ pub(crate) fn llm_response_system(
 
         let result = &result_message.result;
 
-        for mut task in &mut tasks {
+        for (mut task, short_term) in &mut tasks {
             if task.id != result.task_id {
                 continue;
             }
 
             match &result.result {
                 Ok(content) => {
-                    // 检查任务状态
-                    if task.status == TaskStatus::Pending {
-                        // Pending 状态：响应后进入 Waiting(User)，支持多轮对话
+                    // 追加 Agent 响应到 ShortTermMemory
+                    if let Some(mut stm) = short_term {
+                        stm.add_entry(EntryRole::Assistant, content, EntryMetadata::default());
+                    }
+
+                    // 检查是否支持多轮对话
+                    if task.multi_turn {
+                        // 多轮对话：响应后进入 Waiting(User)
                         task.status = TaskStatus::Waiting(WaitingReason::User);
                         task.input_summary = content.clone();
                         task.updated_at = clock.0;
@@ -191,7 +197,7 @@ pub(crate) fn llm_response_system(
                             content: content.clone(),
                         });
                     } else {
-                        // 非 Pending：原有逻辑，标记完成
+                        // 单轮对话：标记完成
                         task.mark_done(content.clone(), clock.0);
                         commands.spawn(UserOutputMessage {
                             content: content.clone(),

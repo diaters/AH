@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    ExecutorFuture, HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task,
+    EntryRole, ExecutorFuture, HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task,
     TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
@@ -29,32 +29,34 @@ fn multi_turn_task_lifecycle() {
     let (output_tx, _output_rx) = unbounded::<OutputMessage>();
     let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
 
+    // 初始化 app
+    app.update();
+
     // Create a task in Waiting(User) state
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id,
-            content: "multi-turn task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            input_summary: "multi-turn task".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-        },
-        ShortTermMemory {
-            entries: vec![],
-            estimated_tokens: 0,
-            summary_prefix: None,
-            last_cached_tokens: None,
-        },
-    ));
+    let entity_id = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "multi-turn task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                input_summary: "multi-turn task".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
 
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
@@ -66,22 +68,39 @@ fn multi_turn_task_lifecycle() {
         app.update();
     }
 
-    // Verify task state change
+    // 验证多轮对话流程：
+    // 1. 用户输入 → 任务进入 Ready
+    // 2. 调度 → 任务进入 Waiting(Agent)
+    // 3. 执行 → 任务进入 Running
+    // 4. 响应 → 任务回到 Waiting(User)（因为 multi_turn: true）
+
+    // 任务应该回到 Waiting(User) 状态，等待下一轮用户输入
     let task = app
         .world_mut()
-        .query::<&Task>()
-        .iter(app.world())
-        .find(|t| t.id == task_id)
-        .cloned();
+        .get::<Task>(entity_id)
+        .cloned()
+        .expect("task should exist");
 
-    assert!(task.is_some());
-    let task = task.unwrap();
-    // Task should have left Waiting(User) state
-    assert_ne!(
+    assert_eq!(
         task.status,
         TaskStatus::Waiting(WaitingReason::User),
-        "task should have left Waiting(User) state"
+        "multi-turn task should return to Waiting(User) after response"
     );
+
+    // 验证 ShortTermMemory 记录了用户输入和 Agent 响应
+    let stm = app
+        .world_mut()
+        .get::<ShortTermMemory>(entity_id)
+        .cloned()
+        .expect("short-term memory should exist");
+
+    assert_eq!(
+        stm.entries.len(),
+        2,
+        "should have user input and assistant response"
+    );
+    assert_eq!(stm.entries[0].role, EntryRole::User);
+    assert_eq!(stm.entries[1].role, EntryRole::Assistant);
 }
 
 #[test]
@@ -113,6 +132,7 @@ fn short_term_memory_tracks_turns() {
                 max_retries: 3,
                 next_retry_at: None,
                 last_error: None,
+                multi_turn: true,
             },
             ShortTermMemory::default(),
         ));
@@ -272,6 +292,7 @@ fn memory_contribution_on_agent_termination() {
         max_retries: 3,
         next_retry_at: None,
         last_error: None,
+        multi_turn: true,
     });
 
     // Trigger termination by spawning TaskTerminatedMessage
@@ -325,5 +346,217 @@ fn memory_contribution_on_agent_termination() {
         absorption_messages,
         child_exists,
         parent_memory
+    );
+}
+
+#[test]
+fn multi_turn_memory_records_user_and_assistant() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建 Waiting(User) 状态的任务和 ShortTermMemory
+    let task_id = uuid::Uuid::new_v4();
+    let entity_id = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "initial task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                input_summary: "initial task".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+
+    // 模拟用户继续输入
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "what is the weather?".to_string(),
+    });
+
+    // 运行多个 frame 处理输入和响应
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证 ShortTermMemory 记录了用户输入和 Agent 响应
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert_eq!(
+        stm.entries.len(),
+        2,
+        "should have recorded user input and assistant response"
+    );
+    assert_eq!(stm.entries[0].role, EntryRole::User);
+    assert_eq!(stm.entries[0].content, "what is the weather?");
+    assert_eq!(stm.entries[1].role, EntryRole::Assistant);
+}
+
+#[test]
+fn multi_turn_full_conversation_flow() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建 Pending 状态的任务
+    let entity_id = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input("hello", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+
+    // 运行直到任务进入 Waiting(User)
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 验证任务已进入 Waiting(User) 状态
+    let task = app.world_mut().get::<Task>(entity_id).unwrap();
+    assert_eq!(
+        task.status,
+        TaskStatus::Waiting(WaitingReason::User),
+        "task should be waiting for user after first response"
+    );
+
+    // 验证 ShortTermMemory 记录了 Agent 响应
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert_eq!(
+        stm.entries.len(),
+        1,
+        "should have recorded assistant response"
+    );
+    assert_eq!(stm.entries[0].role, EntryRole::Assistant);
+
+    // 模拟用户继续输入
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "tell me more".to_string(),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 验证 ShortTermMemory 记录了第二轮用户输入
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert!(
+        stm.entries.len() >= 2,
+        "should have recorded both user input and assistant response"
+    );
+
+    // 验证最后一条是 Assistant 响应
+    let last_entry = stm.entries.last().unwrap();
+    assert_eq!(last_entry.role, EntryRole::Assistant);
+}
+
+#[test]
+fn prompt_includes_conversation_history() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+
+    // 使用一个 Executor 来捕获请求内容
+    use std::sync::Mutex;
+    struct CapturingExecutor {
+        captured: Arc<Mutex<Option<String>>>,
+    }
+    impl AgentExecutor for CapturingExecutor {
+        fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+            *self.captured.lock().unwrap() = Some(request.prompt.clone());
+            Box::pin(async move { Ok("response".to_string()) })
+        }
+    }
+
+    let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CapturingExecutor {
+        captured: captured.clone(),
+    });
+
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建带历史对话的任务
+    let task_id = uuid::Uuid::new_v4();
+    let _entity_id = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "current question".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Ready,
+                input_summary: String::new(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+            },
+            ShortTermMemory {
+                entries: vec![
+                    harness::MemoryEntry::new(EntryRole::User, "previous question"),
+                    harness::MemoryEntry::new(EntryRole::Assistant, "previous answer"),
+                ],
+                summary_prefix: None,
+                estimated_tokens: 100,
+                last_cached_tokens: None,
+            },
+        ))
+        .id();
+
+    app.update();
+
+    // 验证 prompt 包含历史对话
+    let captured_prompt = captured.lock().unwrap().clone();
+    assert!(
+        captured_prompt.is_some(),
+        "executor should have received a request"
+    );
+    let prompt = captured_prompt.unwrap();
+    assert!(
+        prompt.contains("[Conversation history]"),
+        "prompt should include conversation history section"
+    );
+    assert!(
+        prompt.contains("previous question"),
+        "prompt should include previous user message"
+    );
+    assert!(
+        prompt.contains("previous answer"),
+        "prompt should include previous assistant message"
+    );
+    assert!(
+        prompt.contains("[Current request]"),
+        "prompt should include current request section"
+    );
+    assert!(
+        prompt.contains("current question"),
+        "prompt should include current question"
     );
 }

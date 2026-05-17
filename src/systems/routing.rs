@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use crate::{
     app::Clock,
     domain::{
-        ContinueTaskMessage, CreateTaskMessage, Task, TaskStatus, UserCommand, UserInputMessage,
-        WaitingReason,
+        ContinueTaskMessage, CreateTaskMessage, EntryMetadata, EntryRole, ShortTermMemory, Task,
+        TaskStatus, UserCommand, UserInputMessage, WaitingReason,
     },
 };
 
@@ -47,14 +47,20 @@ pub(crate) fn continue_task_system(
     mut commands: Commands,
     clock: Res<Clock>,
     continue_messages: Query<(Entity, &ContinueTaskMessage)>,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
 ) {
     for (entity, msg) in &continue_messages {
-        if let Some(mut task) = tasks.iter_mut().find(|t| t.id == msg.task_id) {
-            // 更新任务状态为 Ready
+        // 更新任务状态和追加用户输入到 ShortTermMemory
+        if let Some((mut task, short_term)) = tasks.iter_mut().find(|(t, _)| t.id == msg.task_id) {
             task.status = TaskStatus::Ready;
             task.updated_at = clock.0;
+
+            // 追加用户输入到 ShortTermMemory
+            if let Some(mut stm) = short_term {
+                stm.add_entry(EntryRole::User, &msg.user_input, EntryMetadata::default());
+            }
         }
+
         commands.entity(entity).despawn();
     }
 }

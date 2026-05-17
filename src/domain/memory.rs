@@ -51,7 +51,7 @@ pub fn estimate_tokens(text: &str) -> u32 {
 }
 
 /// 记忆条目
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryEntry {
     pub role: EntryRole,
     pub content: String,
@@ -83,7 +83,7 @@ pub enum EntryRole {
 }
 
 /// 记忆条目元数据
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EntryMetadata {
     pub tool_calls: Vec<ToolCall>,
     pub resources: Vec<String>,
@@ -92,7 +92,7 @@ pub struct EntryMetadata {
 }
 
 /// 工具调用记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
     pub tool_name: String,
     pub input: String,
@@ -101,7 +101,7 @@ pub struct ToolCall {
 }
 
 /// 短期记忆（绑定 Task）
-#[derive(Component, Default)]
+#[derive(Component, Default, Clone)]
 pub struct ShortTermMemory {
     /// 完整对话条目
     pub entries: Vec<MemoryEntry>,
