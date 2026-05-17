@@ -9,19 +9,22 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, Task,
+        AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, SpaceAgentRegistry,
+        SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, Task,
         TaskEvaluationConfig, TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     systems::{
-        HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
+        HarnessSet, agent_evolution_system, agent_execution_system, agent_factory_system,
+        agent_termination_system, approval_dispatch_system, approval_result_system,
         brain_decision_system, brain_dispatch_system, command_parse_system, continue_task_system,
         evaluation_result_system, evaluation_trigger_system, ingest_execution_results_system,
         init_agent_memory_system, input_ingress_system, llm_response_system,
         memory_absorption_system, memory_compression_system, memory_contribution_system,
-        retry_ready_system, retry_wakeup_system, signal_ingest_system, task_dispatch_system,
-        task_termination_system, tick_clock_system, user_input_routing_system,
-        user_message_to_task_system, user_output_system,
+        register_builtin_tools, retry_ready_system, retry_wakeup_system, signal_ingest_system,
+        task_dispatch_system, task_termination_system, tick_clock_system, tool_dispatch_system,
+        tool_result_system, user_input_routing_system, user_message_to_task_system,
+        user_output_system,
     },
 };
 
@@ -167,6 +170,17 @@ pub fn build_harness_app(
     app.insert_resource(MemoryConfig::default());
     app.insert_resource(TaskEvaluationConfig::default());
 
+    // Space Resources
+    app.insert_resource(SpaceKnowledge::default());
+    app.insert_resource(SpacePreferences::default());
+    app.insert_resource(SpaceAgentRegistry::default());
+    app.insert_resource(SpaceRuntimeContext::default());
+
+    // Tool Registry with builtin tools
+    let mut tool_registry = SpaceToolRegistry::default();
+    register_builtin_tools(&mut tool_registry);
+    app.insert_resource(tool_registry);
+
     app.configure_sets(
         Update,
         (
@@ -210,10 +224,20 @@ pub fn build_harness_app(
                 .in_set(HarnessSet::Transform)
                 .after(llm_response_system),
             evaluation_result_system.in_set(HarnessSet::Transform),
+            tool_result_system
+                .in_set(HarnessSet::Transform)
+                .after(ingest_execution_results_system),
+        ),
+    );
+
+    app.add_systems(
+        Update,
+        (
             brain_dispatch_system
                 .in_set(HarnessSet::Dispatch)
                 .before(task_dispatch_system),
             task_dispatch_system.in_set(HarnessSet::Dispatch),
+            tool_dispatch_system.in_set(HarnessSet::Dispatch),
             evaluation_trigger_system.in_set(HarnessSet::Dispatch),
             agent_execution_system.in_set(HarnessSet::Execution),
             user_output_system.in_set(HarnessSet::Output),
@@ -231,6 +255,10 @@ pub fn build_harness_app(
             init_agent_memory_system.in_set(HarnessSet::Maintenance),
             memory_contribution_system.in_set(HarnessSet::Execution),
             memory_absorption_system.in_set(HarnessSet::Maintenance),
+            // 审批与演化系统
+            approval_dispatch_system.in_set(HarnessSet::Dispatch),
+            approval_result_system.in_set(HarnessSet::Transform),
+            agent_evolution_system.in_set(HarnessSet::Maintenance),
         ),
     );
 

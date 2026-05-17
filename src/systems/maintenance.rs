@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::{
     app::{Clock, HarnessSettings},
     domain::{
-        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
-        AgentProfile, AgentSpawnRequestMessage, FailureReason, Task, TaskId, TaskTerminatedMessage,
+        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage,
+        AgentExperience, AgentKind, AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions,
+        FailureReason, Task, TaskId, TaskTerminatedMessage, ToolPermission,
     },
 };
 
@@ -84,6 +85,16 @@ fn load_persistent_agents(
     for entry in &config.agent {
         let id = Uuid::new_v4();
         info!(name = %entry.name, %id, "spawning persistent agent");
+
+        let tool_permissions = if let Some(ref tools_config) = entry.tools {
+            AgentToolPermissions {
+                default_permission: tools_config.default_permission.unwrap_or(ToolPermission::Confirm),
+                overrides: tools_config.overrides.clone(),
+            }
+        } else {
+            AgentToolPermissions::default()
+        };
+
         commands.spawn(Agent {
             id,
             profile: AgentProfile {
@@ -97,6 +108,8 @@ fn load_persistent_agents(
             kind: AgentKind::Persistent,
             parent_id: None,
             bound_task_id: None,
+            tool_permissions,
+            experience: AgentExperience::default(),
         });
     }
 }
@@ -153,6 +166,8 @@ fn handle_spawn_request(
         kind: AgentKind::TaskScoped,
         parent_id: Some(request.parent_agent_id),
         bound_task_id: Some(request.task_id),
+        tool_permissions: parent_agent.tool_permissions.clone(),
+        experience: AgentExperience::default(),
     });
 
     let execution_request = AgentExecutionRequest {

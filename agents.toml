@@ -4,8 +4,19 @@ model = "gpt-4.1-mini"
 tags = ["llm", "default", "general"]
 description = "默认 LLM Agent，处理通用任务"
 
+[agent.tools]
+default_permission = "Confirm"
+read_file = "Allow"
+search_web = "Allow"
+write_file = "Confirm"
+execute_code = "Deny"
+
 [[agent]]
 name = "brain"
 model = "gpt-4.1-mini"
 tags = ["brain", "dispatcher"]
 description = "Brain Agent，负责调度决策"
+
+[agent.tools]
+default_permission = "Deny"
+read_file = "Allow"

@@ -114,6 +114,42 @@ pub struct ShortTermMemory {
 }
 
 impl ShortTermMemory {
+    /// 记录 Tool 调用
+    ///
+    /// 将 Tool 调用记录追加到最后一个 Assistant 条目的元数据中，
+    /// 如果没有 Assistant 条目则创建一个新的。
+    pub fn record_tool_call(
+        &mut self,
+        tool_name: String,
+        input: String,
+        output: String,
+        timestamp: DateTime<Utc>,
+    ) {
+        let tool_call = ToolCall {
+            tool_name,
+            input,
+            output,
+            timestamp,
+        };
+
+        // 查找最后一个 Assistant 条目
+        if let Some(last_entry) = self.entries.last_mut() {
+            if last_entry.role == EntryRole::Assistant {
+                last_entry.metadata.tool_calls.push(tool_call);
+                return;
+            }
+        }
+
+        // 如果没有 Assistant 条目，创建一个新的
+        let mut metadata = EntryMetadata::default();
+        metadata.tool_calls.push(tool_call);
+        self.entries.push(MemoryEntry {
+            role: EntryRole::Assistant,
+            content: String::new(),
+            metadata,
+        });
+    }
+
     /// 添加新条目
     pub fn add_entry(
         &mut self,

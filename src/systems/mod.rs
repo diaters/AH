@@ -8,6 +8,7 @@ mod maintenance;
 mod memory;
 mod output;
 mod routing;
+mod tool;
 mod transform;
 
 use bevy::ecs::schedule::SystemSet;
@@ -24,6 +25,10 @@ pub(crate) use maintenance::agent_factory_system;
 pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
 pub(crate) use output::user_output_system;
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
+pub(crate) use tool::{
+    agent_evolution_system, approval_dispatch_system, approval_result_system, register_builtin_tools,
+    tool_dispatch_system, tool_result_system,
+};
 pub(crate) use transform::{
     brain_decision_system, ingest_execution_results_system, llm_response_system,
     retry_ready_system, signal_ingest_system, task_termination_system, user_message_to_task_system,
