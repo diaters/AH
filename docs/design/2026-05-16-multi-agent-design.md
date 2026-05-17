@@ -2,11 +2,14 @@
 
 本文档描述 Phase 3 多 Agent 支持的详细设计，包括 Agent 分类、配置加载、动态创建/销毁、权限继承和核心数据流。
 
+> 注：本文档关于 Agent 定位的前提已被 [ADR-002](/Users/diater/workspace/Harness/docs/adr/ADR-002-agent-controlled-evolution.md) 修订。
+> 本文中的"Agent 无运行状态"仍然成立，但"Agent 不可变配置实体"已更新为"Agent 是可演化的执行配置实体"。
+
 ---
 
 ## 一、设计目标
 
-- Agent 是不可变配置实体，无运行状态，可被多个 Task 并发复用
+- Agent 是可演化的执行配置实体，不承载瞬时运行状态，可被多个 Task 并发复用
 - 持久性 Agent 从 TOML 配置文件加载，系统运行期间始终存在
 - 任务型 Agent 由任意 Agent 动态创建，一对一绑定 Task，终态后自动销毁
 - 子 Agent 的 tags 必须是父 Agent tags 的子集（权限继承约束）
@@ -16,9 +19,17 @@
 
 ## 二、核心原则
 
-### Agent 是配置，不是状态
+### Agent 是执行配置，不是执行状态
 
 Agent 描述"怎么执行"（model、tags、description），不追踪"执行到哪了"。执行状态由 Task 承担，Agent 不需要 `Idle/Busy` 等可变状态。
+
+与本文原始版本不同，Agent 的长期配置允许被受控修正，例如：
+
+- Tool 权限
+- 长期经验记忆
+- 可继承的执行约束
+
+但这些修正不改变本节核心边界：Agent 不承载瞬时执行态。
 
 ### 统一创建入口
 
