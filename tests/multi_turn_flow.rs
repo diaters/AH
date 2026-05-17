@@ -50,9 +50,8 @@ fn multi_turn_task_lifecycle() {
         },
         ShortTermMemory {
             entries: vec![],
-            turn_count: 1,
+            estimated_tokens: 0,
             summary_prefix: None,
-            summary_range: None,
             last_cached_tokens: None,
         },
     ));
@@ -145,8 +144,8 @@ fn short_term_memory_tracks_turns() {
 
     assert!(stored.is_some());
     let stored = stored.unwrap();
-    assert_eq!(stored.turn_count, 2);
     assert_eq!(stored.entries.len(), 2);
+    assert!(stored.estimated_tokens > 0);
 }
 
 #[test]

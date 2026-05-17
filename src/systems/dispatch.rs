@@ -16,7 +16,8 @@ pub(crate) fn task_dispatch_system(
     agents: Query<&Agent>,
 ) {
     for mut task in &mut tasks {
-        if task.status != TaskStatus::Ready {
+        // Pending 或 Ready 状态都可以被调度
+        if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;
         }
 
@@ -71,7 +72,8 @@ pub(crate) fn brain_dispatch_system(
         .collect();
 
     for mut task in &mut tasks {
-        if task.status != TaskStatus::Ready {
+        // Pending 或 Ready 状态都可以被调度
+        if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;
         }
 

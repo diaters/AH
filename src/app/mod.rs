@@ -15,7 +15,7 @@ use crate::{
     llm::LlmProviderConfig,
     systems::{
         HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
-        brain_decision_system, brain_dispatch_system, continue_task_system,
+        brain_decision_system, brain_dispatch_system, command_parse_system, continue_task_system,
         evaluation_result_system, evaluation_trigger_system, ingest_execution_results_system,
         init_agent_memory_system, input_ingress_system, llm_response_system,
         memory_absorption_system, memory_compression_system, memory_contribution_system,
@@ -127,20 +127,20 @@ pub struct ShutdownState {
 /// 记忆配置
 #[derive(Debug, Clone, Resource)]
 pub struct MemoryConfig {
-    /// 近期全量保留轮数
-    pub recent_turns: u32,
-    /// 中期摘要触发阈值
-    pub compression_threshold: u32,
-    /// 摘要覆盖轮数
-    pub summary_window: u32,
+    /// 压缩触发阈值（token 数）
+    pub compression_threshold_tokens: u32,
+    /// 保留最近 N 轮不压缩
+    pub preserve_recent_turns: u32,
+    /// LLM 摘要目标 token 数
+    pub summary_target_tokens: u32,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            recent_turns: 5,
-            compression_threshold: 10,
-            summary_window: 5,
+            compression_threshold_tokens: 8000,
+            preserve_recent_turns: 2,
+            summary_target_tokens: 1000,
         }
     }
 }
@@ -192,7 +192,10 @@ pub fn build_harness_app(
             brain_decision_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
-            user_input_routing_system.in_set(HarnessSet::Transform),
+            command_parse_system.in_set(HarnessSet::Transform),
+            user_input_routing_system
+                .in_set(HarnessSet::Transform)
+                .after(command_parse_system),
             user_message_to_task_system
                 .in_set(HarnessSet::Transform)
                 .after(user_input_routing_system),

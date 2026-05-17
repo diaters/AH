@@ -3,7 +3,8 @@ use bevy::prelude::*;
 use crate::{
     app::Clock,
     domain::{
-        ContinueTaskMessage, CreateTaskMessage, Task, TaskStatus, UserInputMessage, WaitingReason,
+        ContinueTaskMessage, CreateTaskMessage, Task, TaskStatus, UserCommand, UserInputMessage,
+        WaitingReason,
     },
 };
 
@@ -14,6 +15,11 @@ pub(crate) fn user_input_routing_system(
     tasks: Query<&Task>,
 ) {
     for (entity, input) in &user_inputs {
+        // 检查是否是命令（命令由 command_parse_system 处理）
+        if UserCommand::parse(&input.content).is_command() {
+            continue; // 跳过，由 command_parse_system 处理
+        }
+
         // 查找是否有 Waiting(User) 状态的任务
         let waiting_task = tasks
             .iter()

@@ -147,12 +147,11 @@ fn evaluation_triggered_on_turn_limit() {
         last_error: None,
     });
 
-    // Add short term memory with turn_count = 2
+    // Add short term memory with some entries
     app.world_mut().spawn(harness::ShortTermMemory {
         entries: vec![],
-        turn_count: 2,
+        estimated_tokens: 100,
         summary_prefix: None,
-        summary_range: None,
         last_cached_tokens: None,
     });
 

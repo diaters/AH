@@ -26,8 +26,9 @@ pub(crate) fn evaluation_trigger_system(
 
         // 检查轮数阈值
         if let Some(max_turns) = config.max_turns {
-            let turn_count = memory.map(|m| m.turn_count).unwrap_or(0);
-            if turn_count >= max_turns {
+            // 每轮包含 User + Assistant，所以除以 2
+            let turn_count = memory.map(|m| m.entries.len() / 2).unwrap_or(0);
+            if turn_count >= max_turns as usize {
                 // 查找评估器 Agent
                 let evaluator_id = agents
                     .iter()
