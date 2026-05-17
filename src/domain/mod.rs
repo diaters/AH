@@ -251,6 +251,29 @@ impl Task {
         }
     }
 
+    /// 基于用户输入创建一个处于 Ready 状态的新任务（用于测试或单轮场景）。
+    pub fn from_user_input_ready(content: impl Into<String>, max_retries: u32) -> Self {
+        let content = content.into();
+        let now = Utc::now();
+
+        Self {
+            id: Uuid::new_v4(),
+            content: content.clone(),
+            creator: Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Ready,
+            input_summary: content.clone(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            retry_count: 0,
+            max_retries,
+            next_retry_at: None,
+            last_error: None,
+        }
+    }
+
     /// 将任务标记为分发等待状态。
     pub fn mark_waiting_for_agent(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
         self.delegate = Some(agent_id);

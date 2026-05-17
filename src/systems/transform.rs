@@ -6,7 +6,7 @@ use crate::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
         AgentRequestKind, BrainDecisionError, CreateTaskMessage, FailureReason, RetryReadyMessage,
         Signal, SignalPayload, Task, TaskStatus, TaskTerminatedMessage, UserInputMessage,
-        UserOutputMessage,
+        UserOutputMessage, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -181,10 +181,22 @@ pub(crate) fn llm_response_system(
 
             match &result.result {
                 Ok(content) => {
-                    task.mark_done(content.clone(), clock.0);
-                    commands.spawn(UserOutputMessage {
-                        content: content.clone(),
-                    });
+                    // 检查任务状态
+                    if task.status == TaskStatus::Pending {
+                        // Pending 状态：响应后进入 Waiting(User)，支持多轮对话
+                        task.status = TaskStatus::Waiting(WaitingReason::User);
+                        task.input_summary = content.clone();
+                        task.updated_at = clock.0;
+                        commands.spawn(UserOutputMessage {
+                            content: content.clone(),
+                        });
+                    } else {
+                        // 非 Pending：原有逻辑，标记完成
+                        task.mark_done(content.clone(), clock.0);
+                        commands.spawn(UserOutputMessage {
+                            content: content.clone(),
+                        });
+                    }
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
                     task.schedule_retry(error, clock.0);

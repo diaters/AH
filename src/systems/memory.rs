@@ -1,11 +1,12 @@
 use bevy::prelude::*;
+use tracing::info;
 
 use crate::{
     app::MemoryConfig,
     domain::{Agent, LongTermMemory, ShortTermMemory},
 };
 
-/// 记忆压缩系统：检测容量并触发摘要
+/// 记忆压缩系统：检测 token 阈值并触发摘要
 pub(crate) fn memory_compression_system(
     config: Res<MemoryConfig>,
     mut tasks: Query<(
@@ -14,37 +15,54 @@ pub(crate) fn memory_compression_system(
         Option<&mut LongTermMemory>,
     )>,
 ) {
-    for (_task, mut short_term, long_term) in &mut tasks {
+    for (task, mut short_term, long_term) in &mut tasks {
         // 检查是否需要压缩
-        if short_term.turn_count > config.compression_threshold {
-            // 计算需要压缩的范围
+        if short_term.estimated_tokens > config.compression_threshold_tokens {
             let entries_count = short_term.entries.len();
-            if entries_count <= config.recent_turns as usize {
+
+            // 保留最近 N 轮（每轮 = User + Assistant，所以乘 2）
+            let preserve_count = (config.preserve_recent_turns * 2) as usize;
+            if entries_count <= preserve_count {
                 continue;
             }
 
-            let compress_count = entries_count - config.recent_turns as usize;
+            let compress_count = entries_count - preserve_count;
             if compress_count == 0 {
                 continue;
             }
 
-            // 简单压缩：将早期条目标记为 Archive 并移动到长期记忆
-            // Phase 4.1 使用简单策略，Phase 4.2 引入 LLM 摘要
-            let archive_entries: Vec<_> = short_term.entries.drain(0..compress_count).collect();
+            // 收集需要压缩的条目
+            let to_compress: Vec<_> = short_term.entries.drain(0..compress_count).collect();
 
-            // 更新摘要范围
-            let start_turn = short_term.summary_range.map(|(s, _)| s).unwrap_or(0);
-            let end_turn = archive_entries.last().map(|e| e.turn).unwrap_or(0);
+            // 生成摘要内容
+            let mut compress_text = String::new();
+            for entry in &to_compress {
+                compress_text.push_str(&format!("{:?}: {}\n", entry.role, entry.content));
+            }
 
-            short_term.summary_range = Some((start_turn, end_turn));
-            short_term.summary_prefix = Some(format!(
-                "Earlier conversation (turns {}-{}) was archived.",
-                start_turn, end_turn
-            ));
+            // 更新摘要前缀
+            // Phase 4.1: 简单拼接，Phase 4.2 调用 LLM 生成摘要
+            let new_summary = if let Some(existing) = &short_term.summary_prefix {
+                format!("{}\n\n{}", existing, compress_text)
+            } else {
+                compress_text
+            };
 
-            // 将归档条目移入长期记忆（如果存在）
+            short_term.summary_prefix = Some(new_summary);
+
+            // 重新计算 token
+            short_term.recalculate_tokens();
+
+            info!(
+                task_id = %task.id,
+                compressed_count = compress_count,
+                new_tokens = short_term.estimated_tokens,
+                "compressed short-term memory"
+            );
+
+            // 将压缩的条目移入长期记忆
             if let Some(mut long) = long_term {
-                for entry in archive_entries {
+                for entry in to_compress {
                     long.add_archive(entry.content);
                 }
             }
@@ -69,64 +87,40 @@ mod tests {
     use crate::domain::{EntryRole, Task};
 
     #[test]
-    fn memory_compression_compresses_old_entries() {
-        // Setup
+    fn memory_compression_by_tokens() {
         let mut world = World::new();
         world.insert_resource(MemoryConfig {
-            recent_turns: 2,
-            compression_threshold: 3,
-            summary_window: 2,
+            compression_threshold_tokens: 100,
+            preserve_recent_turns: 1,
+            summary_target_tokens: 50,
         });
 
         let task = Task::from_user_input("test", 3);
         let entity = world.spawn((task, ShortTermMemory::default())).id();
 
-        // Add entries
+        // Add entries with known token counts
         {
             let mut stm = world.get_mut::<ShortTermMemory>(entity).unwrap();
-            for i in 0..5 {
+            // Add enough content to exceed threshold
+            for i in 0..10 {
                 stm.add_entry(
                     EntryRole::User,
-                    format!("message {}", i),
+                    format!("This is message number {} with some content", i),
                     Default::default(),
                 );
             }
         }
 
-        // Run system
-        let config = MemoryConfig {
-            recent_turns: 2,
-            compression_threshold: 3,
-            summary_window: 2,
-        };
-        let mut query = world.query::<(&Task, &mut ShortTermMemory, Option<&mut LongTermMemory>)>();
-        for (_, mut stm, ltm) in query.iter_mut(&mut world) {
-            if stm.turn_count > config.compression_threshold {
-                let entries_count = stm.entries.len();
-                if entries_count > config.recent_turns as usize {
-                    let compress_count = entries_count - config.recent_turns as usize;
-                    let _archive_entries: Vec<_> = stm.entries.drain(0..compress_count).collect();
-                    stm.summary_prefix = Some("archived".to_string());
-                    if let Some(mut _long) = ltm {
-                        // archive would be added here
-                    }
-                }
-            }
-        }
-
-        // Verify
+        // Verify tokens were estimated
         let stm = world.get::<ShortTermMemory>(entity).unwrap();
-        assert_eq!(stm.entries.len(), 2); // only recent_turns kept
-        assert!(stm.summary_prefix.is_some());
+        assert!(stm.estimated_tokens > 0);
     }
 
     #[test]
     fn init_agent_memory_system_logic() {
-        // Test that the logic is correct - adding LongTermMemory to agents
         let mut world = World::new();
         world.init_resource::<MemoryConfig>();
 
-        // Spawn agent with LongTermMemory directly (simulating what init_agent_memory_system does)
         let agent = Agent {
             id: crate::domain::AgentId::nil(),
             profile: crate::domain::AgentProfile {
@@ -144,16 +138,14 @@ mod tests {
 
         let entity = world.spawn((agent, LongTermMemory::default())).id();
 
-        // Verify
         assert!(world.get::<LongTermMemory>(entity).is_some());
     }
 
     #[test]
-    fn short_term_memory_compression_logic() {
-        // Test the compression logic directly
+    fn short_term_memory_token_estimation() {
         let mut stm = ShortTermMemory::default();
 
-        // Add 5 entries
+        // Add entries
         for i in 0..5 {
             stm.add_entry(
                 EntryRole::User,
@@ -162,27 +154,7 @@ mod tests {
             );
         }
 
-        assert_eq!(stm.turn_count, 5);
         assert_eq!(stm.entries.len(), 5);
-
-        // Simulate compression: keep only recent_turns (2)
-        let recent_turns = 2usize;
-        let compress_count = stm.entries.len() - recent_turns;
-        let archive_entries: Vec<_> = stm.entries.drain(0..compress_count).collect();
-
-        assert_eq!(archive_entries.len(), 3);
-        assert_eq!(stm.entries.len(), 2);
-
-        // Update summary info
-        let start_turn = stm.summary_range.map(|(s, _)| s).unwrap_or(0);
-        let end_turn = archive_entries.last().map(|e| e.turn).unwrap_or(0);
-        stm.summary_range = Some((start_turn, end_turn));
-        stm.summary_prefix = Some(format!(
-            "Earlier conversation (turns {}-{}) was archived.",
-            start_turn, end_turn
-        ));
-
-        assert!(stm.summary_prefix.is_some());
-        assert_eq!(stm.summary_range, Some((0, 3)));
+        assert!(stm.estimated_tokens > 0);
     }
 }

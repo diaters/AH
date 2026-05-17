@@ -127,20 +127,20 @@ pub struct ShutdownState {
 /// 记忆配置
 #[derive(Debug, Clone, Resource)]
 pub struct MemoryConfig {
-    /// 近期全量保留轮数
-    pub recent_turns: u32,
-    /// 中期摘要触发阈值
-    pub compression_threshold: u32,
-    /// 摘要覆盖轮数
-    pub summary_window: u32,
+    /// 压缩触发阈值（token 数）
+    pub compression_threshold_tokens: u32,
+    /// 保留最近 N 轮不压缩
+    pub preserve_recent_turns: u32,
+    /// LLM 摘要目标 token 数
+    pub summary_target_tokens: u32,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            recent_turns: 5,
-            compression_threshold: 10,
-            summary_window: 5,
+            compression_threshold_tokens: 8000,
+            preserve_recent_turns: 2,
+            summary_target_tokens: 1000,
         }
     }
 }
