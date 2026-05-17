@@ -99,4 +99,4 @@
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 - Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`
-- Phase 4.1 设计文档：`docs/superpowers/specs/2026-05-17-multi-turn-memory-design-v2.md`
+- Phase 4.1 设计文档：`docs/design/2026-05-17-multi-turn-memory-design.md`
