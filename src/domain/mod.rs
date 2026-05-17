@@ -23,9 +23,9 @@ pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
 };
 pub use space::{
-    AgentToolsConfig, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge,
-    SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, SystemStatus, ToolDefinition,
-    ToolExecutorKind, ToolPermission, ToolSchema,
+    AgentToolsConfig, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge, SpacePreferences,
+    SpaceRuntimeContext, SpaceToolRegistry, SystemStatus, ToolDefinition, ToolExecutorKind,
+    ToolPermission, ToolSchema,
 };
 
 pub type TaskId = Uuid;
@@ -45,7 +45,7 @@ pub enum WaitingReason {
     User,      // 等待用户输入
     Evaluator, // 等待评估器判定
     RetryBackoff,
-    Approval,  // 等待审批
+    Approval, // 等待审批
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -21,7 +21,11 @@ impl AgentExecutor for BrainMockExecutor {
             }
             harness::AgentRequestKind::ToolExecution { .. } => {
                 // Tool 执行由专门的 tool_execution_system 处理，此处不应到达
-                Box::pin(async move { Err(harness::ExecutionError::Unknown("ToolExecution not supported in mock executor".to_string())) })
+                Box::pin(async move {
+                    Err(harness::ExecutionError::Unknown(
+                        "ToolExecution not supported in mock executor".to_string(),
+                    ))
+                })
             }
         }
     }

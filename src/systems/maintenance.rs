@@ -88,7 +88,9 @@ fn load_persistent_agents(
 
         let tool_permissions = if let Some(ref tools_config) = entry.tools {
             AgentToolPermissions {
-                default_permission: tools_config.default_permission.unwrap_or(ToolPermission::Confirm),
+                default_permission: tools_config
+                    .default_permission
+                    .unwrap_or(ToolPermission::Confirm),
                 overrides: tools_config.overrides.clone(),
             }
         } else {

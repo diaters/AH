@@ -31,7 +31,10 @@ pub fn register_builtin_tools(registry: &mut SpaceToolRegistry) {
 }
 
 /// 执行内置 Tool
-fn execute_builtin_tool(name: &str, input: &serde_json::Value) -> Result<serde_json::Value, ToolError> {
+fn execute_builtin_tool(
+    name: &str,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, ToolError> {
     match name {
         "echo" => {
             // 简单 echo 实现
@@ -92,7 +95,10 @@ pub(crate) fn tool_dispatch_system(
                     &mut commands,
                     entity,
                     request,
-                    ToolError::PermissionDenied(format!("{} requires user confirmation", tool_name)),
+                    ToolError::PermissionDenied(format!(
+                        "{} requires user confirmation",
+                        tool_name
+                    )),
                 );
             }
             ToolPermission::Deny => {
@@ -120,12 +126,12 @@ fn execute_tool(
         crate::domain::ToolExecutorKind::Builtin(name) => {
             execute_builtin_tool(name, &request.tool_input)
         }
-        crate::domain::ToolExecutorKind::External { .. } => {
-            Err(ToolError::NotFound("external executor not supported in MVP".to_string()))
-        }
-        crate::domain::ToolExecutorKind::Http { .. } => {
-            Err(ToolError::NotFound("http executor not supported in MVP".to_string()))
-        }
+        crate::domain::ToolExecutorKind::External { .. } => Err(ToolError::NotFound(
+            "external executor not supported in MVP".to_string(),
+        )),
+        crate::domain::ToolExecutorKind::Http { .. } => Err(ToolError::NotFound(
+            "http executor not supported in MVP".to_string(),
+        )),
     };
 
     // 生成结果消息
@@ -195,8 +201,8 @@ pub(crate) fn tool_result_system(
 
                     // 记录 ToolCall 到 ShortTermMemory
                     if let Some(mut stm) = short_term_memory {
-                        let output_str = serde_json::to_string(output)
-                            .unwrap_or_else(|_| output.to_string());
+                        let output_str =
+                            serde_json::to_string(output).unwrap_or_else(|_| output.to_string());
                         stm.record_tool_call(
                             result.tool_name.clone(),
                             serde_json::to_string(output).unwrap_or_default(),
@@ -239,10 +245,10 @@ pub(crate) fn approval_dispatch_system(
         );
 
         // 记录原 Task 状态
-        if let Some(task) = tasks.iter().find(|t| t.id == request.source_task_id) {
-            if task.status == TaskStatus::Waiting(WaitingReason::Approval) {
-                info!(task_id = %task.id, "source task is waiting for approval");
-            }
+        if let Some(task) = tasks.iter().find(|t| t.id == request.source_task_id)
+            && task.status == TaskStatus::Waiting(WaitingReason::Approval)
+        {
+            info!(task_id = %task.id, "source task is waiting for approval");
         }
 
         // 生成拒绝结果
@@ -291,9 +297,7 @@ pub(crate) fn approval_result_system(
 ///
 /// 将批准后的长期权限修正或经验写回 Agent
 #[allow(dead_code)]
-pub(crate) fn agent_evolution_system(
-    agents: Query<&Agent>,
-) {
+pub(crate) fn agent_evolution_system(agents: Query<&Agent>) {
     // MVP 阶段暂不实现具体演化逻辑
     // 后续扩展：
     // - 从 Tool 执行结果中提取经验
@@ -305,7 +309,9 @@ pub(crate) fn agent_evolution_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions};
+    use crate::domain::{
+        AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
+    };
 
     #[allow(dead_code)]
     fn test_agent() -> Agent {
@@ -352,14 +358,21 @@ mod tests {
     #[test]
     fn agent_tool_permissions_default_is_confirm() {
         let perms = AgentToolPermissions::default();
-        assert_eq!(perms.get_permission("unknown_tool"), ToolPermission::Confirm);
+        assert_eq!(
+            perms.get_permission("unknown_tool"),
+            ToolPermission::Confirm
+        );
     }
 
     #[test]
     fn agent_tool_permissions_override() {
-        let mut perms = AgentToolPermissions::default();
-        perms.default_permission = ToolPermission::Deny;
-        perms.overrides.insert("echo".to_string(), ToolPermission::Allow);
+        let mut perms = AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            ..Default::default()
+        };
+        perms
+            .overrides
+            .insert("echo".to_string(), ToolPermission::Allow);
 
         assert_eq!(perms.get_permission("echo"), ToolPermission::Allow);
         assert_eq!(perms.get_permission("other"), ToolPermission::Deny);

@@ -3,10 +3,9 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience,
-    AgentKind, AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture, HarnessConfig,
-    LongTermMemory, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentKind,
+    AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture, HarnessConfig, LongTermMemory,
+    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 

@@ -133,11 +133,11 @@ impl ShortTermMemory {
         };
 
         // 查找最后一个 Assistant 条目
-        if let Some(last_entry) = self.entries.last_mut() {
-            if last_entry.role == EntryRole::Assistant {
-                last_entry.metadata.tool_calls.push(tool_call);
-                return;
-            }
+        if let Some(last_entry) = self.entries.last_mut()
+            && last_entry.role == EntryRole::Assistant
+        {
+            last_entry.metadata.tool_calls.push(tool_call);
+            return;
         }
 
         // 如果没有 Assistant 条目，创建一个新的

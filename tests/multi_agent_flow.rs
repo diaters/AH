@@ -3,8 +3,8 @@ use std::{sync::Arc, thread, time::Duration};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience,
-    AgentKind, AgentProfile, AgentToolPermissions, ExecutorFuture, ExternalInput, HarnessConfig,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentKind,
+    AgentProfile, AgentToolPermissions, ExecutorFuture, ExternalInput, HarnessConfig,
     OutputMessage, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;

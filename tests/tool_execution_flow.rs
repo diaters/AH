@@ -7,9 +7,9 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentId,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, EntryRole, ExecutorFuture,
-    HarnessConfig, OutputMessage, ShortTermMemory, Task, ToolDefinition,
+    HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task, ToolDefinition,
     ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind, ToolPermission,
-    ToolSchema, SpaceToolRegistry, build_harness_app,
+    ToolSchema, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -26,10 +26,7 @@ fn test_config() -> HarnessConfig {
 }
 
 /// 创建测试用的 Agent
-fn create_test_agent(
-    world: &mut World,
-    tool_permissions: AgentToolPermissions,
-) -> AgentId {
+fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) -> AgentId {
     let id = uuid::Uuid::new_v4();
     world.spawn(Agent {
         id,
@@ -322,10 +319,13 @@ fn tool_call_is_recorded_to_short_term_memory() {
 
     // 创建 Task 和 ShortTermMemory
     let task_id = uuid::Uuid::new_v4();
-    let task_entity = app.world_mut().spawn((
-        Task::from_user_input_ready("test task", 3),
-        ShortTermMemory::default(),
-    )).id();
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());
@@ -355,9 +355,10 @@ fn tool_call_is_recorded_to_short_term_memory() {
     let stm = app.world_mut().get::<ShortTermMemory>(task_entity);
     if let Some(memory) = stm {
         // 检查是否有 assistant 条目（可能包含 tool call）
-        let has_tool_record = memory.entries.iter().any(|e| {
-            e.role == EntryRole::Assistant && !e.metadata.tool_calls.is_empty()
-        });
+        let has_tool_record = memory
+            .entries
+            .iter()
+            .any(|e| e.role == EntryRole::Assistant && !e.metadata.tool_calls.is_empty());
         assert!(
             has_tool_record || !memory.entries.is_empty(),
             "ShortTermMemory should have recorded the tool call"

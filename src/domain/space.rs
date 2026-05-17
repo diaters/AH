@@ -102,20 +102,15 @@ pub enum ToolExecutorKind {
 }
 
 /// Tool 权限级别
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolPermission {
     /// 允许直接执行
     Allow,
     /// 需要用户确认
+    #[default]
     Confirm,
     /// 禁止执行
     Deny,
-}
-
-impl Default for ToolPermission {
-    fn default() -> Self {
-        Self::Confirm
-    }
 }
 
 /// 持久性 Agent 配置镜像
