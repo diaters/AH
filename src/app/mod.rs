@@ -15,7 +15,7 @@ use crate::{
     llm::LlmProviderConfig,
     systems::{
         HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
-        brain_decision_system, brain_dispatch_system, continue_task_system,
+        brain_decision_system, brain_dispatch_system, command_parse_system, continue_task_system,
         evaluation_result_system, evaluation_trigger_system, ingest_execution_results_system,
         init_agent_memory_system, input_ingress_system, llm_response_system,
         memory_absorption_system, memory_compression_system, memory_contribution_system,
@@ -192,7 +192,10 @@ pub fn build_harness_app(
             brain_decision_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
-            user_input_routing_system.in_set(HarnessSet::Transform),
+            command_parse_system.in_set(HarnessSet::Transform),
+            user_input_routing_system
+                .in_set(HarnessSet::Transform)
+                .after(command_parse_system),
             user_message_to_task_system
                 .in_set(HarnessSet::Transform)
                 .after(user_input_routing_system),
