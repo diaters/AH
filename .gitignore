@@ -12,7 +12,7 @@ Cargo.lock
 # Environment
 .env
 .env.local
-
+AGENTS.md
 # Claude Code local config
 .claude/
 
