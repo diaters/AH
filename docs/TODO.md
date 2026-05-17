@@ -84,6 +84,9 @@
 - [x] 多轮对话上下文管理
 - [x] 记忆传承机制（子 Agent 向父 Agent 贡献）
 - [x] 评估器 Agent 设计
+- [x] 基于 token 的记忆压缩
+- [x] 用户指令解析（/btw, /finish, /summarize）
+- [x] Pending 状态支持多轮对话
 - [ ] Tool / ToolCall 设计
 - [ ] Session 概念设计
 - [ ] Planner 模块设计
@@ -92,8 +95,8 @@
 
 ## 备注
 
-- 当前阶段：Phase 4.1 多轮对话与双层记忆已完成
+- 当前阶段：Phase 4.1 v2 多轮对话与记忆管理已完成
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 - Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`
-- Phase 4.1 设计文档：`docs/superpowers/specs/2026-05-16-multi-turn-memory-design.md`
+- Phase 4.1 设计文档：`docs/superpowers/specs/2026-05-17-multi-turn-memory-design-v2.md`
