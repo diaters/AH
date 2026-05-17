@@ -53,7 +53,7 @@ sequenceDiagram
 
 ## 三、状态转换
 
-> **注意**：Brain 决策发生在 Task 创建前，不进入 Task 状态机。Task 状态只描述执行过程。
+> __注意__：Brain 决策发生在 Task 创建前，不进入 Task 状态机。Task 状态只描述执行过程。
 
 ### Task 状态（无 Brain 相关状态）
 
@@ -72,7 +72,7 @@ stateDiagram-v2
 
 Brain 决策在 Task 创建时同步完成：
 
-```
+```text
 用户输入 -> Brain 决策 -> 创建 Task（指定 delegate）
 ```
 
@@ -246,4 +246,4 @@ flowchart LR
 
 每帧最多推进 2 跳，符合约束。
 
-> **注意**：Brain 决策和普通 Agent 执行都使用 `Waiting(Agent)` 状态，Task 状态机不区分两者。
+> __注意__：Brain 决策和普通 Agent 执行都使用 `Waiting(Agent)` 状态，Task 状态机不区分两者。
