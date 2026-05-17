@@ -98,7 +98,12 @@ fn selects_agent_by_tags_match() {
         query.iter(world).cloned().collect()
     };
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, TaskStatus::Done);
+    // 多轮对话任务会在响应后回到 Waiting(User) 状态
+    assert!(
+        !tasks[0].status.is_terminal(),
+        "multi-turn task should not be in terminal state, got {:?}",
+        tasks[0].status
+    );
 }
 
 /// 验证任务型 Agent 的创建、执行和销毁完整生命周期。

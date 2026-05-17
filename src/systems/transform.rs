@@ -35,10 +35,10 @@ pub(crate) fn user_message_to_task_system(
     messages: Query<(Entity, &CreateTaskMessage)>,
 ) {
     for (entity, message) in &messages {
-        // 外部输入创建单轮任务（Ready 状态）
-        commands.spawn(Task::from_user_input_ready(
-            message.content.clone(),
-            settings.0.max_retries,
+        // 创建多轮对话任务（Pending 状态）并附带 ShortTermMemory
+        commands.spawn((
+            Task::from_user_input(message.content.clone(), settings.0.max_retries),
+            ShortTermMemory::default(),
         ));
         commands.entity(entity).despawn();
     }
