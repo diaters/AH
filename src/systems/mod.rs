@@ -1,3 +1,4 @@
+mod command;
 mod contribution;
 mod dispatch;
 mod evaluation;
@@ -11,6 +12,7 @@ mod transform;
 
 use bevy::ecs::schedule::SystemSet;
 
+pub(crate) use command::command_parse_system;
 pub(crate) use contribution::{
     agent_termination_system, memory_absorption_system, memory_contribution_system,
 };

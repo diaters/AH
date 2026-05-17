@@ -4,9 +4,9 @@ use crate::{
     app::{Clock, ExecutionResultReceiver, HarnessSettings},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
-        AgentRequestKind, BrainDecisionError, CreateTaskMessage, FailureReason, RetryReadyMessage,
-        Signal, SignalPayload, Task, TaskStatus, TaskTerminatedMessage, UserInputMessage,
-        UserOutputMessage,
+        AgentRequestKind, BrainDecisionError, CreateTaskMessage, EntryMetadata, EntryRole,
+        FailureReason, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload, Task, TaskStatus,
+        TaskTerminatedMessage, UserInputMessage, UserOutputMessage, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -35,9 +35,10 @@ pub(crate) fn user_message_to_task_system(
     messages: Query<(Entity, &CreateTaskMessage)>,
 ) {
     for (entity, message) in &messages {
-        commands.spawn(Task::from_user_input(
-            message.content.clone(),
-            settings.0.max_retries,
+        // 创建多轮对话任务（Pending 状态）并附带 ShortTermMemory
+        commands.spawn((
+            Task::from_user_input(message.content.clone(), settings.0.max_retries),
+            ShortTermMemory::default(),
         ));
         commands.entity(entity).despawn();
     }
@@ -164,7 +165,7 @@ pub(crate) fn brain_decision_system(
 pub(crate) fn llm_response_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
 ) {
     for (entity, result_message) in &results {
@@ -174,17 +175,34 @@ pub(crate) fn llm_response_system(
 
         let result = &result_message.result;
 
-        for mut task in &mut tasks {
+        for (mut task, short_term) in &mut tasks {
             if task.id != result.task_id {
                 continue;
             }
 
             match &result.result {
                 Ok(content) => {
-                    task.mark_done(content.clone(), clock.0);
-                    commands.spawn(UserOutputMessage {
-                        content: content.clone(),
-                    });
+                    // 追加 Agent 响应到 ShortTermMemory
+                    if let Some(mut stm) = short_term {
+                        stm.add_entry(EntryRole::Assistant, content, EntryMetadata::default());
+                    }
+
+                    // 检查是否支持多轮对话
+                    if task.multi_turn {
+                        // 多轮对话：响应后进入 Waiting(User)
+                        task.status = TaskStatus::Waiting(WaitingReason::User);
+                        task.input_summary = content.clone();
+                        task.updated_at = clock.0;
+                        commands.spawn(UserOutputMessage {
+                            content: content.clone(),
+                        });
+                    } else {
+                        // 单轮对话：标记完成
+                        task.mark_done(content.clone(), clock.0);
+                        commands.spawn(UserOutputMessage {
+                            content: content.clone(),
+                        });
+                    }
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
                     task.schedule_retry(error, clock.0);

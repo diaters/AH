@@ -53,24 +53,30 @@ sequenceDiagram
 
 ## 三、状态转换
 
-### Task 状态扩展
+> __注意__：Brain 决策发生在 Task 创建前，不进入 Task 状态机。Task 状态只描述执行过程。
 
-`WaitingReason::Brain` 已在 MVP 中预留，现在正式启用。
+### Task 状态（无 Brain 相关状态）
 
 ```mermaid
 stateDiagram-v2
     [*] --> Ready
-    Ready --> Waiting_Brain: brain_dispatch (Brain 启用)
-    Ready --> Waiting_Agent: task_dispatch (Brain 不启用)
-    Waiting_Brain --> Waiting_Agent: brain_decision 成功
-    Waiting_Brain --> Failed: brain 决策不可重试失败
-    Waiting_Brain --> Waiting_RetryBackoff: brain 决策可重试失败
+    Ready --> Waiting_Agent: task_dispatch
     Waiting_Agent --> Running: executor accepted
     Running --> Done: success
     Running --> Waiting_RetryBackoff: retryable failure
     Running --> Failed: fatal failure
     Waiting_RetryBackoff --> Ready: retry wakeup signal
 ```
+
+### Brain 决策流程
+
+Brain 决策在 Task 创建时同步完成：
+
+```text
+用户输入 -> Brain 决策 -> 创建 Task（指定 delegate）
+```
+
+Brain 不引入额外的 Task 状态，`WaitingReason::Brain` 已被移除。
 
 ---
 
@@ -108,17 +114,9 @@ struct AgentExecutionResult {
 }
 ```
 
-### Task 新增方法
+### Task 方法
 
-```rust
-impl Task {
-    pub fn mark_waiting_for_brain(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
-        self.delegate = Some(agent_id);
-        self.status = TaskStatus::Waiting(WaitingReason::Brain);
-        self.updated_at = now;
-    }
-}
-```
+Brain 决策在 Task 创建时完成，无需额外的 Task 状态方法。Task 创建时 `delegate` 字段已确定。
 
 ### 新增类型
 
@@ -143,17 +141,17 @@ enum BrainDecisionError {
 ### brain_dispatch_system
 
 - __阶段__：DispatchSet（在 `task_dispatch_system` 之前）
-- __输入__：`Ready` 状态的 Task、`Idle` 状态的 Brain Agent
+- __输入__：`Ready` 状态的 Task
 - __输出__：`AgentExecutionRequestMessage(BrainDecision)`
-- __副作用__：Task 进入 `Waiting(Brain)`，Brain Agent 进入 `Busy`
-- __跳过条件__：Brain 未启用、Brain Agent 不可用
+- __副作用__：Task 进入 `Waiting(Agent)`（与普通任务一致）
+- __跳过条件__：Brain 未启用、Brain Agent 不存在
 
 ### brain_decision_system
 
 - __阶段__：TransformSet（在 `ingest_execution_results_system` 之后）
 - __输入__：`AgentExecutionResultMessage` 中 `request_kind == BrainDecision` 的结果
 - __输出__：`AgentExecutionRequestMessage(LlmCompletion)`
-- __副作用__：Task 从 `Waiting(Brain)` 转为 `Waiting(Agent)`，Brain Agent 恢复 `Idle`，选定 Agent 进入 `Busy`
+- __副作用__：Task 更新 `delegate` 为选定 Agent，继续等待执行
 - __容错__：解析失败时 Task 标记为 Failed；选定 Agent 不存在时回退到默认 Agent
 
 ### llm_response_system 改造
@@ -240,10 +238,12 @@ flowchart LR
 
 | 帧   | 推进                                         | 跳数 |
 |------|---------------------------------------------|------|
-| N    | Ready -> Waiting(Brain) + BrainDecision 请求 | 1    |
+| N    | Ready -> Waiting(Agent) + BrainDecision 请求 | 1    |
 | N+1  | agent_execution_system spawn 异步任务        | 1    |
 | N+K  | ingest + brain_decision -> Waiting(Agent) + LlmCompletion 请求 | 2 |
 | N+K+1| agent_execution_system spawn 异步任务        | 1    |
 | N+K+M| ingest + llm_response -> Done + UserOutput  | 2    |
 
 每帧最多推进 2 跳，符合约束。
+
+> __注意__：Brain 决策和普通 Agent 执行都使用 `Waiting(Agent)` 状态，Task 状态机不区分两者。

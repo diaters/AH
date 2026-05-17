@@ -2,8 +2,8 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture, ExternalInput,
-    HarnessConfig, OutputMessage, Task, TaskStatus, build_harness_app,
+    AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture, HarnessConfig,
+    OutputMessage, Task, TaskStatus, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -48,13 +48,17 @@ fn brain_test_config() -> HarnessConfig {
 fn completes_brain_dispatch_flow() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
-    let (input_tx, input_rx) = unbounded();
+    let (_input_tx, input_rx) = unbounded();
     let (output_tx, output_rx) = unbounded::<OutputMessage>();
     let mut app = build_harness_app(brain_test_config(), runtime, executor, input_rx, output_tx);
 
-    input_tx
-        .send(ExternalInput::Text("你好，Harness".to_string()))
-        .expect("input should be accepted");
+    // 初始化应用
+    app.update();
+
+    // 创建一个 Ready 状态的任务
+    let task = Task::from_user_input_ready("你好，Harness", 3);
+    app.world_mut()
+        .spawn((task, harness::ShortTermMemory::default()));
 
     for _ in 0..16 {
         app.update();
@@ -81,16 +85,20 @@ fn completes_brain_dispatch_flow() {
 fn mvp_flow_unchanged_when_brain_disabled() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
-    let (input_tx, input_rx) = unbounded();
+    let (_input_tx, input_rx) = unbounded();
     let (output_tx, output_rx) = unbounded::<OutputMessage>();
 
     let mut no_brain_config = brain_test_config();
     no_brain_config.brain = None;
     let mut app = build_harness_app(no_brain_config, runtime, executor, input_rx, output_tx);
 
-    input_tx
-        .send(ExternalInput::Text("你好，Harness".to_string()))
-        .expect("input should be accepted");
+    // 初始化应用
+    app.update();
+
+    // 创建一个 Ready 状态的任务
+    let task = Task::from_user_input_ready("你好，Harness", 3);
+    app.world_mut()
+        .spawn((task, harness::ShortTermMemory::default()));
 
     for _ in 0..8 {
         app.update();

@@ -1,6 +1,7 @@
 use bevy::prelude::Component;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tiktoken_rs::cl100k_base;
 
 #[cfg(test)]
 mod tests {
@@ -8,8 +9,7 @@ mod tests {
 
     #[test]
     fn memory_entry_new_creates_user_entry() {
-        let entry = MemoryEntry::new(1, EntryRole::User, "hello");
-        assert_eq!(entry.turn, 1);
+        let entry = MemoryEntry::new(EntryRole::User, "hello");
         assert_eq!(entry.role, EntryRole::User);
         assert_eq!(entry.content, "hello");
     }
@@ -18,16 +18,22 @@ mod tests {
     fn short_term_memory_default_is_empty() {
         let memory = ShortTermMemory::default();
         assert!(memory.entries.is_empty());
-        assert_eq!(memory.turn_count, 0);
+        assert_eq!(memory.estimated_tokens, 0);
         assert!(memory.summary_prefix.is_none());
     }
 
     #[test]
-    fn short_term_memory_add_entry_increments_turn() {
+    fn short_term_memory_add_entry_updates_tokens() {
         let mut memory = ShortTermMemory::default();
-        memory.add_entry(EntryRole::User, "hello", EntryMetadata::default());
-        assert_eq!(memory.turn_count, 1);
+        memory.add_entry(EntryRole::User, "hello world", EntryMetadata::default());
         assert_eq!(memory.entries.len(), 1);
+        assert!(memory.estimated_tokens > 0);
+    }
+
+    #[test]
+    fn estimate_tokens_returns_positive() {
+        let tokens = estimate_tokens("Hello, world!");
+        assert!(tokens > 0);
     }
 
     #[test]
@@ -37,19 +43,24 @@ mod tests {
     }
 }
 
+/// 估算文本的 token 数
+pub fn estimate_tokens(text: &str) -> u32 {
+    cl100k_base()
+        .map(|enc| enc.encode_with_special_tokens(text).len() as u32)
+        .unwrap_or_else(|_| (text.len() / 4) as u32) // fallback: 4 chars ≈ 1 token
+}
+
 /// 记忆条目
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryEntry {
-    pub turn: u32,
     pub role: EntryRole,
     pub content: String,
     pub metadata: EntryMetadata,
 }
 
 impl MemoryEntry {
-    pub fn new(turn: u32, role: EntryRole, content: impl Into<String>) -> Self {
+    pub fn new(role: EntryRole, content: impl Into<String>) -> Self {
         Self {
-            turn,
             role,
             content: content.into(),
             metadata: EntryMetadata::default(),
@@ -72,7 +83,7 @@ pub enum EntryRole {
 }
 
 /// 记忆条目元数据
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EntryMetadata {
     pub tool_calls: Vec<ToolCall>,
     pub resources: Vec<String>,
@@ -81,7 +92,7 @@ pub struct EntryMetadata {
 }
 
 /// 工具调用记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
     pub tool_name: String,
     pub input: String,
@@ -90,12 +101,15 @@ pub struct ToolCall {
 }
 
 /// 短期记忆（绑定 Task）
-#[derive(Component, Default)]
+#[derive(Component, Default, Clone)]
 pub struct ShortTermMemory {
+    /// 完整对话条目
     pub entries: Vec<MemoryEntry>,
-    pub turn_count: u32,
+    /// 摘要前缀（压缩后的旧内容）
     pub summary_prefix: Option<String>,
-    pub summary_range: Option<(u32, u32)>,
+    /// 当前 token 估算
+    pub estimated_tokens: u32,
+    /// 最后一次缓存命中的 token 数
     pub last_cached_tokens: Option<u32>,
 }
 
@@ -107,15 +121,23 @@ impl ShortTermMemory {
         content: impl Into<String>,
         metadata: EntryMetadata,
     ) {
-        self.turn_count += 1;
-        let entry = MemoryEntry::new(self.turn_count, role, content).with_metadata(metadata);
+        let content = content.into();
+        // 更新 token 估算
+        self.estimated_tokens += estimate_tokens(&content);
+        let entry = MemoryEntry::new(role, content).with_metadata(metadata);
         self.entries.push(entry);
     }
 
-    /// 获取需要发送给 LLM 的条目（排除已摘要的部分）
-    pub fn active_entries(&self) -> impl Iterator<Item = &MemoryEntry> {
-        let start_turn = self.summary_range.map(|(_, end)| end).unwrap_or(0);
-        self.entries.iter().filter(move |e| e.turn >= start_turn)
+    /// 重新计算 token 估算
+    pub fn recalculate_tokens(&mut self) {
+        let mut total = 0u32;
+        if let Some(summary) = &self.summary_prefix {
+            total += estimate_tokens(summary);
+        }
+        for entry in &self.entries {
+            total += estimate_tokens(&entry.content);
+        }
+        self.estimated_tokens = total;
     }
 }
 
@@ -128,7 +150,7 @@ pub struct LongTermMemory {
 impl LongTermMemory {
     /// 添加归档条目
     pub fn add_archive(&mut self, content: impl Into<String>) {
-        let entry = MemoryEntry::new(0, EntryRole::Archive, content);
+        let entry = MemoryEntry::new(EntryRole::Archive, content);
         self.entries.push(entry);
     }
 
