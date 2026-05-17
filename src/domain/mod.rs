@@ -1,8 +1,9 @@
 mod contribution;
 mod evaluation;
 mod memory;
+mod space;
 
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{collections::HashMap, future::Future, pin::Pin, time::Duration};
 
 use bevy::prelude::Component;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -20,6 +21,11 @@ pub use evaluation::{
 };
 pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
+};
+pub use space::{
+    AgentToolsConfig, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge, SpacePreferences,
+    SpaceRuntimeContext, SpaceToolRegistry, SystemStatus, ToolDefinition, ToolExecutorKind,
+    ToolPermission, ToolSchema,
 };
 
 pub type TaskId = Uuid;
@@ -39,6 +45,7 @@ pub enum WaitingReason {
     User,      // 等待用户输入
     Evaluator, // 等待评估器判定
     RetryBackoff,
+    Approval, // 等待审批
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,6 +183,40 @@ pub enum AgentKind {
     TaskScoped,
 }
 
+/// Agent 的 Tool 权限配置
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentToolPermissions {
+    /// 未显式配置的 Tool 默认权限
+    pub default_permission: ToolPermission,
+    /// 针对特定 Tool 的覆盖项
+    pub overrides: HashMap<String, ToolPermission>,
+}
+
+impl AgentToolPermissions {
+    /// 获取指定 Tool 的权限
+    pub fn get_permission(&self, tool_name: &str) -> ToolPermission {
+        self.overrides
+            .get(tool_name)
+            .copied()
+            .unwrap_or(self.default_permission)
+    }
+}
+
+impl Default for AgentToolPermissions {
+    fn default() -> Self {
+        Self {
+            default_permission: ToolPermission::Confirm,
+            overrides: HashMap::new(),
+        }
+    }
+}
+
+/// Agent 长期经验
+#[derive(Debug, Clone, Component, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentExperience {
+    pub entries: Vec<MemoryEntry>,
+}
+
 #[derive(Debug, Clone, Component)]
 pub struct Agent {
     pub id: AgentId,
@@ -184,12 +225,17 @@ pub struct Agent {
     pub kind: AgentKind,
     pub parent_id: Option<AgentId>,
     pub bound_task_id: Option<TaskId>,
+    /// Tool 权限配置：启动加载、父 Agent 授权或后续修正
+    pub tool_permissions: AgentToolPermissions,
+    /// Agent 长期经验
+    pub experience: AgentExperience,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentRequestKind {
     LlmCompletion,
     BrainDecision,
+    ToolExecution { tool_name: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -350,6 +396,21 @@ pub enum ExecutionError {
     Unknown(String),
 }
 
+/// Tool 执行错误
+#[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ToolError {
+    #[error("tool not found: {0}")]
+    NotFound(String),
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
+    #[error("execution failed: {0}")]
+    ExecutionFailed(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error("timeout: {0}")]
+    Timeout(String),
+}
+
 impl ExecutionError {
     /// 判断当前错误是否允许进入统一重试流程。
     pub fn is_retryable(&self) -> bool {
@@ -438,6 +499,61 @@ pub struct TaskTerminatedMessage {
     pub task_id: TaskId,
 }
 
+/// Tool 执行请求消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolExecutionRequestMessage {
+    pub request: AgentExecutionRequest,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+}
+
+/// Tool 执行结果消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolExecutionResultMessage {
+    pub result: AgentExecutionResult,
+    pub tool_name: String,
+    pub tool_output: Result<serde_json::Value, ToolError>,
+}
+
+/// 确认模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmMode {
+    /// 单次确认，仅对本次请求生效
+    Once,
+    /// 永久确认，修正 Agent 的长期权限配置
+    Permanent,
+}
+
+/// 审批请求消息
+#[derive(Debug, Clone, Component)]
+pub struct ApprovalRequestMessage {
+    pub request_id: Uuid,
+    pub source_task_id: TaskId,
+    pub approval_task_id: TaskId,
+    pub parent_agent_id: AgentId,
+    pub child_agent_id: AgentId,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub context: String,
+}
+
+/// 审批结果消息
+#[derive(Debug, Clone, Component)]
+pub struct ApprovalResultMessage {
+    pub request_id: Uuid,
+    pub source_task_id: TaskId,
+    pub approval_task_id: TaskId,
+    pub decision: ApprovalDecision,
+    pub reasoning: String,
+}
+
+/// 审批决策
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Approved,
+    Rejected,
+}
+
 /// 用户指令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserCommand {
@@ -489,6 +605,8 @@ pub struct AgentEntry {
     pub model: String,
     pub tags: Vec<String>,
     pub description: String,
+    /// Tool 权限配置
+    pub tools: Option<AgentToolsConfig>,
 }
 
 #[cfg(test)]

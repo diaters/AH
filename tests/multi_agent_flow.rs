@@ -3,9 +3,9 @@ use std::{sync::Arc, thread, time::Duration};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    ExecutorFuture, ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus,
-    TaskTerminatedMessage, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentKind,
+    AgentProfile, AgentToolPermissions, ExecutorFuture, ExternalInput, HarnessConfig,
+    OutputMessage, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -143,6 +143,8 @@ fn task_scoped_agent_lifecycle() {
             kind: AgentKind::TaskScoped,
             parent_id: Some(parent_agent_id),
             bound_task_id: Some(task_id),
+            tool_permissions: AgentToolPermissions::default(),
+            experience: AgentExperience::default(),
         });
     }
 

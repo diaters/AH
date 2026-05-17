@@ -3,9 +3,9 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    EntryRole, ExecutorFuture, HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task,
-    TaskStatus, WaitingReason, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentKind,
+    AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture, HarnessConfig, LongTermMemory,
+    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -194,6 +194,8 @@ fn agent_has_long_term_memory() {
         kind: AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        experience: AgentExperience::default(),
     });
 
     // Run another frame to trigger init_agent_memory_system for the new agent
@@ -239,6 +241,8 @@ fn memory_contribution_on_agent_termination() {
             kind: AgentKind::Persistent,
             parent_id: None,
             bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            experience: AgentExperience::default(),
         },
         LongTermMemory::default(),
     ));
@@ -261,6 +265,8 @@ fn memory_contribution_on_agent_termination() {
                 kind: AgentKind::TaskScoped,
                 parent_id: Some(parent_id),
                 bound_task_id: Some(task_id),
+                tool_permissions: AgentToolPermissions::default(),
+                experience: AgentExperience::default(),
             },
             LongTermMemory::default(),
         ));

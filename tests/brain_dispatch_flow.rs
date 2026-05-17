@@ -19,6 +19,14 @@ impl AgentExecutor for BrainMockExecutor {
             harness::AgentRequestKind::LlmCompletion => {
                 Box::pin(async move { Ok(format!("echo: {}", request.prompt)) })
             }
+            harness::AgentRequestKind::ToolExecution { .. } => {
+                // Tool 执行由专门的 tool_execution_system 处理，此处不应到达
+                Box::pin(async move {
+                    Err(harness::ExecutionError::Unknown(
+                        "ToolExecution not supported in mock executor".to_string(),
+                    ))
+                })
+            }
         }
     }
 }

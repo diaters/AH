@@ -87,16 +87,34 @@
 - [x] 基于 token 的记忆压缩
 - [x] 用户指令解析（/btw, /finish, /summarize）
 - [x] Pending 状态支持多轮对话
-- [ ] Tool / ToolCall 设计
-- [ ] Session 概念设计
+- [x] Tool / ToolCall 实现（Phase 4.2 MVP 完成）
 - [ ] Planner 模块设计
+
+> 注：Session 概念已被 Phase 4.2 Space 设计取代，不再单独设计。
+
+#### Phase 4.2 Tool & Space 实现明细
+
+- [x] Space Resource 骨架（SpaceKnowledge, SpacePreferences, SpaceToolRegistry, SpaceAgentRegistry, SpaceRuntimeContext）
+- [x] ToolDefinition 与 ToolPermission
+- [x] AgentRequestKind::ToolExecution
+- [x] WaitingReason::Approval
+- [x] Agent.tool_permissions 与 AgentExperience
+- [x] agents.toml 扩展（tools 配置节）
+- [x] Tool 执行消息（ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolError）
+- [x] Builtin Tool 执行器（tool_dispatch_system, tool_execution_system, tool_result_system）
+- [x] ToolCall 记录到 ShortTermMemory
+- [x] 审批消息（ApprovalRequestMessage, ApprovalResultMessage, ConfirmMode）
+- [x] 审批流 System（approval_dispatch_system, approval_result_system）
+- [x] Agent 演化 System（agent_evolution_system）
+- [x] 集成测试（Tool 执行流程、权限场景）
 
 ---
 
 ## 备注
 
-- 当前阶段：Phase 4.1 v2 多轮对话与记忆管理已完成
+- 当前阶段：Phase 4.2 Tool & Space MVP 已完成
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 - Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`
 - Phase 4.1 设计文档：`docs/design/2026-05-17-multi-turn-memory-design.md`
+- Phase 4.2 设计文档：`docs/design/2026-05-17-tool-space-design.md`
