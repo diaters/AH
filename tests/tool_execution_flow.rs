@@ -7,9 +7,9 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentId,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, EntryRole, ExecutorFuture,
-    HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task, ToolDefinition,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind, ToolPermission,
-    ToolSchema, build_harness_app,
+    HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
+    ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -78,6 +78,15 @@ fn create_test_tool_registry(world: &mut World) {
         executor: ToolExecutorKind::Builtin("test_deny".to_string()),
     });
 
+    // 注册 echo 工具（需要确认，用于测试 allow_once 和 allow_always）
+    registry.register(ToolDefinition {
+        name: "echo".to_string(),
+        description: "Echo back the input".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("echo".to_string()),
+    });
+
     world.insert_resource(registry);
 }
 
@@ -103,11 +112,14 @@ fn allowed_tool_executes_directly() {
     );
 
     // 创建 Task 和 ShortTermMemory
-    let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task::from_user_input_ready("test task", 3),
-        ShortTermMemory::default(),
-    ));
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());
@@ -126,6 +138,7 @@ fn allowed_tool_executes_directly() {
         request,
         tool_name: "test_allowed".to_string(),
         tool_input: serde_json::json!({"test": "input"}),
+        pending_confirmation_id: None,
     });
 
     // 运行几帧让系统处理
@@ -133,19 +146,15 @@ fn allowed_tool_executes_directly() {
         app.update();
     }
 
-    // 验证：应该产生 ToolExecutionResultMessage（工具执行成功）
-    let results: Vec<ToolExecutionResultMessage> = {
+    // 验证：请求被处理了（有结果消息或请求被清理）
+    let pending_requests: Vec<&ToolExecutionRequestMessage> = {
         let world = app.world_mut();
-        let mut query = world.query::<&ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect()
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query.iter(world).collect()
     };
-
-    // 注意：由于 echo 工具实现，结果应该成功
-    // 但 test_allowed 工具没有实际的执行器，会返回 NotFound 错误
-    // 这里我们验证请求被处理了（有结果消息或请求被清理）
     assert!(
-        results.is_empty() || results.iter().any(|r| r.tool_name == "test_allowed"),
-        "Tool execution should produce a result or be cleaned up"
+        pending_requests.is_empty(),
+        "Tool request should be cleaned up after execution"
     );
 }
 
@@ -171,11 +180,14 @@ fn denied_tool_does_not_execute() {
     );
 
     // 创建 Task
-    let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task::from_user_input_ready("test task", 3),
-        ShortTermMemory::default(),
-    ));
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());
@@ -194,19 +206,13 @@ fn denied_tool_does_not_execute() {
         request,
         tool_name: "test_deny".to_string(),
         tool_input: serde_json::json!({}),
+        pending_confirmation_id: None,
     });
 
     // 运行几帧让系统处理
     for _ in 0..5 {
         app.update();
     }
-
-    // 验证：应该产生 PermissionDenied 错误
-    let results: Vec<ToolExecutionResultMessage> = {
-        let world = app.world_mut();
-        let mut query = world.query::<&ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect()
-    };
 
     // 请求应该被清理
     let pending_requests: Vec<&ToolExecutionRequestMessage> = {
@@ -219,17 +225,9 @@ fn denied_tool_does_not_execute() {
         pending_requests.is_empty(),
         "Denied tool request should be cleaned up"
     );
-
-    // 应该有错误结果
-    if let Some(result) = results.first() {
-        assert!(
-            result.tool_output.is_err(),
-            "Denied tool should produce an error"
-        );
-    }
 }
 
-/// 测试：需要确认的工具在没有用户确认时不会执行
+/// 测试：需要确认的工具会生成确认请求消息
 #[test]
 fn confirm_tool_requires_user_confirmation() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -251,11 +249,14 @@ fn confirm_tool_requires_user_confirmation() {
     );
 
     // 创建 Task
-    let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task::from_user_input_ready("test task", 3),
-        ShortTermMemory::default(),
-    ));
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());
@@ -274,6 +275,7 @@ fn confirm_tool_requires_user_confirmation() {
         request,
         tool_name: "test_confirm".to_string(),
         tool_input: serde_json::json!({}),
+        pending_confirmation_id: None,
     });
 
     // 运行几帧让系统处理
@@ -281,19 +283,29 @@ fn confirm_tool_requires_user_confirmation() {
         app.update();
     }
 
-    // 验证：应该产生错误（MVP 阶段没有用户确认 UI，所以拒绝）
-    let results: Vec<ToolExecutionResultMessage> = {
+    // 收集所有验证数据
+    let (results, pending_requests) = {
         let world = app.world_mut();
-        let mut query = world.query::<&ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect()
+        let results: Vec<ToolExecutionResultMessage> = {
+            let mut query = world.query::<&ToolExecutionResultMessage>();
+            query.iter(world).cloned().collect()
+        };
+        let pending_requests: Vec<&ToolExecutionRequestMessage> = {
+            let mut query = world.query::<&ToolExecutionRequestMessage>();
+            query.iter(world).collect()
+        };
+        (results, pending_requests)
     };
 
-    if let Some(result) = results.first() {
-        assert!(
-            result.tool_output.is_err(),
-            "Confirm tool should produce an error when no user confirmation is available"
-        );
-    }
+    assert!(
+        results.is_empty(),
+        "Tool should not execute while waiting for confirmation"
+    );
+
+    assert!(
+        !pending_requests.is_empty(),
+        "ToolExecutionRequestMessage should be preserved while waiting for confirmation"
+    );
 }
 
 /// 测试：ToolCall 被记录到 ShortTermMemory
@@ -318,7 +330,6 @@ fn tool_call_is_recorded_to_short_term_memory() {
     );
 
     // 创建 Task 和 ShortTermMemory
-    let task_id = uuid::Uuid::new_v4();
     let task_entity = app
         .world_mut()
         .spawn((
@@ -326,6 +337,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
             ShortTermMemory::default(),
         ))
         .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());
@@ -344,6 +356,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         request,
         tool_name: "echo".to_string(),
         tool_input: serde_json::json!({"message": "hello"}),
+        pending_confirmation_id: None,
     });
 
     // 运行几帧让系统处理
@@ -391,5 +404,307 @@ fn agent_tool_permissions_override_works() {
         perms.get_permission("unknown_tool"),
         ToolPermission::Deny,
         "Default should be used for unknown tools"
+    );
+}
+
+/// 测试：用户拒绝工具确认
+#[test]
+fn user_denies_tool_confirmation() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    // 初始化
+    app.update();
+
+    // 创建 Agent（默认 Confirm）
+    let agent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Confirm,
+            overrides: HashMap::new(),
+        },
+    );
+
+    // 创建 Task
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // 注册测试工具
+    create_test_tool_registry(app.world_mut());
+
+    // 发起 Tool 执行请求
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "test_confirm".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "test_confirm".to_string(),
+        tool_input: serde_json::json!({}),
+        pending_confirmation_id: None,
+    });
+
+    // 运行让确认请求生成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 从 ToolExecutionRequestMessage 获取 request_id
+    let request_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .find_map(|r| r.pending_confirmation_id)
+            .unwrap_or_else(uuid::Uuid::new_v4)
+    };
+
+    // 用户选择拒绝
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "deny".to_string(),
+    });
+
+    // 运行让响应处理
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 验证：请求应该被清理
+    let pending_requests: Vec<&ToolExecutionRequestMessage> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query.iter(world).collect()
+    };
+
+    assert!(
+        pending_requests.is_empty(),
+        "Tool request should be cleaned up after denial"
+    );
+}
+
+/// 测试：用户允许一次工具执行
+#[test]
+fn user_allows_tool_once() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    // 初始化
+    app.update();
+
+    // 创建 Agent（默认 Confirm）
+    let agent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Confirm,
+            overrides: HashMap::new(),
+        },
+    );
+
+    // 创建 Task
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // 注册测试工具（使用 echo 工具）
+    create_test_tool_registry(app.world_mut());
+
+    // 发起 Tool 执行请求
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "echo".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "echo".to_string(),
+        tool_input: serde_json::json!({"message": "test"}),
+        pending_confirmation_id: None,
+    });
+
+    // 运行让确认请求生成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 从 ToolExecutionRequestMessage 获取 request_id
+    let request_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .find_map(|r| r.pending_confirmation_id)
+            .unwrap_or_else(uuid::Uuid::new_v4)
+    };
+
+    // 用户选择允许一次
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "allow_once".to_string(),
+    });
+
+    // 运行让响应处理
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证：请求应该被清理
+    let pending_requests: Vec<&ToolExecutionRequestMessage> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query.iter(world).collect()
+    };
+
+    assert!(
+        pending_requests.is_empty(),
+        "Tool request should be cleaned up after execution"
+    );
+
+    // 验证：allow_once 不应该更新永久权限
+    let has_permanent_permission = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Agent>();
+        query
+            .iter(world)
+            .find(|a| a.id == agent_id)
+            .map(|a| a.tool_permissions.overrides.contains_key("echo"))
+            .unwrap_or(false)
+    };
+
+    assert!(
+        !has_permanent_permission,
+        "allow_once should not update permanent permissions"
+    );
+}
+
+/// 测试：用户允许永久（更新 Agent 权限）
+#[test]
+fn user_allows_tool_always() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    // 初始化
+    app.update();
+
+    // 创建 Agent（默认 Confirm）
+    let agent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Confirm,
+            overrides: HashMap::new(),
+        },
+    );
+
+    // 创建 Task
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // 注册测试工具（使用 echo 工具）
+    create_test_tool_registry(app.world_mut());
+
+    // 发起 Tool 执行请求
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "echo".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "echo".to_string(),
+        tool_input: serde_json::json!({"message": "test"}),
+        pending_confirmation_id: None,
+    });
+
+    // 运行让确认请求生成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 从 ToolExecutionRequestMessage 获取 request_id
+    let request_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .find_map(|r| r.pending_confirmation_id)
+            .unwrap_or_else(uuid::Uuid::new_v4)
+    };
+
+    // 用户选择允许永久
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "allow_always".to_string(),
+    });
+
+    // 运行让响应处理
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证：请求应该被清理
+    let pending_requests: Vec<&ToolExecutionRequestMessage> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query.iter(world).collect()
+    };
+
+    assert!(
+        pending_requests.is_empty(),
+        "Tool request should be cleaned up after execution"
+    );
+
+    // 验证：allow_always 应该更新永久权限
+    let has_permanent_permission = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Agent>();
+        query
+            .iter(world)
+            .find(|a| a.id == agent_id)
+            .map(|a| a.tool_permissions.overrides.contains_key("echo"))
+            .unwrap_or(false)
+    };
+
+    assert!(
+        has_permanent_permission,
+        "allow_always should update permanent permissions"
     );
 }

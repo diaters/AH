@@ -106,7 +106,8 @@
 - [x] 审批消息（ApprovalRequestMessage, ApprovalResultMessage, ConfirmMode）
 - [x] 审批流 System（approval_dispatch_system, approval_result_system）
 - [x] Agent 演化 System（agent_evolution_system）
-- [x] 集成测试（Tool 执行流程、权限场景）
+- [x] 用户确认 UI（选项式交互、永久权限、CLI channel）
+- [x] 集成测试（Tool 执行流程、权限场景、确认流程）
 
 ---
 

@@ -4,10 +4,12 @@
 
 use bevy::prelude::*;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::domain::{
     Agent, AgentExecutionResult, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-    ExecutionError, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolDefinition,
+    ConfirmationOption, ExecutionError, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
+    TaskStatus, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolDefinition,
     ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
     WaitingReason,
 };
@@ -49,20 +51,26 @@ fn execute_builtin_tool(
 /// 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批
 pub(crate) fn tool_dispatch_system(
     mut commands: Commands,
+    mut tasks: Query<&mut Task>,
     registry: Res<SpaceToolRegistry>,
     agents: Query<&Agent>,
-    requests: Query<(Entity, &ToolExecutionRequestMessage)>,
+    mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
 ) {
-    for (entity, request) in &requests {
-        let tool_name = &request.tool_name;
+    for (entity, mut request) in &mut requests {
+        // 跳过已经在等待确认的请求
+        if request.pending_confirmation_id.is_some() {
+            continue;
+        }
+
+        let tool_name = request.tool_name.clone();
 
         // 查找 Tool 定义
-        let Some(tool_def) = registry.get(tool_name) else {
+        let Some(tool_def) = registry.get(&tool_name) else {
             warn!(tool_name = %tool_name, "tool not found in registry");
             spawn_tool_error(
                 &mut commands,
                 entity,
-                request,
+                &request,
                 ToolError::NotFound(tool_name.clone()),
             );
             continue;
@@ -74,32 +82,42 @@ pub(crate) fn tool_dispatch_system(
             spawn_tool_error(
                 &mut commands,
                 entity,
-                request,
+                &request,
                 ToolError::NotFound(format!("agent {}", request.request.agent_id)),
             );
             continue;
         };
 
-        let permission = agent.tool_permissions.get_permission(tool_name);
+        let permission = agent.tool_permissions.get_permission(&tool_name);
 
         match permission {
             ToolPermission::Allow => {
                 // 直接执行
                 info!(tool_name = %tool_name, agent_id = %agent.id, "tool execution allowed");
-                execute_tool(&mut commands, entity, request, tool_def);
+                execute_tool(&mut commands, entity, &request, tool_def);
             }
             ToolPermission::Confirm => {
-                // 需要用户确认（P2 实现）
-                warn!(tool_name = %tool_name, "tool requires user confirmation - not implemented in P1");
-                spawn_tool_error(
-                    &mut commands,
-                    entity,
-                    request,
-                    ToolError::PermissionDenied(format!(
-                        "{} requires user confirmation",
-                        tool_name
-                    )),
-                );
+                // 需要用户确认
+                info!(tool_name = %tool_name, agent_id = %agent.id, "tool requires user confirmation");
+
+                // 将 Task 设置为等待审批状态
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                    task.status = TaskStatus::Waiting(WaitingReason::Approval);
+                }
+
+                // 生成确认请求消息
+                let request_id = Uuid::new_v4();
+                commands.spawn(ToolConfirmationRequestMessage {
+                    request_id,
+                    task_id: request.request.task_id,
+                    agent_id: agent.id,
+                    tool_name: tool_name.clone(),
+                    tool_input: request.tool_input.clone(),
+                    options: ConfirmationOption::default_options(),
+                });
+
+                // 更新 ToolExecutionRequestMessage 的 pending_confirmation_id
+                request.pending_confirmation_id = Some(request_id);
             }
             ToolPermission::Deny => {
                 // 拒绝执行
@@ -107,7 +125,7 @@ pub(crate) fn tool_dispatch_system(
                 spawn_tool_error(
                     &mut commands,
                     entity,
-                    request,
+                    &request,
                     ToolError::PermissionDenied(tool_name.clone()),
                 );
             }
@@ -304,6 +322,163 @@ pub(crate) fn agent_evolution_system(agents: Query<&Agent>) {
     // - 更新 Agent.experience
     // - 根据 Permanent 确认更新 Agent.tool_permissions
     let _ = agents;
+}
+
+/// Tool 确认请求输出 System
+///
+/// 将确认请求发送到输出 channel
+pub(crate) fn tool_confirmation_request_system(
+    mut commands: Commands,
+    agents: Query<&Agent>,
+    sender: Res<crate::app::OutputSender>,
+    requests: Query<(Entity, &ToolConfirmationRequestMessage)>,
+) {
+    for (entity, request) in &requests {
+        // 获取 Agent 名称
+        let agent_name = agents
+            .iter()
+            .find(|a| a.id == request.agent_id)
+            .map(|a| a.profile.name.as_str())
+            .unwrap_or("unknown");
+
+        // 格式化 tool_input 摘要
+        let input_summary = serde_json::to_string(&request.tool_input)
+            .unwrap_or_else(|_| request.tool_input.to_string());
+        let input_display = if input_summary.len() > 100 {
+            format!("{}...", &input_summary[..100])
+        } else {
+            input_summary
+        };
+
+        // 构建标题
+        let title = format!(
+            "[Tool Confirm] Agent \"{}\" requests to execute \"{}\"\nInput: {}",
+            agent_name, request.tool_name, input_display
+        );
+
+        // 发送确认请求
+        let output =
+            OutputMessage::confirmation_request(request.request_id, title, request.options.clone());
+
+        if let Err(e) = sender.0.send(output) {
+            warn!(error = %e, "failed to send confirmation request");
+        }
+
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Tool 确认响应处理 System
+///
+/// 处理用户的确认响应
+pub(crate) fn tool_confirmation_result_system(
+    mut commands: Commands,
+    mut agents: Query<&mut Agent>,
+    mut tasks: Query<&mut Task>,
+    registry: Res<SpaceToolRegistry>,
+    tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
+    responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
+) {
+    for (entity, response) in &responses {
+        // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
+        let Some((request_entity, tool_request)) = tool_requests
+            .iter()
+            .find(|(_, r)| r.pending_confirmation_id == Some(response.request_id))
+        else {
+            warn!(request_id = %response.request_id, "no matching tool request found");
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 查找选中的选项
+        let default_options = ConfirmationOption::default_options();
+        let selected_option = default_options
+            .iter()
+            .find(|opt| opt.id == response.selected_option);
+
+        match selected_option {
+            Some(option) if option.is_deny() => {
+                // 用户拒绝
+                warn!(
+                    tool_name = %tool_request.tool_name,
+                    "tool execution denied by user"
+                );
+
+                // 生成错误结果
+                let execution_result = AgentExecutionResult {
+                    task_id: tool_request.request.task_id,
+                    agent_id: tool_request.request.agent_id,
+                    request_kind: tool_request.request.request_kind.clone(),
+                    result: Err(ExecutionError::UserCancelled(
+                        "user denied tool execution".to_string(),
+                    )),
+                };
+
+                commands.spawn(ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: tool_request.tool_name.clone(),
+                    tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
+                });
+
+                // 恢复 Task 状态
+                if let Some(mut task) = tasks
+                    .iter_mut()
+                    .find(|t| t.id == tool_request.request.task_id)
+                {
+                    task.status = TaskStatus::Ready;
+                }
+
+                // 清理请求
+                commands.entity(request_entity).despawn();
+            }
+            Some(option) => {
+                // 用户确认
+                info!(
+                    tool_name = %tool_request.tool_name,
+                    mode = ?option.mode,
+                    "tool execution confirmed by user"
+                );
+
+                // Permanent 模式：更新 Agent 权限
+                if option.mode == crate::domain::ConfirmMode::Permanent
+                    && let Some(mut agent) = agents
+                        .iter_mut()
+                        .find(|a| a.id == tool_request.request.agent_id)
+                {
+                    agent
+                        .tool_permissions
+                        .overrides
+                        .insert(tool_request.tool_name.clone(), ToolPermission::Allow);
+                    info!(
+                        agent_id = %agent.id,
+                        tool_name = %tool_request.tool_name,
+                        "agent permission updated to Allow permanently"
+                    );
+                }
+
+                // 执行 Tool
+                if let Some(tool_def) = registry.get(&tool_request.tool_name) {
+                    execute_tool(&mut commands, request_entity, tool_request, tool_def);
+                }
+
+                // 恢复 Task 状态
+                if let Some(mut task) = tasks
+                    .iter_mut()
+                    .find(|t| t.id == tool_request.request.task_id)
+                {
+                    task.status = TaskStatus::Ready;
+                }
+            }
+            None => {
+                warn!(
+                    selected_option = %response.selected_option,
+                    "unknown option selected"
+                );
+            }
+        }
+
+        commands.entity(entity).despawn();
+    }
 }
 
 #[cfg(test)]

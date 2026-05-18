@@ -3,7 +3,10 @@ use chrono::Utc;
 
 use crate::{
     app::{Clock, InputReceiver, ShutdownState},
-    domain::{ExternalInput, Signal, SignalPayload, Task, TaskStatus, WaitingReason},
+    domain::{
+        ExternalInput, Signal, SignalPayload, Task, TaskStatus, ToolConfirmationResponseMessage,
+        WaitingReason,
+    },
 };
 
 /// 更新统一时钟资源，避免各系统直接读取系统时间。
@@ -11,7 +14,7 @@ pub(crate) fn tick_clock_system(mut clock: ResMut<Clock>) {
     clock.0 = Utc::now();
 }
 
-/// 将外部线程输入转为 ECS 内部 Signal。
+/// 将外部线程输入转为 ECS 内部 Signal 或确认响应。
 pub(crate) fn input_ingress_system(
     receiver: Res<InputReceiver>,
     mut shutdown: ResMut<ShutdownState>,
@@ -24,6 +27,12 @@ pub(crate) fn input_ingress_system(
             }
             ExternalInput::Shutdown => {
                 shutdown.requested = true;
+            }
+            ExternalInput::Confirmation { request_id, option } => {
+                commands.spawn(ToolConfirmationResponseMessage {
+                    request_id,
+                    selected_option: option,
+                });
             }
         }
     }
