@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use harness::{
-    ExternalInput, HarnessConfig, OutputKind, OutputMessage, ShutdownState,
-    app_is_idle, build_harness_app, create_executor_from_config,
+    ExternalInput, HarnessConfig, OutputKind, OutputMessage, ShutdownState, app_is_idle,
+    build_harness_app, create_executor_from_config,
 };
 use tokio::runtime::Runtime;
 use tracing::error;

@@ -8,9 +8,8 @@ use harness::{
     Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentId,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, EntryRole, ExecutorFuture,
     HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
-    ToolConfirmationResponseMessage, ToolDefinition,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind, ToolPermission,
-    ToolSchema, build_harness_app,
+    ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, build_harness_app,
 };
 use tokio::runtime::Runtime;
 

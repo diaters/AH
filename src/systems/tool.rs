@@ -101,8 +101,7 @@ pub(crate) fn tool_dispatch_system(
                 info!(tool_name = %tool_name, agent_id = %agent.id, "tool requires user confirmation");
 
                 // 将 Task 设置为等待审批状态
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id)
-                {
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
                     task.status = TaskStatus::Waiting(WaitingReason::Approval);
                 }
 
@@ -358,11 +357,8 @@ pub(crate) fn tool_confirmation_request_system(
         );
 
         // 发送确认请求
-        let output = OutputMessage::confirmation_request(
-            request.request_id,
-            title,
-            request.options.clone(),
-        );
+        let output =
+            OutputMessage::confirmation_request(request.request_id, title, request.options.clone());
 
         if let Err(e) = sender.0.send(output) {
             warn!(error = %e, "failed to send confirmation request");
@@ -421,13 +417,13 @@ pub(crate) fn tool_confirmation_result_system(
                 commands.spawn(ToolExecutionResultMessage {
                     result: execution_result,
                     tool_name: tool_request.tool_name.clone(),
-                    tool_output: Err(ToolError::PermissionDenied(
-                        "user denied".to_string(),
-                    )),
+                    tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
                 });
 
                 // 恢复 Task 状态
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == tool_request.request.task_id)
+                if let Some(mut task) = tasks
+                    .iter_mut()
+                    .find(|t| t.id == tool_request.request.task_id)
                 {
                     task.status = TaskStatus::Ready;
                 }
@@ -466,7 +462,9 @@ pub(crate) fn tool_confirmation_result_system(
                 }
 
                 // 恢复 Task 状态
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == tool_request.request.task_id)
+                if let Some(mut task) = tasks
+                    .iter_mut()
+                    .find(|t| t.id == tool_request.request.task_id)
                 {
                     task.status = TaskStatus::Ready;
                 }
