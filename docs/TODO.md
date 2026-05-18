@@ -88,9 +88,9 @@
 - [x] 用户指令解析（/btw, /finish, /summarize）
 - [x] Pending 状态支持多轮对话
 - [x] Tool / ToolCall 实现（Phase 4.2 MVP 完成）
-- [ ] Planner 模块设计
 
 > 注：Session 概念已被 Phase 4.2 Space 设计取代，不再单独设计。
+> 注：Planner 功能已被 Brain Agent + TaskScoped Agent 覆盖，不再单独设计。
 
 #### Phase 4.2 Tool & Space 实现明细
 
