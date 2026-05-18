@@ -87,18 +87,55 @@ pub enum SignalPayload {
 pub enum ExternalInput {
     Text(String),
     Shutdown,
+    /// Tool 确认响应
+    Confirmation {
+        request_id: Uuid,
+        option: String,
+    },
+}
+
+/// 输出类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum OutputKind {
+    /// 普通文本输出
+    #[default]
+    Text,
+    /// Tool 确认请求
+    ConfirmationRequest {
+        request_id: Uuid,
+        title: String,
+        options: Vec<ConfirmationOption>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OutputMessage {
     pub content: String,
+    pub kind: OutputKind,
 }
 
 impl OutputMessage {
-    /// 构造发往外部线程的输出消息。
+    /// 构造普通文本输出消息。
     pub fn new(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            kind: OutputKind::Text,
+        }
+    }
+
+    /// 构造确认请求输出消息。
+    pub fn confirmation_request(
+        request_id: Uuid,
+        title: impl Into<String>,
+        options: Vec<ConfirmationOption>,
+    ) -> Self {
+        Self {
+            content: String::new(),
+            kind: OutputKind::ConfirmationRequest {
+                request_id,
+                title: title.into(),
+                options,
+            },
         }
     }
 }
@@ -505,6 +542,8 @@ pub struct ToolExecutionRequestMessage {
     pub request: AgentExecutionRequest,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+    /// 确认请求 ID（当工具需要确认时设置）
+    pub pending_confirmation_id: Option<Uuid>,
 }
 
 /// Tool 执行结果消息
@@ -516,12 +555,80 @@ pub struct ToolExecutionResultMessage {
 }
 
 /// 确认模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfirmMode {
     /// 单次确认，仅对本次请求生效
     Once,
     /// 永久确认，修正 Agent 的长期权限配置
     Permanent,
+}
+
+/// 确认选项
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfirmationOption {
+    /// 选项标识
+    pub id: String,
+    /// 显示文本
+    pub label: String,
+    /// 确认模式
+    pub mode: ConfirmMode,
+}
+
+impl ConfirmationOption {
+    /// 创建 "允许一次" 选项
+    pub fn allow_once() -> Self {
+        Self {
+            id: "allow_once".to_string(),
+            label: "Allow once".to_string(),
+            mode: ConfirmMode::Once,
+        }
+    }
+
+    /// 创建 "永久允许" 选项
+    pub fn allow_always() -> Self {
+        Self {
+            id: "allow_always".to_string(),
+            label: "Allow always".to_string(),
+            mode: ConfirmMode::Permanent,
+        }
+    }
+
+    /// 创建 "拒绝" 选项
+    pub fn deny() -> Self {
+        Self {
+            id: "deny".to_string(),
+            label: "Deny".to_string(),
+            mode: ConfirmMode::Once, // Deny 模式不影响 Permanent
+        }
+    }
+
+    /// 判断是否为拒绝选项
+    pub fn is_deny(&self) -> bool {
+        self.id == "deny"
+    }
+
+    /// 获取默认选项列表
+    pub fn default_options() -> Vec<Self> {
+        vec![Self::allow_once(), Self::allow_always(), Self::deny()]
+    }
+}
+
+/// Tool 确认请求消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolConfirmationRequestMessage {
+    pub request_id: Uuid,
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub options: Vec<ConfirmationOption>,
+}
+
+/// Tool 确认响应消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolConfirmationResponseMessage {
+    pub request_id: Uuid,
+    pub selected_option: String,
 }
 
 /// 审批请求消息

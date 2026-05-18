@@ -22,7 +22,8 @@ use crate::{
         init_agent_memory_system, input_ingress_system, llm_response_system,
         memory_absorption_system, memory_compression_system, memory_contribution_system,
         register_builtin_tools, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        task_dispatch_system, task_termination_system, tick_clock_system, tool_dispatch_system,
+        task_dispatch_system, task_termination_system, tick_clock_system,
+        tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
         tool_result_system, user_input_routing_system, user_message_to_task_system,
         user_output_system,
     },
@@ -259,6 +260,11 @@ pub fn build_harness_app(
             approval_dispatch_system.in_set(HarnessSet::Dispatch),
             approval_result_system.in_set(HarnessSet::Transform),
             agent_evolution_system.in_set(HarnessSet::Maintenance),
+            // 用户确认系统
+            tool_confirmation_request_system.in_set(HarnessSet::Output),
+            tool_confirmation_result_system
+                .in_set(HarnessSet::Dispatch)
+                .after(tool_dispatch_system),
         ),
     );
 
