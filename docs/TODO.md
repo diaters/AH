@@ -108,6 +108,9 @@
 - [x] Agent 演化 System（agent_evolution_system）
 - [x] 用户确认 UI（选项式交互、永久权限、CLI channel）
 - [x] 集成测试（Tool 执行流程、权限场景、确认流程）
+- [x] LongTermMemory 注入 Agent prompt
+- [x] knowledge_search Tool 实现（从 SpaceKnowledge 检索）
+- [x] /remember 指令（添加知识到 SpaceKnowledge）
 
 ---
 

@@ -2,13 +2,14 @@ use bevy::prelude::*;
 use tracing::info;
 
 use crate::domain::{
-    CreateTaskMessage, ShortTermMemory, Task, TaskStatus, TaskTerminatedMessage, UserCommand,
-    UserInputMessage,
+    CreateTaskMessage, EntryRole, MemoryEntry, ShortTermMemory, SpaceKnowledge, Task, TaskStatus,
+    TaskTerminatedMessage, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
 pub(crate) fn command_parse_system(
     mut commands: Commands,
+    mut knowledge: ResMut<SpaceKnowledge>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
     tasks: Query<&Task>,
 ) {
@@ -64,6 +65,18 @@ pub(crate) fn command_parse_system(
                 info!("summarize command received - to be implemented");
                 commands.entity(entity).despawn();
             }
+            UserCommand::Remember { content } => {
+                // /remember - 添加知识到 SpaceKnowledge
+                if content.is_empty() {
+                    info!("remember command received with empty content - ignoring");
+                } else {
+                    info!(content = %content, "adding knowledge via /remember command");
+                    knowledge
+                        .entries
+                        .push(MemoryEntry::new(EntryRole::User, content.clone()));
+                }
+                commands.entity(entity).despawn();
+            }
             UserCommand::PlainText(_) => {
                 // 普通输入，交给路由系统处理
                 // 不 despawn，让 user_input_routing_system 处理
@@ -111,6 +124,30 @@ mod tests {
     fn parse_summarize() {
         let cmd = UserCommand::parse("/summarize");
         assert_eq!(cmd, UserCommand::Summarize);
+        assert!(cmd.is_command());
+    }
+
+    #[test]
+    fn parse_remember_with_content() {
+        let cmd = UserCommand::parse("/remember This is important knowledge");
+        assert_eq!(
+            cmd,
+            UserCommand::Remember {
+                content: "This is important knowledge".to_string()
+            }
+        );
+        assert!(cmd.is_command());
+    }
+
+    #[test]
+    fn parse_remember_without_content() {
+        let cmd = UserCommand::parse("/remember");
+        assert_eq!(
+            cmd,
+            UserCommand::Remember {
+                content: String::new()
+            }
+        );
         assert!(cmd.is_command());
     }
 

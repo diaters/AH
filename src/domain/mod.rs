@@ -670,6 +670,8 @@ pub enum UserCommand {
     FinishCurrentTask,
     /// /summarize - 触发总结
     Summarize,
+    /// /remember - 添加知识到 SpaceKnowledge
+    Remember { content: String },
     /// 普通输入（非指令）
     PlainText(String),
 }
@@ -690,6 +692,14 @@ impl UserCommand {
             Self::FinishCurrentTask
         } else if trimmed == "/summarize" {
             Self::Summarize
+        } else if let Some(stripped) = trimmed.strip_prefix("/remember ") {
+            Self::Remember {
+                content: stripped.trim().to_string(),
+            }
+        } else if trimmed == "/remember" {
+            Self::Remember {
+                content: String::new(),
+            }
         } else {
             Self::PlainText(input.to_string())
         }
