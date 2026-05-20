@@ -4,7 +4,7 @@ use crate::{
     app::{Clock, HarnessSettings},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        EntryRole, ShortTermMemory, Task, TaskStatus,
+        EntryRole, LongTermMemory, ShortTermMemory, Task, TaskStatus,
     },
     llm::brain_system_prompt,
 };
@@ -13,7 +13,7 @@ pub(crate) fn task_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
     mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
-    agents: Query<&Agent>,
+    agents: Query<(&Agent, Option<&LongTermMemory>)>,
 ) {
     for (mut task, short_term) in &mut tasks {
         // Pending 或 Ready 状态都可以被调度
@@ -21,12 +21,13 @@ pub(crate) fn task_dispatch_system(
             continue;
         }
 
-        let Some(agent) = select_agent(agents.iter(), &task.content) else {
+        let Some((agent, long_term)) = select_agent_with_memory(agents.iter(), &task.content)
+        else {
             continue;
         };
 
-        // 构建带历史对话的 prompt
-        let prompt = build_prompt_with_history(&task.content, short_term);
+        // 构建带历史对话和长期记忆的 prompt
+        let prompt = build_prompt_with_context(&task.content, short_term, long_term);
 
         let request = AgentExecutionRequest {
             task_id: task.id,
@@ -129,14 +130,14 @@ Select the best agent for this task and provide a delegate prompt."#,
     )
 }
 
-fn select_agent<'a>(
-    agents: impl Iterator<Item = &'a Agent>,
+fn select_agent_with_memory<'a>(
+    agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,
-) -> Option<&'a Agent> {
+) -> Option<(&'a Agent, Option<&'a LongTermMemory>)> {
     agents
-        .filter(|a| a.kind == AgentKind::Persistent)
-        .filter(|a| !a.capabilities.tags.contains(&"brain".to_string()))
-        .max_by_key(|a| match_score(a, task_content))
+        .filter(|(a, _)| a.kind == AgentKind::Persistent)
+        .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
+        .max_by_key(|(a, _)| match_score(a, task_content))
 }
 
 fn match_score(agent: &Agent, task_content: &str) -> usize {
@@ -149,7 +150,63 @@ fn match_score(agent: &Agent, task_content: &str) -> usize {
         .count()
 }
 
-/// 构建带历史对话的 prompt
+/// 构建带历史对话和长期记忆的 prompt
+fn build_prompt_with_context(
+    task_content: &str,
+    short_term: Option<&ShortTermMemory>,
+    long_term: Option<&LongTermMemory>,
+) -> String {
+    let mut parts = Vec::new();
+
+    // 1. 长期记忆（Agent 专属经验）
+    if let Some(ltm) = long_term
+        && !ltm.entries.is_empty()
+    {
+        let memory_text: String = ltm
+            .entries
+            .iter()
+            .map(|e| &e.content)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("[Agent memory]\n{}", memory_text));
+    }
+
+    // 2. 短期记忆（对话历史）
+    if let Some(stm) = short_term
+        && !stm.entries.is_empty()
+    {
+        let mut history = String::new();
+
+        // 添加摘要前缀（如果有）
+        if let Some(summary) = &stm.summary_prefix {
+            history.push_str(&format!("[Previous context summary]\n{}\n\n", summary));
+        }
+
+        // 添加对话历史
+        history.push_str("[Conversation history]\n");
+        for entry in &stm.entries {
+            let role = match entry.role {
+                EntryRole::User => "User",
+                EntryRole::Assistant => "Assistant",
+                _ => continue,
+            };
+            history.push_str(&format!("{}: {}\n", role, entry.content));
+        }
+
+        parts.push(history.trim_end().to_string());
+    }
+
+    // 3. 当前请求（如果有上下文则添加前缀，否则直接返回）
+    if parts.is_empty() {
+        task_content.to_string()
+    } else {
+        parts.push(format!("[Current request]\n{}", task_content));
+        parts.join("\n\n")
+    }
+}
+
+/// 构建带历史对话的 prompt（Brain Agent 使用）
 fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMemory>) -> String {
     let Some(stm) = short_term else {
         return task_content.to_string();

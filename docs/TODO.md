@@ -88,9 +88,9 @@
 - [x] 用户指令解析（/btw, /finish, /summarize）
 - [x] Pending 状态支持多轮对话
 - [x] Tool / ToolCall 实现（Phase 4.2 MVP 完成）
-- [ ] Planner 模块设计
 
 > 注：Session 概念已被 Phase 4.2 Space 设计取代，不再单独设计。
+> 注：Planner 功能已被 Brain Agent + TaskScoped Agent 覆盖，不再单独设计。
 
 #### Phase 4.2 Tool & Space 实现明细
 
@@ -108,6 +108,9 @@
 - [x] Agent 演化 System（agent_evolution_system）
 - [x] 用户确认 UI（选项式交互、永久权限、CLI channel）
 - [x] 集成测试（Tool 执行流程、权限场景、确认流程）
+- [x] LongTermMemory 注入 Agent prompt
+- [x] knowledge_search Tool 实现（从 SpaceKnowledge 检索）
+- [x] /remember 指令（添加知识到 SpaceKnowledge）
 
 ---
 

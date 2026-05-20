@@ -8,15 +8,16 @@ use uuid::Uuid;
 
 use crate::domain::{
     Agent, AgentExecutionResult, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-    ConfirmationOption, ExecutionError, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
-    TaskStatus, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolDefinition,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
-    WaitingReason,
+    ConfirmationOption, ExecutionError, OutputMessage, ShortTermMemory, SpaceKnowledge,
+    SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, ToolDefinition, ToolError, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolPermission, WaitingReason,
 };
 
 /// Builtin Tool 执行器函数签名
 #[allow(dead_code)]
-pub type BuiltinToolExecutor = fn(&serde_json::Value) -> Result<serde_json::Value, ToolError>;
+pub type BuiltinToolExecutor =
+    fn(&serde_json::Value, &SpaceKnowledge) -> Result<serde_json::Value, ToolError>;
 
 /// 注册内置 Tool
 pub fn register_builtin_tools(registry: &mut SpaceToolRegistry) {
@@ -30,17 +31,66 @@ pub fn register_builtin_tools(registry: &mut SpaceToolRegistry) {
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("echo".to_string()),
     });
+
+    // knowledge_search 工具（从 SpaceKnowledge 检索）
+    registry.register(ToolDefinition {
+        name: "knowledge_search".to_string(),
+        description: "Search for relevant information in the shared knowledge base. Use this when you need to access global knowledge, user preferences, or context that is not in your personal memory.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query or keywords to look for"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 3)",
+                        "default": 3
+                    }
+                },
+                "required": ["query"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
+    });
 }
 
 /// 执行内置 Tool
 fn execute_builtin_tool(
     name: &str,
     input: &serde_json::Value,
+    knowledge: &SpaceKnowledge,
 ) -> Result<serde_json::Value, ToolError> {
     match name {
         "echo" => {
             // 简单 echo 实现
             Ok(input.clone())
+        }
+        "knowledge_search" => {
+            let query = input
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidInput("missing 'query' parameter".to_string()))?;
+
+            let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+
+            // 简单关键词匹配检索
+            let results: Vec<&str> = knowledge
+                .entries
+                .iter()
+                .filter(|entry| entry.content.to_lowercase().contains(&query.to_lowercase()))
+                .take(limit)
+                .map(|entry| entry.content.as_str())
+                .collect();
+
+            Ok(serde_json::json!({
+                "query": query,
+                "results": results,
+                "count": results.len()
+            }))
         }
         _ => Err(ToolError::NotFound(name.to_string())),
     }
@@ -53,6 +103,7 @@ pub(crate) fn tool_dispatch_system(
     mut commands: Commands,
     mut tasks: Query<&mut Task>,
     registry: Res<SpaceToolRegistry>,
+    knowledge: Res<SpaceKnowledge>,
     agents: Query<&Agent>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
 ) {
@@ -94,7 +145,7 @@ pub(crate) fn tool_dispatch_system(
             ToolPermission::Allow => {
                 // 直接执行
                 info!(tool_name = %tool_name, agent_id = %agent.id, "tool execution allowed");
-                execute_tool(&mut commands, entity, &request, tool_def);
+                execute_tool(&mut commands, entity, &request, tool_def, &knowledge);
             }
             ToolPermission::Confirm => {
                 // 需要用户确认
@@ -139,10 +190,11 @@ fn execute_tool(
     request_entity: Entity,
     request: &ToolExecutionRequestMessage,
     tool_def: &ToolDefinition,
+    knowledge: &SpaceKnowledge,
 ) {
     let result = match &tool_def.executor {
         crate::domain::ToolExecutorKind::Builtin(name) => {
-            execute_builtin_tool(name, &request.tool_input)
+            execute_builtin_tool(name, &request.tool_input, knowledge)
         }
         crate::domain::ToolExecutorKind::External { .. } => Err(ToolError::NotFound(
             "external executor not supported in MVP".to_string(),
@@ -376,6 +428,7 @@ pub(crate) fn tool_confirmation_result_system(
     mut agents: Query<&mut Agent>,
     mut tasks: Query<&mut Task>,
     registry: Res<SpaceToolRegistry>,
+    knowledge: Res<SpaceKnowledge>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
 ) {
@@ -458,7 +511,13 @@ pub(crate) fn tool_confirmation_result_system(
 
                 // 执行 Tool
                 if let Some(tool_def) = registry.get(&tool_request.tool_name) {
-                    execute_tool(&mut commands, request_entity, tool_request, tool_def);
+                    execute_tool(
+                        &mut commands,
+                        request_entity,
+                        tool_request,
+                        tool_def,
+                        &knowledge,
+                    );
                 }
 
                 // 恢复 Task 状态
@@ -518,7 +577,8 @@ mod tests {
     #[test]
     fn execute_builtin_echo() {
         let input = serde_json::json!({"message": "hello"});
-        let result = execute_builtin_tool("echo", &input);
+        let knowledge = SpaceKnowledge::default();
+        let result = execute_builtin_tool("echo", &input, &knowledge);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), input);
     }
@@ -526,8 +586,46 @@ mod tests {
     #[test]
     fn execute_builtin_unknown_returns_error() {
         let input = serde_json::json!({});
-        let result = execute_builtin_tool("unknown", &input);
+        let knowledge = SpaceKnowledge::default();
+        let result = execute_builtin_tool("unknown", &input, &knowledge);
         assert!(matches!(result, Err(ToolError::NotFound(_))));
+    }
+
+    #[test]
+    fn execute_builtin_knowledge_search() {
+        use crate::domain::{EntryRole, MemoryEntry};
+
+        let mut knowledge = SpaceKnowledge::default();
+        knowledge.entries.push(MemoryEntry::new(
+            EntryRole::User,
+            "The project uses Rust and Bevy framework",
+        ));
+        knowledge.entries.push(MemoryEntry::new(
+            EntryRole::User,
+            "The system follows ECS architecture",
+        ));
+
+        // Search for "rust"
+        let input = serde_json::json!({"query": "rust"});
+        let result = execute_builtin_tool("knowledge_search", &input, &knowledge);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output["count"], 1);
+        assert!(output["results"].as_array().unwrap().len() == 1);
+
+        // Search for "bevy"
+        let input = serde_json::json!({"query": "bevy"});
+        let result = execute_builtin_tool("knowledge_search", &input, &knowledge);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output["count"], 1);
+
+        // Search for non-existent
+        let input = serde_json::json!({"query": "python"});
+        let result = execute_builtin_tool("knowledge_search", &input, &knowledge);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert_eq!(output["count"], 0);
     }
 
     #[test]
