@@ -46,6 +46,7 @@ pub enum WaitingReason {
     Evaluator, // 等待评估器判定
     RetryBackoff,
     Approval, // 等待审批
+    Summarization, // 等待摘要完成
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -273,6 +274,7 @@ pub enum AgentRequestKind {
     LlmCompletion,
     BrainDecision,
     ToolExecution { tool_name: String },
+    Summarization,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -552,6 +554,39 @@ pub struct ToolExecutionResultMessage {
     pub result: AgentExecutionResult,
     pub tool_name: String,
     pub tool_output: Result<serde_json::Value, ToolError>,
+}
+
+/// 摘要触发来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummarizationTrigger {
+    /// Token 阈值触发
+    TokenThreshold,
+    /// 用户 /summarize 指令
+    UserCommand,
+    /// 任务完成
+    TaskComplete,
+}
+
+/// 摘要请求消息
+#[derive(Debug, Clone, Component)]
+pub struct SummarizationRequestMessage {
+    /// 关联的任务 ID
+    pub task_id: TaskId,
+    /// 待压缩的内容
+    pub content_to_summarize: String,
+    /// 目标 token 数
+    pub target_tokens: u32,
+    /// 摘要触发来源
+    pub trigger: SummarizationTrigger,
+}
+
+/// 摘要结果消息
+#[derive(Debug, Clone, Component)]
+pub struct SummarizationResultMessage {
+    /// 关联的任务 ID
+    pub task_id: TaskId,
+    /// 生成的摘要
+    pub summary: Result<String, ExecutionError>,
 }
 
 /// 确认模式
