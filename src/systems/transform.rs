@@ -1,12 +1,14 @@
 use bevy::prelude::*;
+use tracing::info;
 
 use crate::{
-    app::{Clock, ExecutionResultReceiver, HarnessSettings},
+    app::{Clock, ExecutionResultReceiver, HarnessSettings, MemoryConfig},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
         AgentRequestKind, BrainDecisionError, CreateTaskMessage, EntryMetadata, EntryRole,
-        FailureReason, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload, Task, TaskStatus,
-        TaskTerminatedMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+        FailureReason, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload,
+        SummarizationRequestMessage, SummarizationResultMessage, SummarizationTrigger, Task,
+        TaskStatus, TaskTerminatedMessage, UserInputMessage, UserOutputMessage, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -169,6 +171,16 @@ pub(crate) fn llm_response_system(
     results: Query<(Entity, &AgentExecutionResultMessage)>,
 ) {
     for (entity, result_message) in &results {
+        // 处理 Summarization 结果
+        if result_message.result.request_kind == AgentRequestKind::Summarization {
+            commands.spawn(SummarizationResultMessage {
+                task_id: result_message.result.task_id,
+                summary: result_message.result.result.clone(),
+            });
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         if result_message.result.request_kind != AgentRequestKind::LlmCompletion {
             continue;
         }
@@ -244,10 +256,34 @@ pub(crate) fn retry_ready_system(
     }
 }
 
-pub(crate) fn task_termination_system(mut commands: Commands, tasks: Query<&Task, Changed<Task>>) {
-    for task in &tasks {
+pub(crate) fn task_termination_system(
+    mut commands: Commands,
+    config: Res<MemoryConfig>,
+    tasks: Query<(&Task, Option<&ShortTermMemory>), Changed<Task>>,
+) {
+    for (task, memory) in &tasks {
         if task.status.is_terminal() {
             commands.spawn(TaskTerminatedMessage { task_id: task.id });
+
+            // 任务完成时触发摘要
+            if let Some(stm) = memory {
+                if !stm.entries.is_empty() {
+                    let content: String = stm
+                        .entries
+                        .iter()
+                        .map(|e| format!("{:?}: {}", e.role, e.content))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    info!(task_id = %task.id, "triggering summarization on task completion");
+                    commands.spawn(SummarizationRequestMessage {
+                        task_id: task.id,
+                        content_to_summarize: content,
+                        target_tokens: config.summary_target_tokens,
+                        trigger: SummarizationTrigger::TaskComplete,
+                    });
+                }
+            }
         }
     }
 }
