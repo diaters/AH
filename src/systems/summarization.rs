@@ -70,15 +70,18 @@ pub(crate) fn summarization_result_system(
     config: Res<MemoryConfig>,
     mut commands: Commands,
     results: Query<(Entity, &SummarizationResultMessage)>,
-    mut tasks: Query<&mut Task>,
-    mut memories: Query<(Entity, &Task, &mut ShortTermMemory)>,
+    mut tasks_with_memory: Query<(&mut Task, &mut ShortTermMemory)>,
+    mut tasks_without_memory: Query<&mut Task, Without<ShortTermMemory>>,
 ) {
     for (entity, result) in &results {
+        let task_id = result.task_id;
+
         match &result.summary {
             Ok(summary) => {
-                // 查找关联的任务和记忆
-                for (_task_entity, task, mut memory) in &mut memories {
-                    if task.id == result.task_id {
+                // 查找与任务关联的记忆并更新（Task 和 ShortTermMemory 在同一实体上）
+                let mut found = false;
+                for (mut task, mut memory) in &mut tasks_with_memory {
+                    if task.id == task_id {
                         // 更新摘要前缀
                         memory.summary_prefix = Some(summary.clone());
 
@@ -87,39 +90,47 @@ pub(crate) fn summarization_result_system(
                         if memory.entries.len() > preserve_count {
                             let removed = memory.entries.len() - preserve_count;
                             memory.entries.drain(0..removed);
-                            info!(task_id = %task.id, removed_count = removed, "removed compressed entries");
+                            info!(task_id = %task_id, removed_count = removed, "removed compressed entries");
                         }
 
                         // 重新计算 token
                         memory.recalculate_tokens();
 
                         // 恢复任务状态
-                        if let Some(mut task_mut) =
-                            tasks.iter_mut().find(|t| t.id == result.task_id)
-                        {
-                            task_mut.status = TaskStatus::Ready;
-                            task_mut.updated_at = clock.0;
-                        }
+                        task.status = TaskStatus::Ready;
+                        task.updated_at = clock.0;
 
-                        info!(
-                            task_id = %result.task_id,
-                            summary_len = summary.len(),
-                            remaining_entries = memory.entries.len(),
-                            new_tokens = memory.estimated_tokens,
-                            "summarization completed"
-                        );
+                        found = true;
                         break;
                     }
                 }
+
+                if !found {
+                    // 任务没有 ShortTermMemory，只恢复状态
+                    if let Some(mut task) = tasks_without_memory.iter_mut().find(|t| t.id == task_id) {
+                        task.status = TaskStatus::Ready;
+                        task.updated_at = clock.0;
+                    }
+                }
+
+                info!(
+                    task_id = %task_id,
+                    summary_len = summary.len(),
+                    "summarization completed"
+                );
             }
             Err(error) => {
                 // 摘要失败，记录错误但恢复任务状态
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == result.task_id) {
+                if let Some(mut task) = tasks_with_memory.iter_mut().map(|(t, _)| t).find(|t| t.id == task_id) {
+                    task.status = TaskStatus::Ready;
+                    task.updated_at = clock.0;
+                    task.last_error = Some(format!("summarization failed: {}", error.message()));
+                } else if let Some(mut task) = tasks_without_memory.iter_mut().find(|t| t.id == task_id) {
                     task.status = TaskStatus::Ready;
                     task.updated_at = clock.0;
                     task.last_error = Some(format!("summarization failed: {}", error.message()));
                 }
-                info!(task_id = %result.task_id, error = ?error, "summarization failed");
+                info!(task_id = %task_id, error = ?error, "summarization failed");
             }
         }
         commands.entity(entity).despawn();
