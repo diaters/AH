@@ -45,7 +45,7 @@ pub enum WaitingReason {
     User,      // 等待用户输入
     Evaluator, // 等待评估器判定
     RetryBackoff,
-    Approval, // 等待审批
+    Approval,      // 等待审批
     Summarization, // 等待摘要完成
 }
 

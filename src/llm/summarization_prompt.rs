@@ -9,7 +9,8 @@ pub fn summarization_system_prompt() -> String {
 4. 保持摘要的可读性和连贯性
 5. 目标长度：不超过指定的 token 数
 
-输出格式：直接输出摘要内容，不需要额外说明。"#.to_string()
+输出格式：直接输出摘要内容，不需要额外说明。"#
+        .to_string()
 }
 
 /// 构建摘要的用户 prompt，包含待压缩的对话历史和目标 token 数限制。
