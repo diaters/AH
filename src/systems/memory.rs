@@ -3,19 +3,27 @@ use tracing::info;
 
 use crate::{
     app::MemoryConfig,
-    domain::{Agent, LongTermMemory, ShortTermMemory},
+    domain::{
+        Agent, LongTermMemory, ShortTermMemory, SummarizationRequestMessage,
+        SummarizationTrigger, Task, TaskStatus, WaitingReason,
+    },
 };
 
-/// 记忆压缩系统：检测 token 阈值并触发摘要
+/// 记忆压缩系统：检测 token 阈值并触发摘要请求
 pub(crate) fn memory_compression_system(
     config: Res<MemoryConfig>,
-    mut tasks: Query<(
-        &crate::domain::Task,
-        &mut ShortTermMemory,
-        Option<&mut LongTermMemory>,
-    )>,
+    mut commands: Commands,
+    tasks: Query<(&Task, &ShortTermMemory)>,
 ) {
-    for (task, mut short_term, long_term) in &mut tasks {
+    for (task, short_term) in &tasks {
+        // 跳过终态任务和等待摘要的任务
+        if task.status.is_terminal() {
+            continue;
+        }
+        if matches!(task.status, TaskStatus::Waiting(WaitingReason::Summarization)) {
+            continue;
+        }
+
         // 检查是否需要压缩
         if short_term.estimated_tokens > config.compression_threshold_tokens {
             let entries_count = short_term.entries.len();
@@ -31,41 +39,27 @@ pub(crate) fn memory_compression_system(
                 continue;
             }
 
-            // 收集需要压缩的条目
-            let to_compress: Vec<_> = short_term.entries.drain(0..compress_count).collect();
-
-            // 生成摘要内容
+            // 收集需要压缩的条目内容
+            let to_compress: Vec<_> = short_term.entries.iter().take(compress_count).collect();
             let mut compress_text = String::new();
             for entry in &to_compress {
                 compress_text.push_str(&format!("{:?}: {}\n", entry.role, entry.content));
             }
 
-            // 更新摘要前缀
-            // Phase 4.1: 简单拼接，Phase 4.2 调用 LLM 生成摘要
-            let new_summary = if let Some(existing) = &short_term.summary_prefix {
-                format!("{}\n\n{}", existing, compress_text)
-            } else {
-                compress_text
-            };
-
-            short_term.summary_prefix = Some(new_summary);
-
-            // 重新计算 token
-            short_term.recalculate_tokens();
-
+            // 发送摘要请求而非直接拼接
             info!(
                 task_id = %task.id,
-                compressed_count = compress_count,
-                new_tokens = short_term.estimated_tokens,
-                "compressed short-term memory"
+                entries_to_compress = compress_count,
+                current_tokens = short_term.estimated_tokens,
+                "triggering summarization request"
             );
 
-            // 将压缩的条目移入长期记忆
-            if let Some(mut long) = long_term {
-                for entry in to_compress {
-                    long.add_archive(entry.content);
-                }
-            }
+            commands.spawn(SummarizationRequestMessage {
+                task_id: task.id,
+                content_to_summarize: compress_text,
+                target_tokens: config.summary_target_tokens,
+                trigger: SummarizationTrigger::TokenThreshold,
+            });
         }
     }
 }
