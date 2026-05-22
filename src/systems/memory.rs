@@ -4,8 +4,8 @@ use tracing::info;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, LongTermMemory, ShortTermMemory, SummarizationRequestMessage,
-        SummarizationTrigger, Task, TaskStatus, WaitingReason,
+        Agent, LongTermMemory, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger,
+        Task, TaskStatus, WaitingReason,
     },
 };
 
@@ -20,7 +20,10 @@ pub(crate) fn memory_compression_system(
         if task.status.is_terminal() {
             continue;
         }
-        if matches!(task.status, TaskStatus::Waiting(WaitingReason::Summarization)) {
+        if matches!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::Summarization)
+        ) {
             continue;
         }
 

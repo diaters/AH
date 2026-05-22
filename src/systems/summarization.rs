@@ -5,8 +5,8 @@ use crate::{
     app::{Clock, MemoryConfig},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        ShortTermMemory, SummarizationRequestMessage, SummarizationResultMessage, Task, TaskStatus,
-        WaitingReason,
+        ShortTermMemory, SummarizationRequestMessage, SummarizationResultMessage,
+        SummarizationTrigger, Task, TaskStatus, WaitingReason,
     },
     llm::{summarization_system_prompt, summarization_user_prompt},
 };
@@ -35,8 +35,12 @@ pub(crate) fn summarization_dispatch_system(
     };
 
     for (entity, request) in &requests {
-        // 标记任务为等待摘要
-        if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id) {
+        // 对于非 TaskComplete 触发的摘要，标记任务为等待摘要
+        // TaskComplete 触发的摘要不需要改变任务状态（任务已是终态）
+        if request.trigger != SummarizationTrigger::TaskComplete
+            && let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id)
+            && !task.status.is_terminal()
+        {
             task.status = TaskStatus::Waiting(WaitingReason::Summarization);
             task.updated_at = clock.0;
             info!(task_id = %request.task_id, "task waiting for summarization");
@@ -66,51 +70,32 @@ pub(crate) fn summarization_dispatch_system(
 
 /// 摘要结果处理系统：更新 ShortTermMemory
 pub(crate) fn summarization_result_system(
-    clock: Res<Clock>,
     config: Res<MemoryConfig>,
     mut commands: Commands,
     results: Query<(Entity, &SummarizationResultMessage)>,
-    mut tasks_with_memory: Query<(&mut Task, &mut ShortTermMemory)>,
-    mut tasks_without_memory: Query<&mut Task, Without<ShortTermMemory>>,
+    mut memories: Query<&mut ShortTermMemory>,
 ) {
     for (entity, result) in &results {
         let task_id = result.task_id;
 
         match &result.summary {
             Ok(summary) => {
-                // 查找与任务关联的记忆并更新（Task 和 ShortTermMemory 在同一实体上）
-                let mut found = false;
-                for (mut task, mut memory) in &mut tasks_with_memory {
-                    if task.id == task_id {
-                        // 更新摘要前缀
-                        memory.summary_prefix = Some(summary.clone());
+                // 更新摘要前缀（不修改任务状态）
+                // 对于 TaskComplete 触发的摘要，任务已是终态
+                // 对于 TokenThreshold/UserCommand 触发的摘要，任务状态由 summarization_dispatch_system 管理
+                if let Some(mut memory) = memories.iter_mut().next() {
+                    memory.summary_prefix = Some(summary.clone());
 
-                        // 移除已压缩的 entries（保留最近 N 轮）
-                        let preserve_count = (config.preserve_recent_turns * 2) as usize;
-                        if memory.entries.len() > preserve_count {
-                            let removed = memory.entries.len() - preserve_count;
-                            memory.entries.drain(0..removed);
-                            info!(task_id = %task_id, removed_count = removed, "removed compressed entries");
-                        }
-
-                        // 重新计算 token
-                        memory.recalculate_tokens();
-
-                        // 恢复任务状态
-                        task.status = TaskStatus::Ready;
-                        task.updated_at = clock.0;
-
-                        found = true;
-                        break;
+                    // 移除已压缩的 entries（保留最近 N 轮）
+                    let preserve_count = (config.preserve_recent_turns * 2) as usize;
+                    if memory.entries.len() > preserve_count {
+                        let removed = memory.entries.len() - preserve_count;
+                        memory.entries.drain(0..removed);
+                        info!(task_id = %task_id, removed_count = removed, "removed compressed entries");
                     }
-                }
 
-                if !found {
-                    // 任务没有 ShortTermMemory，只恢复状态
-                    if let Some(mut task) = tasks_without_memory.iter_mut().find(|t| t.id == task_id) {
-                        task.status = TaskStatus::Ready;
-                        task.updated_at = clock.0;
-                    }
+                    // 重新计算 token
+                    memory.recalculate_tokens();
                 }
 
                 info!(
@@ -120,16 +105,6 @@ pub(crate) fn summarization_result_system(
                 );
             }
             Err(error) => {
-                // 摘要失败，记录错误但恢复任务状态
-                if let Some(mut task) = tasks_with_memory.iter_mut().map(|(t, _)| t).find(|t| t.id == task_id) {
-                    task.status = TaskStatus::Ready;
-                    task.updated_at = clock.0;
-                    task.last_error = Some(format!("summarization failed: {}", error.message()));
-                } else if let Some(mut task) = tasks_without_memory.iter_mut().find(|t| t.id == task_id) {
-                    task.status = TaskStatus::Ready;
-                    task.updated_at = clock.0;
-                    task.last_error = Some(format!("summarization failed: {}", error.message()));
-                }
                 info!(task_id = %task_id, error = ?error, "summarization failed");
             }
         }

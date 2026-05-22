@@ -7,8 +7,8 @@ use crate::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
         AgentRequestKind, BrainDecisionError, CreateTaskMessage, EntryMetadata, EntryRole,
         FailureReason, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload,
-        SummarizationRequestMessage, SummarizationResultMessage, SummarizationTrigger, Task,
-        TaskStatus, TaskTerminatedMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+        UserInputMessage, UserOutputMessage, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -171,17 +171,8 @@ pub(crate) fn llm_response_system(
     results: Query<(Entity, &AgentExecutionResultMessage)>,
 ) {
     for (entity, result_message) in &results {
-        // 处理 Summarization 结果
-        if result_message.result.request_kind == AgentRequestKind::Summarization {
-            commands.spawn(SummarizationResultMessage {
-                task_id: result_message.result.task_id,
-                summary: result_message.result.result.clone(),
-            });
-            commands.entity(entity).despawn();
-            continue;
-        }
-
         if result_message.result.request_kind != AgentRequestKind::LlmCompletion {
+            // 对于 Summarization 和 BrainDecision 结果，由其他系统处理
             continue;
         }
 
@@ -192,6 +183,11 @@ pub(crate) fn llm_response_system(
                 continue;
             }
 
+            info!(
+                "[DEBUG llm_response_system] found matching task {}, multi_turn = {}",
+                task.id, task.multi_turn
+            );
+
             match &result.result {
                 Ok(content) => {
                     // 追加 Agent 响应到 ShortTermMemory
@@ -201,6 +197,7 @@ pub(crate) fn llm_response_system(
 
                     // 检查是否支持多轮对话
                     if task.multi_turn {
+                        info!("[DEBUG llm_response_system] multi_turn path: setting Waiting(User)");
                         // 多轮对话：响应后进入 Waiting(User)
                         task.status = TaskStatus::Waiting(WaitingReason::User);
                         task.input_summary = content.clone();
@@ -266,23 +263,23 @@ pub(crate) fn task_termination_system(
             commands.spawn(TaskTerminatedMessage { task_id: task.id });
 
             // 任务完成时触发摘要
-            if let Some(stm) = memory {
-                if !stm.entries.is_empty() {
-                    let content: String = stm
-                        .entries
-                        .iter()
-                        .map(|e| format!("{:?}: {}", e.role, e.content))
-                        .collect::<Vec<_>>()
-                        .join("\n");
+            if let Some(stm) = memory
+                && !stm.entries.is_empty()
+            {
+                let content: String = stm
+                    .entries
+                    .iter()
+                    .map(|e| format!("{:?}: {}", e.role, e.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
-                    info!(task_id = %task.id, "triggering summarization on task completion");
-                    commands.spawn(SummarizationRequestMessage {
-                        task_id: task.id,
-                        content_to_summarize: content,
-                        target_tokens: config.summary_target_tokens,
-                        trigger: SummarizationTrigger::TaskComplete,
-                    });
-                }
+                info!(task_id = %task.id, "triggering summarization on task completion");
+                commands.spawn(SummarizationRequestMessage {
+                    task_id: task.id,
+                    content_to_summarize: content,
+                    target_tokens: config.summary_target_tokens,
+                    trigger: SummarizationTrigger::TaskComplete,
+                });
             }
         }
     }

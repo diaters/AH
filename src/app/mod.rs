@@ -22,10 +22,10 @@ use crate::{
         init_agent_memory_system, input_ingress_system, llm_response_system,
         memory_absorption_system, memory_compression_system, memory_contribution_system,
         register_builtin_tools, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        task_dispatch_system, task_termination_system, tick_clock_system,
-        tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
-        tool_result_system, user_input_routing_system, user_message_to_task_system,
-        user_output_system,
+        summarization_dispatch_system, summarization_result_system, task_dispatch_system,
+        task_termination_system, tick_clock_system, tool_confirmation_request_system,
+        tool_confirmation_result_system, tool_dispatch_system, tool_result_system,
+        user_input_routing_system, user_message_to_task_system, user_output_system,
     },
 };
 
@@ -247,6 +247,13 @@ pub fn build_harness_app(
 
     app.add_systems(
         Update,
+        (summarization_result_system
+            .in_set(HarnessSet::Transform)
+            .after(llm_response_system),),
+    );
+
+    app.add_systems(
+        Update,
         (
             agent_termination_system
                 .in_set(HarnessSet::Maintenance)
@@ -256,6 +263,7 @@ pub fn build_harness_app(
             init_agent_memory_system.in_set(HarnessSet::Maintenance),
             memory_contribution_system.in_set(HarnessSet::Execution),
             memory_absorption_system.in_set(HarnessSet::Maintenance),
+            summarization_dispatch_system.in_set(HarnessSet::Maintenance),
             // 审批与演化系统
             approval_dispatch_system.in_set(HarnessSet::Dispatch),
             approval_result_system.in_set(HarnessSet::Transform),

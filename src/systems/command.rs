@@ -3,8 +3,9 @@ use tracing::info;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, EntryRole, MemoryEntry, ShortTermMemory, SpaceKnowledge, SummarizationRequestMessage,
-    SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage, UserCommand, UserInputMessage,
+    CreateTaskMessage, EntryRole, MemoryEntry, ShortTermMemory, SpaceKnowledge,
+    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+    UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -65,25 +66,25 @@ pub(crate) fn command_parse_system(
                 // /summarize - 触发总结
                 let active_task = tasks.iter().find(|(t, _)| !t.status.is_terminal());
 
-                if let Some((task, memory)) = active_task {
-                    if let Some(stm) = memory {
-                        // 收集所有条目内容
-                        let content: String = stm
-                            .entries
-                            .iter()
-                            .map(|e| format!("{:?}: {}", e.role, e.content))
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                if let Some((task, memory)) = active_task
+                    && let Some(stm) = memory
+                {
+                    // 收集所有条目内容
+                    let content: String = stm
+                        .entries
+                        .iter()
+                        .map(|e| format!("{:?}: {}", e.role, e.content))
+                        .collect::<Vec<_>>()
+                        .join("\n");
 
-                        if !content.is_empty() {
-                            info!(task_id = %task.id, "triggering summarization via /summarize command");
-                            commands.spawn(SummarizationRequestMessage {
-                                task_id: task.id,
-                                content_to_summarize: content,
-                                target_tokens: config.summary_target_tokens,
-                                trigger: SummarizationTrigger::UserCommand,
-                            });
-                        }
+                    if !content.is_empty() {
+                        info!(task_id = %task.id, "triggering summarization via /summarize command");
+                        commands.spawn(SummarizationRequestMessage {
+                            task_id: task.id,
+                            content_to_summarize: content,
+                            target_tokens: config.summary_target_tokens,
+                            trigger: SummarizationTrigger::UserCommand,
+                        });
                     }
                 }
                 commands.entity(entity).despawn();
