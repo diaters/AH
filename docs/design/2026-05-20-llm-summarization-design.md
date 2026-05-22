@@ -15,7 +15,7 @@
 
 ## 二、整体架构
 
-```
+```text
 触发条件                     执行链路                      结果处理
 ┌─────────────┐              ┌─────────────┐              ┌─────────────┐
 │ Token 阈值  │──┐           │             │              │             │
@@ -26,13 +26,15 @@
 └─────────────┘              └─────────────┘              └─────────────┘
 ```
 
-**新增组件**：
+__新增组件__：
+
 - `SummarizationRequestMessage` — 摘要请求消息
 - `SummarizationResultMessage` — 摘要结果消息
 - `WaitingReason::Summarization` — 等待摘要状态
 - `summarizer` Agent（持久性）
 
-**新增 System**：
+__新增 System__：
+
 - `summarization_trigger_system` — 检测触发条件
 - `summarization_dispatch_system` — 生成摘要请求
 - `summarization_result_system` — 处理摘要结果

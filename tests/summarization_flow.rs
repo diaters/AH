@@ -222,15 +222,15 @@ fn summarization_preserves_terminal_task_status() {
         thread::sleep(Duration::from_millis(30));
 
         // Check if task is still Done after each update
-        if let Some(task) = app.world_mut().get::<Task>(entity_id).cloned() {
-            if task.status == TaskStatus::Done {
-                // Run a few more updates to ensure summarization doesn't change status
-                for _ in 0..5 {
-                    app.update();
-                    thread::sleep(Duration::from_millis(20));
-                }
-                break;
+        if let Some(task) = app.world_mut().get::<Task>(entity_id).cloned()
+            && task.status == TaskStatus::Done
+        {
+            // Run a few more updates to ensure summarization doesn't change status
+            for _ in 0..5 {
+                app.update();
+                thread::sleep(Duration::from_millis(20));
             }
+            break;
         }
     }
 

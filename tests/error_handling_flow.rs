@@ -6,7 +6,7 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutionError, ExecutorFuture,
+    AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture,
     ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus, WaitingReason,
     build_harness_app,
 };
