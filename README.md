@@ -8,23 +8,41 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架原型，当前聚�
 - 已完成模块化拆分：`app`、`domain`、`systems`、`llm`
 - 已支持基于配置的 LLM provider 抽象
 - 当前 provider 支持：`openai`、`openai-compatible`
+- __Phase 4.3 已完成__：LLM 生成记忆摘要（替代简单拼接）
+  - 支持三种触发条件：Token 阈值、`/summarize` 指令、任务完成
+  - 新增 Summarizer Agent，支持经验积累与演化
+- __测试体系完善__：88 个测试覆盖主链路、错误处理、边界条件、记忆摘要
 
 更多背景可参考：
 
-- 设计文档：[2026-05-10-core-flow-design.md](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/docs/design/2026-05-10-core-flow-design.md)
-- 配置说明：[configuration.md](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/docs/configuration.md)
-- 项目规范：[CLAUDE.md](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/CLAUDE.md)
+- 设计文档：[2026-05-10-core-flow-design.md](docs/design/2026-05-10-core-flow-design.md)
+- 摘要设计：[2026-05-20-llm-summarization-design.md](docs/design/2026-05-20-llm-summarization-design.md)
+- 配置说明：[configuration.md](docs/configuration.md)
+- 项目规范：[CLAUDE.md](CLAUDE.md)
 
 ## 目录结构
 
 ```text
 src/
-├── app/       # 应用装配、资源与运行配置
-├── domain/    # 核心实体、状态与执行器 trait
-├── llm/       # provider 配置、执行器工厂、OpenAI 接入
-├── systems/   # ECS systems，按阶段拆分
+├── app/              # 应用装配、资源与运行配置
+├── domain/           # 核心实体、状态与执行器 trait
+│   ├── mod.rs        # Task、Agent、Message 类型定义
+│   └── error.rs      # ExecutionError 错误类型
+├── llm/              # provider 配置、执行器工厂、OpenAI 接入
+│   ├── provider.rs   # LLM provider 配置
+│   ├── executor.rs   # Agent 执行器实现
+│   └── summarization_prompt.rs  # 摘要生成 prompt
+├── systems/          # ECS systems，按阶段拆分
+│   ├── dispatch.rs   # 任务分派、Agent 选择
+│   ├── transform.rs  # 结果处理、状态流转
+│   ├── memory.rs     # 记忆压缩管理
+│   ├── summarization.rs  # 摘要请求/结果处理
+│   ├── command.rs    # 用户指令解析
+│   └── execution.rs  # 异步执行管理
 ├── lib.rs
 └── main.rs
+
+agents.toml         # Agent 配置（含 summarizer）
 ```
 
 ## 快速开始
@@ -93,14 +111,27 @@ cargo run
 
 ## 测试说明
 
-当前测试分为两类：
+当前测试共 __88 个__，分为三类：
 
-- 单元测试：位于 `src/llm/provider.rs`，覆盖 provider 解析与配置校验
-- 集成测试：位于 [mvp_flow.rs](file:///Users/diater/Library/Mobile%20Documents/com~apple~CloudDocs/Obsidian/diater/Harness/tests/mvp_flow.rs)，验证单轮对话闭环
+| 测试文件 | 数量 | 覆盖范围 |
+|---------|------|---------|
+| `tests/mvp_flow.rs` | 6 | 核心主链路：任务创建、Agent 执行、结果输出、多轮对话 |
+| `tests/error_handling_flow.rs` | 7 | 错误处理与边界条件：重试机制、非重试错误、空输入、大输入(100KB)、并发任务(5个)、等待状态、失败消息 |
+| `tests/summarization_flow.rs` | 4 | LLM 摘要功能：任务完成触发、多轮不触发、终态保持、端到端流程 |
+| `src/llm/provider.rs` (单元测试) | 71 | Provider 配置解析、环境变量回退、验证逻辑 |
+
+运行全部测试：
+
+```bash
+cargo test --all-features
+```
 
 ## 下一步方向
 
-- BrainDispatchSystem / BrainDecisionSystem
-- AgentFactorySystem 的真实能力匹配
-- Memory / Tool / Session / Planner 等高级能力
-- 多轮上下文管理与真实 provider 联调
+- [x] LLM 记忆摘要（Phase 4.3 已完成）
+- [ ] BrainDispatchSystem / BrainDecisionSystem 完善
+- [ ] AgentFactorySystem 的真实能力匹配
+- [ ] Tool / Session / Planner 等高级能力
+- [ ] 真实 OpenAI provider 联调验证
+- [ ] 配置文件热加载
+- [ ] 分布式/多实例支持
