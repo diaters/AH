@@ -1,17 +1,20 @@
 use bevy::prelude::*;
 use tracing::info;
 
+use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, EntryRole, MemoryEntry, ShortTermMemory, SpaceKnowledge, Task, TaskStatus,
-    TaskTerminatedMessage, UserCommand, UserInputMessage,
+    CreateTaskMessage, EntryRole, MemoryEntry, ShortTermMemory, SpaceKnowledge,
+    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+    UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
 pub(crate) fn command_parse_system(
     mut commands: Commands,
     mut knowledge: ResMut<SpaceKnowledge>,
+    config: Res<MemoryConfig>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
-    tasks: Query<&Task>,
+    tasks: Query<(&Task, Option<&ShortTermMemory>)>,
 ) {
     for (entity, input) in &user_inputs {
         let cmd = UserCommand::parse(&input.content);
@@ -22,9 +25,9 @@ pub(crate) fn command_parse_system(
                 // 查找当前活跃的任务作为父任务
                 let parent_task = tasks
                     .iter()
-                    .find(|t| !t.status.is_terminal() && t.status != TaskStatus::Pending);
+                    .find(|(t, _)| !t.status.is_terminal() && t.status != TaskStatus::Pending);
 
-                if let Some(parent) = parent_task {
+                if let Some((parent, _)) = parent_task {
                     info!(
                         parent_id = %parent.id,
                         topic = %topic,
@@ -50,9 +53,9 @@ pub(crate) fn command_parse_system(
             }
             UserCommand::FinishCurrentTask => {
                 // /finish - 结束当前任务
-                let current_task = tasks.iter().find(|t| !t.status.is_terminal());
+                let current_task = tasks.iter().find(|(t, _)| !t.status.is_terminal());
 
-                if let Some(task) = current_task {
+                if let Some((task, _)) = current_task {
                     info!(task_id = %task.id, "finishing current task via /finish command");
                     // 触发任务终止，后续会被 contribution 系统处理
                     commands.spawn(TaskTerminatedMessage { task_id: task.id });
@@ -61,8 +64,29 @@ pub(crate) fn command_parse_system(
             }
             UserCommand::Summarize => {
                 // /summarize - 触发总结
-                // TODO: 实现总结触发
-                info!("summarize command received - to be implemented");
+                let active_task = tasks.iter().find(|(t, _)| !t.status.is_terminal());
+
+                if let Some((task, memory)) = active_task
+                    && let Some(stm) = memory
+                {
+                    // 收集所有条目内容
+                    let content: String = stm
+                        .entries
+                        .iter()
+                        .map(|e| format!("{:?}: {}", e.role, e.content))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    if !content.is_empty() {
+                        info!(task_id = %task.id, "triggering summarization via /summarize command");
+                        commands.spawn(SummarizationRequestMessage {
+                            task_id: task.id,
+                            content_to_summarize: content,
+                            target_tokens: config.summary_target_tokens,
+                            trigger: SummarizationTrigger::UserCommand,
+                        });
+                    }
+                }
                 commands.entity(entity).despawn();
             }
             UserCommand::Remember { content } => {

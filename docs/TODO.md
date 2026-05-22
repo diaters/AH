@@ -112,11 +112,24 @@
 - [x] knowledge_search Tool 实现（从 SpaceKnowledge 检索）
 - [x] /remember 指令（添加知识到 SpaceKnowledge）
 
+#### Phase 4.3 LLM 记忆摘要
+
+- [x] 扩展数据结构（SummarizationTrigger, SummarizationRequestMessage, SummarizationResultMessage）
+- [x] 创建摘要 Prompt 模板（summarization_system_prompt, summarization_user_prompt）
+- [x] 创建摘要处理 Systems（summarization_dispatch_system, summarization_result_system）
+- [x] 修改 memory_compression_system 触发 TokenThreshold 摘要
+- [x] 修改 command_parse_system 处理 /summarize 指令
+- [x] 修改 task_termination_system 触发 TaskComplete 摘要
+- [x] 修改 llm_response_system 路由摘要结果
+- [x] 注册新 Systems 到 app/mod.rs
+- [x] 添加 summarizer Agent 配置（agents.toml）
+- [x] 修复 agent_execution_system 对 Summarization 请求的处理（不改变任务状态）
+
 ---
 
 ## 备注
 
-- 当前阶段：Phase 4.2 Tool & Space MVP 已完成
+- 当前阶段：Phase 4.3 LLM 记忆摘要已完成
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 - Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`

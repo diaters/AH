@@ -24,8 +24,13 @@ pub(crate) fn agent_execution_system(
 
         for mut task in &mut tasks {
             if task.id == request.task_id {
-                if request.request_kind != AgentRequestKind::BrainDecision {
-                    task.mark_running(clock.0);
+                // 只有 LlmCompletion 请求才标记任务为 Running
+                // BrainDecision 和 Summarization 不改变任务状态
+                if request.request_kind == AgentRequestKind::LlmCompletion {
+                    // 只有非终态任务才标记为 Running
+                    if !task.status.is_terminal() {
+                        task.mark_running(clock.0);
+                    }
                 }
                 break;
             }

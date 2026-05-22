@@ -27,6 +27,14 @@ impl AgentExecutor for BrainMockExecutor {
                     ))
                 })
             }
+            harness::AgentRequestKind::Summarization => {
+                // Summarization 由专门的 summarization system 处理，此处不应到达
+                Box::pin(async move {
+                    Err(harness::ExecutionError::Unknown(
+                        "Summarization not supported in mock executor".to_string(),
+                    ))
+                })
+            }
         }
     }
 }

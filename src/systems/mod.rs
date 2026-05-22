@@ -8,6 +8,7 @@ mod maintenance;
 mod memory;
 mod output;
 mod routing;
+mod summarization;
 mod tool;
 mod transform;
 
@@ -25,6 +26,7 @@ pub(crate) use maintenance::agent_factory_system;
 pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
 pub(crate) use output::user_output_system;
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
+pub(crate) use summarization::{summarization_dispatch_system, summarization_result_system};
 pub(crate) use tool::{
     agent_evolution_system, approval_dispatch_system, approval_result_system,
     register_builtin_tools, tool_confirmation_request_system, tool_confirmation_result_system,
