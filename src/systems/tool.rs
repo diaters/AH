@@ -513,32 +513,109 @@ pub(crate) fn approval_dispatch_system(
 
 /// 审批结果处理 System
 ///
-/// 处理审批结果并恢复待执行 Tool 请求
-#[allow(dead_code)]
+/// 处理父 Agent 审批结果，更新权限，恢复任务
 pub(crate) fn approval_result_system(
     mut commands: Commands,
-    agents: Query<&Agent>,
+    mut agents: Query<&mut Agent>,
+    mut tasks: Query<&mut Task>,
+    registry: Res<SpaceToolRegistry>,
+    knowledge: Res<SpaceKnowledge>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
+    tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
     for (entity, result) in &approval_results {
-        debug!(
-            event = "ApprovalResultProcessed",
-            request_id = %result.request_id,
-            source_task_id = %result.source_task_id,
-            decision = ?result.decision,
-            reasoning = %result.reasoning,
-            "approval result processed"
-        );
+        // 查找对应的 Tool 执行请求
+        let Some((request_entity, tool_request)) = tool_requests
+            .iter()
+            .find(|(_, r)| r.pending_confirmation_id == Some(result.request_id))
+        else {
+            debug!(
+                event = "ApprovalResultNoMatch",
+                request_id = %result.request_id,
+                "no matching tool request found, may have been processed"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
 
-        // 如果审批通过，更新 Agent 权限（Permanent 模式）
-        if result.decision == ApprovalDecision::Approved {
-            // 查找子 Agent 并更新权限
-            if let Some(agent) = agents.iter().find(|a| a.id == result.source_task_id) {
-                debug!(
-                    event = "AgentPermissionUpdatePending",
-                    agent_id = %agent.id,
-                    "agent permission would be updated"
+        match result.decision {
+            ApprovalDecision::Rejected => {
+                warn!(
+                    event = "ToolApprovalRejected",
+                    tool_name = %tool_request.tool_name,
+                    task_id = %tool_request.request.task_id,
+                    agent_id = %tool_request.request.agent_id,
+                    reasoning = %result.reasoning,
+                    "tool execution rejected by parent agent"
                 );
+
+                let execution_result = AgentExecutionResult {
+                    task_id: tool_request.request.task_id,
+                    agent_id: tool_request.request.agent_id,
+                    request_kind: tool_request.request.request_kind.clone(),
+                    result: Err(ExecutionError::UserCancelled(format!(
+                        "parent agent rejected: {}",
+                        result.reasoning
+                    ))),
+                };
+
+                commands.spawn(ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: tool_request.tool_name.clone(),
+                    tool_output: Err(ToolError::PermissionDenied(format!(
+                        "parent agent rejected: {}",
+                        result.reasoning
+                    ))),
+                });
+
+                // 恢复 Task 状态
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == result.source_task_id) {
+                    task.status = TaskStatus::Ready;
+                }
+
+                commands.entity(request_entity).despawn();
+            }
+            ApprovalDecision::Approved => {
+                debug!(
+                    event = "ToolApprovalGranted",
+                    tool_name = %tool_request.tool_name,
+                    task_id = %tool_request.request.task_id,
+                    agent_id = %tool_request.request.agent_id,
+                    grant_mode = ?result.grant_mode,
+                    "tool execution approved by parent agent"
+                );
+
+                // Permanent 模式：更新 Agent 权限
+                if result.grant_mode == GrantMode::Permanent {
+                    if let Some(mut agent) = agents
+                        .iter_mut()
+                        .find(|a| a.id == tool_request.request.agent_id)
+                    {
+                        agent.grant_permission(tool_request.tool_name.clone());
+                        debug!(
+                            event = "AgentPermissionUpdated",
+                            agent_id = %agent.id,
+                            tool_name = %tool_request.tool_name,
+                            "agent permission updated to Allow permanently"
+                        );
+                    }
+                }
+
+                // 执行 Tool
+                if let Some(tool_def) = registry.get(&tool_request.tool_name) {
+                    execute_tool(
+                        &mut commands,
+                        request_entity,
+                        tool_request,
+                        tool_def,
+                        &knowledge,
+                    );
+                }
+
+                // 恢复 Task 状态
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == result.source_task_id) {
+                    task.status = TaskStatus::Ready;
+                }
             }
         }
 
