@@ -7,11 +7,12 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::domain::{
-    Agent, AgentExecutionResult, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-    ConfirmationOption, ConfirmationSource, ExecutionError, GrantMode, OutputMessage,
-    ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolDefinition, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
+    Agent, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
+    ApprovalRequestMessage, ApprovalResultMessage, ConfirmationOption, ConfirmationSource,
+    ExecutionError, GrantMode, OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
+    Task, TaskStatus, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolDefinition, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ToolPermission, WaitingReason,
 };
 
 /// Builtin Tool 执行器函数签名
@@ -229,7 +230,9 @@ pub(crate) fn tool_dispatch_system(
                     );
 
                     // 将 Task 设置为等待用户确认状态
-                    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                    if let Some(mut task) =
+                        tasks.iter_mut().find(|t| t.id == request.request.task_id)
+                    {
                         task.status = TaskStatus::Waiting(WaitingReason::User);
                     }
 
@@ -265,7 +268,9 @@ pub(crate) fn tool_dispatch_system(
                             );
 
                             // 将 Task 设置为等待父 Agent 审批状态
-                            if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                            if let Some(mut task) =
+                                tasks.iter_mut().find(|t| t.id == request.request.task_id)
+                            {
                                 task.status = TaskStatus::Waiting(WaitingReason::Approval);
                             }
 
@@ -714,6 +719,91 @@ pub(crate) fn tool_confirmation_result_system(
                         new_permission = ?ToolPermission::Allow,
                         "agent permission updated to Allow permanently"
                     );
+                }
+
+                // spawn_agent 工具特殊处理：不执行 builtin，而是生成 spawn 请求
+                if tool_request.tool_name == "spawn_agent" {
+                    // 解析参数
+                    let name = tool_request
+                        .tool_input
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("child-agent")
+                        .to_string();
+
+                    let model = tool_request
+                        .tool_input
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    let description = tool_request
+                        .tool_input
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let tools: Vec<String> = tool_request
+                        .tool_input
+                        .get("tools")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    debug!(
+                        event = "SpawnAgentRequestCreated",
+                        parent_agent_id = %tool_request.request.agent_id,
+                        task_id = %tool_request.request.task_id,
+                        name = %name,
+                        model = ?model,
+                        description = %description,
+                        tools = ?tools,
+                        "spawn_agent request submitted"
+                    );
+
+                    // 生成 AgentSpawnRequestMessage
+                    commands.spawn(AgentSpawnRequestMessage {
+                        parent_agent_id: tool_request.request.agent_id,
+                        task_id: tool_request.request.task_id,
+                        name,
+                        model,
+                        description,
+                        tools,
+                    });
+
+                    // 生成成功结果
+                    let execution_result = AgentExecutionResult {
+                        task_id: tool_request.request.task_id,
+                        agent_id: tool_request.request.agent_id,
+                        request_kind: tool_request.request.request_kind.clone(),
+                        result: Ok("spawn_agent request submitted".to_string()),
+                    };
+
+                    commands.spawn(ToolExecutionResultMessage {
+                        result: execution_result,
+                        tool_name: "spawn_agent".to_string(),
+                        tool_output: Ok(serde_json::json!({
+                            "status": "spawn_request_created"
+                        })),
+                    });
+
+                    // 恢复 Task 状态
+                    if let Some(mut task) = tasks
+                        .iter_mut()
+                        .find(|t| t.id == tool_request.request.task_id)
+                    {
+                        task.status = TaskStatus::Ready;
+                    }
+
+                    // 清理请求
+                    commands.entity(request_entity).despawn();
+                    commands.entity(entity).despawn();
+                    continue;
                 }
 
                 // 执行 Tool
