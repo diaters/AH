@@ -243,10 +243,6 @@ fn handle_termination(commands: &mut Commands, agents: &Query<(Entity, &Agent)>,
     }
 }
 
-pub(crate) fn validate_tags_subset(parent_tags: &[String], child_tags: &[String]) -> bool {
-    child_tags.iter().all(|tag| parent_tags.contains(tag))
-}
-
 fn mark_task_failed(
     tasks: &mut Query<&mut Task>,
     clock: &Clock,
