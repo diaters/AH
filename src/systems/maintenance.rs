@@ -147,9 +147,7 @@ fn handle_spawn_request(
     clock: &Clock,
     request: &AgentSpawnRequestMessage,
 ) {
-    let Some((_, parent_agent)) = agents
-        .iter()
-        .find(|(_, a)| a.id == request.parent_agent_id)
+    let Some((_, parent_agent)) = agents.iter().find(|(_, a)| a.id == request.parent_agent_id)
     else {
         warn!(
             event = "SpawnRequestFailed",

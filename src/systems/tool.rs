@@ -207,6 +207,89 @@ pub(crate) fn tool_dispatch_system(
 
         match permission {
             ToolPermission::Allow => {
+                // spawn_agent 工具特殊处理：即使是 Allow 权限也需要创建 spawn 请求
+                if tool_name == "spawn_agent" {
+                    debug!(
+                        event = "SpawnAgentDirectExecution",
+                        tool_name = %tool_name,
+                        agent_id = %agent.id,
+                        "spawn_agent with Allow permission, creating spawn request directly"
+                    );
+
+                    // 解析参数
+                    let name = request
+                        .tool_input
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("child-agent")
+                        .to_string();
+
+                    let model = request
+                        .tool_input
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    let description = request
+                        .tool_input
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let tools: Vec<String> = request
+                        .tool_input
+                        .get("tools")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    debug!(
+                        event = "SpawnAgentRequestCreated",
+                        parent_agent_id = %agent.id,
+                        task_id = %request.request.task_id,
+                        name = %name,
+                        model = ?model,
+                        description = %description,
+                        tools = ?tools,
+                        "spawn_agent request submitted with Allow permission"
+                    );
+
+                    // 生成 AgentSpawnRequestMessage
+                    commands.spawn(AgentSpawnRequestMessage {
+                        parent_agent_id: agent.id,
+                        task_id: request.request.task_id,
+                        name,
+                        model,
+                        description,
+                        tools,
+                    });
+
+                    // 生成成功结果
+                    let execution_result = AgentExecutionResult {
+                        task_id: request.request.task_id,
+                        agent_id: agent.id,
+                        request_kind: request.request.request_kind.clone(),
+                        result: Ok("spawn_agent request submitted".to_string()),
+                    };
+
+                    commands.spawn(ToolExecutionResultMessage {
+                        result: execution_result,
+                        tool_name: "spawn_agent".to_string(),
+                        tool_output: Ok(serde_json::json!({
+                            "status": "spawn_request_created"
+                        })),
+                    });
+
+                    // 清理请求
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+
                 // 直接执行
                 debug!(
                     event = "ToolExecutionAllowed",
@@ -255,43 +338,42 @@ pub(crate) fn tool_dispatch_system(
                 }
 
                 // 2. 检查 Agent 是否有父 Agent，且父 Agent 有该工具的 Allow 权限
-                if let Some(parent_id) = agent.parent_id {
-                    if let Some(parent) = agents.iter().find(|a| a.id == parent_id) {
-                        if parent.has_permission(&tool_name) {
-                            debug!(
-                                event = "ToolRequiresParentApproval",
-                                tool_name = %tool_name,
-                                agent_id = %agent.id,
-                                parent_agent_id = %parent.id,
-                                reason = "parent agent has permission",
-                                "tool requires parent agent approval"
-                            );
+                if let Some(parent_id) = agent.parent_id
+                    && let Some(parent) = agents.iter().find(|a| a.id == parent_id)
+                    && parent.has_permission(&tool_name)
+                {
+                    debug!(
+                        event = "ToolRequiresParentApproval",
+                        tool_name = %tool_name,
+                        agent_id = %agent.id,
+                        parent_agent_id = %parent.id,
+                        reason = "parent agent has permission",
+                        "tool requires parent agent approval"
+                    );
 
-                            // 将 Task 设置为等待父 Agent 审批状态
-                            if let Some(mut task) =
-                                tasks.iter_mut().find(|t| t.id == request.request.task_id)
-                            {
-                                task.status = TaskStatus::Waiting(WaitingReason::Approval);
-                            }
-
-                            // 生成父 Agent 审批请求消息
-                            let request_id = Uuid::new_v4();
-                            commands.spawn(ToolConfirmationRequestMessage {
-                                request_id,
-                                task_id: request.request.task_id,
-                                agent_id: agent.id,
-                                tool_name: tool_name.clone(),
-                                tool_input: request.tool_input.clone(),
-                                options: ConfirmationOption::default_options(),
-                                source: ConfirmationSource::ParentAgent,
-                                parent_agent_id: Some(parent.id),
-                            });
-
-                            // 更新 ToolExecutionRequestMessage 的 pending_confirmation_id
-                            request.pending_confirmation_id = Some(request_id);
-                            continue;
-                        }
+                    // 将 Task 设置为等待父 Agent 审批状态
+                    if let Some(mut task) =
+                        tasks.iter_mut().find(|t| t.id == request.request.task_id)
+                    {
+                        task.status = TaskStatus::Waiting(WaitingReason::Approval);
                     }
+
+                    // 生成父 Agent 审批请求消息
+                    let request_id = Uuid::new_v4();
+                    commands.spawn(ToolConfirmationRequestMessage {
+                        request_id,
+                        task_id: request.request.task_id,
+                        agent_id: agent.id,
+                        tool_name: tool_name.clone(),
+                        tool_input: request.tool_input.clone(),
+                        options: ConfirmationOption::default_options(),
+                        source: ConfirmationSource::ParentAgent,
+                        parent_agent_id: Some(parent.id),
+                    });
+
+                    // 更新 ToolExecutionRequestMessage 的 pending_confirmation_id
+                    request.pending_confirmation_id = Some(request_id);
+                    continue;
                 }
 
                 // 3. 无父 Agent 或父 Agent 无权限 → 用户确认
@@ -586,19 +668,18 @@ pub(crate) fn approval_result_system(
                 );
 
                 // Permanent 模式：更新 Agent 权限
-                if result.grant_mode == GrantMode::Permanent {
-                    if let Some(mut agent) = agents
+                if result.grant_mode == GrantMode::Permanent
+                    && let Some(mut agent) = agents
                         .iter_mut()
                         .find(|a| a.id == tool_request.request.agent_id)
-                    {
-                        agent.grant_permission(tool_request.tool_name.clone());
-                        debug!(
-                            event = "AgentPermissionUpdated",
-                            agent_id = %agent.id,
-                            tool_name = %tool_request.tool_name,
-                            "agent permission updated to Allow permanently"
-                        );
-                    }
+                {
+                    agent.grant_permission(tool_request.tool_name.clone());
+                    debug!(
+                        event = "AgentPermissionUpdated",
+                        agent_id = %agent.id,
+                        tool_name = %tool_request.tool_name,
+                        "agent permission updated to Allow permanently"
+                    );
                 }
 
                 // 执行 Tool

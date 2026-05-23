@@ -4,6 +4,10 @@
 
 > 注：本文档关于 Agent 定位的前提已被 [ADR-002](/Users/diater/workspace/Harness/docs/adr/ADR-002-agent-controlled-evolution.md) 修订。
 > 本文中的"Agent 无运行状态"仍然成立，但"Agent 不可变配置实体"已更新为"Agent 是可演化的执行配置实体"。
+> 
+> **Phase 5 更新**：标签（tags）子集校验已替换为基于工具（tools）的权限继承模型。
+> 子 Agent 创建时指定所需工具列表，`handle_spawn_request` 过滤为父 Agent 拥有 Allow 权限的工具。
+> 详见 `AgentSpawnRequestMessage.tools` 和 `handle_spawn_request`。
 
 ---
 
@@ -59,8 +63,8 @@ Agent 描述"怎么执行"（model、tags、description），不追踪"执行到
 - 由任意 Agent（包括子 Agent）通过 `AgentSpawnRequestMessage` 请求创建
 - 一对一绑定 Task
 - 创建时即绑定目标 Task，不参与通用匹配
-- tags 必须是父 Agent tags 的子集
-- 子 Agent 也可以创建自己的子 Agent（同样受 tags 子集约束）
+- tools 列表由父 Agent 过滤，仅保留父 Agent 有 Allow 权限的工具
+- 子 Agent 也可以创建自己的子 Agent（同样受工具权限继承约束）
 - 关联 Task 到达终态（Done/Failed）后自动销毁
 
 ---
@@ -189,7 +193,7 @@ sequenceDiagram
     participant ExecutionSystem
 
     ParentAgent->>FactorySystem: AgentSpawnRequestMessage
-    FactorySystem->>FactorySystem: 校验 tags 子集约束
+    FactorySystem->>FactorySystem: 校验工具权限（过滤父 Agent 无 Allow 权限的工具）
     alt 校验通过
         FactorySystem->>FactorySystem: 创建任务型 Agent Entity
         FactorySystem->>ExecutionSystem: 产出 AgentExecutionRequestMessage
