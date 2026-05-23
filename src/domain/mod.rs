@@ -683,7 +683,7 @@ pub enum ConfirmMode {
 }
 
 /// 授权模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantMode {
     /// 单次授权，仅本次执行
     Once,
@@ -692,7 +692,7 @@ pub enum GrantMode {
 }
 
 /// 审批来源
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ConfirmationSource {
     #[default]
     User,
