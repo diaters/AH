@@ -1,14 +1,14 @@
 use bevy::prelude::*;
-use tracing::info;
+use tracing::debug;
 
 use crate::{
     app::{Clock, ExecutionResultReceiver, HarnessSettings, MemoryConfig},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutionResultMessage,
         AgentRequestKind, BrainDecisionError, CreateTaskMessage, EntryMetadata, EntryRole,
-        FailureReason, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
-        UserInputMessage, UserOutputMessage, WaitingReason,
+        FailureReason, FinishTaskMessage, RetryReadyMessage, ShortTermMemory, Signal,
+        SignalPayload, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
+        TaskTerminatedMessage, UserInputMessage, UserOutputMessage, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -17,14 +17,36 @@ pub(crate) fn signal_ingest_system(mut commands: Commands, signals: Query<(Entit
     for (entity, signal) in &signals {
         match &signal.payload {
             SignalPayload::UserInput(content) => {
+                debug!(
+                    event = "SignalIngested",
+                    signal_type = ?signal.kind,
+                    payload_type = "UserInput",
+                    content = %content,
+                    content_len = content.len(),
+                    "signal converted to UserInputMessage"
+                );
                 commands.spawn(UserInputMessage {
                     content: content.clone(),
                 });
             }
             SignalPayload::RetryWakeup(task_id) => {
+                debug!(
+                    event = "SignalIngested",
+                    signal_type = ?signal.kind,
+                    payload_type = "RetryWakeup",
+                    task_id = %task_id,
+                    "signal converted to RetryReadyMessage"
+                );
                 commands.spawn(RetryReadyMessage { task_id: *task_id });
             }
-            SignalPayload::SystemWakeup => {}
+            SignalPayload::SystemWakeup => {
+                debug!(
+                    event = "SignalIngested",
+                    signal_type = ?signal.kind,
+                    payload_type = "SystemWakeup",
+                    "system wakeup signal received"
+                );
+            }
         }
 
         commands.entity(entity).despawn();
@@ -38,10 +60,24 @@ pub(crate) fn user_message_to_task_system(
 ) {
     for (entity, message) in &messages {
         // 创建多轮对话任务（Pending 状态）并附带 ShortTermMemory
-        commands.spawn((
-            Task::from_user_input(message.content.clone(), settings.0.max_retries),
-            ShortTermMemory::default(),
-        ));
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(EntryRole::User, &message.content, EntryMetadata::default());
+        let stm_tokens = stm.estimated_tokens;
+
+        let task = Task::from_user_input(message.content.clone(), settings.0.max_retries);
+        debug!(
+            event = "TaskCreated",
+            task_id = %task.id,
+            content = %message.content,
+            content_len = message.content.len(),
+            multi_turn = task.multi_turn,
+            max_retries = task.max_retries,
+            stm_initial_entries = 1,
+            stm_initial_tokens = stm_tokens,
+            "new task spawned from user message"
+        );
+
+        commands.spawn((task, stm));
         commands.entity(entity).despawn();
     }
 }
@@ -183,30 +219,73 @@ pub(crate) fn llm_response_system(
                 continue;
             }
 
-            info!(
-                "[DEBUG llm_response_system] found matching task {}, multi_turn = {}",
-                task.id, task.multi_turn
+            debug!(
+                event = "LlmResponseReceived",
+                task_id = %task.id,
+                agent_id = %result.agent_id,
+                request_kind = ?result.request_kind,
+                success = result.result.is_ok(),
+                response_len = result.result.as_ref().ok().map(|c| c.len()),
+                response_content = ?result.result.as_ref().ok(),
+                multi_turn = task.multi_turn,
+                "llm response received"
             );
 
             match &result.result {
                 Ok(content) => {
                     // 追加 Agent 响应到 ShortTermMemory
+                    let stm_len = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
+                    let stm_tokens_before =
+                        short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
+                    let stm_recent: Option<Vec<_>> = short_term.as_ref().map(|s| {
+                        s.entries
+                            .iter()
+                            .rev()
+                            .take(3)
+                            .map(|e| (e.role, e.content.clone()))
+                            .collect()
+                    });
+
                     if let Some(mut stm) = short_term {
                         stm.add_entry(EntryRole::Assistant, content, EntryMetadata::default());
                     }
+                    let stm_tokens_after =
+                        stm_tokens_before + crate::domain::estimate_tokens(content);
 
                     // 检查是否支持多轮对话
                     if task.multi_turn {
-                        info!("[DEBUG llm_response_system] multi_turn path: setting Waiting(User)");
-                        // 多轮对话：响应后进入 Waiting(User)
+                        let old_status = task.status.clone();
                         task.status = TaskStatus::Waiting(WaitingReason::User);
                         task.input_summary = content.clone();
                         task.updated_at = clock.0;
+                        debug!(
+                            event = "TaskStatusTransition",
+                            task_id = %task.id,
+                            from_status = ?old_status,
+                            to_status = ?task.status,
+                            reason = "multi_turn_response",
+                            response_len = content.len(),
+                            response_content = %content,
+                            stm_entries = stm_len + 1,
+                            stm_tokens_before = stm_tokens_before,
+                            stm_tokens_after = stm_tokens_after,
+                            stm_recent = ?stm_recent,
+                            "multi_turn: task now waiting for user"
+                        );
                         commands.spawn(UserOutputMessage {
                             content: content.clone(),
                         });
                     } else {
-                        // 单轮对话：标记完成
+                        debug!(
+                            event = "TaskStatusTransition",
+                            task_id = %task.id,
+                            from_status = ?task.status,
+                            to_status = ?TaskStatus::Done,
+                            reason = "single_turn_complete",
+                            response_len = content.len(),
+                            response_content = %content,
+                            "single_turn: marking task Done"
+                        );
                         task.mark_done(content.clone(), clock.0);
                         commands.spawn(UserOutputMessage {
                             content: content.clone(),
@@ -214,9 +293,53 @@ pub(crate) fn llm_response_system(
                     }
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
+                    let stm_entries = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
+                    let stm_tokens = short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
+                    let stm_recent: Option<Vec<_>> = short_term.as_ref().map(|s| {
+                        s.entries
+                            .iter()
+                            .rev()
+                            .take(3)
+                            .map(|e| (e.role, e.content.clone()))
+                            .collect()
+                    });
+                    debug!(
+                        event = "TaskRetryScheduled",
+                        task_id = %task.id,
+                        retry_count = task.retry_count,
+                        max_retries = task.max_retries,
+                        error = %error.message(),
+                        error_type = std::any::type_name_of_val(error),
+                        stm_entries = stm_entries,
+                        stm_tokens = stm_tokens,
+                        stm_recent = ?stm_recent,
+                        "scheduling retry for task"
+                    );
                     task.schedule_retry(error, clock.0);
                 }
                 Err(error) => {
+                    let stm_entries = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
+                    let stm_tokens = short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
+                    let stm_recent: Option<Vec<_>> = short_term.as_ref().map(|s| {
+                        s.entries
+                            .iter()
+                            .rev()
+                            .take(3)
+                            .map(|e| (e.role, e.content.clone()))
+                            .collect()
+                    });
+                    debug!(
+                        event = "TaskFailed",
+                        task_id = %task.id,
+                        error = %error.message(),
+                        error_type = std::any::type_name_of_val(error),
+                        retry_count = task.retry_count,
+                        max_retries = task.max_retries,
+                        stm_entries = stm_entries,
+                        stm_tokens = stm_tokens,
+                        stm_recent = ?stm_recent,
+                        "task failed with non-retryable error"
+                    );
                     task.mark_failed(error, clock.0);
                     commands.spawn(UserOutputMessage {
                         content: format!(
@@ -244,6 +367,14 @@ pub(crate) fn retry_ready_system(
     for (entity, message) in &messages {
         for mut task in &mut tasks {
             if task.id == message.task_id {
+                debug!(
+                    event = "RetryReady",
+                    task_id = %task.id,
+                    retry_count = task.retry_count,
+                    max_retries = task.max_retries,
+                    last_error = ?task.last_error,
+                    "marking task ready for retry"
+                );
                 task.mark_ready_for_retry(clock.0);
                 break;
             }
@@ -260,6 +391,15 @@ pub(crate) fn task_termination_system(
 ) {
     for (task, memory) in &tasks {
         if task.status.is_terminal() {
+            debug!(
+                event = "TaskTerminated",
+                task_id = %task.id,
+                task_status = ?task.status,
+                task_content = %task.content,
+                result_summary = %task.result_summary,
+                has_stm = memory.is_some(),
+                "task reached terminal state"
+            );
             commands.spawn(TaskTerminatedMessage { task_id: task.id });
 
             // 任务完成时触发摘要
@@ -273,7 +413,16 @@ pub(crate) fn task_termination_system(
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                info!(task_id = %task.id, "triggering summarization on task completion");
+                debug!(
+                    event = "SummarizationTriggered",
+                    task_id = %task.id,
+                    trigger = "TaskComplete",
+                    stm_entries = stm.entries.len(),
+                    stm_tokens = stm.estimated_tokens,
+                    content_len = content.len(),
+                    target_tokens = config.summary_target_tokens,
+                    "triggering summarization on task completion"
+                );
                 commands.spawn(SummarizationRequestMessage {
                     task_id: task.id,
                     content_to_summarize: content,
@@ -289,5 +438,27 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
     match &task.status {
         TaskStatus::Failed(reason) => Some(reason.clone()),
         _ => None,
+    }
+}
+
+/// 处理 /finish 命令，将任务标记为 Done。
+pub(crate) fn finish_task_system(
+    clock: Res<Clock>,
+    mut commands: Commands,
+    messages: Query<(Entity, &FinishTaskMessage)>,
+    mut tasks: Query<&mut Task>,
+) {
+    for (entity, msg) in &messages {
+        if let Some(mut task) = tasks.iter_mut().find(|t| t.id == msg.task_id) {
+            debug!(
+                event = "TaskFinished",
+                task_id = %task.id,
+                task_status = ?task.status,
+                task_content = %task.content,
+                "finishing task via /finish command"
+            );
+            task.mark_done("finished by user", clock.0);
+        }
+        commands.entity(entity).despawn();
     }
 }

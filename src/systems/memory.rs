@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tracing::info;
+use tracing::debug;
 
 use crate::{
     app::MemoryConfig,
@@ -50,10 +50,15 @@ pub(crate) fn memory_compression_system(
             }
 
             // 发送摘要请求而非直接拼接
-            info!(
+            debug!(
+                event = "CompressionTriggered",
                 task_id = %task.id,
-                entries_to_compress = compress_count,
                 current_tokens = short_term.estimated_tokens,
+                threshold = config.compression_threshold_tokens,
+                entries_total = entries_count,
+                entries_to_compress = compress_count,
+                entries_to_preserve = preserve_count,
+                compress_text_len = compress_text.len(),
                 "triggering summarization request"
             );
 
@@ -72,7 +77,14 @@ pub(crate) fn init_agent_memory_system(
     mut commands: Commands,
     agents: Query<(Entity, &Agent), Added<Agent>>,
 ) {
-    for (entity, _agent) in &agents {
+    for (entity, agent) in &agents {
+        debug!(
+            event = "AgentMemoryInitialized",
+            entity = ?entity,
+            agent_id = %agent.id,
+            agent_name = %agent.profile.name,
+            "initializing long term memory for agent"
+        );
         // 所有 Agent 都添加长期记忆
         commands.entity(entity).insert(LongTermMemory::default());
     }

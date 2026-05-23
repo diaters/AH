@@ -1,7 +1,7 @@
 use std::fs;
 
 use bevy::prelude::*;
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -13,22 +13,25 @@ use crate::{
     },
 };
 
+/// Startup 系统：加载持久化 Agent
+pub(crate) fn load_agents_system(
+    mut commands: Commands,
+    settings: Res<HarnessSettings>,
+    agents: Query<(Entity, &Agent)>,
+) {
+    load_persistent_agents(&mut commands, &settings, &agents);
+}
+
+/// 运行时系统：处理 Agent 创建和销毁
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn agent_factory_system(
     mut commands: Commands,
     clock: Res<Clock>,
-    settings: Res<HarnessSettings>,
     agents: Query<(Entity, &Agent)>,
     mut tasks: Query<&mut Task>,
     spawn_requests: Query<(Entity, &AgentSpawnRequestMessage)>,
     terminated_messages: Query<(Entity, &TaskTerminatedMessage)>,
-    mut loaded: Local<bool>,
 ) {
-    if !*loaded {
-        load_persistent_agents(&mut commands, &settings, &agents);
-        *loaded = true;
-    }
-
     for (entity, request) in &spawn_requests {
         handle_spawn_request(&mut commands, &agents, &mut tasks, &clock, request);
         commands.entity(entity).despawn();
@@ -51,8 +54,9 @@ fn load_persistent_agents(
         Ok(content) => content,
         Err(_) => {
             warn!(
-                "agents config file '{}' not found, no persistent agents loaded",
-                config_path
+                event = "AgentsConfigNotFound",
+                config_path = %config_path,
+                "agents config file not found, no persistent agents loaded"
             );
             return;
         }
@@ -61,7 +65,12 @@ fn load_persistent_agents(
     let config: crate::domain::AgentConfig = match toml::from_str(&content) {
         Ok(config) => config,
         Err(err) => {
-            error!("failed to parse agents config: {err}");
+            error!(
+                event = "AgentsConfigParseError",
+                config_path = %config_path,
+                error = %err,
+                "failed to parse agents config"
+            );
             panic!("invalid agents config: {err}");
         }
     };
@@ -82,9 +91,24 @@ fn load_persistent_agents(
         }
     }
 
+    debug!(
+        event = "AgentsConfigLoaded",
+        config_path = %config_path,
+        agent_count = config.agent.len(),
+        agent_names = ?config.agent.iter().map(|a| &a.name).collect::<Vec<_>>(),
+        "persistent agents loaded from config"
+    );
+
     for entry in &config.agent {
         let id = Uuid::new_v4();
-        info!(name = %entry.name, %id, "spawning persistent agent");
+        debug!(
+            event = "PersistentAgentSpawned",
+            agent_id = %id,
+            agent_name = %entry.name,
+            agent_model = %entry.model,
+            agent_tags = ?entry.tags,
+            "spawning persistent agent"
+        );
 
         let tool_permissions = if let Some(ref tools_config) = entry.tools {
             AgentToolPermissions {
@@ -123,12 +147,15 @@ fn handle_spawn_request(
     clock: &Clock,
     request: &AgentSpawnRequestMessage,
 ) {
-    let Some(parent_agent) = agents
-        .iter()
-        .find(|(_, a)| a.id == request.parent_agent_id)
-        .map(|(_, a)| a)
+    let Some((_, parent_agent)) = agents.iter().find(|(_, a)| a.id == request.parent_agent_id)
     else {
-        warn!(parent_id = %request.parent_agent_id, "parent agent not found for spawn request");
+        warn!(
+            event = "SpawnRequestFailed",
+            parent_id = %request.parent_agent_id,
+            task_id = %request.task_id,
+            reason = "parent_agent_not_found",
+            "parent agent not found for spawn request"
+        );
         mark_task_failed(
             tasks,
             clock,
@@ -138,37 +165,73 @@ fn handle_spawn_request(
         return;
     };
 
-    if !validate_tags_subset(&parent_agent.capabilities.tags, &request.tags) {
+    // 过滤 tools：仅保留父 Agent 拥有的权限
+    let allowed_tools: Vec<String> = request
+        .tools
+        .iter()
+        .filter(|tool| parent_agent.has_permission(tool))
+        .cloned()
+        .collect();
+
+    if allowed_tools.is_empty() {
         warn!(
-            parent_tags = ?parent_agent.capabilities.tags,
-            child_tags = ?request.tags,
-            "spawn rejected: child tags exceed parent tags"
+            event = "SpawnRequestRejected",
+            parent_id = %request.parent_agent_id,
+            task_id = %request.task_id,
+            requested_tools = ?request.tools,
+            reason = "no_valid_tools",
+            "spawn rejected: no valid tools after filtering"
         );
         let msg = format!(
-            "Agent spawn rejected: child tags {:?} exceed parent tags {:?}",
-            request.tags, parent_agent.capabilities.tags
+            "Agent spawn rejected: requested tools {:?} not available in parent agent",
+            request.tools
         );
         mark_task_failed(tasks, clock, request.task_id, &msg);
         return;
     }
 
+    // 使用请求中的 model，或继承父 Agent 的 model
+    let model = request
+        .model
+        .clone()
+        .unwrap_or_else(|| parent_agent.profile.model.clone());
+
     let id = Uuid::new_v4();
-    info!(name = %request.name, %id, "spawning task-scoped agent");
+    debug!(
+        event = "TaskScopedAgentSpawned",
+        agent_id = %id,
+        agent_name = %request.name,
+        agent_model = %model,
+        parent_agent_id = %request.parent_agent_id,
+        task_id = %request.task_id,
+        tools = ?allowed_tools,
+        "spawning task-scoped agent"
+    );
+
+    // 构建 tool_permissions: 子 Agent 默认拒绝，仅显式允许的工具可用
+    let tool_permissions = AgentToolPermissions {
+        default_permission: ToolPermission::Deny,
+        overrides: allowed_tools
+            .iter()
+            .map(|t| (t.clone(), ToolPermission::Allow))
+            .collect(),
+    };
 
     commands.spawn(Agent {
         id,
         profile: AgentProfile {
             name: request.name.clone(),
-            model: request.model.clone(),
+            model,
         },
         capabilities: AgentCapabilities {
-            tags: request.tags.clone(),
+            // TaskScoped Agent 不参与路由
+            tags: vec![],
             description: request.description.clone(),
         },
         kind: AgentKind::TaskScoped,
         parent_id: Some(request.parent_agent_id),
         bound_task_id: Some(request.task_id),
-        tool_permissions: parent_agent.tool_permissions.clone(),
+        tool_permissions,
         experience: AgentExperience::default(),
     });
 
@@ -188,14 +251,17 @@ fn handle_spawn_request(
 fn handle_termination(commands: &mut Commands, agents: &Query<(Entity, &Agent)>, task_id: TaskId) {
     for (entity, agent) in agents.iter() {
         if agent.kind == AgentKind::TaskScoped && agent.bound_task_id == Some(task_id) {
-            info!(name = %agent.profile.name, %task_id, "despawning task-scoped agent");
+            debug!(
+                event = "AgentDespawned",
+                agent_id = %agent.id,
+                agent_name = %agent.profile.name,
+                task_id = %task_id,
+                kind = ?agent.kind,
+                "despawning task-scoped agent"
+            );
             commands.entity(entity).despawn();
         }
     }
-}
-
-pub(crate) fn validate_tags_subset(parent_tags: &[String], child_tags: &[String]) -> bool {
-    child_tags.iter().all(|tag| parent_tags.contains(tag))
 }
 
 fn mark_task_failed(

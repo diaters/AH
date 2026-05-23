@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use tracing::debug;
 
 use crate::domain::AgentExecutor;
 
@@ -13,6 +14,7 @@ use super::{
 pub fn create_executor_from_config(config: &LlmProviderConfig) -> Result<Arc<dyn AgentExecutor>> {
     match config.provider {
         LlmProviderKind::OpenAi | LlmProviderKind::OpenAiCompatible => {
+            debug!(provider = ?config.provider, model = %config.model, "creating executor from config");
             Ok(Arc::new(OpenAiExecutor::new(config)?))
         }
     }

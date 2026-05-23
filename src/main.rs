@@ -133,6 +133,8 @@ fn run_event_loop(app: &mut bevy::app::App) {
 
 /// 组装线程、运行时与 ECS 应用，启动 MVP 主程序。
 fn main() -> Result<()> {
+    // 加载 .env.local 文件（如果存在）
+    dotenvy::from_filename(".env.local").ok();
     init_tracing();
 
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);

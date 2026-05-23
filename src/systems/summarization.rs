@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tracing::info;
+use tracing::debug;
 
 use crate::{
     app::{Clock, MemoryConfig},
@@ -26,7 +26,11 @@ pub(crate) fn summarization_dispatch_system(
     });
 
     let Some(summarizer) = summarizer else {
-        info!("no summarizer agent found, skipping summarization requests");
+        debug!(
+            event = "SummarizerNotFound",
+            pending_requests = requests.iter().count(),
+            "no summarizer agent found, skipping summarization requests"
+        );
         // 没有 summarizer，清理所有请求
         for (entity, _) in &requests {
             commands.entity(entity).despawn();
@@ -41,9 +45,17 @@ pub(crate) fn summarization_dispatch_system(
             && let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id)
             && !task.status.is_terminal()
         {
+            let old_status = task.status.clone();
             task.status = TaskStatus::Waiting(WaitingReason::Summarization);
             task.updated_at = clock.0;
-            info!(task_id = %request.task_id, "task waiting for summarization");
+            debug!(
+                event = "TaskWaitingForSummarization",
+                task_id = %task.id,
+                from_status = ?old_status,
+                to_status = ?task.status,
+                trigger = ?request.trigger,
+                "task waiting for summarization"
+            );
         }
 
         // 构建 AgentExecutionRequest
@@ -58,10 +70,14 @@ pub(crate) fn summarization_dispatch_system(
         commands.spawn(AgentExecutionRequestMessage {
             request: execution_request,
         });
-        info!(
+        debug!(
+            event = "SummarizationDispatched",
             task_id = %request.task_id,
+            summarizer_agent_id = %summarizer.id,
+            summarizer_agent_name = %summarizer.profile.name,
             trigger = ?request.trigger,
             target_tokens = request.target_tokens,
+            content_len = request.content_to_summarize.len(),
             "dispatched summarization request"
         );
         commands.entity(entity).despawn();
@@ -88,24 +104,37 @@ pub(crate) fn summarization_result_system(
 
                     // 移除已压缩的 entries（保留最近 N 轮）
                     let preserve_count = (config.preserve_recent_turns * 2) as usize;
-                    if memory.entries.len() > preserve_count {
+                    let removed = if memory.entries.len() > preserve_count {
                         let removed = memory.entries.len() - preserve_count;
                         memory.entries.drain(0..removed);
-                        info!(task_id = %task_id, removed_count = removed, "removed compressed entries");
-                    }
+                        removed
+                    } else {
+                        0
+                    };
 
                     // 重新计算 token
                     memory.recalculate_tokens();
-                }
 
-                info!(
-                    task_id = %task_id,
-                    summary_len = summary.len(),
-                    "summarization completed"
-                );
+                    debug!(
+                        event = "SummarizationCompleted",
+                        task_id = %task_id,
+                        summary_len = summary.len(),
+                        summary = %summary,
+                        removed_entries = removed,
+                        remaining_entries = memory.entries.len(),
+                        new_tokens = memory.estimated_tokens,
+                        "summarization completed"
+                    );
+                }
             }
             Err(error) => {
-                info!(task_id = %task_id, error = ?error, "summarization failed");
+                debug!(
+                    event = "SummarizationFailed",
+                    task_id = %task_id,
+                    error = %error.message(),
+                    error_type = std::any::type_name_of_val(error),
+                    "summarization failed"
+                );
             }
         }
         commands.entity(entity).despawn();

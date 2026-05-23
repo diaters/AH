@@ -7,9 +7,10 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentId,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, EntryRole, ExecutorFuture,
-    HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
+    HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus,
     ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, build_harness_app,
+    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -603,7 +604,673 @@ fn user_allows_tool_once() {
     );
 }
 
-/// 测试：用户允许永久（更新 Agent 权限）
+/// 测试：spawn_agent Tool 创建子 Agent
+#[test]
+fn spawn_agent_creates_child_agent() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建父 Agent（拥有 spawn_agent 和 echo 权限）
+    let parent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: HashMap::new(),
+        },
+    );
+
+    // 注册 spawn_agent 工具
+    let mut registry = SpaceToolRegistry::default();
+    registry.register(ToolDefinition {
+        name: "spawn_agent".to_string(),
+        description: "Create a child agent".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("spawn_agent".to_string()),
+    });
+    // 注册 echo 工具供子 Agent 使用
+    registry.register(ToolDefinition {
+        name: "echo".to_string(),
+        description: "Echo back input".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("echo".to_string()),
+    });
+    app.world_mut().insert_resource(registry);
+
+    // 创建任务
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // 发起 spawn_agent 请求
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id: parent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "spawn_agent".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "spawn_agent".to_string(),
+        tool_input: serde_json::json!({
+            "name": "child-agent",
+            "description": "A test child agent",
+            "tools": ["echo"]
+        }),
+        pending_confirmation_id: None,
+    });
+
+    // 运行系统 - 只运行 1 帧，验证子 Agent 创建
+    // 注意：不能运行太多帧，因为 handle_spawn_request 会创建 AgentExecutionRequestMessage，
+    // MockExecutor 返回结果后，llm_response_system 会将任务标记为 Done，
+    // 然后 agent_factory_system 会因 TaskTerminatedMessage 销毁 TaskScoped 子 Agent
+    app.update();
+
+    // 验证：子 Agent 已创建
+    let child_agents: Vec<Agent> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Agent>();
+        query
+            .iter(world)
+            .filter(|a| a.parent_id == Some(parent_id))
+            .cloned()
+            .collect()
+    };
+
+    assert_eq!(child_agents.len(), 1, "should have created one child agent");
+    let child = &child_agents[0];
+    assert_eq!(child.profile.name, "child-agent");
+    assert_eq!(child.kind, AgentKind::TaskScoped);
+    assert_eq!(child.bound_task_id, Some(task_id));
+    assert!(child.has_permission("echo"));
+}
+
+/// 测试：spawn_agent Confirm 权限路由到用户确认
+#[test]
+fn spawn_agent_confirm_routes_to_user() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建父 Agent（Confirm 权限）
+    let parent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Confirm,
+            overrides: HashMap::new(),
+        },
+    );
+
+    // 注册 spawn_agent 工具（default_permission: Confirm）
+    let mut registry = SpaceToolRegistry::default();
+    registry.register(ToolDefinition {
+        name: "spawn_agent".to_string(),
+        description: "Create a child agent".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("spawn_agent".to_string()),
+    });
+    app.world_mut().insert_resource(registry);
+
+    // 创建任务
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // 发起 spawn_agent 请求
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id: parent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "spawn_agent".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "spawn_agent".to_string(),
+        tool_input: serde_json::json!({
+            "name": "child-agent",
+            "description": "A test child agent",
+            "tools": ["echo"]
+        }),
+        pending_confirmation_id: None,
+    });
+
+    // 运行系统
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 验证：Task 进入 Waiting(User) 状态（spawn_agent 始终路由到用户确认）
+    let task_status = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Task>();
+        query
+            .iter(world)
+            .find(|t| t.id == task_id)
+            .map(|t| t.status.clone())
+    };
+    assert_eq!(
+        task_status,
+        Some(TaskStatus::Waiting(WaitingReason::User)),
+        "spawn_agent with Confirm should route to user (task Waiting for User)"
+    );
+
+    // 验证：ToolExecutionRequestMessage 有 pending_confirmation_id
+    let has_pending = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .any(|r| r.tool_name == "spawn_agent" && r.pending_confirmation_id.is_some())
+    };
+    assert!(
+        has_pending,
+        "should have pending confirmation for spawn_agent"
+    );
+}
+
+/// 测试：子 Agent Confirm 权限路由到父 Agent 审批
+#[test]
+fn child_agent_confirm_routes_to_parent() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建父 Agent（拥有 echo 权限）
+    let parent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: {
+                let mut m = HashMap::new();
+                m.insert("echo".to_string(), ToolPermission::Allow);
+                m
+            },
+        },
+    );
+
+    // 创建子 Agent（Confirm 权限，绑定为 TaskScoped）
+    let child_id = uuid::Uuid::new_v4();
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("child task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(Agent {
+        id: child_id,
+        profile: AgentProfile {
+            name: "child-agent".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec![],
+            description: "child".to_string(),
+        },
+        kind: AgentKind::TaskScoped,
+        parent_id: Some(parent_id),
+        bound_task_id: Some(task_id),
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: {
+                let mut m = HashMap::new();
+                m.insert("echo".to_string(), ToolPermission::Confirm);
+                m
+            },
+        },
+        experience: AgentExperience::default(),
+    });
+
+    // 注册 echo 工具
+    let mut registry = SpaceToolRegistry::default();
+    registry.register(ToolDefinition {
+        name: "echo".to_string(),
+        description: "Echo back input".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("echo".to_string()),
+    });
+    app.world_mut().insert_resource(registry);
+
+    // 子 Agent 请求执行 echo 工具
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id: child_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "echo".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "echo".to_string(),
+        tool_input: serde_json::json!({"message": "test"}),
+        pending_confirmation_id: None,
+    });
+
+    // 运行系统
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 验证：Task 进入 Waiting(Approval) 状态（父 Agent 审批路由）
+    let task_status = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Task>();
+        query
+            .iter(world)
+            .find(|t| t.id == task_id)
+            .map(|t| t.status.clone())
+    };
+    assert_eq!(
+        task_status,
+        Some(TaskStatus::Waiting(WaitingReason::Approval)),
+        "child agent with parent permission should route to parent (task Waiting for Approval)"
+    );
+
+    // 验证：ToolExecutionRequestMessage 有 pending_confirmation_id
+    let has_pending = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .any(|r| r.tool_name == "echo" && r.pending_confirmation_id.is_some())
+    };
+    assert!(has_pending, "should have pending confirmation for echo");
+}
+
+/// 测试：用户确认 spawn_agent 后创建子 Agent
+#[test]
+fn user_confirms_spawn_agent_creates_child() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建父 Agent（spawn_agent Confirm 权限，echo Allow 权限）
+    let parent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: {
+                let mut m = HashMap::new();
+                m.insert("spawn_agent".to_string(), ToolPermission::Confirm);
+                m.insert("echo".to_string(), ToolPermission::Allow);
+                m
+            },
+        },
+    );
+
+    // 注册工具
+    let mut registry = SpaceToolRegistry::default();
+    registry.register(ToolDefinition {
+        name: "spawn_agent".to_string(),
+        description: "Create a child agent".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("spawn_agent".to_string()),
+    });
+    registry.register(ToolDefinition {
+        name: "echo".to_string(),
+        description: "Echo back input".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("echo".to_string()),
+    });
+    app.world_mut().insert_resource(registry);
+
+    // 创建任务
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("test task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // 发起 spawn_agent 请求
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id: parent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "spawn_agent".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "spawn_agent".to_string(),
+        tool_input: serde_json::json!({
+            "name": "child-agent",
+            "description": "A test child agent",
+            "tools": ["echo"]
+        }),
+        pending_confirmation_id: None,
+    });
+
+    // 运行让确认请求生成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 获取 request_id from ToolExecutionRequestMessage.pending_confirmation_id
+    let request_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .find(|r| r.tool_name == "spawn_agent")
+            .and_then(|r| r.pending_confirmation_id)
+            .unwrap()
+    };
+
+    // 用户确认
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "allow_once".to_string(),
+    });
+
+    // 运行系统 - 只运行 1 帧验证子 Agent 创建
+    // 注意：只运行 1 帧因为 MockExecutor 会在后续帧导致任务完成，从而销毁 TaskScoped 子 Agent
+    app.update();
+
+    // 验证：子 Agent 已创建
+    let child_agents: Vec<Agent> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Agent>();
+        query
+            .iter(world)
+            .filter(|a| a.parent_id == Some(parent_id))
+            .cloned()
+            .collect()
+    };
+
+    assert_eq!(
+        child_agents.len(),
+        1,
+        "should have created one child agent after user confirmation"
+    );
+    assert_eq!(child_agents[0].profile.name, "child-agent");
+    assert_eq!(child_agents[0].kind, AgentKind::TaskScoped);
+}
+
+/// 测试：确认拒绝后工具执行失败
+#[test]
+fn confirmation_denied_rejects_tool() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建父 Agent（拥有 echo 权限）
+    let parent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: {
+                let mut m = HashMap::new();
+                m.insert("echo".to_string(), ToolPermission::Allow);
+                m
+            },
+        },
+    );
+
+    // 创建子 Agent
+    let child_id = uuid::Uuid::new_v4();
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("child task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(Agent {
+        id: child_id,
+        profile: AgentProfile {
+            name: "child-agent".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec![],
+            description: "child".to_string(),
+        },
+        kind: AgentKind::TaskScoped,
+        parent_id: Some(parent_id),
+        bound_task_id: Some(task_id),
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: {
+                let mut m = HashMap::new();
+                m.insert("echo".to_string(), ToolPermission::Confirm);
+                m
+            },
+        },
+        experience: AgentExperience::default(),
+    });
+
+    // 注册 echo 工具
+    let mut registry = SpaceToolRegistry::default();
+    registry.register(ToolDefinition {
+        name: "echo".to_string(),
+        description: "Echo back input".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("echo".to_string()),
+    });
+    app.world_mut().insert_resource(registry);
+
+    // 子 Agent 请求执行 echo
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id: child_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "echo".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "echo".to_string(),
+        tool_input: serde_json::json!({"message": "test"}),
+        pending_confirmation_id: None,
+    });
+
+    // 运行让确认请求生成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 获取 request_id from ToolExecutionRequestMessage.pending_confirmation_id
+    let request_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query
+            .iter(world)
+            .find(|r| r.tool_name == "echo")
+            .and_then(|r| r.pending_confirmation_id)
+            .unwrap()
+    };
+
+    // 模拟拒绝（通过 ToolConfirmationResponseMessage 选择 deny）
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "deny".to_string(),
+    });
+
+    // 运行 1 帧处理确认结果（结果在这一帧产生，下一帧被 tool_result_system 消耗）
+    app.update();
+
+    // 验证：Tool 执行结果为错误
+    let tool_results: Vec<ToolExecutionResultMessage> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionResultMessage>();
+        query.iter(world).cloned().collect()
+    };
+    assert!(
+        tool_results.iter().any(|r| r.tool_output.is_err()),
+        "should have error result after rejection"
+    );
+
+    // 验证：Tool 执行请求被清理
+    let pending_requests: Vec<&ToolExecutionRequestMessage> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ToolExecutionRequestMessage>();
+        query.iter(world).collect()
+    };
+    assert!(
+        pending_requests.is_empty(),
+        "tool request should be cleaned up after rejection"
+    );
+}
+
+/// 测试：子 Agent Confirm 权限，父 Agent 无权限时路由到用户确认
+#[test]
+fn child_agent_confirm_no_parent_permission_routes_to_user() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建父 Agent（没有 echo 权限）
+    let parent_id = create_test_agent(
+        app.world_mut(),
+        AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: HashMap::new(),
+        },
+    );
+
+    // 创建子 Agent（echo Confirm 权限）
+    let child_id = uuid::Uuid::new_v4();
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("child task", 3),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(Agent {
+        id: child_id,
+        profile: AgentProfile {
+            name: "child-agent".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec![],
+            description: "child".to_string(),
+        },
+        kind: AgentKind::TaskScoped,
+        parent_id: Some(parent_id),
+        bound_task_id: Some(task_id),
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Deny,
+            overrides: {
+                let mut m = HashMap::new();
+                m.insert("echo".to_string(), ToolPermission::Confirm);
+                m
+            },
+        },
+        experience: AgentExperience::default(),
+    });
+
+    // 注册 echo 工具
+    let mut registry = SpaceToolRegistry::default();
+    registry.register(ToolDefinition {
+        name: "echo".to_string(),
+        description: "Echo back input".to_string(),
+        parameters: ToolSchema::default(),
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("echo".to_string()),
+    });
+    app.world_mut().insert_resource(registry);
+
+    // 子 Agent 请求执行 echo
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id: child_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "echo".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+    };
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "echo".to_string(),
+        tool_input: serde_json::json!({"message": "test"}),
+        pending_confirmation_id: None,
+    });
+
+    // 运行系统
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 验证：Task 进入 Waiting(User) 状态（父 Agent 无权限，路由到用户）
+    let task_status = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Task>();
+        query
+            .iter(world)
+            .find(|t| t.id == task_id)
+            .map(|t| t.status.clone())
+    };
+    assert_eq!(
+        task_status,
+        Some(TaskStatus::Waiting(WaitingReason::User)),
+        "should route to user when parent lacks permission"
+    );
+}
 #[test]
 fn user_allows_tool_always() {
     let runtime = Arc::new(Runtime::new().unwrap());

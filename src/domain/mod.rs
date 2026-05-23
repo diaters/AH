@@ -9,6 +9,7 @@ use bevy::prelude::Component;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::debug;
 use uuid::Uuid;
 
 pub use contribution::{
@@ -21,6 +22,7 @@ pub use evaluation::{
 };
 pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
+    estimate_tokens,
 };
 pub use space::{
     AgentToolsConfig, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge, SpacePreferences,
@@ -269,6 +271,20 @@ pub struct Agent {
     pub experience: AgentExperience,
 }
 
+impl Agent {
+    /// 判断是否拥有某 Tool 的 Allow 权限
+    pub fn has_permission(&self, tool_name: &str) -> bool {
+        self.tool_permissions.get_permission(tool_name) == ToolPermission::Allow
+    }
+
+    /// 授予永久权限
+    pub fn grant_permission(&mut self, tool_name: String) {
+        self.tool_permissions
+            .overrides
+            .insert(tool_name, ToolPermission::Allow);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentRequestKind {
     LlmCompletion,
@@ -365,50 +381,124 @@ impl Task {
 
     /// 将任务标记为分发等待状态。
     pub fn mark_waiting_for_agent(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.delegate = Some(agent_id);
         self.status = TaskStatus::Waiting(WaitingReason::Agent);
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            agent_id = %agent_id,
+            reason = "mark_waiting_for_agent",
+            "task waiting for agent"
+        );
     }
 
     /// 将任务标记为运行中。
     pub fn mark_running(&mut self, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.status = TaskStatus::Running;
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            delegate = ?self.delegate,
+            reason = "mark_running",
+            "task now running"
+        );
     }
 
     /// 在成功完成后写回结果并清理重试状态。
     pub fn mark_done(&mut self, result: impl Into<String>, now: DateTime<Utc>) {
-        self.result_summary = result.into();
+        let old_status = self.status.clone();
+        let result_str = result.into();
+        self.result_summary = result_str.clone();
         self.status = TaskStatus::Done;
         self.updated_at = now;
         self.next_retry_at = None;
         self.last_error = None;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            result = %result_str,
+            result_len = result_str.len(),
+            reason = "mark_done",
+            "task completed successfully"
+        );
     }
 
     /// 根据可重试错误更新任务回退信息。
     pub fn schedule_retry(&mut self, error: &ExecutionError, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.retry_count += 1;
+        let delay = error.retry_delay(self.retry_count);
         self.next_retry_at = Some(
-            now + ChronoDuration::from_std(error.retry_delay(self.retry_count))
-                .unwrap_or_else(|_| ChronoDuration::seconds(1)),
+            now + ChronoDuration::from_std(delay).unwrap_or_else(|_| ChronoDuration::seconds(1)),
         );
-        self.last_error = Some(error.message().to_string());
+        let error_msg = error.message().to_string();
+        self.last_error = Some(error_msg.clone());
         self.status = TaskStatus::Waiting(WaitingReason::RetryBackoff);
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            error = %error_msg,
+            error_type = std::any::type_name_of_val(error),
+            retry_delay_secs = delay.as_secs(),
+            reason = "schedule_retry",
+            "task scheduled for retry"
+        );
     }
 
     /// 将任务标记为最终失败。
     pub fn mark_failed(&mut self, error: &ExecutionError, now: DateTime<Utc>) {
-        self.last_error = Some(error.message().to_string());
-        self.status = TaskStatus::Failed(error.to_failure_reason());
+        let old_status = self.status.clone();
+        let error_msg = error.message().to_string();
+        let failure_reason = error.to_failure_reason();
+        self.last_error = Some(error_msg.clone());
+        self.status = TaskStatus::Failed(failure_reason.clone());
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            error = %error_msg,
+            error_type = std::any::type_name_of_val(error),
+            failure_reason = ?failure_reason,
+            reason = "mark_failed",
+            "task marked as failed"
+        );
     }
 
     /// 将任务重新置回 Ready 以进入下一次调度。
     pub fn mark_ready_for_retry(&mut self, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.status = TaskStatus::Ready;
         self.next_retry_at = None;
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            reason = "mark_ready_for_retry",
+            "task ready for retry"
+        );
     }
 }
 
@@ -528,13 +618,21 @@ pub struct AgentSpawnRequestMessage {
     pub parent_agent_id: AgentId,
     pub task_id: TaskId,
     pub name: String,
-    pub model: String,
-    pub tags: Vec<String>,
+    /// 可选，None 时继承父 Agent 的 model
+    pub model: Option<String>,
     pub description: String,
+    /// 初始 Tool 权限列表（每个 Tool 设为 Allow）
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Component)]
 pub struct TaskTerminatedMessage {
+    pub task_id: TaskId,
+}
+
+/// /finish 命令触发的任务完成消息
+#[derive(Debug, Clone, Component)]
+pub struct FinishTaskMessage {
     pub task_id: TaskId,
 }
 
@@ -598,6 +696,23 @@ pub enum ConfirmMode {
     Permanent,
 }
 
+/// 授权模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GrantMode {
+    /// 单次授权，仅本次执行
+    Once,
+    /// 永久授权，更新 Agent 权限配置
+    Permanent,
+}
+
+/// 审批来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ConfirmationSource {
+    #[default]
+    User,
+    ParentAgent,
+}
+
 /// 确认选项
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfirmationOption {
@@ -657,6 +772,10 @@ pub struct ToolConfirmationRequestMessage {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub options: Vec<ConfirmationOption>,
+    /// 审批来源
+    pub source: ConfirmationSource,
+    /// 父 Agent ID（当 source == ParentAgent 时）
+    pub parent_agent_id: Option<AgentId>,
 }
 
 /// Tool 确认响应消息
@@ -687,6 +806,8 @@ pub struct ApprovalResultMessage {
     pub approval_task_id: TaskId,
     pub decision: ApprovalDecision,
     pub reasoning: String,
+    /// 授权模式
+    pub grant_mode: GrantMode,
 }
 
 /// 审批决策
@@ -770,5 +891,59 @@ mod tests {
         use WaitingReason::*;
         let _ = User;
         let _ = Evaluator;
+    }
+
+    #[test]
+    fn agent_has_permission_returns_true_for_allow() {
+        let mut perms = AgentToolPermissions::default();
+        perms
+            .overrides
+            .insert("test_tool".to_string(), ToolPermission::Allow);
+
+        let agent = Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "test".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: "test".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: perms,
+            experience: AgentExperience::default(),
+        };
+
+        assert!(agent.has_permission("test_tool"));
+        assert!(!agent.has_permission("other_tool"));
+    }
+
+    #[test]
+    fn agent_grant_permission_updates_overrides() {
+        let mut agent = Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "test".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: "test".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            experience: AgentExperience::default(),
+        };
+
+        assert!(!agent.has_permission("new_tool"));
+
+        agent.grant_permission("new_tool".to_string());
+
+        assert!(agent.has_permission("new_tool"));
     }
 }

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use tracing::debug;
 
 use crate::{
     app::{Clock, HarnessSettings},
@@ -21,13 +22,66 @@ pub(crate) fn task_dispatch_system(
             continue;
         }
 
+        // 收集候选 Agent 信息
+        let candidates_info: Vec<_> = agents
+            .iter()
+            .filter(|(a, _)| a.kind == AgentKind::Persistent)
+            .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
+            .map(|(a, ltm)| {
+                (
+                    a.profile.name.clone(),
+                    match_score(a, &task.content),
+                    ltm.map(|l| l.entries.len()).unwrap_or(0),
+                )
+            })
+            .collect();
+
         let Some((agent, long_term)) = select_agent_with_memory(agents.iter(), &task.content)
         else {
+            debug!(
+                event = "NoAgentAvailable",
+                task_id = %task.id,
+                task_content = %task.content,
+                task_status = ?task.status,
+                candidates_count = candidates_info.len(),
+                candidates = ?candidates_info,
+                "no available agent for task dispatch"
+            );
             continue;
         };
 
         // 构建带历史对话和长期记忆的 prompt
         let prompt = build_prompt_with_context(&task.content, short_term, long_term);
+        let stm_entries = short_term.map(|s| s.entries.len()).unwrap_or(0);
+        let stm_tokens = short_term.map(|s| s.estimated_tokens).unwrap_or(0);
+        let ltm_entries = long_term.map(|l| l.entries.len()).unwrap_or(0);
+
+        debug!(
+            event = "AgentSelected",
+            task_id = %task.id,
+            task_content = %task.content,
+            task_status = ?task.status,
+            selected_agent = %agent.profile.name,
+            selected_agent_id = %agent.id,
+            selection_reason = "highest_score",
+            candidates = ?candidates_info,
+            stm_entries = stm_entries,
+            stm_tokens = stm_tokens,
+            stm_recent_entries = ?short_term.map(|s| s.entries.iter().rev().take(3).map(|e| (&e.role, &e.content)).collect::<Vec<_>>()),
+            ltm_entries = ltm_entries,
+            "agent selected for task"
+        );
+
+        debug!(
+            event = "PromptBuilt",
+            task_id = %task.id,
+            agent_id = %agent.id,
+            agent_name = %agent.profile.name,
+            prompt_len = prompt.len(),
+            prompt = %prompt,
+            system_prompt = ?None::<String>,
+            "execution request ready"
+        );
 
         let request = AgentExecutionRequest {
             task_id: task.id,
@@ -61,6 +115,10 @@ pub(crate) fn brain_dispatch_system(
     });
 
     let Some(brain_agent) = brain_agent else {
+        debug!(
+            event = "BrainAgentNotFound",
+            "no brain agent found, skipping brain dispatch"
+        );
         return;
     };
 
@@ -85,6 +143,23 @@ pub(crate) fn brain_dispatch_system(
         let prompt_with_history = build_prompt_with_history(&task.content, short_term);
         let prompt =
             brain_user_prompt_from_descriptions(&prompt_with_history, &all_agent_descriptions);
+
+        let stm_entries = short_term.map(|s| s.entries.len()).unwrap_or(0);
+        let stm_tokens = short_term.map(|s| s.estimated_tokens).unwrap_or(0);
+
+        debug!(
+            event = "BrainDispatch",
+            task_id = %task.id,
+            task_content = %task.content,
+            task_status = ?task.status,
+            brain_agent_id = %brain_agent.id,
+            brain_agent_name = %brain_agent.profile.name,
+            prompt_len = prompt.len(),
+            stm_entries = stm_entries,
+            stm_tokens = stm_tokens,
+            available_agents = ?all_agent_descriptions.iter().map(|a| &a.name).collect::<Vec<_>>(),
+            "brain dispatching task"
+        );
 
         let request = AgentExecutionRequest {
             task_id: task.id,
@@ -134,10 +209,32 @@ fn select_agent_with_memory<'a>(
     agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,
 ) -> Option<(&'a Agent, Option<&'a LongTermMemory>)> {
-    agents
+    let candidates: Vec<_> = agents
         .filter(|(a, _)| a.kind == AgentKind::Persistent)
         .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
-        .max_by_key(|(a, _)| match_score(a, task_content))
+        .collect();
+
+    let selected = candidates
+        .iter()
+        .max_by_key(|(a, _)| match_score(a, task_content));
+
+    if let Some((agent, _ltm)) = selected {
+        let score = match_score(agent, task_content);
+        let all_scores: Vec<_> = candidates
+            .iter()
+            .map(|(a, _)| (a.profile.name.clone(), match_score(a, task_content)))
+            .collect();
+        debug!(
+            event = "AgentScoring",
+            selected_agent = %agent.profile.name,
+            selected_score = score,
+            all_candidates_scores = ?all_scores,
+            task_content_preview = %task_content.chars().take(100).collect::<String>(),
+            "agent scoring completed"
+        );
+    }
+
+    selected.copied()
 }
 
 fn match_score(agent: &Agent, task_content: &str) -> usize {

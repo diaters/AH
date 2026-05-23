@@ -2,6 +2,7 @@ use bevy::prelude::Component;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tiktoken_rs::cl100k_base;
+use tracing::debug;
 
 #[cfg(test)]
 mod tests {
@@ -158,14 +159,26 @@ impl ShortTermMemory {
         metadata: EntryMetadata,
     ) {
         let content = content.into();
+        let tokens_added = estimate_tokens(&content);
         // 更新 token 估算
-        self.estimated_tokens += estimate_tokens(&content);
-        let entry = MemoryEntry::new(role, content).with_metadata(metadata);
+        self.estimated_tokens += tokens_added;
+        let entry = MemoryEntry::new(role, content.clone()).with_metadata(metadata);
         self.entries.push(entry);
+        debug!(
+            event = "StmEntryAdded",
+            role = ?role,
+            content = %content,
+            content_len = content.len(),
+            entry_tokens = tokens_added,
+            total_tokens = self.estimated_tokens,
+            total_entries = self.entries.len(),
+            "short term memory entry added"
+        );
     }
 
     /// 重新计算 token 估算
     pub fn recalculate_tokens(&mut self) {
+        let old_tokens = self.estimated_tokens;
         let mut total = 0u32;
         if let Some(summary) = &self.summary_prefix {
             total += estimate_tokens(summary);
@@ -174,6 +187,14 @@ impl ShortTermMemory {
             total += estimate_tokens(&entry.content);
         }
         self.estimated_tokens = total;
+        debug!(
+            event = "StmTokensRecalculated",
+            old_tokens = old_tokens,
+            new_tokens = total,
+            entries_count = self.entries.len(),
+            has_summary_prefix = self.summary_prefix.is_some(),
+            "STM tokens recalculated"
+        );
     }
 }
 
@@ -186,12 +207,30 @@ pub struct LongTermMemory {
 impl LongTermMemory {
     /// 添加归档条目
     pub fn add_archive(&mut self, content: impl Into<String>) {
+        let content = content.into();
+        debug!(
+            event = "LtmArchiveAdded",
+            content = %content,
+            content_len = content.len(),
+            total_entries = self.entries.len(),
+            "long term memory archive added"
+        );
         let entry = MemoryEntry::new(EntryRole::Archive, content);
         self.entries.push(entry);
     }
 
     /// 吸收来自子 Agent 的记忆
     pub fn absorb(&mut self, entries: Vec<MemoryEntry>) {
+        let absorbing_count = entries.len();
+        let total_before = self.entries.len();
+        debug!(
+            event = "LtmAbsorb",
+            absorbing_count = absorbing_count,
+            total_entries_before = total_before,
+            total_entries_after = total_before + absorbing_count,
+            absorbing_entries = ?entries.iter().map(|e| (&e.role, &e.content)).collect::<Vec<_>>(),
+            "long term memory absorbed entries"
+        );
         self.entries.extend(entries);
     }
 }
