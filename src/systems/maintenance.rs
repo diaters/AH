@@ -147,10 +147,9 @@ fn handle_spawn_request(
     clock: &Clock,
     request: &AgentSpawnRequestMessage,
 ) {
-    let Some(parent_agent) = agents
+    let Some((_, parent_agent)) = agents
         .iter()
         .find(|(_, a)| a.id == request.parent_agent_id)
-        .map(|(_, a)| a)
     else {
         warn!(
             event = "SpawnRequestFailed",
@@ -168,21 +167,36 @@ fn handle_spawn_request(
         return;
     };
 
+    // 过滤 tools：仅保留父 Agent 拥有的权限
+    let allowed_tools: Vec<String> = request
+        .tools
+        .iter()
+        .filter(|tool| parent_agent.has_permission(tool))
+        .cloned()
+        .collect();
+
+    if allowed_tools.is_empty() {
+        warn!(
+            event = "SpawnRequestRejected",
+            parent_id = %request.parent_agent_id,
+            task_id = %request.task_id,
+            requested_tools = ?request.tools,
+            reason = "no_valid_tools",
+            "spawn rejected: no valid tools after filtering"
+        );
+        let msg = format!(
+            "Agent spawn rejected: requested tools {:?} not available in parent agent",
+            request.tools
+        );
+        mark_task_failed(tasks, clock, request.task_id, &msg);
+        return;
+    }
+
     // 使用请求中的 model，或继承父 Agent 的 model
     let model = request
         .model
         .clone()
         .unwrap_or_else(|| parent_agent.profile.model.clone());
-
-    // 基于 tools 列表构建权限配置：每个 tool 设为 Allow
-    let mut overrides = std::collections::HashMap::new();
-    for tool in &request.tools {
-        overrides.insert(tool.clone(), ToolPermission::Allow);
-    }
-    let tool_permissions = AgentToolPermissions {
-        default_permission: parent_agent.tool_permissions.default_permission,
-        overrides,
-    };
 
     let id = Uuid::new_v4();
     debug!(
@@ -192,9 +206,18 @@ fn handle_spawn_request(
         agent_model = %model,
         parent_agent_id = %request.parent_agent_id,
         task_id = %request.task_id,
-        agent_tools = ?request.tools,
+        tools = ?allowed_tools,
         "spawning task-scoped agent"
     );
+
+    // 构建 tool_permissions: 子 Agent 默认拒绝，仅显式允许的工具可用
+    let tool_permissions = AgentToolPermissions {
+        default_permission: ToolPermission::Deny,
+        overrides: allowed_tools
+            .iter()
+            .map(|t| (t.clone(), ToolPermission::Allow))
+            .collect(),
+    };
 
     commands.spawn(Agent {
         id,
@@ -203,8 +226,8 @@ fn handle_spawn_request(
             model,
         },
         capabilities: AgentCapabilities {
-            // 子 Agent 继承父 Agent 的 tags
-            tags: parent_agent.capabilities.tags.clone(),
+            // TaskScoped Agent 不参与路由
+            tags: vec![],
             description: request.description.clone(),
         },
         kind: AgentKind::TaskScoped,
