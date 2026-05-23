@@ -8,10 +8,10 @@ use uuid::Uuid;
 
 use crate::domain::{
     Agent, AgentExecutionResult, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-    ConfirmationOption, ExecutionError, OutputMessage, ShortTermMemory, SpaceKnowledge,
-    SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, ToolDefinition, ToolError, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, ToolPermission, WaitingReason,
+    ConfirmationOption, ConfirmationSource, ExecutionError, GrantMode, OutputMessage,
+    ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolDefinition, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
 };
 
 /// Builtin Tool 执行器函数签名
@@ -197,6 +197,8 @@ pub(crate) fn tool_dispatch_system(
                     tool_name: tool_name.clone(),
                     tool_input: request.tool_input.clone(),
                     options: ConfirmationOption::default_options(),
+                    source: ConfirmationSource::User,
+                    parent_agent_id: None,
                 });
 
                 // 更新 ToolExecutionRequestMessage 的 pending_confirmation_id
@@ -382,6 +384,7 @@ pub(crate) fn approval_dispatch_system(
             approval_task_id: request.approval_task_id,
             decision: ApprovalDecision::Rejected,
             reasoning: "MVP auto-reject: approval UI not implemented".to_string(),
+            grant_mode: GrantMode::Once,
         });
 
         commands.entity(entity).despawn();

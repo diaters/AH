@@ -168,33 +168,31 @@ fn handle_spawn_request(
         return;
     };
 
-    if !validate_tags_subset(&parent_agent.capabilities.tags, &request.tags) {
-        warn!(
-            event = "SpawnRequestRejected",
-            parent_id = %request.parent_agent_id,
-            task_id = %request.task_id,
-            parent_tags = ?parent_agent.capabilities.tags,
-            child_tags = ?request.tags,
-            reason = "child_tags_exceed_parent",
-            "spawn rejected: child tags exceed parent tags"
-        );
-        let msg = format!(
-            "Agent spawn rejected: child tags {:?} exceed parent tags {:?}",
-            request.tags, parent_agent.capabilities.tags
-        );
-        mark_task_failed(tasks, clock, request.task_id, &msg);
-        return;
+    // 使用请求中的 model，或继承父 Agent 的 model
+    let model = request
+        .model
+        .clone()
+        .unwrap_or_else(|| parent_agent.profile.model.clone());
+
+    // 基于 tools 列表构建权限配置：每个 tool 设为 Allow
+    let mut overrides = std::collections::HashMap::new();
+    for tool in &request.tools {
+        overrides.insert(tool.clone(), ToolPermission::Allow);
     }
+    let tool_permissions = AgentToolPermissions {
+        default_permission: parent_agent.tool_permissions.default_permission,
+        overrides,
+    };
 
     let id = Uuid::new_v4();
     debug!(
         event = "TaskScopedAgentSpawned",
         agent_id = %id,
         agent_name = %request.name,
-        agent_model = %request.model,
+        agent_model = %model,
         parent_agent_id = %request.parent_agent_id,
         task_id = %request.task_id,
-        agent_tags = ?request.tags,
+        agent_tools = ?request.tools,
         "spawning task-scoped agent"
     );
 
@@ -202,16 +200,17 @@ fn handle_spawn_request(
         id,
         profile: AgentProfile {
             name: request.name.clone(),
-            model: request.model.clone(),
+            model,
         },
         capabilities: AgentCapabilities {
-            tags: request.tags.clone(),
+            // 子 Agent 继承父 Agent 的 tags
+            tags: parent_agent.capabilities.tags.clone(),
             description: request.description.clone(),
         },
         kind: AgentKind::TaskScoped,
         parent_id: Some(request.parent_agent_id),
         bound_task_id: Some(request.task_id),
-        tool_permissions: parent_agent.tool_permissions.clone(),
+        tool_permissions,
         experience: AgentExperience::default(),
     });
 

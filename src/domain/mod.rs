@@ -604,9 +604,11 @@ pub struct AgentSpawnRequestMessage {
     pub parent_agent_id: AgentId,
     pub task_id: TaskId,
     pub name: String,
-    pub model: String,
-    pub tags: Vec<String>,
+    /// 可选，None 时继承父 Agent 的 model
+    pub model: Option<String>,
     pub description: String,
+    /// 初始 Tool 权限列表（每个 Tool 设为 Allow）
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Component)]
@@ -680,6 +682,23 @@ pub enum ConfirmMode {
     Permanent,
 }
 
+/// 授权模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantMode {
+    /// 单次授权，仅本次执行
+    Once,
+    /// 永久授权，更新 Agent 权限配置
+    Permanent,
+}
+
+/// 审批来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConfirmationSource {
+    #[default]
+    User,
+    ParentAgent,
+}
+
 /// 确认选项
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfirmationOption {
@@ -739,6 +758,10 @@ pub struct ToolConfirmationRequestMessage {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub options: Vec<ConfirmationOption>,
+    /// 审批来源
+    pub source: ConfirmationSource,
+    /// 父 Agent ID（当 source == ParentAgent 时）
+    pub parent_agent_id: Option<AgentId>,
 }
 
 /// Tool 确认响应消息
@@ -769,6 +792,8 @@ pub struct ApprovalResultMessage {
     pub approval_task_id: TaskId,
     pub decision: ApprovalDecision,
     pub reasoning: String,
+    /// 授权模式
+    pub grant_mode: GrantMode,
 }
 
 /// 审批决策
