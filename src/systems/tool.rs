@@ -125,6 +125,14 @@ fn execute_builtin_tool(
                 "count": results.len()
             }))
         }
+        "spawn_agent" => {
+            // spawn_agent 不在这里执行，因为它需要访问 ECS World
+            // 这里返回一个标记，由 tool_confirmation_result_system 特殊处理
+            Ok(serde_json::json!({
+                "status": "spawn_request_created",
+                "message": "Agent spawn request has been submitted"
+            }))
+        }
         _ => Err(ToolError::NotFound(name.to_string())),
     }
 }
