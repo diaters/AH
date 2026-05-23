@@ -4,8 +4,8 @@
 
 > 注：本文档关于 Agent 定位的前提已被 [ADR-002](/Users/diater/workspace/Harness/docs/adr/ADR-002-agent-controlled-evolution.md) 修订。
 > 本文中的"Agent 无运行状态"仍然成立，但"Agent 不可变配置实体"已更新为"Agent 是可演化的执行配置实体"。
-> 
-> **Phase 5 更新**：标签（tags）子集校验已替换为基于工具（tools）的权限继承模型。
+>
+> __Phase 5 更新__：标签（tags）子集校验已替换为基于工具（tools）的权限继承模型。
 > 子 Agent 创建时指定所需工具列表，`handle_spawn_request` 过滤为父 Agent 拥有 Allow 权限的工具。
 > 详见 `AgentSpawnRequestMessage.tools` 和 `handle_spawn_request`。
 
