@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
@@ -423,36 +423,41 @@ fn multi_turn_full_conversation_flow() {
 
     app.update();
 
-    // 创建 Pending 状态的任务
-    let entity_id = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input("hello", 3),
-            ShortTermMemory::default(),
-        ))
-        .id();
+    // 通过 CreateTaskMessage 创建任务，走完整系统流程
+    app.world_mut().spawn(harness::CreateTaskMessage {
+        content: "hello".to_string(),
+    });
 
     // 运行直到任务进入 Waiting(User)
     for _ in 0..5 {
         app.update();
     }
 
-    // 验证任务已进入 Waiting(User) 状态
-    let task = app.world_mut().get::<Task>(entity_id).unwrap();
+    // 找到创建的任务
+    let (entity_id, task) = app
+        .world_mut()
+        .query::<(Entity, &Task)>()
+        .iter(app.world())
+        .find(|(_, t)| t.status == TaskStatus::Waiting(WaitingReason::User))
+        .map(|(e, t)| (e, t.clone()))
+        .expect("should have a task in Waiting(User)");
+
     assert_eq!(
         task.status,
         TaskStatus::Waiting(WaitingReason::User),
         "task should be waiting for user after first response"
     );
 
-    // 验证 ShortTermMemory 记录了 Agent 响应
+    // 验证 ShortTermMemory 记录了用户输入和 Agent 响应
     let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
     assert_eq!(
         stm.entries.len(),
-        1,
-        "should have recorded assistant response"
+        2,
+        "should have recorded user input and assistant response"
     );
-    assert_eq!(stm.entries[0].role, EntryRole::Assistant);
+    assert_eq!(stm.entries[0].role, EntryRole::User);
+    assert_eq!(stm.entries[0].content, "hello");
+    assert_eq!(stm.entries[1].role, EntryRole::Assistant);
 
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
@@ -463,11 +468,11 @@ fn multi_turn_full_conversation_flow() {
         app.update();
     }
 
-    // 验证 ShortTermMemory 记录了第二轮用户输入
+    // 验证 ShortTermMemory 记录了第二轮
     let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
     assert!(
-        stm.entries.len() >= 2,
-        "should have recorded both user input and assistant response"
+        stm.entries.len() >= 4,
+        "should have recorded 2x user input and 2x assistant response"
     );
 
     // 验证最后一条是 Assistant 响应
@@ -564,5 +569,307 @@ fn prompt_includes_conversation_history() {
     assert!(
         prompt.contains("current question"),
         "prompt should include current question"
+    );
+}
+
+/// 验证首轮用户输入被记录到 ShortTermMemory。
+/// 通过 CreateTaskMessage → user_message_to_task_system 流程创建任务，
+/// 确保 user_message_to_task_system 将用户输入写入 STM。
+#[test]
+fn initial_user_input_recorded_in_short_term_memory() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 通过 CreateTaskMessage 创建任务，走 user_message_to_task_system 流程
+    app.world_mut().spawn(harness::CreateTaskMessage {
+        content: "hello world".to_string(),
+    });
+
+    // 运行直到任务进入 Waiting(User)
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 找到创建的任务
+    let (entity_id, task) = app
+        .world_mut()
+        .query::<(Entity, &Task)>()
+        .iter(app.world())
+        .find(|(_, t)| t.status == TaskStatus::Waiting(WaitingReason::User))
+        .map(|(e, t)| (e, t.clone()))
+        .expect("should have a task in Waiting(User)");
+
+    assert_eq!(
+        task.status,
+        TaskStatus::Waiting(WaitingReason::User),
+        "task should be waiting for user after first response"
+    );
+
+    // 验证 STM 同时包含用户输入和 Assistant 响应
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert_eq!(
+        stm.entries.len(),
+        2,
+        "should have both user input and assistant response, got {:?}",
+        stm.entries
+            .iter()
+            .map(|e| (e.role, &e.content))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(stm.entries[0].role, EntryRole::User);
+    assert_eq!(stm.entries[0].content, "hello world");
+    assert_eq!(stm.entries[1].role, EntryRole::Assistant);
+}
+
+/// 验证三轮对话中 STM 条目顺序正确：User/Assistant 交替出现。
+#[test]
+fn three_turn_conversation_maintains_correct_order() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 第一轮：通过 CreateTaskMessage 创建任务
+    app.world_mut().spawn(harness::CreateTaskMessage {
+        content: "first question".to_string(),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 第一轮结束后验证
+    let (entity_id, _task) = app
+        .world_mut()
+        .query::<(Entity, &Task)>()
+        .iter(app.world())
+        .find(|(_, t)| t.status == TaskStatus::Waiting(WaitingReason::User))
+        .map(|(e, t)| (e, t.clone()))
+        .expect("should have a task in Waiting(User)");
+
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert_eq!(
+        stm.entries.len(),
+        2,
+        "first turn: should have User + Assistant"
+    );
+    assert_eq!(stm.entries[0].role, EntryRole::User);
+    assert_eq!(stm.entries[0].content, "first question");
+    assert_eq!(stm.entries[1].role, EntryRole::Assistant);
+
+    // 第二轮：继续对话
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "second question".to_string(),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert_eq!(
+        stm.entries.len(),
+        4,
+        "second turn: should have 4 entries (2x User + 2x Assistant)"
+    );
+    // 验证顺序：User, Assistant, User, Assistant
+    assert_eq!(stm.entries[2].role, EntryRole::User);
+    assert_eq!(stm.entries[2].content, "second question");
+    assert_eq!(stm.entries[3].role, EntryRole::Assistant);
+
+    // 第三轮：继续对话
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "third question".to_string(),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
+    assert_eq!(
+        stm.entries.len(),
+        6,
+        "third turn: should have 6 entries (3x User + 3x Assistant)"
+    );
+    // 验证整体顺序：User/Assistant 交替
+    for (i, entry) in stm.entries.iter().enumerate() {
+        let expected_role = if i % 2 == 0 {
+            EntryRole::User
+        } else {
+            EntryRole::Assistant
+        };
+        assert_eq!(
+            entry.role, expected_role,
+            "entry {} should be {:?}, got {:?}",
+            i, expected_role, entry.role
+        );
+    }
+    assert_eq!(stm.entries[4].content, "third question");
+}
+
+/// 验证继续对话后，LLM 收到的 prompt 中历史顺序和当前请求正确。
+/// BUG: 历史顺序错误（Assistant 在 User 之前），且 [Current request]
+/// 仍显示首轮内容而非当前用户输入。
+#[test]
+fn second_dispatch_prompt_includes_correct_history() {
+    struct HistoryCapturingExecutor {
+        captured: Arc<Mutex<Vec<String>>>,
+    }
+    impl AgentExecutor for HistoryCapturingExecutor {
+        fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+            self.captured.lock().unwrap().push(request.prompt.clone());
+            Box::pin(async move { Ok("response".to_string()) })
+        }
+    }
+
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(HistoryCapturingExecutor {
+        captured: captured.clone(),
+    });
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建 Waiting(User) 状态的任务，并预填充对话历史
+    let task_id = uuid::Uuid::new_v4();
+    let _entity_id = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "original question".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                input_summary: String::new(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+            },
+            ShortTermMemory {
+                entries: vec![
+                    harness::MemoryEntry::new(EntryRole::User, "previous question"),
+                    harness::MemoryEntry::new(EntryRole::Assistant, "previous answer"),
+                ],
+                summary_prefix: None,
+                estimated_tokens: 100,
+                last_cached_tokens: None,
+            },
+        ))
+        .id();
+
+    // 模拟用户继续对话
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "follow-up question".to_string(),
+    });
+
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 获取第二轮 dispatch 的 prompt
+    let prompts = captured.lock().unwrap();
+    assert!(
+        !prompts.is_empty(),
+        "executor should have received at least one request"
+    );
+
+    let second_prompt = prompts.last().unwrap();
+
+    // 验证历史中 User 在 Assistant 之前
+    let user_pos = second_prompt.find("User: previous question");
+    let assistant_pos = second_prompt.find("Assistant: previous answer");
+    assert!(
+        user_pos.is_some(),
+        "prompt should contain previous user message"
+    );
+    assert!(
+        assistant_pos.is_some(),
+        "prompt should contain previous assistant message"
+    );
+    assert!(
+        user_pos < assistant_pos,
+        "User message should appear before Assistant message in history"
+    );
+
+    // 验证 [Current request] 反映当前用户输入
+    assert!(
+        second_prompt.contains("follow-up question"),
+        "prompt should contain the current user input 'follow-up question', got: {}",
+        second_prompt
+    );
+}
+
+/// 验证继续对话时 task.content 被更新为当前用户输入。
+/// BUG: continue_task_system 不更新 task.content，导致 [Current request]
+/// 始终显示首轮输入内容。
+#[test]
+fn task_content_updates_on_continue() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建 Waiting(User) 状态的任务
+    let task_id = uuid::Uuid::new_v4();
+    let entity_id = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "original question".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                input_summary: String::new(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+
+    // 模拟用户继续输入
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "new follow-up question".to_string(),
+    });
+
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证 task.content 已更新为当前用户输入
+    let task = app.world_mut().get::<Task>(entity_id).unwrap();
+    assert_eq!(
+        task.content, "new follow-up question",
+        "task.content should be updated to the latest user input"
     );
 }

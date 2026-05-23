@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tracing::info;
+use tracing::debug;
 
 use crate::domain::{
     Agent, AgentKind, LongTermMemory, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
@@ -40,6 +40,17 @@ pub(crate) fn agent_termination_system(
             // 获取长期记忆
             let long_memory = long_memories.get(agent_entity).ok();
 
+            debug!(
+                event = "AgentTerminationDetected",
+                agent_id = %agent.id,
+                agent_name = %agent.profile.name,
+                task_id = %terminated_msg.task_id,
+                parent_id = %parent_id,
+                has_ltm = long_memory.is_some(),
+                ltm_entries = long_memory.map(|m| m.entries.len()).unwrap_or(0),
+                "generating memory contribution request"
+            );
+
             // 生成贡献请求
             commands.spawn(MemoryContributionRequestMessage {
                 contributor_id: agent.id,
@@ -52,12 +63,6 @@ pub(crate) fn agent_termination_system(
                     outcome: String::new(),
                 }),
             });
-
-            info!(
-                contributor = %agent.profile.name,
-                parent_id = %parent_id,
-                "generated memory contribution request"
-            );
         }
         // Note: TaskTerminatedMessage is despawned by agent_factory_system
         // This system must run BEFORE agent_factory_system
@@ -72,6 +77,17 @@ pub(crate) fn memory_contribution_system(
     for (entity, request) in &requests {
         let parent_id = request.parent_id;
         let memories = request.memories.clone();
+
+        debug!(
+            event = "MemoryContributionProcessing",
+            contributor_id = %request.contributor_id,
+            contributor_name = %request.contributor_name,
+            parent_id = %parent_id,
+            memories_count = memories.len(),
+            memories = ?memories.iter().map(|m| &m.content).collect::<Vec<_>>(),
+            task_summary = ?request.task_summary,
+            "processing memory contribution request"
+        );
 
         // Phase 4.1: 简单策略 - 直接吸收所有记忆
         // Phase 4.2: 引入 LLM 评估
@@ -95,13 +111,18 @@ pub(crate) fn memory_absorption_system(
         // 查找父 Agent
         let parent = agents.iter().find(|(_, a)| a.id == absorption.parent_id);
 
-        if let Some((parent_entity, _parent)) = parent {
+        if let Some((parent_entity, parent)) = parent {
             // 找到父 Agent 的长期记忆并吸收
             if let Ok(mut memory) = long_memories.get_mut(parent_entity) {
+                let before_count = memory.entries.len();
                 memory.absorb(absorption.absorbed.clone());
-                info!(
-                    parent_entity = ?parent_entity,
-                    count = absorption.absorbed.len(),
+                debug!(
+                    event = "MemoryAbsorbed",
+                    parent_agent_id = %absorption.parent_id,
+                    parent_agent_name = %parent.profile.name,
+                    absorbed_count = absorption.absorbed.len(),
+                    ltm_entries_before = before_count,
+                    ltm_entries_after = memory.entries.len(),
                     "absorbed memories into parent agent"
                 );
             }

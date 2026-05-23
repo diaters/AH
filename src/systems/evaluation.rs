@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use tracing::debug;
 
 use crate::{
     app::Clock,
@@ -36,6 +37,13 @@ pub(crate) fn evaluation_trigger_system(
                     .map(|a| a.id);
 
                 if let Some(evaluator_id) = evaluator_id {
+                    debug!(
+                        task_id = %task.id,
+                        turn_count,
+                        max_turns,
+                        evaluator_id = %evaluator_id,
+                        "evaluation triggered by turn limit"
+                    );
                     commands.spawn(EvaluationRequestMessage {
                         task_id: task.id,
                         trigger: EvaluationTrigger::TurnLimitReached,
@@ -60,18 +68,22 @@ pub(crate) fn evaluation_result_system(
 
             match msg.result.decision {
                 EvaluationDecision::Continue => {
+                    debug!(task_id = %task.id, "evaluation result: continue");
                     task.status = TaskStatus::Ready;
                     task.updated_at = clock.0;
                 }
                 EvaluationDecision::Complete => {
+                    debug!(task_id = %task.id, "evaluation result: complete");
                     task.status = TaskStatus::Done;
                     task.updated_at = clock.0;
                 }
                 EvaluationDecision::Failed => {
+                    debug!(task_id = %task.id, "evaluation result: failed");
                     task.status = TaskStatus::Failed(crate::domain::FailureReason::AgentError);
                     task.updated_at = clock.0;
                 }
                 EvaluationDecision::OffTrack => {
+                    debug!(task_id = %task.id, "evaluation result: off-track");
                     // TODO: 根据配置策略处理偏离
                     task.status = TaskStatus::Ready;
                     task.updated_at = clock.0;

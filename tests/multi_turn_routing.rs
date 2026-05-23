@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionRequest, AgentExecutor, ExecutorFuture, ExternalInput, HarnessConfig,
-    OutputMessage, Task, TaskStatus, WaitingReason, build_harness_app,
+    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -168,4 +168,149 @@ fn evaluation_triggered_on_turn_limit() {
         !has_evaluation_request,
         "should not trigger without evaluator agent"
     );
+}
+
+/// 验证多个 Waiting(User) 任务时，用户输入只路由到其中一个。
+/// 接收输入的任务会完成一轮对话后回到 Waiting(User)，但只有它的 STM 会包含新条目。
+#[test]
+fn multiple_waiting_user_tasks_routes_to_one() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建两个 Waiting(User) 状态的任务
+    let task_id_1 = uuid::Uuid::new_v4();
+    app.world_mut().spawn((
+        Task {
+            id: task_id_1,
+            content: "first waiting task".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Waiting(WaitingReason::User),
+            input_summary: "first".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+        },
+        ShortTermMemory::default(),
+    ));
+
+    let task_id_2 = uuid::Uuid::new_v4();
+    app.world_mut().spawn((
+        Task {
+            id: task_id_2,
+            content: "second waiting task".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Waiting(WaitingReason::User),
+            input_summary: "second".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+        },
+        ShortTermMemory::default(),
+    ));
+
+    // 模拟用户输入
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "hello".to_string(),
+    });
+
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证只有一个任务的 STM 包含 "hello"（即接收了用户输入）
+    let tasks_with_input: Vec<_> = app
+        .world_mut()
+        .query::<(&Task, &ShortTermMemory)>()
+        .iter(app.world())
+        .filter(|(_, stm)| stm.entries.iter().any(|e| e.content == "hello"))
+        .collect();
+
+    assert_eq!(
+        tasks_with_input.len(),
+        1,
+        "exactly one task should have received the user input"
+    );
+    assert_eq!(
+        tasks_with_input[0].0.id, task_id_1,
+        "the first Waiting(User) task should receive the input"
+    );
+}
+
+/// 验证 /finish 命令能结束多轮对话任务。
+#[test]
+fn finish_command_ends_multi_turn_conversation() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+
+    app.update();
+
+    // 创建 Waiting(User) 状态的多轮对话任务
+    let task_id = uuid::Uuid::new_v4();
+    app.world_mut().spawn((
+        Task {
+            id: task_id,
+            content: "active multi-turn task".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Waiting(WaitingReason::User),
+            input_summary: "active task".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+        },
+        ShortTermMemory::default(),
+    ));
+
+    // 模拟用户输入 /finish
+    app.world_mut().spawn(harness::UserInputMessage {
+        content: "/finish".to_string(),
+    });
+
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证任务已终止
+    let task = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .find(|t| t.id == task_id);
+
+    if let Some(task) = task {
+        assert!(
+            task.status.is_terminal(),
+            "task should be in terminal state after /finish, got {:?}",
+            task.status
+        );
+    }
+    // 任务可能已被清理，找不到也说明已正常终止
 }

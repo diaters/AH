@@ -3,7 +3,7 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 use bevy::prelude::*;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::domain::{
@@ -117,7 +117,13 @@ pub(crate) fn tool_dispatch_system(
 
         // 查找 Tool 定义
         let Some(tool_def) = registry.get(&tool_name) else {
-            warn!(tool_name = %tool_name, "tool not found in registry");
+            warn!(
+                event = "ToolNotFound",
+                tool_name = %tool_name,
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                "tool not found in registry"
+            );
             spawn_tool_error(
                 &mut commands,
                 entity,
@@ -129,7 +135,12 @@ pub(crate) fn tool_dispatch_system(
 
         // 获取 Agent 权限
         let Some(agent) = agents.iter().find(|a| a.id == request.request.agent_id) else {
-            warn!(agent_id = %request.request.agent_id, "agent not found for tool execution");
+            warn!(
+                event = "AgentNotFound",
+                agent_id = %request.request.agent_id,
+                tool_name = %tool_name,
+                "agent not found for tool execution"
+            );
             spawn_tool_error(
                 &mut commands,
                 entity,
@@ -141,15 +152,36 @@ pub(crate) fn tool_dispatch_system(
 
         let permission = agent.tool_permissions.get_permission(&tool_name);
 
+        debug!(
+            event = "ToolDispatch",
+            tool_name = %tool_name,
+            agent_id = %agent.id,
+            agent_name = %agent.profile.name,
+            permission = ?permission,
+            tool_input = ?request.tool_input,
+            task_id = %request.request.task_id,
+            "tool execution decision"
+        );
+
         match permission {
             ToolPermission::Allow => {
                 // 直接执行
-                info!(tool_name = %tool_name, agent_id = %agent.id, "tool execution allowed");
+                debug!(
+                    event = "ToolExecutionAllowed",
+                    tool_name = %tool_name,
+                    agent_id = %agent.id,
+                    "tool execution allowed"
+                );
                 execute_tool(&mut commands, entity, &request, tool_def, &knowledge);
             }
             ToolPermission::Confirm => {
                 // 需要用户确认
-                info!(tool_name = %tool_name, agent_id = %agent.id, "tool requires user confirmation");
+                debug!(
+                    event = "ToolRequiresConfirmation",
+                    tool_name = %tool_name,
+                    agent_id = %agent.id,
+                    "tool requires user confirmation"
+                );
 
                 // 将 Task 设置为等待审批状态
                 if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
@@ -172,7 +204,12 @@ pub(crate) fn tool_dispatch_system(
             }
             ToolPermission::Deny => {
                 // 拒绝执行
-                warn!(tool_name = %tool_name, agent_id = %agent.id, "tool execution denied");
+                warn!(
+                    event = "ToolExecutionDenied",
+                    tool_name = %tool_name,
+                    agent_id = %agent.id,
+                    "tool execution denied"
+                );
                 spawn_tool_error(
                     &mut commands,
                     entity,
@@ -263,16 +300,21 @@ pub(crate) fn tool_result_system(
 
             match &result.tool_output {
                 Ok(output) => {
-                    info!(
+                    let output_str =
+                        serde_json::to_string(output).unwrap_or_else(|_| output.to_string());
+                    debug!(
+                        event = "ToolExecuted",
                         tool_name = %result.tool_name,
                         task_id = %task.id,
+                        agent_id = %result.result.agent_id,
+                        success = true,
+                        output = %output_str,
+                        output_len = output_str.len(),
                         "tool execution completed"
                     );
 
                     // 记录 ToolCall 到 ShortTermMemory
                     if let Some(mut stm) = short_term_memory {
-                        let output_str =
-                            serde_json::to_string(output).unwrap_or_else(|_| output.to_string());
                         stm.record_tool_call(
                             result.tool_name.clone(),
                             serde_json::to_string(output).unwrap_or_default(),
@@ -283,8 +325,11 @@ pub(crate) fn tool_result_system(
                 }
                 Err(e) => {
                     warn!(
+                        event = "ToolExecutionFailed",
                         tool_name = %result.tool_name,
                         task_id = %task.id,
+                        agent_id = %result.result.agent_id,
+                        success = false,
                         error = %e,
                         "tool execution failed"
                     );
@@ -308,9 +353,14 @@ pub(crate) fn approval_dispatch_system(
 ) {
     for (entity, request) in &approval_requests {
         // 创建审批任务（简化实现：直接拒绝，因为 MVP 没有完整的审批 UI）
-        warn!(
+        debug!(
+            event = "ApprovalRequestReceived",
             request_id = %request.request_id,
             tool_name = %request.tool_name,
+            source_task_id = %request.source_task_id,
+            parent_agent_id = %request.parent_agent_id,
+            child_agent_id = %request.child_agent_id,
+            tool_input = ?request.tool_input,
             "approval request received - auto-rejecting in MVP"
         );
 
@@ -318,7 +368,11 @@ pub(crate) fn approval_dispatch_system(
         if let Some(task) = tasks.iter().find(|t| t.id == request.source_task_id)
             && task.status == TaskStatus::Waiting(WaitingReason::Approval)
         {
-            info!(task_id = %task.id, "source task is waiting for approval");
+            debug!(
+                event = "SourceTaskWaiting",
+                task_id = %task.id,
+                "source task is waiting for approval"
+            );
         }
 
         // 生成拒绝结果
@@ -344,9 +398,12 @@ pub(crate) fn approval_result_system(
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
 ) {
     for (entity, result) in &approval_results {
-        info!(
+        debug!(
+            event = "ApprovalResultProcessed",
             request_id = %result.request_id,
+            source_task_id = %result.source_task_id,
             decision = ?result.decision,
+            reasoning = %result.reasoning,
             "approval result processed"
         );
 
@@ -354,8 +411,11 @@ pub(crate) fn approval_result_system(
         if result.decision == ApprovalDecision::Approved {
             // 查找子 Agent 并更新权限
             if let Some(agent) = agents.iter().find(|a| a.id == result.source_task_id) {
-                // 这里需要知道具体的 tool_name，简化处理
-                info!(agent_id = %agent.id, "agent permission would be updated");
+                debug!(
+                    event = "AgentPermissionUpdatePending",
+                    agent_id = %agent.id,
+                    "agent permission would be updated"
+                );
             }
         }
 
@@ -399,8 +459,20 @@ pub(crate) fn tool_confirmation_request_system(
         let input_display = if input_summary.len() > 100 {
             format!("{}...", &input_summary[..100])
         } else {
-            input_summary
+            input_summary.clone()
         };
+
+        debug!(
+            event = "ToolConfirmationRequest",
+            request_id = %request.request_id,
+            tool_name = %request.tool_name,
+            agent_id = %request.agent_id,
+            agent_name = %agent_name,
+            task_id = %request.task_id,
+            tool_input = ?request.tool_input,
+            options_count = request.options.len(),
+            "sending tool confirmation request to user"
+        );
 
         // 构建标题
         let title = format!(
@@ -413,7 +485,12 @@ pub(crate) fn tool_confirmation_request_system(
             OutputMessage::confirmation_request(request.request_id, title, request.options.clone());
 
         if let Err(e) = sender.0.send(output) {
-            warn!(error = %e, "failed to send confirmation request");
+            warn!(
+                event = "ConfirmationRequestSendFailed",
+                request_id = %request.request_id,
+                error = %e,
+                "failed to send confirmation request"
+            );
         }
 
         commands.entity(entity).despawn();
@@ -438,7 +515,11 @@ pub(crate) fn tool_confirmation_result_system(
             .iter()
             .find(|(_, r)| r.pending_confirmation_id == Some(response.request_id))
         else {
-            warn!(request_id = %response.request_id, "no matching tool request found");
+            warn!(
+                event = "ToolConfirmationNoMatch",
+                request_id = %response.request_id,
+                "no matching tool request found"
+            );
             commands.entity(entity).despawn();
             continue;
         };
@@ -453,7 +534,10 @@ pub(crate) fn tool_confirmation_result_system(
             Some(option) if option.is_deny() => {
                 // 用户拒绝
                 warn!(
+                    event = "ToolConfirmationDenied",
                     tool_name = %tool_request.tool_name,
+                    task_id = %tool_request.request.task_id,
+                    agent_id = %tool_request.request.agent_id,
                     "tool execution denied by user"
                 );
 
@@ -486,8 +570,11 @@ pub(crate) fn tool_confirmation_result_system(
             }
             Some(option) => {
                 // 用户确认
-                info!(
+                debug!(
+                    event = "ToolConfirmationApproved",
                     tool_name = %tool_request.tool_name,
+                    task_id = %tool_request.request.task_id,
+                    agent_id = %tool_request.request.agent_id,
                     mode = ?option.mode,
                     "tool execution confirmed by user"
                 );
@@ -502,9 +589,11 @@ pub(crate) fn tool_confirmation_result_system(
                         .tool_permissions
                         .overrides
                         .insert(tool_request.tool_name.clone(), ToolPermission::Allow);
-                    info!(
+                    debug!(
+                        event = "AgentPermissionUpdated",
                         agent_id = %agent.id,
                         tool_name = %tool_request.tool_name,
+                        new_permission = ?ToolPermission::Allow,
                         "agent permission updated to Allow permanently"
                     );
                 }
@@ -530,6 +619,8 @@ pub(crate) fn tool_confirmation_result_system(
             }
             None => {
                 warn!(
+                    event = "ToolConfirmationUnknownOption",
+                    request_id = %response.request_id,
                     selected_option = %response.selected_option,
                     "unknown option selected"
                 );

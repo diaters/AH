@@ -9,6 +9,7 @@ use async_openai::{
         CreateChatCompletionRequestArgs,
     },
 };
+use tracing::debug;
 
 use crate::domain::{AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture};
 
@@ -23,6 +24,7 @@ pub(crate) struct OpenAiExecutor {
 impl OpenAiExecutor {
     /// 根据 provider 配置构造 OpenAI 或 OpenAI 兼容执行器。
     pub(crate) fn new(config: &LlmProviderConfig) -> Result<Self> {
+        debug!(model = %config.model, provider = ?config.provider, "creating OpenAI executor");
         let mut client_config = OpenAIConfig::new().with_api_key(config.api_key.clone());
 
         if let Some(api_base) = config
@@ -63,6 +65,15 @@ impl AgentExecutor for OpenAiExecutor {
         let model = self.model.clone();
 
         Box::pin(async move {
+            debug!(
+                task_id = %request.task_id,
+                agent_id = %request.agent_id,
+                kind = ?request.request_kind,
+                prompt_len = request.prompt.len(),
+                has_system_prompt = request.system_prompt.is_some(),
+                "sending request to OpenAI"
+            );
+
             let mut messages = Vec::new();
 
             if let Some(system_prompt) = &request.system_prompt {
@@ -89,14 +100,25 @@ impl AgentExecutor for OpenAiExecutor {
                 .chat()
                 .create(completion_request)
                 .await
-                .map_err(classify_openai_error)?;
+                .map_err(|error| {
+                    debug!(error = %error, "OpenAI API error");
+                    classify_openai_error(error)
+                })?;
 
-            response
+            let content = response
                 .choices
                 .first()
                 .and_then(|choice| choice.message.content.clone())
-                .filter(|content| !content.trim().is_empty())
-                .ok_or(ExecutionError::EmptyResponse)
+                .filter(|content| !content.trim().is_empty());
+
+            match &content {
+                Some(c) => {
+                    debug!(task_id = %request.task_id, response_len = c.len(), "received OpenAI response")
+                }
+                None => debug!(task_id = %request.task_id, "OpenAI returned empty response"),
+            }
+
+            content.ok_or(ExecutionError::EmptyResponse)
         })
     }
 }

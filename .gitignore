@@ -15,6 +15,7 @@ Cargo.lock
 AGENTS.md
 # Claude Code local config
 .claude/
+.codegraph/
 
 # OS
 .DS_Store
@@ -31,3 +32,6 @@ node_modules/
 # Added by cargo
 
 /target
+
+# Manual test cases (not tracked)
+MANUAL_TEST_CASES.md

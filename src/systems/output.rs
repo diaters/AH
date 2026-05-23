@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     app::OutputSender,
@@ -13,8 +13,20 @@ pub(crate) fn user_output_system(
     outputs: Query<(Entity, &UserOutputMessage)>,
 ) {
     for (entity, output) in &outputs {
+        debug!(
+            event = "UserOutputSent",
+            content_len = output.content.len(),
+            content = %output.content,
+            "sending output to external channel"
+        );
+
         if let Err(error) = sender.0.send(OutputMessage::new(output.content.clone())) {
-            warn!(?error, "failed to forward output to external channel");
+            warn!(
+                event = "OutputSendFailed",
+                error = %error,
+                content_len = output.content.len(),
+                "failed to forward output to external channel"
+            );
         }
 
         commands.entity(entity).despawn();

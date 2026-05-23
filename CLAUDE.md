@@ -84,6 +84,124 @@ __当前阶段__：MVP 主链路已实现，待进行真实 OpenAI 联调验证�
 | 生产   | INFO     |
 | 开发   | DEBUG    |
 
+#### 日志级别使用
+
+| 级别 | 用途 | 示例场景 |
+|------|------|----------|
+| `trace!` | 高频事件、周期性检查 | tick_clock_system、心跳检测 |
+| `debug!` | 数据流转、状态转换、决策过程 | 任务创建、Agent 选择、响应处理 |
+| `info!` | 重要业务事件、外部交互 | 任务完成、摘要触发（生产可见） |
+| `warn!` | 异常但可恢复的情况 | Tool 执行拒绝、降级处理 |
+| `error!` | 错误场景，必须附带完整现场信息 | 执行失败、认证错误 |
+
+**高频日志使用 trace**：每帧都可能执行的日志使用 `trace!`，避免日志泛滥。例如：
+
+- `tick_clock_system`：每帧更新时钟
+- 心跳检测、健康检查等周期性任务
+- 空轮询检查（无数据时）
+
+#### 统一格式要求
+
+所有日志必须使用结构化字段，格式如下：
+
+```rust
+debug!(
+    event = "EventName",      // 必需：事件名称（PascalCase）
+    field1 = value1,          // 业务字段
+    field2 = value2,
+    "human readable message"  // 简短描述
+);
+```
+
+#### 必需字段
+
+| 场景 | 必需字段 |
+|------|----------|
+| 所有日志 | `event` - 事件名称 |
+| Task 相关 | `task_id` |
+| Agent 相关 | `agent_id`, `agent_name` |
+| 错误 | `error`, `error_type` |
+
+#### 数据级日志要求
+
+本项目采用数据级日志，记录完整数据流转：
+
+1. **完整内容记录**: 记录完整的 prompt、响应内容、STM 条目等
+2. **不截断不脱敏**: 调试需要完整上下文
+3. **状态转换追踪**: 每次状态转换记录 from/to/reason
+
+```rust
+// 示例：任务状态转换日志
+debug!(
+    event = "TaskStatusTransition",
+    task_id = %task.id,
+    from_status = ?old_status,
+    to_status = ?new_status,
+    reason = "llm_response",
+    response_content = %content,
+    stm_entries = stm.entries.len(),
+    "task status changed"
+);
+```
+
+#### 错误现场规范
+
+错误日志必须包含完整现场信息：
+
+```rust
+error!(
+    // === 核心字段 ===
+    task_id = %task.id,
+    task_status = ?task.status,
+    task_content = %task.content,
+    retry_count = task.retry_count,
+    last_error = ?task.last_error,
+
+    // === STM 状态 ===
+    stm_entries = stm_entries_count,
+    stm_tokens = stm_tokens_count,
+    stm_recent = ?recent_entries,
+
+    // === 请求详情 ===
+    agent_id = %agent_id,
+    request_kind = ?request_kind,
+    prompt_len = prompt_len,
+
+    // === 错误本身 ===
+    error = %error,
+    error_type = std::any::type_name_of_val(&error),
+
+    "execution error with full context"
+);
+```
+
+#### 日志层级
+
+按数据流转分层记录：
+
+| 层级 | 系统 | 关注点 |
+|------|------|--------|
+| Ingress | input_ingress_system | 外部输入 |
+| Signal | signal_ingest_system | 信号转换 |
+| Command | command_parse_system | 命令解析 |
+| Routing | user_input_routing_system | 路由决策 |
+| Dispatch | task_dispatch_system | Agent 选择、prompt 构建 |
+| Execution | agent_execution_system | 请求提交 |
+| Response | llm_response_system | 响应处理、状态转换 |
+| Memory | memory_compression_system | 记忆压缩 |
+| Tool | tool_dispatch_system | 工具执行 |
+
+#### 事件命名规范
+
+事件名称使用 PascalCase，动词开头表示动作，名词开头表示状态：
+
+| 模式 | 示例 |
+|------|------|
+| 动作完成 | `TaskCreated`, `AgentSelected`, `PromptBuilt` |
+| 状态变化 | `TaskStatusTransition`, `StmEntryAdded` |
+| 错误发生 | `TaskFailed`, `ToolExecutionFailed` |
+| 触发事件 | `CompressionTriggered`, `SummarizationDispatched` |
+
 ---
 
 ## 流程规范

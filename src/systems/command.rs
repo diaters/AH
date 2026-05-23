@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-use tracing::info;
+use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, EntryRole, MemoryEntry, ShortTermMemory, SpaceKnowledge,
+    CreateTaskMessage, EntryRole, FinishTaskMessage, MemoryEntry, ShortTermMemory, SpaceKnowledge,
     SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
     UserCommand, UserInputMessage,
 };
@@ -19,6 +19,14 @@ pub(crate) fn command_parse_system(
     for (entity, input) in &user_inputs {
         let cmd = UserCommand::parse(&input.content);
 
+        debug!(
+            event = "CommandParsed",
+            command = ?cmd,
+            raw_input = %input.content,
+            input_len = input.content.len(),
+            "user command parsed"
+        );
+
         match cmd {
             UserCommand::NewTask { topic } => {
                 // /btw - 创建子任务承接新话题
@@ -28,7 +36,8 @@ pub(crate) fn command_parse_system(
                     .find(|(t, _)| !t.status.is_terminal() && t.status != TaskStatus::Pending);
 
                 if let Some((parent, _)) = parent_task {
-                    info!(
+                    debug!(
+                        event = "SubTaskCreating",
                         parent_id = %parent.id,
                         topic = %topic,
                         "creating sub-task via /btw command"
@@ -44,6 +53,11 @@ pub(crate) fn command_parse_system(
                     );
                     commands.spawn((child_task, ShortTermMemory::default()));
                 } else {
+                    debug!(
+                        event = "NoParentTask",
+                        topic = %topic,
+                        "no active parent task, creating normal task"
+                    );
                     // 没有父任务，创建普通任务
                     commands.spawn(CreateTaskMessage {
                         content: input.content.clone(),
@@ -56,9 +70,18 @@ pub(crate) fn command_parse_system(
                 let current_task = tasks.iter().find(|(t, _)| !t.status.is_terminal());
 
                 if let Some((task, _)) = current_task {
-                    info!(task_id = %task.id, "finishing current task via /finish command");
-                    // 触发任务终止，后续会被 contribution 系统处理
+                    debug!(
+                        event = "FinishCommandReceived",
+                        task_id = %task.id,
+                        task_status = ?task.status,
+                        task_content = %task.content,
+                        "finishing current task via /finish command"
+                    );
                     commands.spawn(TaskTerminatedMessage { task_id: task.id });
+                    // 标记任务为完成
+                    commands.spawn(FinishTaskMessage { task_id: task.id });
+                } else {
+                    debug!(event = "FinishCommandNoTask", "no active task to finish");
                 }
                 commands.entity(entity).despawn();
             }
@@ -78,23 +101,50 @@ pub(crate) fn command_parse_system(
                         .join("\n");
 
                     if !content.is_empty() {
-                        info!(task_id = %task.id, "triggering summarization via /summarize command");
+                        debug!(
+                            event = "SummarizeCommandReceived",
+                            task_id = %task.id,
+                            stm_entries = stm.entries.len(),
+                            stm_tokens = stm.estimated_tokens,
+                            content_len = content.len(),
+                            "triggering summarization via /summarize command"
+                        );
                         commands.spawn(SummarizationRequestMessage {
                             task_id: task.id,
                             content_to_summarize: content,
                             target_tokens: config.summary_target_tokens,
                             trigger: SummarizationTrigger::UserCommand,
                         });
+                    } else {
+                        debug!(
+                            event = "SummarizeCommandEmpty",
+                            task_id = %task.id,
+                            "stm is empty, nothing to summarize"
+                        );
                     }
+                } else {
+                    debug!(
+                        event = "SummarizeCommandNoTask",
+                        "no active task to summarize"
+                    );
                 }
                 commands.entity(entity).despawn();
             }
             UserCommand::Remember { content } => {
                 // /remember - 添加知识到 SpaceKnowledge
                 if content.is_empty() {
-                    info!("remember command received with empty content - ignoring");
+                    debug!(
+                        event = "RememberCommandEmpty",
+                        "remember command received with empty content - ignoring"
+                    );
                 } else {
-                    info!(content = %content, "adding knowledge via /remember command");
+                    debug!(
+                        event = "RememberCommandReceived",
+                        content = %content,
+                        content_len = content.len(),
+                        knowledge_entries_before = knowledge.entries.len(),
+                        "adding knowledge via /remember command"
+                    );
                     knowledge
                         .entries
                         .push(MemoryEntry::new(EntryRole::User, content.clone()));

@@ -9,6 +9,7 @@ use bevy::prelude::Component;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::debug;
 use uuid::Uuid;
 
 pub use contribution::{
@@ -21,6 +22,7 @@ pub use evaluation::{
 };
 pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
+    estimate_tokens,
 };
 pub use space::{
     AgentToolsConfig, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge, SpacePreferences,
@@ -365,50 +367,124 @@ impl Task {
 
     /// 将任务标记为分发等待状态。
     pub fn mark_waiting_for_agent(&mut self, agent_id: AgentId, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.delegate = Some(agent_id);
         self.status = TaskStatus::Waiting(WaitingReason::Agent);
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            agent_id = %agent_id,
+            reason = "mark_waiting_for_agent",
+            "task waiting for agent"
+        );
     }
 
     /// 将任务标记为运行中。
     pub fn mark_running(&mut self, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.status = TaskStatus::Running;
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            delegate = ?self.delegate,
+            reason = "mark_running",
+            "task now running"
+        );
     }
 
     /// 在成功完成后写回结果并清理重试状态。
     pub fn mark_done(&mut self, result: impl Into<String>, now: DateTime<Utc>) {
-        self.result_summary = result.into();
+        let old_status = self.status.clone();
+        let result_str = result.into();
+        self.result_summary = result_str.clone();
         self.status = TaskStatus::Done;
         self.updated_at = now;
         self.next_retry_at = None;
         self.last_error = None;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            result = %result_str,
+            result_len = result_str.len(),
+            reason = "mark_done",
+            "task completed successfully"
+        );
     }
 
     /// 根据可重试错误更新任务回退信息。
     pub fn schedule_retry(&mut self, error: &ExecutionError, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.retry_count += 1;
+        let delay = error.retry_delay(self.retry_count);
         self.next_retry_at = Some(
-            now + ChronoDuration::from_std(error.retry_delay(self.retry_count))
-                .unwrap_or_else(|_| ChronoDuration::seconds(1)),
+            now + ChronoDuration::from_std(delay).unwrap_or_else(|_| ChronoDuration::seconds(1)),
         );
-        self.last_error = Some(error.message().to_string());
+        let error_msg = error.message().to_string();
+        self.last_error = Some(error_msg.clone());
         self.status = TaskStatus::Waiting(WaitingReason::RetryBackoff);
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            error = %error_msg,
+            error_type = std::any::type_name_of_val(error),
+            retry_delay_secs = delay.as_secs(),
+            reason = "schedule_retry",
+            "task scheduled for retry"
+        );
     }
 
     /// 将任务标记为最终失败。
     pub fn mark_failed(&mut self, error: &ExecutionError, now: DateTime<Utc>) {
-        self.last_error = Some(error.message().to_string());
-        self.status = TaskStatus::Failed(error.to_failure_reason());
+        let old_status = self.status.clone();
+        let error_msg = error.message().to_string();
+        let failure_reason = error.to_failure_reason();
+        self.last_error = Some(error_msg.clone());
+        self.status = TaskStatus::Failed(failure_reason.clone());
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            error = %error_msg,
+            error_type = std::any::type_name_of_val(error),
+            failure_reason = ?failure_reason,
+            reason = "mark_failed",
+            "task marked as failed"
+        );
     }
 
     /// 将任务重新置回 Ready 以进入下一次调度。
     pub fn mark_ready_for_retry(&mut self, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
         self.status = TaskStatus::Ready;
         self.next_retry_at = None;
         self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            reason = "mark_ready_for_retry",
+            "task ready for retry"
+        );
     }
 }
 
@@ -535,6 +611,12 @@ pub struct AgentSpawnRequestMessage {
 
 #[derive(Debug, Clone, Component)]
 pub struct TaskTerminatedMessage {
+    pub task_id: TaskId,
+}
+
+/// /finish 命令触发的任务完成消息
+#[derive(Debug, Clone, Component)]
+pub struct FinishTaskMessage {
     pub task_id: TaskId,
 }
 
