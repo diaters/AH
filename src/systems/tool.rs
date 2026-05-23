@@ -216,20 +216,94 @@ pub(crate) fn tool_dispatch_system(
                 execute_tool(&mut commands, entity, &request, tool_def, &knowledge);
             }
             ToolPermission::Confirm => {
-                // 需要用户确认
+                // 需要确认：根据工具类型和 Agent 层级决定路由
+
+                // 1. spawn_agent 工具始终需要用户确认
+                if tool_name == "spawn_agent" {
+                    debug!(
+                        event = "ToolRequiresUserConfirmation",
+                        tool_name = %tool_name,
+                        agent_id = %agent.id,
+                        reason = "spawn_agent requires user approval",
+                        "tool requires user confirmation"
+                    );
+
+                    // 将 Task 设置为等待用户确认状态
+                    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                        task.status = TaskStatus::Waiting(WaitingReason::User);
+                    }
+
+                    // 生成用户确认请求消息
+                    let request_id = Uuid::new_v4();
+                    commands.spawn(ToolConfirmationRequestMessage {
+                        request_id,
+                        task_id: request.request.task_id,
+                        agent_id: agent.id,
+                        tool_name: tool_name.clone(),
+                        tool_input: request.tool_input.clone(),
+                        options: ConfirmationOption::default_options(),
+                        source: ConfirmationSource::User,
+                        parent_agent_id: None,
+                    });
+
+                    // 更新 ToolExecutionRequestMessage 的 pending_confirmation_id
+                    request.pending_confirmation_id = Some(request_id);
+                    continue;
+                }
+
+                // 2. 检查 Agent 是否有父 Agent，且父 Agent 有该工具的 Allow 权限
+                if let Some(parent_id) = agent.parent_id {
+                    if let Some(parent) = agents.iter().find(|a| a.id == parent_id) {
+                        if parent.has_permission(&tool_name) {
+                            debug!(
+                                event = "ToolRequiresParentApproval",
+                                tool_name = %tool_name,
+                                agent_id = %agent.id,
+                                parent_agent_id = %parent.id,
+                                reason = "parent agent has permission",
+                                "tool requires parent agent approval"
+                            );
+
+                            // 将 Task 设置为等待父 Agent 审批状态
+                            if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                                task.status = TaskStatus::Waiting(WaitingReason::Approval);
+                            }
+
+                            // 生成父 Agent 审批请求消息
+                            let request_id = Uuid::new_v4();
+                            commands.spawn(ToolConfirmationRequestMessage {
+                                request_id,
+                                task_id: request.request.task_id,
+                                agent_id: agent.id,
+                                tool_name: tool_name.clone(),
+                                tool_input: request.tool_input.clone(),
+                                options: ConfirmationOption::default_options(),
+                                source: ConfirmationSource::ParentAgent,
+                                parent_agent_id: Some(parent.id),
+                            });
+
+                            // 更新 ToolExecutionRequestMessage 的 pending_confirmation_id
+                            request.pending_confirmation_id = Some(request_id);
+                            continue;
+                        }
+                    }
+                }
+
+                // 3. 无父 Agent 或父 Agent 无权限 → 用户确认
                 debug!(
-                    event = "ToolRequiresConfirmation",
+                    event = "ToolRequiresUserConfirmation",
                     tool_name = %tool_name,
                     agent_id = %agent.id,
+                    reason = "no parent agent or parent lacks permission",
                     "tool requires user confirmation"
                 );
 
-                // 将 Task 设置为等待审批状态
+                // 将 Task 设置为等待用户确认状态
                 if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
-                    task.status = TaskStatus::Waiting(WaitingReason::Approval);
+                    task.status = TaskStatus::Waiting(WaitingReason::User);
                 }
 
-                // 生成确认请求消息
+                // 生成用户确认请求消息
                 let request_id = Uuid::new_v4();
                 commands.spawn(ToolConfirmationRequestMessage {
                     request_id,
