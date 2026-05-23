@@ -56,6 +56,39 @@ pub fn register_builtin_tools(registry: &mut SpaceToolRegistry) {
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
     });
+
+    // spawn_agent 工具（创建子 Agent）
+    registry.register(ToolDefinition {
+        name: "spawn_agent".to_string(),
+        description: "Create a child agent with specified tools and capabilities. The child agent will be bound to the current task and automatically terminated when the task completes.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the child agent"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model to use. Defaults to parent agent's model."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of the child agent's capabilities"
+                    },
+                    "tools": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of tool names the child agent can use"
+                    }
+                },
+                "required": ["name", "description", "tools"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("spawn_agent".to_string()),
+    });
 }
 
 /// 执行内置 Tool
