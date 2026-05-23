@@ -271,6 +271,20 @@ pub struct Agent {
     pub experience: AgentExperience,
 }
 
+impl Agent {
+    /// 判断是否拥有某 Tool 的 Allow 权限
+    pub fn has_permission(&self, tool_name: &str) -> bool {
+        self.tool_permissions.get_permission(tool_name) == ToolPermission::Allow
+    }
+
+    /// 授予永久权限
+    pub fn grant_permission(&mut self, tool_name: String) {
+        self.tool_permissions
+            .overrides
+            .insert(tool_name, ToolPermission::Allow);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentRequestKind {
     LlmCompletion,
@@ -877,5 +891,59 @@ mod tests {
         use WaitingReason::*;
         let _ = User;
         let _ = Evaluator;
+    }
+
+    #[test]
+    fn agent_has_permission_returns_true_for_allow() {
+        let mut perms = AgentToolPermissions::default();
+        perms
+            .overrides
+            .insert("test_tool".to_string(), ToolPermission::Allow);
+
+        let agent = Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "test".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: "test".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: perms,
+            experience: AgentExperience::default(),
+        };
+
+        assert!(agent.has_permission("test_tool"));
+        assert!(!agent.has_permission("other_tool"));
+    }
+
+    #[test]
+    fn agent_grant_permission_updates_overrides() {
+        let mut agent = Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "test".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: "test".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            experience: AgentExperience::default(),
+        };
+
+        assert!(!agent.has_permission("new_tool"));
+
+        agent.grant_permission("new_tool".to_string());
+
+        assert!(agent.has_permission("new_tool"));
     }
 }
