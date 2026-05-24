@@ -6,8 +6,9 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutorFuture, HarnessConfig,
-    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutorFuture,
+    HarnessConfig, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -32,11 +33,11 @@ impl AgentExecutor for SummarizationMockExecutor {
             match request.request_kind {
                 AgentRequestKind::Summarization => {
                     summarization_called.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok("这是一个测试摘要。".to_string())
+                    Ok(AgentExecutionOutput::Text("这是一个测试摘要。".to_string()))
                 }
-                AgentRequestKind::LlmCompletion => Ok(format!("response: {}", request.prompt)),
+                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput::Text(format!("response: {}", request.prompt))),
                 AgentRequestKind::BrainDecision => {
-                    Ok(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string())
+                    Ok(AgentExecutionOutput::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()))
                 }
                 AgentRequestKind::ToolExecution { .. } => {
                     Err(harness::ExecutionError::Unknown("Not supported".to_string()))
@@ -52,13 +53,12 @@ fn test_config() -> HarnessConfig {
         llm: harness::LlmProviderConfig {
             provider: harness::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
-            api_key: "test-api-key".to_string(),
+            api_key: Some("test-api-key".to_string()),
             api_base: None,
-            org_id: None,
-            project_id: None,
         },
         brain: None,
         agents_config_path: "agents.toml".to_string(),
+        max_tool_iterations: 5,
     }
 }
 

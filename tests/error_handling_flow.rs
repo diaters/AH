@@ -6,8 +6,8 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture, ExternalInput,
-    HarnessConfig, OutputMessage, Task, TaskStatus, WaitingReason, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture,
+    ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -17,13 +17,12 @@ fn test_config() -> HarnessConfig {
         llm: harness::LlmProviderConfig {
             provider: harness::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
-            api_key: "test-api-key".to_string(),
+            api_key: Some("test-api-key".to_string()),
             api_base: None,
-            org_id: None,
-            project_id: None,
         },
         brain: None,
         agents_config_path: "agents.toml".to_string(),
+        max_tool_iterations: 5,
     }
 }
 
@@ -149,7 +148,7 @@ fn empty_user_input_creates_task() {
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move { Ok(format!("echo: {}", request.prompt)) })
+            Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("echo: {}", request.prompt))) })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -194,7 +193,7 @@ fn large_input_is_handled() {
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move { Ok(format!("processed {} chars", request.prompt.len())) })
+            Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("processed {} chars", request.prompt.len()))) })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -246,7 +245,7 @@ fn multiple_concurrent_tasks_are_handled() {
             Box::pin(async move {
                 // Small delay to simulate concurrent execution
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                Ok(format!("response for task {}", request.task_id))
+                Ok(AgentExecutionOutput::Text(format!("response for task {}", request.task_id)))
             })
         }
     }
@@ -302,7 +301,7 @@ fn waiting_task_waits_for_user_input() {
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move { Ok(format!("response: {}", request.prompt)) })
+            Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("response: {}", request.prompt))) })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);

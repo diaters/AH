@@ -2,8 +2,8 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture, HarnessConfig,
-    OutputMessage, Task, TaskStatus, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture,
+    HarnessConfig, OutputMessage, Task, TaskStatus, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -14,10 +14,10 @@ impl AgentExecutor for BrainMockExecutor {
         match request.request_kind {
             harness::AgentRequestKind::BrainDecision => {
                 let decision = r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"请处理这个任务","reasoning":"测试用例"}"#;
-                Box::pin(async move { Ok(decision.to_string()) })
+                Box::pin(async move { Ok(AgentExecutionOutput::Text(decision.to_string())) })
             }
             harness::AgentRequestKind::LlmCompletion => {
-                Box::pin(async move { Ok(format!("echo: {}", request.prompt)) })
+                Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("echo: {}", request.prompt))) })
             }
             harness::AgentRequestKind::ToolExecution { .. } => {
                 // Tool 执行由专门的 tool_execution_system 处理，此处不应到达
@@ -45,10 +45,8 @@ fn brain_test_config() -> HarnessConfig {
         llm: harness::LlmProviderConfig {
             provider: harness::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
-            api_key: "test-api-key".to_string(),
+            api_key: Some("test-api-key".to_string()),
             api_base: None,
-            org_id: None,
-            project_id: None,
         },
         brain: Some(BrainConfig {
             enabled: true,
@@ -56,6 +54,7 @@ fn brain_test_config() -> HarnessConfig {
             agent_name: "brain".to_string(),
         }),
         agents_config_path: "agents.toml".to_string(),
+        max_tool_iterations: 5,
     }
 }
 
