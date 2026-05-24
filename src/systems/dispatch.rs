@@ -5,7 +5,9 @@ use crate::{
     app::{Clock, HarnessSettings},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        EntryRole, LongTermMemory, ShortTermMemory, Task, TaskStatus,
+        AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory, ShortTermMemory,
+        SpaceToolRegistry, SubTaskBatchState, SubTaskConfig, Task, TaskStatus, ToolPermission,
+        WaitingReason,
     },
     llm::brain_system_prompt,
 };
@@ -15,8 +17,14 @@ pub(crate) fn task_dispatch_system(
     mut commands: Commands,
     mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
+    registry: Res<SpaceToolRegistry>,
 ) {
     for (mut task, short_term) in &mut tasks {
+        // 子任务由 Brain 分发，普通 dispatch 不处理
+        if task.parent_task_id.is_some() {
+            continue;
+        }
+
         // Pending 或 Ready 状态都可以被调度
         if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;
@@ -83,12 +91,24 @@ pub(crate) fn task_dispatch_system(
             "execution request ready"
         );
 
+        // 构建 tools 列表：从 registry 中筛选 Agent 有权限的工具（非 Deny）
+        let tools: Vec<_> = registry
+            .tools
+            .values()
+            .filter(|tool_def| {
+                !matches!(agent.tool_permissions.get_permission(&tool_def.name), ToolPermission::Deny)
+            })
+            .cloned()
+            .collect();
+
         let request = AgentExecutionRequest {
             task_id: task.id,
             agent_id: agent.id,
             request_kind: AgentRequestKind::LlmCompletion,
             prompt,
             system_prompt: None,
+            tools,
+            conversation: None,
         };
 
         task.mark_waiting_for_agent(agent.id, clock.0);
@@ -100,8 +120,13 @@ pub(crate) fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     mut commands: Commands,
-    mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
+    mut tasks: Query<(
+        &mut Task,
+        Option<&ShortTermMemory>,
+        Option<&SubTaskConfig>,
+    )>,
     agents: Query<&Agent>,
+    batch_states: Query<&SubTaskBatchState>,
 ) {
     let Some(brain_config) = &settings.0.brain else {
         return;
@@ -133,9 +158,89 @@ pub(crate) fn brain_dispatch_system(
         })
         .collect();
 
-    for (mut task, short_term) in &mut tasks {
+    for (mut task, short_term, sub_task_config) in &mut tasks {
         // Pending 或 Ready 状态都可以被调度
         if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
+            continue;
+        }
+
+        // 子任务处理：检查 DAG 依赖，由 Brain 分发
+        if let Some(config) = sub_task_config {
+            // 检查 DAG 依赖是否满足
+            let deps_satisfied = if config.depends_on.is_empty() {
+                true
+            } else if let Some(batch_state) = batch_states
+                .iter()
+                .find(|bs| bs.batch_id == config.batch_id)
+            {
+                config.depends_on.iter().all(|dep_name| {
+                    batch_state
+                        .tasks
+                        .get(dep_name)
+                        .is_some_and(|s| s.state == BatchTaskState::Done)
+                })
+            } else {
+                false
+            };
+
+            if !deps_satisfied {
+                debug!(
+                    event = "SubTaskWaitingForDependencies",
+                    task_id = %task.id,
+                    child_name = %config.child_agent_name,
+                    depends_on = ?config.depends_on,
+                    "sub-task waiting for dependencies to complete"
+                );
+                continue;
+            }
+
+            // 选择匹配的 Agent（基于所需工具标签）
+            let child_agent = agents
+                .iter()
+                .filter(|a| a.kind == AgentKind::Persistent)
+                .filter(|a| !a.capabilities.tags.contains(&"brain".to_string()))
+                .max_by_key(|a| {
+                    a.capabilities
+                        .tags
+                        .iter()
+                        .filter(|t| config.allowed_tools.contains(t))
+                        .count()
+                });
+
+            if let Some(agent) = child_agent {
+                debug!(
+                    event = "SubTaskDispatched",
+                    task_id = %task.id,
+                    child_name = %config.child_agent_name,
+                    selected_agent = %agent.profile.name,
+                    batch_id = %config.batch_id,
+                    "dispatching sub-task to agent"
+                );
+
+                let child_task_id = task.id;
+
+                commands.spawn(AgentSpawnRequestMessage {
+                    parent_agent_id: uuid::Uuid::nil(),
+                    task_id: child_task_id,
+                    name: config.child_agent_name.clone(),
+                    model: config.child_agent_model.clone(),
+                    description: config.child_agent_name.clone(),
+                    tools: config.allowed_tools.clone(),
+                    task_prompt: task.content.clone(),
+                    task_system_prompt: None,
+                });
+
+                task.status = TaskStatus::Waiting(WaitingReason::Agent);
+                task.delegate = Some(agent.id);
+                task.updated_at = clock.0;
+            } else {
+                debug!(
+                    event = "SubTaskNoAgentAvailable",
+                    task_id = %task.id,
+                    child_name = %config.child_agent_name,
+                    "no suitable agent found for sub-task"
+                );
+            }
             continue;
         }
 
@@ -167,6 +272,8 @@ pub(crate) fn brain_dispatch_system(
             request_kind: AgentRequestKind::BrainDecision,
             prompt,
             system_prompt: Some(brain_system_prompt()),
+            tools: vec![],
+            conversation: None,
         };
 
         task.mark_waiting_for_agent(brain_agent.id, clock.0);

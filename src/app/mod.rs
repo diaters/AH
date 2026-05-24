@@ -9,7 +9,7 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, SpaceAgentRegistry,
+        AgentSpawnRequestMessage, BuiltinToolExecutors, OutputMessage, RetryReadyMessage, Signal, SpaceAgentRegistry,
         SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, Task,
         TaskEvaluationConfig, TaskTerminatedMessage, ToolCallingState, UserInputMessage,
         UserOutputMessage,
@@ -24,6 +24,7 @@ use crate::{
         llm_response_system, load_agents_system, memory_absorption_system,
         memory_compression_system, memory_contribution_system, register_builtin_tools,
         retry_ready_system, retry_wakeup_system, signal_ingest_system,
+        sub_task_batch_block_system, sub_task_completion_system,
         summarization_dispatch_system, summarization_result_system, task_dispatch_system,
         task_termination_system, tick_clock_system, tool_calling_orchestrator_system,
         tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
@@ -183,8 +184,10 @@ pub fn build_harness_app(
 
     // Tool Registry with builtin tools
     let mut tool_registry = SpaceToolRegistry::default();
-    register_builtin_tools(&mut tool_registry);
+    let mut tool_executors = BuiltinToolExecutors::default();
+    register_builtin_tools(&mut tool_registry, &mut tool_executors);
     app.insert_resource(tool_registry);
+    app.insert_resource(tool_executors);
 
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);
@@ -234,13 +237,19 @@ pub fn build_harness_app(
             task_termination_system
                 .in_set(HarnessSet::Transform)
                 .after(llm_response_system),
+            sub_task_completion_system
+                .in_set(HarnessSet::Transform)
+                .after(task_termination_system),
             evaluation_result_system.in_set(HarnessSet::Transform),
             tool_result_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
-            tool_calling_orchestrator_system
+            sub_task_batch_block_system
                 .in_set(HarnessSet::Transform)
                 .after(tool_result_system),
+            tool_calling_orchestrator_system
+                .in_set(HarnessSet::Transform)
+                .after(sub_task_batch_block_system),
         ),
     );
 

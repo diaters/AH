@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentKind,
-    AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture, HarnessConfig, LongTermMemory,
-    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
+    AgentExecutionOutput, Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor,
+    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture,
+    HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task, TaskStatus,
+    WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -13,7 +14,7 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok("echo response".to_string()) })
+        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text("echo response".to_string()), reasoning_content: None }) })
     }
 }
 
@@ -53,6 +54,8 @@ fn multi_turn_task_lifecycle() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
             },
             ShortTermMemory::default(),
         ))
@@ -133,6 +136,8 @@ fn short_term_memory_tracks_turns() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
             },
             ShortTermMemory::default(),
         ));
@@ -299,6 +304,8 @@ fn memory_contribution_on_agent_termination() {
         next_retry_at: None,
         last_error: None,
         multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
     });
 
     // Trigger termination by spawning TaskTerminatedMessage
@@ -386,6 +393,8 @@ fn multi_turn_memory_records_user_and_assistant() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
             },
             ShortTermMemory::default(),
         ))
@@ -492,7 +501,7 @@ fn prompt_includes_conversation_history() {
     impl AgentExecutor for CapturingExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
             *self.captured.lock().unwrap() = Some(request.prompt.clone());
-            Box::pin(async move { Ok("response".to_string()) })
+            Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text("response".to_string()), reasoning_content: None }) })
         }
     }
 
@@ -528,6 +537,8 @@ fn prompt_includes_conversation_history() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
             },
             ShortTermMemory {
                 entries: vec![
@@ -727,7 +738,7 @@ fn second_dispatch_prompt_includes_correct_history() {
     impl AgentExecutor for HistoryCapturingExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
             self.captured.lock().unwrap().push(request.prompt.clone());
-            Box::pin(async move { Ok("response".to_string()) })
+            Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text("response".to_string()), reasoning_content: None }) })
         }
     }
 
@@ -763,6 +774,8 @@ fn second_dispatch_prompt_includes_correct_history() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
             },
             ShortTermMemory {
                 entries: vec![
@@ -852,6 +865,8 @@ fn task_content_updates_on_continue() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
             },
             ShortTermMemory::default(),
         ))

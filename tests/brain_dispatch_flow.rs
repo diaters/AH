@@ -14,10 +14,10 @@ impl AgentExecutor for BrainMockExecutor {
         match request.request_kind {
             harness::AgentRequestKind::BrainDecision => {
                 let decision = r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"请处理这个任务","reasoning":"测试用例"}"#;
-                Box::pin(async move { Ok(AgentExecutionOutput::Text(decision.to_string())) })
+                Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(decision.to_string()), reasoning_content: None }) })
             }
             harness::AgentRequestKind::LlmCompletion => {
-                Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("echo: {}", request.prompt))) })
+                Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("echo: {}", request.prompt)), reasoning_content: None }) })
             }
             harness::AgentRequestKind::ToolExecution { .. } => {
                 // Tool 执行由专门的 tool_execution_system 处理，此处不应到达

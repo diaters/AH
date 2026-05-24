@@ -3,8 +3,9 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, ExecutorFuture, ExternalInput, HarnessConfig,
-    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutorFuture, ExternalInput,
+    HarnessConfig, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -12,7 +13,7 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok("echo".to_string()) })
+        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text("echo".to_string()), reasoning_content: None }) })
     }
 }
 
@@ -71,6 +72,8 @@ fn user_input_continues_waiting_task() {
         next_retry_at: None,
         last_error: None,
         multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
     });
 
     // Simulate user input
@@ -142,6 +145,8 @@ fn evaluation_triggered_on_turn_limit() {
         next_retry_at: None,
         last_error: None,
         multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
     });
 
     // Add short term memory with some entries
@@ -201,6 +206,8 @@ fn multiple_waiting_user_tasks_routes_to_one() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         },
         ShortTermMemory::default(),
     ));
@@ -223,6 +230,8 @@ fn multiple_waiting_user_tasks_routes_to_one() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         },
         ShortTermMemory::default(),
     ));
@@ -285,6 +294,8 @@ fn finish_command_ends_multi_turn_conversation() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         },
         ShortTermMemory::default(),
     ));

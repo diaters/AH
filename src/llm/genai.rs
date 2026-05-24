@@ -10,7 +10,7 @@ use tracing::debug;
 
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ConversationMessage,
-    ExecutionError, ExecutorFuture, LlmToolCall,
+    ExecutionError, ExecutorFuture, LlmToolCall, OutputContent,
 };
 
 use super::provider::{LlmProviderConfig, LlmProviderKind};
@@ -131,6 +131,7 @@ fn build_chat_messages(
             ConversationMessage::Assistant {
                 content,
                 tool_calls,
+                reasoning_content,
             } => {
                 if !tool_calls.is_empty() {
                     let genai_tool_calls: Vec<ToolCall> = tool_calls
@@ -147,10 +148,13 @@ fn build_chat_messages(
                     if let Some(c) = content {
                         message.content.prepend(ContentPart::Text(c.clone()));
                     }
+                    message = message.with_reasoning_content(reasoning_content.clone());
                     Ok(message)
                 } else {
                     let content_str = content.as_deref().unwrap_or("");
-                    Ok(ChatMessage::assistant(content_str))
+                    let message = ChatMessage::assistant(content_str)
+                        .with_reasoning_content(reasoning_content.clone());
+                    Ok(message)
                 }
             }
             ConversationMessage::Tool {
@@ -182,6 +186,7 @@ fn parse_response(
     task_id: &crate::domain::TaskId,
     response: ChatResponse,
 ) -> Result<AgentExecutionOutput, ExecutionError> {
+    let reasoning_content = response.reasoning_content.clone();
     let tool_calls: Vec<&ToolCall> = response.content.tool_calls();
 
     if !tool_calls.is_empty() {
@@ -198,22 +203,29 @@ fn parse_response(
             task_id = %task_id,
             tool_call_count = parsed_calls.len(),
             tools = ?parsed_calls.iter().map(|c| &c.name).collect::<Vec<_>>(),
+            has_reasoning = reasoning_content.is_some(),
             "LLM requested tool calls"
         );
-        return Ok(AgentExecutionOutput::ToolCalls(parsed_calls));
+        return Ok(AgentExecutionOutput {
+            content: OutputContent::ToolCalls(parsed_calls),
+            reasoning_content,
+        });
     }
 
     let content = response.first_text().map(|s| s.to_string());
 
     match &content {
         Some(c) => {
-            debug!(task_id = %task_id, response_len = c.len(), "received genai response")
+            debug!(task_id = %task_id, response_len = c.len(), has_reasoning = reasoning_content.is_some(), "received genai response")
         }
         None => debug!(task_id = %task_id, "genai returned empty response"),
     }
 
     content
-        .map(AgentExecutionOutput::Text)
+        .map(|c| AgentExecutionOutput {
+            content: OutputContent::Text(c),
+            reasoning_content,
+        })
         .ok_or(ExecutionError::EmptyResponse)
 }
 

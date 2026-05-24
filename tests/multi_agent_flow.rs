@@ -13,7 +13,7 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("echo: {}", request.prompt))) })
+        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("echo: {}", request.prompt)), reasoning_content: None }) })
     }
 }
 
@@ -175,6 +175,8 @@ fn task_scoped_agent_lifecycle() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         });
         world.spawn(TaskTerminatedMessage { task_id });
     }

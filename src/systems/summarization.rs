@@ -65,6 +65,8 @@ pub(crate) fn summarization_dispatch_system(
             request_kind: AgentRequestKind::Summarization,
             prompt: summarization_user_prompt(&request.content_to_summarize, request.target_tokens),
             system_prompt: Some(summarization_system_prompt()),
+            tools: vec![],
+            conversation: None,
         };
 
         commands.spawn(AgentExecutionRequestMessage {

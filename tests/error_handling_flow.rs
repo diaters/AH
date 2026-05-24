@@ -148,7 +148,7 @@ fn empty_user_input_creates_task() {
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("echo: {}", request.prompt))) })
+            Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("echo: {}", request.prompt)), reasoning_content: None }) })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -193,7 +193,7 @@ fn large_input_is_handled() {
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("processed {} chars", request.prompt.len()))) })
+            Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("processed {} chars", request.prompt.len())), reasoning_content: None }) })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -245,7 +245,7 @@ fn multiple_concurrent_tasks_are_handled() {
             Box::pin(async move {
                 // Small delay to simulate concurrent execution
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                Ok(AgentExecutionOutput::Text(format!("response for task {}", request.task_id)))
+                Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("response for task {}", request.task_id)), reasoning_content: None })
             })
         }
     }
@@ -301,7 +301,7 @@ fn waiting_task_waits_for_user_input() {
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move { Ok(AgentExecutionOutput::Text(format!("response: {}", request.prompt))) })
+            Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }) })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -332,6 +332,8 @@ fn waiting_task_waits_for_user_input() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         },
         harness::ShortTermMemory::default(),
     ));

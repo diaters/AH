@@ -20,6 +20,7 @@ description = "Brain Agent，负责调度决策"
 [agent.tools]
 default_permission = "Deny"
 read_file = "Allow"
+spawn_agent = "Allow"
 
 [[agent]]
 name = "summarizer"

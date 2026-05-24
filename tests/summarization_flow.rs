@@ -33,11 +33,11 @@ impl AgentExecutor for SummarizationMockExecutor {
             match request.request_kind {
                 AgentRequestKind::Summarization => {
                     summarization_called.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(AgentExecutionOutput::Text("这是一个测试摘要。".to_string()))
+                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
                 }
-                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput::Text(format!("response: {}", request.prompt))),
+                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
                 AgentRequestKind::BrainDecision => {
-                    Ok(AgentExecutionOutput::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()))
+                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
                 AgentRequestKind::ToolExecution { .. } => {
                     Err(harness::ExecutionError::Unknown("Not supported".to_string()))
@@ -101,7 +101,9 @@ fn task_completion_triggers_summarization() {
                 max_retries: 3,
                 next_retry_at: None,
                 last_error: None,
-                multi_turn: false, // Single turn - will complete
+                multi_turn: false,
+            parent_task_id: None,
+            batch_id: None, // Single turn - will complete
             },
             ShortTermMemory {
                 entries: vec![
@@ -166,6 +168,8 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         },
         ShortTermMemory {
             entries: vec![
