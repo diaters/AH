@@ -95,6 +95,7 @@ pub struct EntryMetadata {
 /// 工具调用记录
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
+    pub id: Option<String>,
     pub tool_name: String,
     pub input: String,
     pub output: String,
@@ -121,12 +122,14 @@ impl ShortTermMemory {
     /// 如果没有 Assistant 条目则创建一个新的。
     pub fn record_tool_call(
         &mut self,
+        id: Option<String>,
         tool_name: String,
         input: String,
         output: String,
         timestamp: DateTime<Utc>,
     ) {
         let tool_call = ToolCall {
+            id,
             tool_name,
             input,
             output,

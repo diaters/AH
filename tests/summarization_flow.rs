@@ -6,8 +6,9 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutorFuture, HarnessConfig,
-    OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutorFuture,
+    HarnessConfig, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -32,11 +33,11 @@ impl AgentExecutor for SummarizationMockExecutor {
             match request.request_kind {
                 AgentRequestKind::Summarization => {
                     summarization_called.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok("这是一个测试摘要。".to_string())
+                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
                 }
-                AgentRequestKind::LlmCompletion => Ok(format!("response: {}", request.prompt)),
+                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
                 AgentRequestKind::BrainDecision => {
-                    Ok(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string())
+                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
                 AgentRequestKind::ToolExecution { .. } => {
                     Err(harness::ExecutionError::Unknown("Not supported".to_string()))
@@ -52,13 +53,12 @@ fn test_config() -> HarnessConfig {
         llm: harness::LlmProviderConfig {
             provider: harness::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
-            api_key: "test-api-key".to_string(),
+            api_key: Some("test-api-key".to_string()),
             api_base: None,
-            org_id: None,
-            project_id: None,
         },
         brain: None,
         agents_config_path: "agents.toml".to_string(),
+        max_tool_iterations: 5,
     }
 }
 
@@ -101,7 +101,9 @@ fn task_completion_triggers_summarization() {
                 max_retries: 3,
                 next_retry_at: None,
                 last_error: None,
-                multi_turn: false, // Single turn - will complete
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None, // Single turn - will complete
             },
             ShortTermMemory {
                 entries: vec![
@@ -166,6 +168,8 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         },
         ShortTermMemory {
             entries: vec![

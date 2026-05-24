@@ -1,6 +1,6 @@
 mod brain_prompt;
 mod factory;
-mod openai;
+mod genai;
 mod provider;
 mod summarization_prompt;
 

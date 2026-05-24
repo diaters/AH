@@ -9,22 +9,24 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, OutputMessage, RetryReadyMessage, Signal, SpaceAgentRegistry,
-        SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, Task,
-        TaskEvaluationConfig, TaskTerminatedMessage, UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, BuiltinToolExecutors, OutputMessage, RetryReadyMessage, Signal,
+        SpaceAgentRegistry, SpaceKnowledge, SpacePreferences, SpaceRuntimeContext,
+        SpaceToolRegistry, Task, TaskEvaluationConfig, TaskTerminatedMessage, ToolCallingState,
+        UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     systems::{
-        HarnessSet, agent_evolution_system, agent_execution_system, agent_factory_system,
-        agent_termination_system, approval_dispatch_system, approval_result_system,
-        brain_decision_system, brain_dispatch_system, command_parse_system, continue_task_system,
+        HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
+        approval_dispatch_system, approval_result_system, brain_decision_system,
+        brain_dispatch_system, command_parse_system, continue_task_system,
         evaluation_result_system, evaluation_trigger_system, finish_task_system,
         ingest_execution_results_system, init_agent_memory_system, input_ingress_system,
         llm_response_system, load_agents_system, memory_absorption_system,
         memory_compression_system, memory_contribution_system, register_builtin_tools,
-        retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        summarization_dispatch_system, summarization_result_system, task_dispatch_system,
-        task_termination_system, tick_clock_system, tool_confirmation_request_system,
+        retry_ready_system, retry_wakeup_system, signal_ingest_system, sub_task_batch_block_system,
+        sub_task_completion_system, summarization_dispatch_system, summarization_result_system,
+        task_dispatch_system, task_termination_system, tick_clock_system,
+        tool_calling_orchestrator_system, tool_confirmation_request_system,
         tool_confirmation_result_system, tool_dispatch_system, tool_result_system,
         user_input_routing_system, user_message_to_task_system, user_output_system,
     },
@@ -40,6 +42,7 @@ pub struct BrainConfig {
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub max_retries: u32,
+    pub max_tool_iterations: u32,
     pub llm: LlmProviderConfig,
     pub brain: Option<BrainConfig>,
     pub agents_config_path: String,
@@ -67,6 +70,7 @@ impl HarnessConfig {
 
         Ok(Self {
             max_retries: 3,
+            max_tool_iterations: 5,
             llm,
             brain,
             agents_config_path,
@@ -78,13 +82,12 @@ impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
             max_retries: 3,
+            max_tool_iterations: 5,
             llm: LlmProviderConfig {
                 provider: crate::llm::LlmProviderKind::OpenAi,
                 model: "gpt-4.1-mini".to_string(),
-                api_key: "test-api-key".to_string(),
+                api_key: Some("test-api-key".to_string()),
                 api_base: None,
-                org_id: None,
-                project_id: None,
             },
             brain: None,
             agents_config_path: "agents.toml".to_string(),
@@ -180,8 +183,10 @@ pub fn build_harness_app(
 
     // Tool Registry with builtin tools
     let mut tool_registry = SpaceToolRegistry::default();
-    register_builtin_tools(&mut tool_registry);
+    let mut tool_executors = BuiltinToolExecutors::default();
+    register_builtin_tools(&mut tool_registry, &mut tool_executors);
     app.insert_resource(tool_registry);
+    app.insert_resource(tool_executors);
 
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);
@@ -231,10 +236,19 @@ pub fn build_harness_app(
             task_termination_system
                 .in_set(HarnessSet::Transform)
                 .after(llm_response_system),
+            sub_task_completion_system
+                .in_set(HarnessSet::Transform)
+                .after(task_termination_system),
             evaluation_result_system.in_set(HarnessSet::Transform),
             tool_result_system
                 .in_set(HarnessSet::Transform)
                 .after(ingest_execution_results_system),
+            sub_task_batch_block_system
+                .in_set(HarnessSet::Transform)
+                .after(tool_result_system),
+            tool_calling_orchestrator_system
+                .in_set(HarnessSet::Transform)
+                .after(sub_task_batch_block_system),
         ),
     );
 
@@ -273,10 +287,9 @@ pub fn build_harness_app(
             summarization_dispatch_system
                 .in_set(HarnessSet::Maintenance)
                 .after(agent_factory_system),
-            // 审批与演化系统
+            // 审批系统
             approval_dispatch_system.in_set(HarnessSet::Dispatch),
             approval_result_system.in_set(HarnessSet::Transform),
-            agent_evolution_system.in_set(HarnessSet::Maintenance),
             // 用户确认系统
             tool_confirmation_request_system.in_set(HarnessSet::Output),
             tool_confirmation_result_system
@@ -311,6 +324,7 @@ pub fn app_is_idle(world: &mut World) -> bool {
         .iter(world)
         .count();
     let pending_terminated = world.query::<&TaskTerminatedMessage>().iter(world).count();
+    let pending_tool_calling = world.query::<&ToolCallingState>().iter(world).count();
 
     active_tasks == 0
         && pending_signals == 0
@@ -321,4 +335,5 @@ pub fn app_is_idle(world: &mut World) -> bool {
         && pending_outputs == 0
         && pending_spawn_requests == 0
         && pending_terminated == 0
+        && pending_tool_calling == 0
 }

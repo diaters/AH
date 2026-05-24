@@ -8,7 +8,7 @@ use bevy::prelude::Resource;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentCapabilities, AgentProfile, MemoryEntry};
+use super::{AgentCapabilities, AgentProfile, MemoryEntry, SubTaskDefinition, ToolError};
 
 /// Space 级别的长期知识（用户相关）
 #[derive(Resource, Default)]
@@ -55,10 +55,20 @@ impl SpaceToolRegistry {
     pub fn exists(&self, name: &str) -> bool {
         self.tools.contains_key(name)
     }
+
+    /// 遍历所有工具定义
+    pub fn iter(&self) -> impl Iterator<Item = &ToolDefinition> {
+        self.tools.values()
+    }
+
+    /// 获取所有工具名称
+    pub fn tool_names(&self) -> Vec<&str> {
+        self.tools.keys().map(|k| k.as_str()).collect()
+    }
 }
 
 /// Tool 定义
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinition {
     /// 工具名称（唯一标识）
     pub name: String,
@@ -70,10 +80,13 @@ pub struct ToolDefinition {
     pub default_permission: ToolPermission,
     /// 执行器类型
     pub executor: ToolExecutorKind,
+    /// 执行所需的最小 tag（如 "brain"）
+    #[serde(default)]
+    pub required_tag: Option<String>,
 }
 
 /// Tool 参数 Schema
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolSchema {
     pub schema: serde_json::Value,
 }
@@ -111,6 +124,55 @@ pub enum ToolPermission {
     Confirm,
     /// 禁止执行
     Deny,
+}
+
+/// Tool 执行动作
+#[derive(Debug, Clone)]
+pub enum ToolAction {
+    /// 直接返回结果
+    Direct(serde_json::Value),
+    /// 创建子 Agent 请求
+    SpawnAgent {
+        name: String,
+        model: Option<String>,
+        description: String,
+        tools: Vec<String>,
+    },
+    /// 创建子任务批次
+    CreateBatch(Vec<SubTaskDefinition>),
+}
+
+/// 内置 Tool 执行上下文
+pub struct ToolContext<'a> {
+    pub knowledge: &'a SpaceKnowledge,
+}
+
+/// 内置 Tool trait
+pub trait BuiltinTool: Send + Sync + 'static {
+    /// 工具名称
+    fn name(&self) -> &str;
+    /// 执行工具并返回动作
+    fn execute(
+        &self,
+        input: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolAction, ToolError>;
+}
+
+/// 内置 Tool 执行器注册表
+#[derive(Resource, Default)]
+pub struct BuiltinToolExecutors {
+    executors: HashMap<String, Box<dyn BuiltinTool>>,
+}
+
+impl BuiltinToolExecutors {
+    pub fn register(&mut self, executor: Box<dyn BuiltinTool>) {
+        self.executors.insert(executor.name().to_string(), executor);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&dyn BuiltinTool> {
+        self.executors.get(name).map(|e| e.as_ref())
+    }
 }
 
 /// 持久性 Agent 配置镜像

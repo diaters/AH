@@ -9,7 +9,7 @@ use crate::{
     domain::{
         Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExperience, AgentKind, AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions,
-        FailureReason, Task, TaskId, TaskTerminatedMessage, ToolPermission,
+        FailureReason, SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
     },
 };
 
@@ -27,13 +27,21 @@ pub(crate) fn load_agents_system(
 pub(crate) fn agent_factory_system(
     mut commands: Commands,
     clock: Res<Clock>,
+    registry: Res<SpaceToolRegistry>,
     agents: Query<(Entity, &Agent)>,
     mut tasks: Query<&mut Task>,
     spawn_requests: Query<(Entity, &AgentSpawnRequestMessage)>,
     terminated_messages: Query<(Entity, &TaskTerminatedMessage)>,
 ) {
     for (entity, request) in &spawn_requests {
-        handle_spawn_request(&mut commands, &agents, &mut tasks, &clock, request);
+        handle_spawn_request(
+            &mut commands,
+            &agents,
+            &mut tasks,
+            &clock,
+            &registry,
+            request,
+        );
         commands.entity(entity).despawn();
     }
 
@@ -110,16 +118,11 @@ fn load_persistent_agents(
             "spawning persistent agent"
         );
 
-        let tool_permissions = if let Some(ref tools_config) = entry.tools {
-            AgentToolPermissions {
-                default_permission: tools_config
-                    .default_permission
-                    .unwrap_or(ToolPermission::Confirm),
-                overrides: tools_config.overrides.clone(),
-            }
-        } else {
-            AgentToolPermissions::default()
-        };
+        let tool_permissions = entry
+            .tools
+            .clone()
+            .map(AgentToolPermissions::from)
+            .unwrap_or_default();
 
         commands.spawn(Agent {
             id,
@@ -145,6 +148,7 @@ fn handle_spawn_request(
     agents: &Query<(Entity, &Agent)>,
     tasks: &mut Query<&mut Task>,
     clock: &Clock,
+    registry: &SpaceToolRegistry,
     request: &AgentSpawnRequestMessage,
 ) {
     let Some((_, parent_agent)) = agents.iter().find(|(_, a)| a.id == request.parent_agent_id)
@@ -165,11 +169,14 @@ fn handle_spawn_request(
         return;
     };
 
-    // 过滤 tools：仅保留父 Agent 拥有的权限
+    // 过滤 tools：保留父 Agent 有 Allow 或 Confirm 权限的工具
     let allowed_tools: Vec<String> = request
         .tools
         .iter()
-        .filter(|tool| parent_agent.has_permission(tool))
+        .filter(|tool| {
+            let perm = parent_agent.tool_permissions.get_permission(tool);
+            !matches!(perm, crate::domain::ToolPermission::Deny)
+        })
         .cloned()
         .collect();
 
@@ -235,12 +242,26 @@ fn handle_spawn_request(
         experience: AgentExperience::default(),
     });
 
+    // 从 registry 构建子 Agent 的工具列表
+    let child_tools: Vec<crate::domain::ToolDefinition> = registry
+        .tools
+        .values()
+        .filter(|td| allowed_tools.contains(&td.name))
+        .cloned()
+        .collect();
+
     let execution_request = AgentExecutionRequest {
         task_id: request.task_id,
         agent_id: id,
         request_kind: crate::domain::AgentRequestKind::LlmCompletion,
-        prompt: String::new(),
-        system_prompt: None,
+        prompt: if request.task_prompt.is_empty() {
+            request.description.clone()
+        } else {
+            request.task_prompt.clone()
+        },
+        system_prompt: request.task_system_prompt.clone(),
+        tools: child_tools,
+        conversation: None,
     };
 
     commands.spawn(AgentExecutionRequestMessage {

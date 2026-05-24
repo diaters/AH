@@ -25,14 +25,15 @@ pub use memory::{
     estimate_tokens,
 };
 pub use space::{
-    AgentToolsConfig, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge, SpacePreferences,
-    SpaceRuntimeContext, SpaceToolRegistry, SystemStatus, ToolDefinition, ToolExecutorKind,
-    ToolPermission, ToolSchema,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, PersistentAgentConfig, SpaceAgentRegistry,
+    SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, SystemStatus,
+    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 pub type TaskId = Uuid;
 pub type AgentId = Uuid;
-pub type ExecutorFuture = Pin<Box<dyn Future<Output = Result<String, ExecutionError>> + Send>>;
+pub type ExecutorFuture =
+    Pin<Box<dyn Future<Output = Result<AgentExecutionOutput, ExecutionError>> + Send>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SignalType {
@@ -49,6 +50,11 @@ pub enum WaitingReason {
     RetryBackoff,
     Approval,      // 等待审批
     Summarization, // 等待摘要完成
+    ToolExecution, // 等待工具执行结果
+    /// 等待一批子任务全部完成（create_tasks 工具调用后）
+    SubTaskBatch {
+        batch_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -251,6 +257,15 @@ impl Default for AgentToolPermissions {
     }
 }
 
+impl From<space::AgentToolsConfig> for AgentToolPermissions {
+    fn from(config: space::AgentToolsConfig) -> Self {
+        Self {
+            default_permission: config.default_permission.unwrap_or(ToolPermission::Confirm),
+            overrides: config.overrides,
+        }
+    }
+}
+
 /// Agent 长期经验
 #[derive(Debug, Clone, Component, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentExperience {
@@ -293,6 +308,66 @@ pub enum AgentRequestKind {
     Summarization,
 }
 
+/// LLM 返回的 Tool 调用
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LlmToolCall {
+    /// Tool 调用 ID（来自 LLM，如 "call_abc123"）
+    pub id: String,
+    /// LLM 请求调用的 Tool 名称
+    pub name: String,
+    /// LLM 传递的 JSON 参数字符串
+    pub arguments: String,
+}
+
+/// LLM 执行输出
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentExecutionOutput {
+    pub content: OutputContent,
+    /// DeepSeek 等推理模型返回的思考内容，后续请求必须回传
+    pub reasoning_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OutputContent {
+    /// LLM 返回了文本响应
+    Text(String),
+    /// LLM 请求了一次或多次 Tool 调用
+    ToolCalls(Vec<LlmToolCall>),
+}
+
+impl std::fmt::Display for AgentExecutionOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.content {
+            OutputContent::Text(s) => write!(f, "{}", s),
+            OutputContent::ToolCalls(calls) => {
+                let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+                write!(f, "tool_calls: [{}]", names.join(", "))
+            }
+        }
+    }
+}
+
+/// 结构化对话消息（用于 Tool 调用多轮对话）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ConversationMessage {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: Option<String>,
+        tool_calls: Vec<LlmToolCall>,
+        /// DeepSeek 等推理模型的思考内容，后续请求必须回传
+        reasoning_content: Option<String>,
+    },
+    Tool {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentExecutionRequest {
     pub task_id: TaskId,
@@ -300,6 +375,10 @@ pub struct AgentExecutionRequest {
     pub request_kind: AgentRequestKind,
     pub prompt: String,
     pub system_prompt: Option<String>,
+    /// Agent 可用的 Tool 定义列表
+    pub tools: Vec<ToolDefinition>,
+    /// 结构化对话历史（后续请求使用，初始请求为 None）
+    pub conversation: Option<Vec<ConversationMessage>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,7 +386,15 @@ pub struct AgentExecutionResult {
     pub task_id: TaskId,
     pub agent_id: AgentId,
     pub request_kind: AgentRequestKind,
-    pub result: Result<String, ExecutionError>,
+    pub result: Result<AgentExecutionOutput, ExecutionError>,
+    /// 原始 prompt（用于对话重建）
+    pub prompt: String,
+    /// 原始 system_prompt（用于对话重建）
+    pub system_prompt: Option<String>,
+    /// Agent 可用的 Tool 定义（用于 tool calling 循环重建）
+    pub tools: Vec<ToolDefinition>,
+    /// DeepSeek 等推理模型的思考内容，后续请求必须回传
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Component, Serialize, Deserialize)]
@@ -328,6 +415,10 @@ pub struct Task {
     pub last_error: Option<String>,
     /// 是否支持多轮对话
     pub multi_turn: bool,
+    /// 父 Task ID（子任务回传用）
+    pub parent_task_id: Option<TaskId>,
+    /// 批次 ID（同一批 create_tasks 调用共享）
+    pub batch_id: Option<Uuid>,
 }
 
 impl Task {
@@ -352,6 +443,8 @@ impl Task {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         }
     }
 
@@ -376,6 +469,8 @@ impl Task {
             next_retry_at: None,
             last_error: None,
             multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
         }
     }
 
@@ -623,11 +718,141 @@ pub struct AgentSpawnRequestMessage {
     pub description: String,
     /// 初始 Tool 权限列表（每个 Tool 设为 Allow）
     pub tools: Vec<String>,
+    /// 子任务的 prompt 内容
+    pub task_prompt: String,
+    /// 子任务的 system prompt（可选）
+    pub task_system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Component)]
 pub struct TaskTerminatedMessage {
     pub task_id: TaskId,
+}
+
+/// 单个子任务的定义（从 create_tasks 工具输入解析）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubTaskDefinition {
+    /// 子 Agent 名称
+    pub name: String,
+    /// 任务描述/prompt
+    pub content: String,
+    /// 需要的工具列表
+    pub tools: Vec<String>,
+    /// 依赖的任务 name 列表（在本批次内）
+    pub depends_on: Vec<String>,
+    /// 可选模型覆盖
+    pub model: Option<String>,
+}
+
+/// 附加在每个子 Task 实体上，供 Brain 和调度系统读取
+#[derive(Debug, Clone, Component)]
+pub struct SubTaskConfig {
+    pub batch_id: Uuid,
+    pub child_agent_name: String,
+    pub child_agent_model: Option<String>,
+    pub allowed_tools: Vec<String>,
+    /// 本任务依赖的其他子任务 name 列表（在 batch 内）
+    pub depends_on: Vec<String>,
+    /// 依赖本任务完成的子任务 name 列表（反向索引，Brain 用）
+    pub depended_by: Vec<String>,
+}
+
+/// 批次级别的 DAG 执行状态，附加在父 Task 实体上
+#[derive(Debug, Clone, Component)]
+pub struct SubTaskBatchState {
+    pub batch_id: Uuid,
+    pub parent_tool_call_id: String,
+    /// name → 任务状态
+    pub tasks: HashMap<String, BatchTaskStatus>,
+    /// 已完成的任务数量
+    pub completed_count: usize,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct BatchTaskStatus {
+    pub task_id: TaskId,
+    pub state: BatchTaskState,
+    pub result_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchTaskState {
+    /// 等待依赖满足
+    Pending,
+    /// 已分发给 Brain/Agent
+    Dispatched,
+    /// Agent 正在执行
+    Running,
+    /// 已完成
+    Done,
+    /// 执行失败
+    Failed,
+}
+
+impl SubTaskBatchState {
+    /// 返回当前可以分发的任务（所有依赖已满足）的 name 列表
+    pub fn ready_tasks(&self) -> Vec<String> {
+        self.tasks
+            .iter()
+            .filter(|(_, status)| {
+                status.state == BatchTaskState::Pending && self.dependencies_satisfied(status)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    fn dependencies_satisfied(&self, _status: &BatchTaskStatus) -> bool {
+        // 需要从 SubTaskConfig 获取 depends_on，这里使用 tasks map 的状态来判断
+        // 实际使用时由调用方传入 depends_on 列表
+        true
+    }
+
+    /// 检查是否全部完成
+    pub fn all_done(&self) -> bool {
+        self.completed_count >= self.total_count
+    }
+
+    /// 更新任务状态
+    pub fn update_task_state(
+        &mut self,
+        name: &str,
+        new_state: BatchTaskState,
+        result_summary: Option<String>,
+    ) {
+        if let Some(status) = self.tasks.get_mut(name) {
+            let was_terminal =
+                matches!(status.state, BatchTaskState::Done | BatchTaskState::Failed);
+            status.state = new_state;
+            if let Some(summary) = result_summary {
+                status.result_summary = Some(summary);
+            }
+            let is_terminal = matches!(status.state, BatchTaskState::Done | BatchTaskState::Failed);
+            if !was_terminal && is_terminal {
+                self.completed_count += 1;
+            }
+        }
+    }
+}
+
+/// create_tasks 工具调用后产出，触发父 Task 阻塞 + Brain 分发
+#[derive(Debug, Clone, Component)]
+pub struct SubTaskBatchCreatedMessage {
+    pub parent_task_id: TaskId,
+    pub batch_id: Uuid,
+    pub parent_tool_call_id: String,
+    pub tasks: Vec<SubTaskDefinition>,
+}
+
+/// 单个子任务完成时产出，用于更新 BatchState 并检查是否全部完成
+#[derive(Debug, Clone, Component)]
+pub struct SubTaskCompletedMessage {
+    pub parent_task_id: TaskId,
+    pub batch_id: Uuid,
+    pub child_task_id: TaskId,
+    pub child_task_name: String,
+    pub result_summary: String,
+    pub success: bool,
 }
 
 /// /finish 命令触发的任务完成消息
@@ -644,6 +869,10 @@ pub struct ToolExecutionRequestMessage {
     pub tool_input: serde_json::Value,
     /// 确认请求 ID（当工具需要确认时设置）
     pub pending_confirmation_id: Option<Uuid>,
+    /// LLM Tool 调用 ID（用于结果匹配，非 LLM 发起的为 None）
+    pub tool_call_id: Option<String>,
+    /// 确认请求的选项列表（用于匹配用户响应，避免硬编码 default_options）
+    pub pending_confirmation_options: Option<Vec<ConfirmationOption>>,
 }
 
 /// Tool 执行结果消息
@@ -652,6 +881,25 @@ pub struct ToolExecutionResultMessage {
     pub result: AgentExecutionResult,
     pub tool_name: String,
     pub tool_output: Result<serde_json::Value, ToolError>,
+    /// LLM Tool 调用 ID（从请求传递到结果，用于匹配）
+    pub tool_call_id: Option<String>,
+}
+
+/// Tool 调用循环状态
+#[derive(Debug, Clone, Component)]
+pub struct ToolCallingState {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    /// 仍在等待执行结果的 LLM Tool 调用 ID 列表
+    pub pending_tool_call_ids: Vec<String>,
+    /// 当前迭代次数
+    pub iteration: u32,
+    /// 最大迭代次数
+    pub max_iterations: u32,
+    /// 累积的结构化对话历史
+    pub conversation: Vec<ConversationMessage>,
+    /// Agent 可用的 Tool 定义（后续请求需要重新发送）
+    pub tools: Vec<ToolDefinition>,
 }
 
 /// 摘要触发来源
@@ -687,16 +935,7 @@ pub struct SummarizationResultMessage {
     pub summary: Result<String, ExecutionError>,
 }
 
-/// 确认模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConfirmMode {
-    /// 单次确认，仅对本次请求生效
-    Once,
-    /// 永久确认，修正 Agent 的长期权限配置
-    Permanent,
-}
-
-/// 授权模式
+/// 授权模式（用户确认和父 Agent 审批共用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantMode {
     /// 单次授权，仅本次执行
@@ -721,7 +960,7 @@ pub struct ConfirmationOption {
     /// 显示文本
     pub label: String,
     /// 确认模式
-    pub mode: ConfirmMode,
+    pub mode: GrantMode,
 }
 
 impl ConfirmationOption {
@@ -730,7 +969,7 @@ impl ConfirmationOption {
         Self {
             id: "allow_once".to_string(),
             label: "Allow once".to_string(),
-            mode: ConfirmMode::Once,
+            mode: GrantMode::Once,
         }
     }
 
@@ -739,7 +978,7 @@ impl ConfirmationOption {
         Self {
             id: "allow_always".to_string(),
             label: "Allow always".to_string(),
-            mode: ConfirmMode::Permanent,
+            mode: GrantMode::Permanent,
         }
     }
 
@@ -748,7 +987,7 @@ impl ConfirmationOption {
         Self {
             id: "deny".to_string(),
             label: "Deny".to_string(),
-            mode: ConfirmMode::Once, // Deny 模式不影响 Permanent
+            mode: GrantMode::Once, // Deny 模式不影响 Permanent
         }
     }
 

@@ -3,9 +3,9 @@ use std::{sync::Arc, thread, time::Duration};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentExperience, AgentKind,
-    AgentProfile, AgentToolPermissions, ExecutorFuture, ExternalInput, HarnessConfig,
-    OutputMessage, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ExecutorFuture, ExternalInput,
+    HarnessConfig, OutputMessage, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -13,7 +13,12 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok(format!("echo: {}", request.prompt)) })
+        Box::pin(async move {
+            Ok(AgentExecutionOutput {
+                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
+                reasoning_content: None,
+            })
+        })
     }
 }
 
@@ -23,13 +28,12 @@ fn multi_agent_config() -> HarnessConfig {
         llm: harness::LlmProviderConfig {
             provider: harness::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
-            api_key: "test-api-key".to_string(),
+            api_key: Some("test-api-key".to_string()),
             api_base: None,
-            org_id: None,
-            project_id: None,
         },
         brain: None,
         agents_config_path: "agents.toml".to_string(),
+        max_tool_iterations: 5,
     }
 }
 
@@ -176,6 +180,8 @@ fn task_scoped_agent_lifecycle() {
             next_retry_at: None,
             last_error: None,
             multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
         });
         world.spawn(TaskTerminatedMessage { task_id });
     }

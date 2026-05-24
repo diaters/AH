@@ -1,11 +1,13 @@
 use std::env;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LlmProviderKind {
     OpenAi,
+    Anthropic,
+    DeepSeek,
     OpenAiCompatible,
 }
 
@@ -14,9 +16,11 @@ impl LlmProviderKind {
     pub fn parse(raw: &str) -> Result<Self> {
         match raw.trim().to_lowercase().as_str() {
             "openai" => Ok(Self::OpenAi),
+            "anthropic" | "claude" => Ok(Self::Anthropic),
+            "deepseek" => Ok(Self::DeepSeek),
             "openai-compatible" | "openai_compatible" | "compatible" => Ok(Self::OpenAiCompatible),
             other => bail!(
-                "unsupported HARNESS_LLM_PROVIDER value: {other}; expected openai or openai-compatible"
+                "unsupported HARNESS_LLM_PROVIDER value: {other}; expected openai, anthropic, deepseek, or openai-compatible"
             ),
         }
     }
@@ -26,10 +30,10 @@ impl LlmProviderKind {
 pub struct LlmProviderConfig {
     pub provider: LlmProviderKind,
     pub model: String,
-    pub api_key: String,
+    /// 显式 API key（仅 openai-compatible 必填；标准 provider 由 genai 从环境变量自动读取）
+    pub api_key: Option<String>,
+    /// 自定义 API endpoint（仅 openai-compatible 必填）
     pub api_base: Option<String>,
-    pub org_id: Option<String>,
-    pub project_id: Option<String>,
 }
 
 impl LlmProviderConfig {
@@ -39,20 +43,14 @@ impl LlmProviderConfig {
             env::var("HARNESS_LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string());
         let provider = LlmProviderKind::parse(&provider_raw)?;
         let model = env::var("HARNESS_MODEL").unwrap_or_else(|_| default_model.to_string());
-        let api_key = read_first_env(&["HARNESS_LLM_API_KEY", "OPENAI_API_KEY"]).context(
-            "missing HARNESS_LLM_API_KEY or OPENAI_API_KEY; please export a valid API key",
-        )?;
+        let api_key = read_first_env(&["HARNESS_LLM_API_KEY", "OPENAI_API_KEY"]);
         let api_base = read_first_env(&["HARNESS_LLM_API_BASE", "OPENAI_BASE_URL"]);
-        let org_id = read_first_env(&["HARNESS_LLM_ORG_ID", "OPENAI_ORG_ID"]);
-        let project_id = read_first_env(&["HARNESS_LLM_PROJECT_ID", "OPENAI_PROJECT_ID"]);
 
         let config = Self {
             provider,
             model,
             api_key,
             api_base,
-            org_id,
-            project_id,
         };
 
         config.validate()?;
@@ -65,17 +63,25 @@ impl LlmProviderConfig {
             bail!("HARNESS_MODEL must not be empty");
         }
 
-        if self.api_key.trim().is_empty() {
-            bail!("API key must not be empty");
-        }
-
-        if matches!(self.provider, LlmProviderKind::OpenAiCompatible)
-            && self
+        if matches!(self.provider, LlmProviderKind::OpenAiCompatible) {
+            if self
                 .api_base
                 .as_deref()
                 .is_none_or(|api_base| api_base.trim().is_empty())
-        {
-            bail!("HARNESS_LLM_API_BASE is required when HARNESS_LLM_PROVIDER=openai-compatible");
+            {
+                bail!(
+                    "HARNESS_LLM_API_BASE is required when HARNESS_LLM_PROVIDER=openai-compatible"
+                );
+            }
+            if self
+                .api_key
+                .as_deref()
+                .is_none_or(|api_key| api_key.trim().is_empty())
+            {
+                bail!(
+                    "HARNESS_LLM_API_KEY is required when HARNESS_LLM_PROVIDER=openai-compatible"
+                );
+            }
         }
 
         Ok(())
@@ -104,6 +110,18 @@ mod tests {
             LlmProviderKind::OpenAi
         );
         assert_eq!(
+            LlmProviderKind::parse("anthropic").expect("anthropic should parse"),
+            LlmProviderKind::Anthropic
+        );
+        assert_eq!(
+            LlmProviderKind::parse("claude").expect("claude should parse"),
+            LlmProviderKind::Anthropic
+        );
+        assert_eq!(
+            LlmProviderKind::parse("deepseek").expect("deepseek should parse"),
+            LlmProviderKind::DeepSeek
+        );
+        assert_eq!(
             LlmProviderKind::parse("openai-compatible").expect("openai-compatible should parse"),
             LlmProviderKind::OpenAiCompatible
         );
@@ -113,16 +131,21 @@ mod tests {
         );
     }
 
+    /// 验证不支持的 provider 字符串会被拒绝。
+    #[test]
+    fn rejects_unknown_provider() {
+        let err = LlmProviderKind::parse("unknown").unwrap_err();
+        assert!(err.to_string().contains("unsupported HARNESS_LLM_PROVIDER"));
+    }
+
     /// 验证 OpenAI 兼容 provider 缺失 base URL 时会被拒绝。
     #[test]
     fn rejects_compatible_provider_without_api_base() {
         let config = LlmProviderConfig {
             provider: LlmProviderKind::OpenAiCompatible,
             model: "test-model".to_string(),
-            api_key: "test-key".to_string(),
+            api_key: Some("test-key".to_string()),
             api_base: None,
-            org_id: None,
-            project_id: None,
         };
 
         let error = config
@@ -137,20 +160,55 @@ mod tests {
         );
     }
 
-    /// 验证 OpenAI 兼容 provider 在完整配置下可以通过校验。
+    /// 验证 OpenAI 兼容 provider 缺失 api key 时会被拒绝。
     #[test]
-    fn accepts_compatible_provider_with_api_base() {
+    fn rejects_compatible_provider_without_api_key() {
         let config = LlmProviderConfig {
             provider: LlmProviderKind::OpenAiCompatible,
             model: "test-model".to_string(),
-            api_key: "test-key".to_string(),
+            api_key: None,
             api_base: Some("https://example.com/v1".to_string()),
-            org_id: None,
-            project_id: None,
+        };
+
+        let error = config
+            .validate()
+            .expect_err("compatible provider without api key should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HARNESS_LLM_API_KEY is required"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// 验证 OpenAI 兼容 provider 在完整配置下可以通过校验。
+    #[test]
+    fn accepts_compatible_provider_with_full_config() {
+        let config = LlmProviderConfig {
+            provider: LlmProviderKind::OpenAiCompatible,
+            model: "test-model".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base: Some("https://example.com/v1".to_string()),
         };
 
         config
             .validate()
-            .expect("compatible provider with api base should pass");
+            .expect("compatible provider with full config should pass");
+    }
+
+    /// 验证标准 provider 无需显式 api_key 和 api_base 也能通过校验。
+    #[test]
+    fn accepts_standard_provider_without_explicit_config() {
+        let config = LlmProviderConfig {
+            provider: LlmProviderKind::OpenAi,
+            model: "test-model".to_string(),
+            api_key: None,
+            api_base: None,
+        };
+
+        config
+            .validate()
+            .expect("standard provider without explicit config should pass");
     }
 }
