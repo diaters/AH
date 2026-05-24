@@ -19,10 +19,46 @@ use tracing_subscriber::{EnvFilter, fmt};
 static mut PENDING_CONFIRMATION: Option<uuid::Uuid> = None;
 
 /// 初始化命令行运行所需的 tracing 日志。
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+///
+/// 终端层：纯文本，级别受 RUST_LOG 控制（默认 INFO）。
+/// 文件层：JSON Lines，级别固定 DEBUG，写入 `logs/` 目录（可通过
+/// `HARNESS_LOG_DIR` 环境变量覆盖）。
+fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
 
-    fmt().with_env_filter(filter).without_time().init();
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let file_filter = EnvFilter::new("debug");
+
+    let log_dir =
+        std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+    let file_appender = tracing_appender::rolling::never(
+        &log_dir,
+        format!(
+            "harness_{}.jsonl",
+            chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+        ),
+    );
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let stdout_layer = fmt::layer()
+        .without_time()
+        .with_filter(env_filter);
+
+    let file_layer = fmt::layer()
+        .json()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_filter(file_filter);
+
+    tracing_subscriber::registry()
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+
+    guard
 }
 
 /// 启动阻塞 stdin 读取线程，并将输入写入 ingress channel。
@@ -135,7 +171,7 @@ fn run_event_loop(app: &mut bevy::app::App) {
 fn main() -> Result<()> {
     // 加载 .env.local 文件（如果存在）
     dotenvy::from_filename(".env.local").ok();
-    init_tracing();
+    let _log_guard = init_tracing();
 
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);
     let config = HarnessConfig::from_env()?;
