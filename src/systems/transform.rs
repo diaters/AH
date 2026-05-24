@@ -6,8 +6,8 @@ use crate::{
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, BrainDecisionError, ConversationMessage,
-        OutputContent, CreateTaskMessage, EntryMetadata, EntryRole, FailureReason,
-        FinishTaskMessage, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload,
+        CreateTaskMessage, EntryMetadata, EntryRole, FailureReason, FinishTaskMessage,
+        OutputContent, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload,
         SubTaskBatchCreatedMessage, SubTaskCompletedMessage, SubTaskConfig,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
         ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
@@ -123,7 +123,10 @@ pub(crate) fn brain_decision_system(
         };
 
         match &result.result {
-            Ok(AgentExecutionOutput { content: OutputContent::Text(content), .. }) => match parse_brain_decision(content) {
+            Ok(AgentExecutionOutput {
+                content: OutputContent::Text(content),
+                ..
+            }) => match parse_brain_decision(content) {
                 Ok(decision) => {
                     let selected_agent = agents.iter().find(|agent| {
                         agent.profile.name == decision.selected_agent_name
@@ -197,9 +200,13 @@ pub(crate) fn brain_decision_system(
                     task.status = TaskStatus::Failed(FailureReason::AgentError);
                     task.updated_at = clock.0;
                 }
-            }
-            Ok(AgentExecutionOutput { content: OutputContent::ToolCalls(_), .. }) => {
-                task.last_error = Some("brain decision returned tool calls, not supported yet".to_string());
+            },
+            Ok(AgentExecutionOutput {
+                content: OutputContent::ToolCalls(_),
+                ..
+            }) => {
+                task.last_error =
+                    Some("brain decision returned tool calls, not supported yet".to_string());
                 task.status = TaskStatus::Failed(FailureReason::AgentError);
                 task.updated_at = clock.0;
             }
@@ -268,11 +275,12 @@ pub(crate) fn llm_response_system(
             );
 
             match &result.result {
-                Ok(AgentExecutionOutput { content: OutputContent::Text(content), .. }) => {
+                Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(content),
+                    ..
+                }) => {
                     // Despawn any ToolCallingState for this task (loop completed with text)
-                    if let Some(info) =
-                        state_info.iter().find(|i| i.task_id == task.id)
-                    {
+                    if let Some(info) = state_info.iter().find(|i| i.task_id == task.id) {
                         debug!(
                             event = "ToolCallingStateCleaned",
                             task_id = %task.id,
@@ -329,7 +337,11 @@ pub(crate) fn llm_response_system(
                         });
                     }
                 }
-                Ok(AgentExecutionOutput { content: OutputContent::ToolCalls(calls), reasoning_content, .. }) => {
+                Ok(AgentExecutionOutput {
+                    content: OutputContent::ToolCalls(calls),
+                    reasoning_content,
+                    ..
+                }) => {
                     // Check for existing ToolCallingState (follow-up iteration)
                     let existing = state_info.iter().find(|i| i.task_id == task.id);
 
@@ -361,8 +373,7 @@ pub(crate) fn llm_response_system(
                             reasoning_content: reasoning_content.clone(),
                         });
 
-                        let pending_ids: Vec<String> =
-                            calls.iter().map(|c| c.id.clone()).collect();
+                        let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
 
                         debug!(
                             event = "ToolCallingStateUpdated",
@@ -387,7 +398,9 @@ pub(crate) fn llm_response_system(
                         // First iteration: create new ToolCallingState
                         let mut conversation = Vec::new();
                         if let Some(sp) = &result.system_prompt {
-                            conversation.push(ConversationMessage::System { content: sp.clone() });
+                            conversation.push(ConversationMessage::System {
+                                content: sp.clone(),
+                            });
                         }
                         conversation.push(ConversationMessage::User {
                             content: result.prompt.clone(),
@@ -398,8 +411,7 @@ pub(crate) fn llm_response_system(
                             reasoning_content: reasoning_content.clone(),
                         });
 
-                        let pending_ids: Vec<String> =
-                            calls.iter().map(|c| c.id.clone()).collect();
+                        let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
                         let max_iterations = settings.0.max_tool_iterations;
 
                         debug!(
@@ -426,9 +438,8 @@ pub(crate) fn llm_response_system(
 
                     // Spawn ToolExecutionRequestMessage for each call
                     for call in calls {
-                        let tool_input: serde_json::Value =
-                            serde_json::from_str(&call.arguments)
-                                .unwrap_or(serde_json::Value::Null);
+                        let tool_input: serde_json::Value = serde_json::from_str(&call.arguments)
+                            .unwrap_or(serde_json::Value::Null);
                         commands.spawn(ToolExecutionRequestMessage {
                             request: AgentExecutionRequest {
                                 task_id: task.id,
@@ -554,9 +565,10 @@ pub(crate) fn tool_calling_orchestrator_system(
 
         // 仅在任务处于 Waiting(ToolExecution) 状态时继续，否则跳过
         // （如 tool 需要用户确认时，任务状态会变为 Waiting(User)）
-        let task_is_waiting = tasks
-            .iter()
-            .any(|t| t.id == state.task_id && matches!(t.status, TaskStatus::Waiting(WaitingReason::ToolExecution)));
+        let task_is_waiting = tasks.iter().any(|t| {
+            t.id == state.task_id
+                && matches!(t.status, TaskStatus::Waiting(WaitingReason::ToolExecution))
+        });
         if !task_is_waiting {
             continue;
         }
@@ -570,9 +582,7 @@ pub(crate) fn tool_calling_orchestrator_system(
                 && remaining_ids.contains(call_id)
             {
                 let content = match &result.tool_output {
-                    Ok(val) => {
-                        serde_json::to_string(val).unwrap_or_else(|_| val.to_string())
-                    }
+                    Ok(val) => serde_json::to_string(val).unwrap_or_else(|_| val.to_string()),
                     Err(e) => format!("error: {}", e),
                 };
                 collected.push((result_entity, call_id.clone(), content));
@@ -663,7 +673,10 @@ pub(crate) fn tool_calling_orchestrator_system(
 
         // Set task back to Waiting(Agent)
         if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
-            && matches!(task.status, TaskStatus::Waiting(WaitingReason::ToolExecution))
+            && matches!(
+                task.status,
+                TaskStatus::Waiting(WaitingReason::ToolExecution)
+            )
         {
             let old_status = task.status.clone();
             task.status = TaskStatus::Waiting(WaitingReason::Agent);
@@ -804,7 +817,12 @@ fn build_tools_for_agent(
     registry
         .tools
         .values()
-        .filter(|td| !matches!(agent.tool_permissions.get_permission(&td.name), ToolPermission::Deny))
+        .filter(|td| {
+            !matches!(
+                agent.tool_permissions.get_permission(&td.name),
+                ToolPermission::Deny
+            )
+        })
         .cloned()
         .collect()
 }
@@ -933,9 +951,8 @@ pub(crate) fn sub_task_completion_system(
 
             // 恢复父 Task 状态
             if let Some(mut parent_task) = tasks.iter_mut().find(|t| t.id == msg.parent_task_id) {
-                let has_calling_state = calling_states
-                    .iter()
-                    .any(|cs| cs.task_id == parent_task.id);
+                let has_calling_state =
+                    calling_states.iter().any(|cs| cs.task_id == parent_task.id);
                 parent_task.status = if has_calling_state {
                     TaskStatus::Waiting(WaitingReason::ToolExecution)
                 } else {

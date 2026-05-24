@@ -25,9 +25,9 @@ pub use memory::{
     estimate_tokens,
 };
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, PersistentAgentConfig, SpaceAgentRegistry, SpaceKnowledge, SpacePreferences,
-    SpaceRuntimeContext, SpaceToolRegistry, SystemStatus, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind,
-    ToolPermission, ToolSchema,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, PersistentAgentConfig, SpaceAgentRegistry,
+    SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, SystemStatus,
+    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 pub type TaskId = Uuid;
@@ -52,7 +52,9 @@ pub enum WaitingReason {
     Summarization, // 等待摘要完成
     ToolExecution, // 等待工具执行结果
     /// 等待一批子任务全部完成（create_tasks 工具调用后）
-    SubTaskBatch { batch_id: Uuid },
+    SubTaskBatch {
+        batch_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -258,9 +260,7 @@ impl Default for AgentToolPermissions {
 impl From<space::AgentToolsConfig> for AgentToolPermissions {
     fn from(config: space::AgentToolsConfig) -> Self {
         Self {
-            default_permission: config
-                .default_permission
-                .unwrap_or(ToolPermission::Confirm),
+            default_permission: config.default_permission.unwrap_or(ToolPermission::Confirm),
             overrides: config.overrides,
         }
     }
@@ -350,8 +350,12 @@ impl std::fmt::Display for AgentExecutionOutput {
 /// 结构化对话消息（用于 Tool 调用多轮对话）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ConversationMessage {
-    System { content: String },
-    User { content: String },
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
     Assistant {
         content: Option<String>,
         tool_calls: Vec<LlmToolCall>,
@@ -792,8 +796,7 @@ impl SubTaskBatchState {
         self.tasks
             .iter()
             .filter(|(_, status)| {
-                status.state == BatchTaskState::Pending
-                    && self.dependencies_satisfied(status)
+                status.state == BatchTaskState::Pending && self.dependencies_satisfied(status)
             })
             .map(|(name, _)| name.clone())
             .collect()
@@ -818,18 +821,13 @@ impl SubTaskBatchState {
         result_summary: Option<String>,
     ) {
         if let Some(status) = self.tasks.get_mut(name) {
-            let was_terminal = matches!(
-                status.state,
-                BatchTaskState::Done | BatchTaskState::Failed
-            );
+            let was_terminal =
+                matches!(status.state, BatchTaskState::Done | BatchTaskState::Failed);
             status.state = new_state;
             if let Some(summary) = result_summary {
                 status.result_summary = Some(summary);
             }
-            let is_terminal = matches!(
-                status.state,
-                BatchTaskState::Done | BatchTaskState::Failed
-            );
+            let is_terminal = matches!(status.state, BatchTaskState::Done | BatchTaskState::Failed);
             if !was_terminal && is_terminal {
                 self.completed_count += 1;
             }

@@ -13,7 +13,12 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text("echo".to_string()), reasoning_content: None }) })
+        Box::pin(async move {
+            Ok(AgentExecutionOutput {
+                content: harness::OutputContent::Text("echo".to_string()),
+                reasoning_content: None,
+            })
+        })
     }
 }
 
@@ -72,8 +77,8 @@ fn user_input_continues_waiting_task() {
         next_retry_at: None,
         last_error: None,
         multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
+        parent_task_id: None,
+        batch_id: None,
     });
 
     // Simulate user input
@@ -145,8 +150,8 @@ fn evaluation_triggered_on_turn_limit() {
         next_retry_at: None,
         last_error: None,
         multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
+        parent_task_id: None,
+        batch_id: None,
     });
 
     // Add short term memory with some entries

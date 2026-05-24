@@ -3,7 +3,7 @@ use std::{sync::Arc, thread, time::Duration};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ExecutorFuture, ExternalInput,
     HarnessConfig, OutputMessage, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
 };
@@ -13,7 +13,12 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("echo: {}", request.prompt)), reasoning_content: None }) })
+        Box::pin(async move {
+            Ok(AgentExecutionOutput {
+                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
+                reasoning_content: None,
+            })
+        })
     }
 }
 

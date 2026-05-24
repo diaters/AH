@@ -96,7 +96,10 @@ pub(crate) fn task_dispatch_system(
             .tools
             .values()
             .filter(|tool_def| {
-                !matches!(agent.tool_permissions.get_permission(&tool_def.name), ToolPermission::Deny)
+                !matches!(
+                    agent.tool_permissions.get_permission(&tool_def.name),
+                    ToolPermission::Deny
+                )
             })
             .cloned()
             .collect();
@@ -120,11 +123,7 @@ pub(crate) fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     mut commands: Commands,
-    mut tasks: Query<(
-        &mut Task,
-        Option<&ShortTermMemory>,
-        Option<&SubTaskConfig>,
-    )>,
+    mut tasks: Query<(&mut Task, Option<&ShortTermMemory>, Option<&SubTaskConfig>)>,
     agents: Query<&Agent>,
     batch_states: Query<&SubTaskBatchState>,
 ) {

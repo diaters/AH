@@ -9,9 +9,9 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    HarnessConfig, LlmToolCall, OutputMessage, ShortTermMemory, SpaceToolRegistry,
-    Task, TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission,
-    ToolSchema, WaitingReason, build_harness_app,
+    HarnessConfig, LlmToolCall, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
+    TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -23,13 +23,21 @@ impl AgentExecutor for ToolCallingMockExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
         let has_conversation = request.conversation.is_some();
         let response = if has_conversation {
-            AgentExecutionOutput { content: harness::OutputContent::Text("final answer based on tool results".to_string()), reasoning_content: None }
+            AgentExecutionOutput {
+                content: harness::OutputContent::Text(
+                    "final answer based on tool results".to_string(),
+                ),
+                reasoning_content: None,
+            }
         } else {
-            AgentExecutionOutput { content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
-                id: "call_test123".to_string(),
-                name: "echo".to_string(),
-                arguments: r#"{"message":"hello"}"#.to_string(),
-            }]), reasoning_content: None }
+            AgentExecutionOutput {
+                content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
+                    id: "call_test123".to_string(),
+                    name: "echo".to_string(),
+                    arguments: r#"{"message":"hello"}"#.to_string(),
+                }]),
+                reasoning_content: None,
+            }
         };
         Box::pin(async move { Ok(response) })
     }
@@ -43,15 +51,22 @@ impl AgentExecutor for InfiniteToolCallExecutor {
         let iteration = request
             .conversation
             .as_ref()
-            .map(|c| c.iter().filter(|m| matches!(m, harness::ConversationMessage::Tool { .. })).count())
+            .map(|c| {
+                c.iter()
+                    .filter(|m| matches!(m, harness::ConversationMessage::Tool { .. }))
+                    .count()
+            })
             .unwrap_or(0);
         let call_id = format!("call_iter_{}", iteration);
         Box::pin(async move {
-            Ok(AgentExecutionOutput { content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
-                id: call_id,
-                name: "echo".to_string(),
-                arguments: r#"{"message":"loop"}"#.to_string(),
-            }]), reasoning_content: None })
+            Ok(AgentExecutionOutput {
+                content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
+                    id: call_id,
+                    name: "echo".to_string(),
+                    arguments: r#"{"message":"loop"}"#.to_string(),
+                }]),
+                reasoning_content: None,
+            })
         })
     }
 }
@@ -111,9 +126,7 @@ fn get_all_tools(world: &World) -> Vec<ToolDefinition> {
 fn spawn_task_with_stm(world: &mut World) -> (Entity, Task) {
     let mut task = Task::from_user_input_ready("test prompt", 3);
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
-    let entity = world
-        .spawn((task.clone(), ShortTermMemory::default()))
-        .id();
+    let entity = world.spawn((task.clone(), ShortTermMemory::default())).id();
     (entity, task)
 }
 

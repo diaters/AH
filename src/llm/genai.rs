@@ -1,10 +1,9 @@
 use anyhow::Result;
 use genai::{
-    Client,
+    Client, ModelIden, ServiceTarget,
     adapter::AdapterKind,
     chat::{ChatMessage, ChatRequest, ChatResponse, ContentPart, Tool, ToolCall, ToolResponse},
     resolver::{AuthData, Endpoint, ServiceTargetResolver},
-    ModelIden, ServiceTarget,
 };
 use tracing::debug;
 
@@ -25,9 +24,9 @@ impl GenaiExecutor {
         debug!(model = %config.model, provider = ?config.provider, "creating genai executor");
 
         let client = match config.provider {
-            LlmProviderKind::OpenAi
-            | LlmProviderKind::Anthropic
-            | LlmProviderKind::DeepSeek => Client::default(),
+            LlmProviderKind::OpenAi | LlmProviderKind::Anthropic | LlmProviderKind::DeepSeek => {
+                Client::default()
+            }
             LlmProviderKind::OpenAiCompatible => {
                 let api_base = config
                     .api_base
@@ -40,20 +39,19 @@ impl GenaiExecutor {
                     .ok_or_else(|| anyhow::anyhow!("api_key is required for openai-compatible"))?
                     .to_string();
 
-                let target_resolver =
-                    ServiceTargetResolver::from_resolver_fn(move |service_target: ServiceTarget| {
+                let target_resolver = ServiceTargetResolver::from_resolver_fn(
+                    move |service_target: ServiceTarget| {
                         let endpoint = Endpoint::from_owned(api_base.as_str());
                         let auth = AuthData::from_single(api_key.as_str());
-                        let model = ModelIden::new(
-                            AdapterKind::OpenAI,
-                            service_target.model.model_name,
-                        );
+                        let model =
+                            ModelIden::new(AdapterKind::OpenAI, service_target.model.model_name);
                         Ok(ServiceTarget {
                             endpoint,
                             auth,
                             model,
                         })
-                    });
+                    },
+                );
 
                 Client::builder()
                     .with_service_target_resolver(target_resolver)

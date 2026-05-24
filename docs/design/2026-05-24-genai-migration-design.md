@@ -14,10 +14,10 @@
 
 ### 核心决策
 
-1. **替换 `async-openai` → `genai 0.6`**：使用 genai 作为唯一的 LLM 客户端
-2. **保留 `AgentExecutor` trait**：最小化 trait 抽象（方案 A），不引入额外的 LLM trait 层
-3. **保留领域类型**：`ConversationMessage`、`LlmToolCall`、`AgentExecutionOutput` 等不变，`GenaiExecutor` 内部做双向转换
-4. **环境变量驱动配置**：`HARNESS_LLM_PROVIDER` 扩展为 `openai` / `anthropic` / `deepseek` / `openai-compatible`
+1. __替换 `async-openai` → `genai 0.6`__：使用 genai 作为唯一的 LLM 客户端
+2. __保留 `AgentExecutor` trait__：最小化 trait 抽象（方案 A），不引入额外的 LLM trait 层
+3. __保留领域类型__：`ConversationMessage`、`LlmToolCall`、`AgentExecutionOutput` 等不变，`GenaiExecutor` 内部做双向转换
+4. __环境变量驱动配置__：`HARNESS_LLM_PROVIDER` 扩展为 `openai` / `anthropic` / `deepseek` / `openai-compatible`
 
 ### 理由
 
@@ -30,12 +30,12 @@
 
 ### 1. 依赖与 Provider 配置
 
-**Cargo.toml 变更**：
+__Cargo.toml 变更__：
 
 - 移除 `async-openai`
 - 添加 `genai = "0.6"`
 
-**LlmProviderKind 扩展**：
+__LlmProviderKind 扩展__：
 
 ```rust
 pub enum LlmProviderKind {
@@ -46,7 +46,7 @@ pub enum LlmProviderKind {
 }
 ```
 
-**环境变量映射**：
+__环境变量映射__：
 
 | `HARNESS_LLM_PROVIDER` | genai AdapterKind | 认证环境变量 |
 |---|---|---|
@@ -75,7 +75,7 @@ let client = Client::builder()
 
 替换 `OpenAiExecutor` → `GenaiExecutor`，实现 `AgentExecutor` trait。
 
-**结构体**：
+__结构体__：
 
 ```rust
 pub(crate) struct GenaiExecutor {
@@ -86,9 +86,9 @@ pub(crate) struct GenaiExecutor {
 
 genai 的 `Client` 内部已是 `Arc` 包装，`Clone` 零成本，无需再包 `Arc`。
 
-**execute 核心流程**：
+__execute 核心流程__：
 
-```
+```text
 AgentExecutionRequest
     │
     ├─ conversation? → build_chat_messages(conversation)
@@ -112,7 +112,7 @@ ChatResponse
     └─ empty → ExecutionError::EmptyResponse
 ```
 
-**转换函数**：
+__转换函数__：
 
 | 函数 | 方向 | 说明 |
 |------|------|------|
@@ -122,7 +122,7 @@ ChatResponse
 | `parse_response` | `ChatResponse` → `Result<AgentExecutionOutput>` | 响应解析 |
 | `classify_genai_error` | `genai::Error` → `ExecutionError` | 错误分类 |
 
-**LlmToolCall 转换注意**：领域类型的 `arguments` 是 `String`，genai 的 `ToolCall.fn_arguments` 是 `serde_json::Value`，转换时用 `fn_arguments.to_string()`。
+__LlmToolCall 转换注意__：领域类型的 `arguments` 是 `String`，genai 的 `ToolCall.fn_arguments` 是 `serde_json::Value`，转换时用 `fn_arguments.to_string()`。
 
 ### 3. 错误处理
 
@@ -152,7 +152,7 @@ ChatResponse
 | 修改 | `src/llm/factory.rs` | 统一创建 `GenaiExecutor` |
 | 修改 | `tests/*.rs` | 移除对 `async-openai` 类型的依赖（如有） |
 
-**不变更**：
+__不变更__：
 
 - `src/domain/mod.rs` — `AgentExecutor` trait、领域类型不动
 - `src/systems/*.rs` — 上层系统零修改

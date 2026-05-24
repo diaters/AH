@@ -11,7 +11,12 @@ struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("echo: {}", request.prompt)), reasoning_content: None }) })
+        Box::pin(async move {
+            Ok(AgentExecutionOutput {
+                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
+                reasoning_content: None,
+            })
+        })
     }
 }
 

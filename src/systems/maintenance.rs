@@ -34,7 +34,14 @@ pub(crate) fn agent_factory_system(
     terminated_messages: Query<(Entity, &TaskTerminatedMessage)>,
 ) {
     for (entity, request) in &spawn_requests {
-        handle_spawn_request(&mut commands, &agents, &mut tasks, &clock, &registry, request);
+        handle_spawn_request(
+            &mut commands,
+            &agents,
+            &mut tasks,
+            &clock,
+            &registry,
+            request,
+        );
         commands.entity(entity).despawn();
     }
 

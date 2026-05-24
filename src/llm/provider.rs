@@ -69,14 +69,18 @@ impl LlmProviderConfig {
                 .as_deref()
                 .is_none_or(|api_base| api_base.trim().is_empty())
             {
-                bail!("HARNESS_LLM_API_BASE is required when HARNESS_LLM_PROVIDER=openai-compatible");
+                bail!(
+                    "HARNESS_LLM_API_BASE is required when HARNESS_LLM_PROVIDER=openai-compatible"
+                );
             }
             if self
                 .api_key
                 .as_deref()
                 .is_none_or(|api_key| api_key.trim().is_empty())
             {
-                bail!("HARNESS_LLM_API_KEY is required when HARNESS_LLM_PROVIDER=openai-compatible");
+                bail!(
+                    "HARNESS_LLM_API_KEY is required when HARNESS_LLM_PROVIDER=openai-compatible"
+                );
             }
         }
 

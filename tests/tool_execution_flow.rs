@@ -7,10 +7,10 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    EntryRole, ExecutorFuture, HarnessConfig, OutputMessage,
-    ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
-    ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind,
-    ToolPermission, ToolSchema, WaitingReason, build_harness_app,
+    EntryRole, ExecutorFuture, HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry,
+    Task, TaskStatus, ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -18,7 +18,12 @@ struct MockExecutor;
 
 impl AgentExecutor for MockExecutor {
     fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move { Ok(AgentExecutionOutput { content: harness::OutputContent::Text("mock response".to_string()), reasoning_content: None }) })
+        Box::pin(async move {
+            Ok(AgentExecutionOutput {
+                content: harness::OutputContent::Text("mock response".to_string()),
+                reasoning_content: None,
+            })
+        })
     }
 }
 

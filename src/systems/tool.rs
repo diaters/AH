@@ -7,14 +7,14 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::domain::{
-    Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage,
-    ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState,
-    BuiltinTool, BuiltinToolExecutors, ConfirmationOption, ConfirmationSource, ExecutionError,
-    GrantMode, OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
-    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
-    TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
+    Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
+    ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
+    BuiltinToolExecutors, ConfirmationOption, ConfirmationSource, ExecutionError, GrantMode,
+    OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, SubTaskBatchCreatedMessage,
+    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskStatus, ToolAction,
+    ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext,
+    ToolDefinition, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ToolPermission, WaitingReason,
 };
 
 // ========== Builtin Tool Implementations ==========
@@ -113,7 +113,10 @@ impl BuiltinTool for CreateTasksTool {
 // ========== Registration ==========
 
 /// 注册内置 Tool
-pub fn register_builtin_tools(registry: &mut SpaceToolRegistry, executors: &mut BuiltinToolExecutors) {
+pub fn register_builtin_tools(
+    registry: &mut SpaceToolRegistry,
+    executors: &mut BuiltinToolExecutors,
+) {
     use crate::domain::{ToolExecutorKind, ToolSchema};
 
     registry.register(ToolDefinition {
@@ -239,7 +242,9 @@ pub fn register_builtin_tools(registry: &mut SpaceToolRegistry, executors: &mut 
 // ========== Helpers ==========
 
 /// 解析 spawn_agent tool 输入参数
-fn parse_spawn_agent_params(input: &serde_json::Value) -> (String, Option<String>, String, Vec<String>) {
+fn parse_spawn_agent_params(
+    input: &serde_json::Value,
+) -> (String, Option<String>, String, Vec<String>) {
     let name = input
         .get("name")
         .and_then(|v| v.as_str())
@@ -309,7 +314,12 @@ fn spawn_spawn_agent_messages(
             task_id,
             agent_id,
             request_kind,
-            result: Ok(AgentExecutionOutput { content: crate::domain::OutputContent::Text("spawn_agent request submitted".to_string()), reasoning_content: None }),
+            result: Ok(AgentExecutionOutput {
+                content: crate::domain::OutputContent::Text(
+                    "spawn_agent request submitted".to_string(),
+                ),
+                reasoning_content: None,
+            }),
             prompt: String::new(),
             system_prompt: None,
             tools: vec![],
@@ -510,10 +520,7 @@ fn spawn_create_tasks_messages(
             batch_id: Some(batch_id),
         };
 
-        let depended_by = depended_by_map
-            .get(&def.name)
-            .cloned()
-            .unwrap_or_default();
+        let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();
 
         let sub_task_config = SubTaskConfig {
             batch_id,
@@ -1285,7 +1292,9 @@ pub(crate) fn tool_confirmation_result_system(
             .pending_confirmation_options
             .clone()
             .unwrap_or_else(ConfirmationOption::default_options);
-        let selected_option = options.iter().find(|opt| opt.id == response.selected_option);
+        let selected_option = options
+            .iter()
+            .find(|opt| opt.id == response.selected_option);
 
         match selected_option {
             Some(option) if option.is_deny() => {
@@ -1319,11 +1328,7 @@ pub(crate) fn tool_confirmation_result_system(
                     tool_call_id: tool_request.tool_call_id.clone(),
                 });
 
-                restore_task_after_tool(
-                    &mut tasks,
-                    &calling_states,
-                    tool_request.request.task_id,
-                );
+                restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
             }
             Some(option) => {
@@ -1384,11 +1389,7 @@ pub(crate) fn tool_confirmation_result_system(
                 let action = executor.execute(&tool_request.tool_input, &ctx);
                 handle_tool_action(&mut commands, request_entity, tool_request, action);
 
-                restore_task_after_tool(
-                    &mut tasks,
-                    &calling_states,
-                    tool_request.request.task_id,
-                );
+                restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
             }
             None => {
                 warn!(
@@ -1626,7 +1627,11 @@ mod tests {
         });
 
         let result = parse_create_tasks_params(&input);
-        assert!(result.is_ok(), "should parse valid tasks: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "should parse valid tasks: {:?}",
+            result.err()
+        );
         let defs = result.unwrap();
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0].name, "task-a");

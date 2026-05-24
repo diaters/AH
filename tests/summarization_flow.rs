@@ -102,8 +102,8 @@ fn task_completion_triggers_summarization() {
                 next_retry_at: None,
                 last_error: None,
                 multi_turn: false,
-            parent_task_id: None,
-            batch_id: None, // Single turn - will complete
+                parent_task_id: None,
+                batch_id: None, // Single turn - will complete
             },
             ShortTermMemory {
                 entries: vec![

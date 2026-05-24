@@ -55,7 +55,10 @@ pub(crate) fn agent_execution_system(
 
         runtime.0.spawn(async move {
             let result = executor.execute(request.clone()).await;
-            let reasoning_content = result.as_ref().ok().and_then(|o| o.reasoning_content.clone());
+            let reasoning_content = result
+                .as_ref()
+                .ok()
+                .and_then(|o| o.reasoning_content.clone());
             let _ = sender.send(AgentExecutionResult {
                 task_id: request.task_id,
                 agent_id: request.agent_id,
