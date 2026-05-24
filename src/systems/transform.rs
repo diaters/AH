@@ -16,6 +16,12 @@ use crate::{
     llm::parse_brain_decision,
 };
 
+type TaskTerminationQuery<'a> = (
+    &'a Task,
+    Option<&'a ShortTermMemory>,
+    Option<&'a SubTaskConfig>,
+);
+
 pub(crate) fn signal_ingest_system(mut commands: Commands, signals: Query<(Entity, &Signal)>) {
     for (entity, signal) in &signals {
         match &signal.payload {
@@ -722,7 +728,7 @@ pub(crate) fn retry_ready_system(
 pub(crate) fn task_termination_system(
     mut commands: Commands,
     config: Res<MemoryConfig>,
-    tasks: Query<(&Task, Option<&ShortTermMemory>, Option<&SubTaskConfig>), Changed<Task>>,
+    tasks: Query<TaskTerminationQuery, Changed<Task>>,
     calling_states: Query<(Entity, &ToolCallingState)>,
 ) {
     for (task, memory, sub_task_config) in &tasks {
