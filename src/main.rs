@@ -24,16 +24,14 @@ static mut PENDING_CONFIRMATION: Option<uuid::Uuid> = None;
 /// 文件层：JSON Lines，级别固定 DEBUG，写入 `logs/` 目录（可通过
 /// `HARNESS_LOG_DIR` 环境变量覆盖）。
 fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
+    use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::Layer;
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let file_filter = EnvFilter::new("debug");
 
-    let log_dir =
-        std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+    let log_dir = std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
     let file_appender = tracing_appender::rolling::never(
         &log_dir,
         format!(
@@ -43,9 +41,7 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
     );
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let stdout_layer = fmt::layer()
-        .without_time()
-        .with_filter(env_filter);
+    let stdout_layer = fmt::layer().without_time().with_filter(env_filter);
 
     let file_layer = fmt::layer()
         .json()
