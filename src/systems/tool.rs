@@ -19,22 +19,6 @@ use crate::domain::{
 
 // ========== Builtin Tool Implementations ==========
 
-struct EchoTool;
-
-impl BuiltinTool for EchoTool {
-    fn name(&self) -> &str {
-        "echo"
-    }
-
-    fn execute(
-        &self,
-        input: &serde_json::Value,
-        _ctx: &ToolContext,
-    ) -> Result<ToolAction, ToolError> {
-        Ok(ToolAction::Direct(input.clone()))
-    }
-}
-
 struct KnowledgeSearchTool;
 
 impl BuiltinTool for KnowledgeSearchTool {
@@ -118,16 +102,6 @@ pub fn register_builtin_tools(
     executors: &mut BuiltinToolExecutors,
 ) {
     use crate::domain::{ToolExecutorKind, ToolSchema};
-
-    registry.register(ToolDefinition {
-        name: "echo".to_string(),
-        description: "Echo back the input message".to_string(),
-        parameters: ToolSchema::default(),
-        default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
-        required_tag: None,
-    });
-    executors.register(Box::new(EchoTool));
 
     registry.register(ToolDefinition {
         name: "knowledge_search".to_string(),
@@ -1446,31 +1420,6 @@ mod tests {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             experience: AgentExperience::default(),
-        }
-    }
-
-    #[test]
-    fn register_builtin_tools_adds_echo() {
-        let mut registry = SpaceToolRegistry::default();
-        let mut executors = BuiltinToolExecutors::default();
-        register_builtin_tools(&mut registry, &mut executors);
-        assert!(registry.exists("echo"));
-        assert!(executors.get("echo").is_some());
-    }
-
-    #[test]
-    fn executor_echo_direct_action() {
-        let input = serde_json::json!({"message": "hello"});
-        let knowledge = SpaceKnowledge::default();
-        let ctx = ToolContext {
-            knowledge: &knowledge,
-        };
-        let executor = EchoTool;
-        let result = executor.execute(&input, &ctx);
-        assert!(result.is_ok());
-        match result.unwrap() {
-            ToolAction::Direct(value) => assert_eq!(value, input),
-            other => panic!("expected Direct action, got {:?}", other),
         }
     }
 
