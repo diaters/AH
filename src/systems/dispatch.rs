@@ -234,19 +234,12 @@ pub(crate) fn brain_dispatch_system(
             };
 
             // 选择匹配的 Agent（基于所需工具标签）
-            let child_agent = agents
-                .iter()
-                .filter(|a| a.kind == AgentKind::Persistent)
-                .filter(|a| !a.capabilities.tags.contains(&"brain".to_string()))
-                .max_by_key(|a| {
-                    a.capabilities
-                        .tags
-                        .iter()
-                        .filter(|t| config.allowed_tools.contains(t))
-                        .count()
-                });
+            let child_agent = select_agent_for_sub_task(
+                agents.iter().map(|a| (a, None::<&LongTermMemory>)),
+                &task.content,
+            );
 
-            if let Some(agent) = child_agent {
+            if let Some((agent, _ltm)) = child_agent {
                 debug!(
                     event = "SubTaskDispatched",
                     task_id = %task.id,
@@ -411,6 +404,75 @@ fn match_score(agent: &Agent, task_content: &str) -> usize {
         .count()
 }
 
+/// 为子任务选择 Agent：基于 task content 与 agent tags 匹配评分，
+/// 所有评分为 0 时优先选择带 "default" tag 的 agent 作为 fallback
+fn select_agent_for_sub_task<'a>(
+    agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
+    task_content: &str,
+) -> Option<(&'a Agent, Option<&'a LongTermMemory>)> {
+    let candidates: Vec<_> = agents
+        .filter(|(a, _)| a.kind == AgentKind::Persistent)
+        .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
+        .collect();
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let max_score = candidates
+        .iter()
+        .map(|(a, _)| match_score(a, task_content))
+        .max()
+        .unwrap_or(0);
+
+    let selected = if max_score > 0 {
+        // 有正向匹配：选最高分，同分时优先 "default" tag
+        candidates
+            .iter()
+            .filter(|(a, _)| match_score(a, task_content) == max_score)
+            .max_by_key(|(a, _)| {
+                a.capabilities
+                    .tags
+                    .contains(&"default".to_string()) as usize
+            })
+    } else {
+        // 全部评分为 0：fallback 到带 "default" tag 的 agent
+        candidates
+            .iter()
+            .filter(|(a, _)| a.capabilities.tags.contains(&"default".to_string()))
+            .max_by_key(|(a, _)| a.capabilities.tags.len())
+    };
+
+    if let Some((agent, ltm)) = selected {
+        let score = match_score(agent, task_content);
+        let all_scores: Vec<_> = candidates
+            .iter()
+            .map(|(a, _)| (a.profile.name.clone(), match_score(a, task_content)))
+            .collect();
+        debug!(
+            event = "SubTaskAgentScoring",
+            selected_agent = %agent.profile.name,
+            selected_score = score,
+            all_candidates_scores = ?all_scores,
+            task_content_preview = %task_content.chars().take(100).collect::<String>(),
+            fallback = (max_score == 0),
+            "sub-task agent scoring completed"
+        );
+        Some((*agent, *ltm))
+    } else {
+        // 无 "default" tag 的 fallback：选第一个候选
+        let (agent, ltm) = candidates.into_iter().next()?;
+        debug!(
+            event = "SubTaskAgentScoring",
+            selected_agent = %agent.profile.name,
+            selected_score = 0,
+            fallback = true,
+            "sub-task agent selected as last resort (no default tag found)"
+        );
+        Some((agent, ltm))
+    }
+}
+
 /// 构建带历史对话和长期记忆的 prompt
 fn build_prompt_with_context(
     task_content: &str,
@@ -502,4 +564,83 @@ fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMe
         history.trim_end(),
         task_content
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::{
+        Agent, AgentCapabilities, AgentExperience, AgentKind, AgentProfile,
+        AgentToolPermissions, LongTermMemory,
+    };
+    use uuid::Uuid;
+
+    use super::select_agent_for_sub_task;
+
+    fn make_agent(name: &str, tags: Vec<&str>) -> Agent {
+        Agent {
+            id: Uuid::new_v4(),
+            profile: AgentProfile {
+                name: name.to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: tags.into_iter().map(|t| t.to_string()).collect(),
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            experience: AgentExperience::default(),
+        }
+    }
+
+    #[test]
+    fn sub_task_prefers_default_on_no_tag_match() {
+        let default_agent = make_agent("default-llm-agent", vec!["llm", "default", "general"]);
+        let summarizer = make_agent("summarizer", vec!["summarization", "memory"]);
+
+        let agents = vec![
+            (&default_agent, None as Option<&LongTermMemory>),
+            (&summarizer, None as Option<&LongTermMemory>),
+        ];
+
+        let selected = select_agent_for_sub_task(agents.into_iter(), "请计算兔子的繁衍数量");
+        assert!(selected.is_some());
+        let (agent, _) = selected.unwrap();
+        assert_eq!(agent.profile.name, "default-llm-agent");
+    }
+
+    #[test]
+    fn sub_task_prefers_higher_tag_score() {
+        let default_agent = make_agent("default-llm-agent", vec!["llm", "default", "general"]);
+        let summarizer = make_agent("summarizer", vec!["summarization", "memory"]);
+
+        let agents = vec![
+            (&default_agent, None as Option<&LongTermMemory>),
+            (&summarizer, None as Option<&LongTermMemory>),
+        ];
+
+        let selected = select_agent_for_sub_task(agents.into_iter(), "Please perform summarization");
+        assert!(selected.is_some());
+        let (agent, _) = selected.unwrap();
+        assert_eq!(agent.profile.name, "summarizer");
+    }
+
+    #[test]
+    fn sub_task_default_tag_ties_break() {
+        let agent_a = make_agent("agent-a", vec!["default"]);
+        let agent_b = make_agent("agent-b", vec!["llm", "default", "general"]);
+
+        let agents = vec![
+            (&agent_a, None as Option<&LongTermMemory>),
+            (&agent_b, None as Option<&LongTermMemory>),
+        ];
+
+        let selected = select_agent_for_sub_task(agents.into_iter(), "无关键词匹配");
+        assert!(selected.is_some());
+        let (agent, _) = selected.unwrap();
+        // Both have "default" tag, agent_b has more tags
+        assert_eq!(agent.profile.name, "agent-b");
+    }
 }
