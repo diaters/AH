@@ -186,10 +186,9 @@ pub(crate) fn brain_dispatch_system(
                 .find(|bs| bs.batch_id == config.batch_id)
             {
                 config.depends_on.iter().all(|dep_name| {
-                    batch_state
-                        .tasks
-                        .get(dep_name)
-                        .is_some_and(|s| matches!(s.state, BatchTaskState::Done | BatchTaskState::Failed))
+                    batch_state.tasks.get(dep_name).is_some_and(|s| {
+                        matches!(s.state, BatchTaskState::Done | BatchTaskState::Failed)
+                    })
                 })
             } else {
                 false
