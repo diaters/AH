@@ -228,6 +228,27 @@ pub(crate) fn brain_decision_system(
     }
 }
 
+/// 从子任务输出中提取 <<<RESULT>>>...<<</RESULT>>> 标记对内容。
+/// 提取最后一对标记。如果未找到，返回 None。
+fn extract_result_summary(text: &str) -> Option<String> {
+    let end_tag = "<<</RESULT>>>";
+    let start_tag = "<<<RESULT>>>";
+
+    // 从后向前找最后一个 end_tag
+    let end_pos = text.rfind(end_tag)?;
+    // 在 end_tag 之前找对应的 start_tag
+    let before_end = &text[..end_pos];
+    let start_pos = before_end.rfind(start_tag)?;
+
+    let content_start = start_pos + start_tag.len();
+    let content = text[content_start..end_pos].trim();
+    if content.is_empty() {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
 pub(crate) fn llm_response_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
@@ -327,16 +348,6 @@ pub(crate) fn llm_response_system(
                             content: content.clone(),
                         });
                     } else {
-                        debug!(
-                            event = "TaskStatusTransition",
-                            task_id = %task.id,
-                            from_status = ?task.status,
-                            to_status = ?TaskStatus::Done,
-                            reason = "single_turn_complete",
-                            response_len = content.len(),
-                            response_content = %content,
-                            "single_turn: marking task Done"
-                        );
                         task.mark_done(content.clone(), clock.0);
                         commands.spawn(UserOutputMessage {
                             content: content.clone(),
@@ -974,5 +985,42 @@ pub(crate) fn sub_task_completion_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_result_summary_basic() {
+        let text = "一些分析\n\n<<<RESULT>>>\n69.7亿只\n<<</RESULT>>>";
+        assert_eq!(extract_result_summary(text), Some("69.7亿只".to_string()));
+    }
+
+    #[test]
+    fn test_extract_result_summary_no_marker() {
+        let text = "没有标记对的普通输出";
+        assert_eq!(extract_result_summary(text), None);
+    }
+
+    #[test]
+    fn test_extract_result_summary_multiple_takes_last() {
+        let text = "<<<RESULT>>>\n中间结果\n<<</RESULT>>>\n继续分析\n\n<<<RESULT>>>\n最终结果\n<<</RESULT>>>";
+        assert_eq!(extract_result_summary(text), Some("最终结果".to_string()));
+    }
+
+    #[test]
+    fn test_extract_result_summary_empty_content() {
+        let text = "<<<RESULT>>>\n<<</RESULT>>>";
+        assert_eq!(extract_result_summary(text), None);
+    }
+
+    #[test]
+    fn test_extract_result_summary_multiline() {
+        let text = "详细计算过程...\n\n<<<RESULT>>>\n一对小猫10年内可繁衍约69.7亿只\n公式: 2×3^20\n<<</RESULT>>>";
+        let result = extract_result_summary(text).unwrap();
+        assert!(result.contains("69.7亿只"));
+        assert!(result.contains("2×3^20"));
     }
 }
