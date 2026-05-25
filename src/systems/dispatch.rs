@@ -189,7 +189,7 @@ pub(crate) fn brain_dispatch_system(
                     batch_state
                         .tasks
                         .get(dep_name)
-                        .is_some_and(|s| s.state == BatchTaskState::Done)
+                        .is_some_and(|s| matches!(s.state, BatchTaskState::Done | BatchTaskState::Failed))
                 })
             } else {
                 false
