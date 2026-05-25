@@ -348,7 +348,23 @@ pub(crate) fn llm_response_system(
                             content: content.clone(),
                         });
                     } else {
-                        task.mark_done(content.clone(), clock.0);
+                        // 子任务：从输出中提取 <<<RESULT>>> 标记对作为 result_summary
+                        let result_summary = if task.parent_task_id.is_some() {
+                            match extract_result_summary(content) {
+                                Some(summary) => summary,
+                                None => {
+                                    warn!(
+                                        event = "ResultMarkerNotFound",
+                                        task_id = %task.id,
+                                        "sub-task output missing <<<RESULT>>> marker, using full output as fallback"
+                                    );
+                                    content.clone()
+                                }
+                            }
+                        } else {
+                            content.clone()
+                        };
+                        task.mark_done(result_summary, clock.0);
                         commands.spawn(UserOutputMessage {
                             content: content.clone(),
                         });

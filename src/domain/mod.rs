@@ -751,6 +751,8 @@ pub struct SubTaskConfig {
     pub child_agent_name: String,
     pub child_agent_model: Option<String>,
     pub allowed_tools: Vec<String>,
+    /// 创建子任务的父 Agent ID，用于 spawn 请求和权限继承
+    pub parent_agent_id: AgentId,
     /// 本任务依赖的其他子任务 name 列表（在 batch 内）
     pub depends_on: Vec<String>,
     /// 依赖本任务完成的子任务 name 列表（反向索引，Brain 用）
@@ -883,6 +885,8 @@ pub struct ToolExecutionResultMessage {
     pub tool_output: Result<serde_json::Value, ToolError>,
     /// LLM Tool 调用 ID（从请求传递到结果，用于匹配）
     pub tool_call_id: Option<String>,
+    /// 是否已被 tool_result_system 处理过，防止重复记录日志和 STM
+    pub processed: bool,
 }
 
 /// Tool 调用循环状态
