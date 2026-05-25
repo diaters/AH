@@ -1492,7 +1492,7 @@ mod tests {
             "name": "child",
             "model": "gpt-4",
             "description": "A child agent",
-            "tools": ["echo", "knowledge_search"]
+            "tools": ["knowledge_search"]
         });
         let result = executor.execute(&input, &ctx);
         assert!(result.is_ok());
@@ -1506,7 +1506,7 @@ mod tests {
                 assert_eq!(name, "child");
                 assert_eq!(model, Some("gpt-4".to_string()));
                 assert_eq!(description, "A child agent");
-                assert_eq!(tools, vec!["echo", "knowledge_search"]);
+                assert_eq!(tools, vec!["knowledge_search"]);
             }
             other => panic!("expected SpawnAgent action, got {:?}", other),
         }
@@ -1524,12 +1524,12 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "do something",
-                    "tools": ["echo"]
+                    "tools": ["knowledge_search"]
                 },
                 {
                     "name": "task-b",
                     "content": "do something else",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -1565,9 +1565,9 @@ mod tests {
         };
         perms
             .overrides
-            .insert("echo".to_string(), ToolPermission::Allow);
+            .insert("knowledge_search".to_string(), ToolPermission::Allow);
 
-        assert_eq!(perms.get_permission("echo"), ToolPermission::Allow);
+        assert_eq!(perms.get_permission("knowledge_search"), ToolPermission::Allow);
         assert_eq!(perms.get_permission("other"), ToolPermission::Deny);
     }
 
@@ -1578,12 +1578,12 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "do something",
-                    "tools": ["echo"]
+                    "tools": ["knowledge_search"]
                 },
                 {
                     "name": "task-b",
                     "content": "do something else",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -1631,7 +1631,7 @@ mod tests {
                 {
                     "name": "only-task",
                     "content": "do something",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["nonexistent"]
                 }
             ]
@@ -1648,13 +1648,13 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "first",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-b"]
                 },
                 {
                     "name": "task-b",
                     "content": "second",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -1671,7 +1671,7 @@ mod tests {
                 {
                     "name": "self-ref",
                     "content": "bad",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["self-ref"]
                 }
             ]
@@ -1688,7 +1688,7 @@ mod tests {
                 {
                     "name": "minimal",
                     "content": "just content",
-                    "tools": ["echo"]
+                    "tools": ["knowledge_search"]
                 }
             ]
         });
