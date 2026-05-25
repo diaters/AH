@@ -627,7 +627,11 @@ fn user_allows_tool_once() {
         query
             .iter(world)
             .find(|a| a.id == agent_id)
-            .map(|a| a.tool_permissions.overrides.contains_key("knowledge_search"))
+            .map(|a| {
+                a.tool_permissions
+                    .overrides
+                    .contains_key("knowledge_search")
+            })
             .unwrap_or(false)
     };
 
@@ -1406,7 +1410,11 @@ fn user_allows_tool_always() {
         query
             .iter(world)
             .find(|a| a.id == agent_id)
-            .map(|a| a.tool_permissions.overrides.contains_key("knowledge_search"))
+            .map(|a| {
+                a.tool_permissions
+                    .overrides
+                    .contains_key("knowledge_search")
+            })
             .unwrap_or(false)
     };
 

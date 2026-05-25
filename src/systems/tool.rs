@@ -1567,7 +1567,10 @@ mod tests {
             .overrides
             .insert("knowledge_search".to_string(), ToolPermission::Allow);
 
-        assert_eq!(perms.get_permission("knowledge_search"), ToolPermission::Allow);
+        assert_eq!(
+            perms.get_permission("knowledge_search"),
+            ToolPermission::Allow
+        );
         assert_eq!(perms.get_permission("other"), ToolPermission::Deny);
     }
 

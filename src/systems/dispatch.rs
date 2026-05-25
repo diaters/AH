@@ -430,11 +430,7 @@ fn select_agent_for_sub_task<'a>(
         candidates
             .iter()
             .filter(|(a, _)| match_score(a, task_content) == max_score)
-            .max_by_key(|(a, _)| {
-                a.capabilities
-                    .tags
-                    .contains(&"default".to_string()) as usize
-            })
+            .max_by_key(|(a, _)| a.capabilities.tags.contains(&"default".to_string()) as usize)
     } else {
         // 全部评分为 0：fallback 到带 "default" tag 的 agent
         candidates
@@ -569,8 +565,8 @@ fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMe
 #[cfg(test)]
 mod tests {
     use crate::domain::{
-        Agent, AgentCapabilities, AgentExperience, AgentKind, AgentProfile,
-        AgentToolPermissions, LongTermMemory,
+        Agent, AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
+        LongTermMemory,
     };
     use uuid::Uuid;
 
@@ -621,7 +617,8 @@ mod tests {
             (&summarizer, None as Option<&LongTermMemory>),
         ];
 
-        let selected = select_agent_for_sub_task(agents.into_iter(), "Please perform summarization");
+        let selected =
+            select_agent_for_sub_task(agents.into_iter(), "Please perform summarization");
         assert!(selected.is_some());
         let (agent, _) = selected.unwrap();
         assert_eq!(agent.profile.name, "summarizer");
