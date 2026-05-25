@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::{
     app::{Clock, HarnessSettings},
@@ -119,6 +119,19 @@ pub(crate) fn task_dispatch_system(
     }
 }
 
+const SUB_TASK_SYSTEM_PROMPT: &str = "\
+你是一个专注于完成特定子任务的 AI Agent。请仔细阅读任务描述，认真完成分配给你的工作。
+
+重要：请在回答的最后，用 <<<RESULT>>> 和 <<</RESULT>>> 标记包围你的核心结论或最终答案。
+标记内的内容应当精炼、自包含，便于其他任务引用。
+
+示例格式：
+（你的详细分析和推理过程...）
+
+<<<RESULT>>>
+你的精炼结论
+<<</RESULT>>>";
+
 pub(crate) fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
@@ -183,7 +196,7 @@ pub(crate) fn brain_dispatch_system(
             };
 
             if !deps_satisfied {
-                debug!(
+                trace!(
                     event = "SubTaskWaitingForDependencies",
                     task_id = %task.id,
                     child_name = %config.child_agent_name,
@@ -219,14 +232,14 @@ pub(crate) fn brain_dispatch_system(
                 let child_task_id = task.id;
 
                 commands.spawn(AgentSpawnRequestMessage {
-                    parent_agent_id: uuid::Uuid::nil(),
+                    parent_agent_id: config.parent_agent_id,
                     task_id: child_task_id,
                     name: config.child_agent_name.clone(),
                     model: config.child_agent_model.clone(),
                     description: config.child_agent_name.clone(),
                     tools: config.allowed_tools.clone(),
                     task_prompt: task.content.clone(),
-                    task_system_prompt: None,
+                    task_system_prompt: Some(SUB_TASK_SYSTEM_PROMPT.to_string()),
                 });
 
                 task.status = TaskStatus::Waiting(WaitingReason::Agent);
