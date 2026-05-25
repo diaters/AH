@@ -242,6 +242,11 @@ fn handle_spawn_request(
         experience: AgentExperience::default(),
     });
 
+    // 更新 Task 的 delegate 为实际执行的 task-scoped agent
+    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id) {
+        task.delegate = Some(id);
+    }
+
     // 从 registry 构建子 Agent 的工具列表
     let child_tools: Vec<crate::domain::ToolDefinition> = registry
         .tools

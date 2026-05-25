@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::{
     app::{Clock, HarnessSettings},
@@ -119,6 +119,19 @@ pub(crate) fn task_dispatch_system(
     }
 }
 
+const SUB_TASK_SYSTEM_PROMPT: &str = "\
+你是一个专注于完成特定子任务的 AI Agent。请仔细阅读任务描述，认真完成分配给你的工作。
+
+重要：请在回答的最后，用 <<<RESULT>>> 和 <<</RESULT>>> 标记包围你的核心结论或最终答案。
+标记内的内容应当精炼、自包含，便于其他任务引用。
+
+示例格式：
+（你的详细分析和推理过程...）
+
+<<<RESULT>>>
+你的精炼结论
+<<</RESULT>>>";
+
 pub(crate) fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
@@ -173,17 +186,16 @@ pub(crate) fn brain_dispatch_system(
                 .find(|bs| bs.batch_id == config.batch_id)
             {
                 config.depends_on.iter().all(|dep_name| {
-                    batch_state
-                        .tasks
-                        .get(dep_name)
-                        .is_some_and(|s| s.state == BatchTaskState::Done)
+                    batch_state.tasks.get(dep_name).is_some_and(|s| {
+                        matches!(s.state, BatchTaskState::Done | BatchTaskState::Failed)
+                    })
                 })
             } else {
                 false
             };
 
             if !deps_satisfied {
-                debug!(
+                trace!(
                     event = "SubTaskWaitingForDependencies",
                     task_id = %task.id,
                     child_name = %config.child_agent_name,
@@ -192,6 +204,34 @@ pub(crate) fn brain_dispatch_system(
                 );
                 continue;
             }
+
+            // 收集依赖的兄弟任务结果
+            let sibling_results = if !config.depends_on.is_empty() {
+                if let Some(batch_state) = batch_states
+                    .iter()
+                    .find(|bs| bs.batch_id == config.batch_id)
+                {
+                    let mut results = Vec::new();
+                    for dep_name in &config.depends_on {
+                        if let Some(status) = batch_state.tasks.get(dep_name) {
+                            let result_text = match &status.result_summary {
+                                Some(summary) if !summary.is_empty() => summary.clone(),
+                                _ => format!("[{}: 执行失败，无结果]", dep_name),
+                            };
+                            results.push(format!("### {}\n{}", dep_name, result_text));
+                        }
+                    }
+                    if results.is_empty() {
+                        None
+                    } else {
+                        Some(results)
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             // 选择匹配的 Agent（基于所需工具标签）
             let child_agent = agents
@@ -219,15 +259,33 @@ pub(crate) fn brain_dispatch_system(
                 let child_task_id = task.id;
 
                 commands.spawn(AgentSpawnRequestMessage {
-                    parent_agent_id: uuid::Uuid::nil(),
+                    parent_agent_id: config.parent_agent_id,
                     task_id: child_task_id,
                     name: config.child_agent_name.clone(),
                     model: config.child_agent_model.clone(),
                     description: config.child_agent_name.clone(),
                     tools: config.allowed_tools.clone(),
-                    task_prompt: task.content.clone(),
-                    task_system_prompt: None,
+                    task_prompt: if let Some(ref results) = sibling_results {
+                        format!(
+                            "{}\n\n## 兄弟任务结果\n\n{}\n\n请基于以上兄弟任务的结果完成你的任务。你可以直接引用这些结果，无需重新计算或搜索。",
+                            task.content,
+                            results.join("\n\n")
+                        )
+                    } else {
+                        task.content.clone()
+                    },
+                    task_system_prompt: Some(SUB_TASK_SYSTEM_PROMPT.to_string()),
                 });
+
+                if sibling_results.is_some() {
+                    debug!(
+                        event = "SiblingResultsInjected",
+                        task_id = %task.id,
+                        child_name = %config.child_agent_name,
+                        depends_on = ?config.depends_on,
+                        "injected sibling task results into sub-task prompt"
+                    );
+                }
 
                 task.status = TaskStatus::Waiting(WaitingReason::Agent);
                 task.delegate = Some(agent.id);

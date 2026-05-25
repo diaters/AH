@@ -183,7 +183,7 @@ pub fn register_builtin_tools(
                 "required": ["name", "description", "tools"]
             }),
         },
-        default_permission: ToolPermission::Deny,
+        default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("spawn_agent".to_string()),
         required_tag: Some("brain".to_string()),
     });
@@ -232,7 +232,7 @@ pub fn register_builtin_tools(
                 "required": ["tasks"]
             }),
         },
-        default_permission: ToolPermission::Confirm,
+        default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("create_tasks".to_string()),
         required_tag: None,
     });
@@ -330,6 +330,7 @@ fn spawn_spawn_agent_messages(
             "status": "spawn_request_created"
         })),
         tool_call_id,
+        processed: false,
     });
 
     commands.entity(request_entity).despawn();
@@ -527,6 +528,7 @@ fn spawn_create_tasks_messages(
             child_agent_name: def.name.clone(),
             child_agent_model: def.model.clone(),
             allowed_tools: def.tools.clone(),
+            parent_agent_id: agent_id,
             depends_on: def.depends_on.clone(),
             depended_by,
         };
@@ -600,6 +602,7 @@ fn spawn_create_tasks_messages(
             "tasks": task_names,
         })),
         tool_call_id,
+        processed: false,
     });
 
     commands.entity(request_entity).despawn();
@@ -633,6 +636,7 @@ fn handle_tool_action(
                 tool_name: request.tool_name.clone(),
                 tool_output: Ok(value),
                 tool_call_id: request.tool_call_id.clone(),
+                processed: false,
             });
 
             commands.entity(request_entity).despawn();
@@ -712,6 +716,7 @@ fn spawn_tool_error(
         tool_name: request.tool_name.clone(),
         tool_output: Err(error),
         tool_call_id: request.tool_call_id.clone(),
+        processed: false,
     });
 
     commands.entity(request_entity).despawn();
@@ -938,11 +943,15 @@ pub(crate) fn tool_dispatch_system(
 pub(crate) fn tool_result_system(
     mut commands: Commands,
     clock: Res<crate::app::Clock>,
-    results: Query<(Entity, &ToolExecutionResultMessage)>,
+    mut results: Query<(Entity, &mut ToolExecutionResultMessage)>,
     mut tasks: Query<(&Task, Option<&mut ShortTermMemory>)>,
     calling_states: Query<&ToolCallingState>,
 ) {
-    for (entity, result) in &results {
+    for (entity, mut result) in &mut results {
+        if result.processed {
+            continue;
+        }
+
         // 查找对应的 Task 及其 ShortTermMemory
         let mut found_task = false;
         for (task, short_term_memory) in &mut tasks {
@@ -1000,6 +1009,9 @@ pub(crate) fn tool_result_system(
                 "tool result has no matching task"
             );
         }
+
+        // Mark as processed to prevent re-handling on subsequent frames
+        result.processed = true;
 
         // Only despawn if no ToolCallingState is tracking this result
         let should_keep = result.tool_call_id.as_ref().is_some_and(|call_id| {
@@ -1121,6 +1133,7 @@ pub(crate) fn approval_result_system(
                         result.reasoning
                     ))),
                     tool_call_id: tool_request.tool_call_id.clone(),
+                    processed: false,
                 });
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
@@ -1326,6 +1339,7 @@ pub(crate) fn tool_confirmation_result_system(
                     tool_name: tool_request.tool_name.clone(),
                     tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
                     tool_call_id: tool_request.tool_call_id.clone(),
+                    processed: false,
                 });
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
