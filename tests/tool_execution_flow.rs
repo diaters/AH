@@ -89,11 +89,11 @@ fn create_test_tool_registry(world: &mut World) {
 
     // 注册 echo 工具（需要确认，用于测试 allow_once 和 allow_always）
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back the input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
 
@@ -369,7 +369,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "echo".to_string(),
+            tool_name: "knowledge_search".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -378,8 +378,8 @@ fn tool_call_is_recorded_to_short_term_memory() {
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "echo".to_string(),
-        tool_input: serde_json::json!({"message": "hello"}),
+        tool_name: "knowledge_search".to_string(),
+        tool_input: serde_json::json!({"query": "hello"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -566,7 +566,7 @@ fn user_allows_tool_once() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "echo".to_string(),
+            tool_name: "knowledge_search".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -575,8 +575,8 @@ fn user_allows_tool_once() {
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "echo".to_string(),
-        tool_input: serde_json::json!({"message": "test"}),
+        tool_name: "knowledge_search".to_string(),
+        tool_input: serde_json::json!({"query": "test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -627,7 +627,7 @@ fn user_allows_tool_once() {
         query
             .iter(world)
             .find(|a| a.id == agent_id)
-            .map(|a| a.tool_permissions.overrides.contains_key("echo"))
+            .map(|a| a.tool_permissions.overrides.contains_key("knowledge_search"))
             .unwrap_or(false)
     };
 
@@ -685,11 +685,11 @@ fn spawn_agent_creates_child_agent() {
     });
     // 注册 echo 工具供子 Agent 使用
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
     app.world_mut().insert_resource(registry);
@@ -722,7 +722,7 @@ fn spawn_agent_creates_child_agent() {
         tool_input: serde_json::json!({
             "name": "child-agent",
             "description": "A test child agent",
-            "tools": ["echo"]
+            "tools": ["knowledge_search"]
         }),
         pending_confirmation_id: None,
         tool_call_id: None,
@@ -751,7 +751,7 @@ fn spawn_agent_creates_child_agent() {
     assert_eq!(child.profile.name, "child-agent");
     assert_eq!(child.kind, AgentKind::TaskScoped);
     assert_eq!(child.bound_task_id, Some(task_id));
-    assert!(child.has_permission("echo"));
+    assert!(child.has_permission("knowledge_search"));
 }
 
 /// 测试：spawn_agent Confirm 权限路由到用户确认
@@ -814,7 +814,7 @@ fn spawn_agent_confirm_routes_to_user() {
         tool_input: serde_json::json!({
             "name": "child-agent",
             "description": "A test child agent",
-            "tools": ["echo"]
+            "tools": ["knowledge_search"]
         }),
         pending_confirmation_id: None,
         tool_call_id: None,
@@ -873,7 +873,7 @@ fn child_agent_confirm_routes_to_parent() {
             default_permission: ToolPermission::Deny,
             overrides: {
                 let mut m = HashMap::new();
-                m.insert("echo".to_string(), ToolPermission::Allow);
+                m.insert("knowledge_search".to_string(), ToolPermission::Allow);
                 m
             },
         },
@@ -907,7 +907,7 @@ fn child_agent_confirm_routes_to_parent() {
             default_permission: ToolPermission::Deny,
             overrides: {
                 let mut m = HashMap::new();
-                m.insert("echo".to_string(), ToolPermission::Confirm);
+                m.insert("knowledge_search".to_string(), ToolPermission::Confirm);
                 m
             },
         },
@@ -917,11 +917,11 @@ fn child_agent_confirm_routes_to_parent() {
     // 注册 echo 工具
     let mut registry = SpaceToolRegistry::default();
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
     app.world_mut().insert_resource(registry);
@@ -931,7 +931,7 @@ fn child_agent_confirm_routes_to_parent() {
         task_id,
         agent_id: child_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "echo".to_string(),
+            tool_name: "knowledge_search".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -940,8 +940,8 @@ fn child_agent_confirm_routes_to_parent() {
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "echo".to_string(),
-        tool_input: serde_json::json!({"message": "test"}),
+        tool_name: "knowledge_search".to_string(),
+        tool_input: serde_json::json!({"query": "test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -983,7 +983,7 @@ fn user_confirms_spawn_agent_creates_child() {
             overrides: {
                 let mut m = HashMap::new();
                 m.insert("spawn_agent".to_string(), ToolPermission::Confirm);
-                m.insert("echo".to_string(), ToolPermission::Allow);
+                m.insert("knowledge_search".to_string(), ToolPermission::Allow);
                 m
             },
         },
@@ -1000,11 +1000,11 @@ fn user_confirms_spawn_agent_creates_child() {
         required_tag: None,
     });
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
     app.world_mut().insert_resource(registry);
@@ -1037,7 +1037,7 @@ fn user_confirms_spawn_agent_creates_child() {
         tool_input: serde_json::json!({
             "name": "child-agent",
             "description": "A test child agent",
-            "tools": ["echo"]
+            "tools": ["knowledge_search"]
         }),
         pending_confirmation_id: None,
         tool_call_id: None,
@@ -1108,7 +1108,7 @@ fn confirmation_denied_rejects_tool() {
             default_permission: ToolPermission::Deny,
             overrides: {
                 let mut m = HashMap::new();
-                m.insert("echo".to_string(), ToolPermission::Allow);
+                m.insert("knowledge_search".to_string(), ToolPermission::Allow);
                 m
             },
         },
@@ -1142,7 +1142,7 @@ fn confirmation_denied_rejects_tool() {
             default_permission: ToolPermission::Deny,
             overrides: {
                 let mut m = HashMap::new();
-                m.insert("echo".to_string(), ToolPermission::Confirm);
+                m.insert("knowledge_search".to_string(), ToolPermission::Confirm);
                 m
             },
         },
@@ -1152,11 +1152,11 @@ fn confirmation_denied_rejects_tool() {
     // 注册 echo 工具
     let mut registry = SpaceToolRegistry::default();
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
     app.world_mut().insert_resource(registry);
@@ -1166,7 +1166,7 @@ fn confirmation_denied_rejects_tool() {
         task_id,
         agent_id: child_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "echo".to_string(),
+            tool_name: "knowledge_search".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -1175,8 +1175,8 @@ fn confirmation_denied_rejects_tool() {
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "echo".to_string(),
-        tool_input: serde_json::json!({"message": "test"}),
+        tool_name: "knowledge_search".to_string(),
+        tool_input: serde_json::json!({"query": "test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -1247,7 +1247,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
             default_permission: ToolPermission::Deny,
             overrides: {
                 let mut m = HashMap::new();
-                m.insert("echo".to_string(), ToolPermission::Confirm);
+                m.insert("knowledge_search".to_string(), ToolPermission::Confirm);
                 m
             },
         },
@@ -1257,11 +1257,11 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
     // 注册 echo 工具
     let mut registry = SpaceToolRegistry::default();
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
     app.world_mut().insert_resource(registry);
@@ -1271,7 +1271,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         task_id,
         agent_id: child_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "echo".to_string(),
+            tool_name: "knowledge_search".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -1280,8 +1280,8 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "echo".to_string(),
-        tool_input: serde_json::json!({"message": "test"}),
+        tool_name: "knowledge_search".to_string(),
+        tool_input: serde_json::json!({"query": "test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -1345,7 +1345,7 @@ fn user_allows_tool_always() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "echo".to_string(),
+            tool_name: "knowledge_search".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -1354,8 +1354,8 @@ fn user_allows_tool_always() {
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "echo".to_string(),
-        tool_input: serde_json::json!({"message": "test"}),
+        tool_name: "knowledge_search".to_string(),
+        tool_input: serde_json::json!({"query": "test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -1406,7 +1406,7 @@ fn user_allows_tool_always() {
         query
             .iter(world)
             .find(|a| a.id == agent_id)
-            .map(|a| a.tool_permissions.overrides.contains_key("echo"))
+            .map(|a| a.tool_permissions.overrides.contains_key("knowledge_search"))
             .unwrap_or(false)
     };
 

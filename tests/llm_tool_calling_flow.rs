@@ -33,8 +33,8 @@ impl AgentExecutor for ToolCallingMockExecutor {
             AgentExecutionOutput {
                 content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
                     id: "call_test123".to_string(),
-                    name: "echo".to_string(),
-                    arguments: r#"{"message":"hello"}"#.to_string(),
+                    name: "knowledge_search".to_string(),
+                    arguments: r#"{"query":"hello"}"#.to_string(),
                 }]),
                 reasoning_content: None,
             }
@@ -62,8 +62,8 @@ impl AgentExecutor for InfiniteToolCallExecutor {
             Ok(AgentExecutionOutput {
                 content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
                     id: call_id,
-                    name: "echo".to_string(),
-                    arguments: r#"{"message":"loop"}"#.to_string(),
+                    name: "knowledge_search".to_string(),
+                    arguments: r#"{"query":"loop"}"#.to_string(),
                 }]),
                 reasoning_content: None,
             })
@@ -103,11 +103,11 @@ fn create_test_tool_registry(world: &mut World) {
     let mut registry = SpaceToolRegistry::default();
 
     registry.register(ToolDefinition {
-        name: "echo".to_string(),
+        name: "knowledge_search".to_string(),
         description: "Echo back the input".to_string(),
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
+        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
         required_tag: None,
     });
 
@@ -274,7 +274,7 @@ fn tool_calling_records_to_short_term_memory() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::LlmCompletion,
-        prompt: "use echo tool".to_string(),
+        prompt: "use knowledge_search tool".to_string(),
         system_prompt: None,
         tools,
         conversation: None,
