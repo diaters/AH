@@ -1,3 +1,4 @@
+pub mod frontend;
 mod contribution;
 mod evaluation;
 mod memory;
@@ -28,6 +29,10 @@ pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, PersistentAgentConfig, SpaceAgentRegistry,
     SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, SystemStatus,
     ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+};
+pub use frontend::{
+    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
+    MessageRole, TaskStatusKind, UserAction,
 };
 
 pub type TaskId = Uuid;
