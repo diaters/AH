@@ -1,8 +1,15 @@
+pub mod app;
+pub mod chat;
+pub mod input;
+pub mod status;
+
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::domain::{
     ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, UserAction,
 };
+
+pub use app::App;
 
 /// TUI 前端实现
 pub struct TuiFrontend {
