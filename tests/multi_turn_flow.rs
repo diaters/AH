@@ -4,10 +4,17 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture,
-    HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole,
+    ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskStatus,
+    WaitingReason, build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
+}
 use tokio::runtime::Runtime;
 
 struct EchoExecutor;
@@ -32,8 +39,7 @@ fn multi_turn_task_lifecycle() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // 初始化 app
     app.update();
@@ -61,6 +67,7 @@ fn multi_turn_task_lifecycle() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ))
@@ -116,8 +123,7 @@ fn short_term_memory_tracks_turns() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -143,6 +149,7 @@ fn short_term_memory_tracks_turns() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ));
@@ -183,8 +190,7 @@ fn agent_has_long_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Run one frame to initialize the app and load persistent agents from config
     app.update();
@@ -229,8 +235,7 @@ fn memory_contribution_on_agent_termination() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize the app first
     app.update();
@@ -311,6 +316,7 @@ fn memory_contribution_on_agent_termination() {
         multi_turn: true,
         parent_task_id: None,
         batch_id: None,
+        origin_channel: default_channel(),
     });
 
     // Trigger termination by spawning TaskTerminatedMessage
@@ -372,8 +378,7 @@ fn multi_turn_memory_records_user_and_assistant() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -400,6 +405,7 @@ fn multi_turn_memory_records_user_and_assistant() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ))
@@ -432,8 +438,7 @@ fn multi_turn_full_conversation_flow() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -521,8 +526,7 @@ fn prompt_includes_conversation_history() {
     });
 
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -549,6 +553,7 @@ fn prompt_includes_conversation_history() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory {
                 entries: vec![
@@ -601,8 +606,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -653,8 +657,7 @@ fn three_turn_conversation_maintains_correct_order() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -763,8 +766,7 @@ fn second_dispatch_prompt_includes_correct_history() {
         captured: captured.clone(),
     });
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -791,6 +793,7 @@ fn second_dispatch_prompt_includes_correct_history() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory {
                 entries: vec![
@@ -854,8 +857,7 @@ fn task_content_updates_on_continue() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -882,6 +884,7 @@ fn task_content_updates_on_continue() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ))

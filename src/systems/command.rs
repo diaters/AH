@@ -3,9 +3,9 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, EntryRole, FinishTaskMessage, MemoryEntry, ShortTermMemory, SpaceKnowledge,
-    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
-    UserCommand, UserInputMessage,
+    ChannelId, CreateTaskMessage, EntryRole, FinishTaskMessage, FrontendKind, MemoryEntry,
+    ShortTermMemory, SpaceKnowledge, SummarizationRequestMessage, SummarizationTrigger, Task,
+    TaskStatus, TaskTerminatedMessage, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -50,6 +50,10 @@ pub(crate) fn command_parse_system(
                             &topic
                         },
                         parent.max_retries,
+                        ChannelId {
+                            frontend: FrontendKind::Tui,
+                            user_id: "default".to_string(),
+                        },
                     );
                     commands.spawn((child_task, ShortTermMemory::default()));
                 } else {

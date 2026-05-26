@@ -1,35 +1,22 @@
-use std::{
-    io::{self, BufRead, Write},
-    sync::Arc,
-    thread,
-    time::Duration,
-};
+use std::{sync::Arc, thread, time::Duration};
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::unbounded;
+use crossterm::event::{self, Event, KeyEventKind};
+use harness::tui::{App, TuiFrontend};
 use harness::{
-    ExternalInput, HarnessConfig, OutputKind, OutputMessage, ShutdownState, app_is_idle,
+    EngineEvent, ExternalInput, HarnessConfig, ShutdownState, UserAction, app_is_idle,
     build_harness_app, create_executor_from_config,
 };
 use tokio::runtime::Runtime;
-use tracing::error;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing::{debug, info, warn};
 
-/// 当前等待确认的 request_id（用于关联用户响应）
-static mut PENDING_CONFIRMATION: Option<uuid::Uuid> = None;
-
-/// 初始化命令行运行所需的 tracing 日志。
-///
-/// 终端层：纯文本，级别受 RUST_LOG 控制（默认 INFO）。
-/// 文件层：JSON Lines，级别固定 DEBUG，写入 `logs/` 目录（可通过
-/// `HARNESS_LOG_DIR` 环境变量覆盖）。
 fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let file_filter = EnvFilter::new("debug");
+    let file_filter = tracing_subscriber::EnvFilter::new("debug");
 
     let log_dir = std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
     let file_appender = tracing_appender::rolling::never(
@@ -41,153 +28,228 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
     );
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let stdout_layer = fmt::layer().without_time().with_filter(env_filter);
-
-    let file_layer = fmt::layer()
+    let file_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_writer(non_blocking)
         .with_ansi(false)
         .with_filter(file_filter);
 
-    tracing_subscriber::registry()
-        .with(stdout_layer)
-        .with(file_layer)
-        .init();
+    tracing_subscriber::registry().with(file_layer).init();
 
     guard
 }
 
-/// 启动阻塞 stdin 读取线程，并将输入写入 ingress channel。
-fn spawn_input_thread(sender: Sender<ExternalInput>) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let stdin = io::stdin();
-        let mut reader = stdin.lock();
+/// RAII guard ensuring terminal is restored even on panic.
+struct TuiGuard;
 
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => {
-                    let _ = sender.send(ExternalInput::Shutdown);
-                    break;
-                }
-                Ok(_) => {
-                    let content = line.trim().to_string();
-                    if content.is_empty() {
-                        continue;
-                    }
-
-                    // 检查是否是确认响应
-                    // SAFETY: 单线程访问
-                    let pending_id = unsafe { PENDING_CONFIRMATION };
-
-                    if let Some(request_id) = pending_id {
-                        // 解析用户选择
-                        let option = parse_confirmation_response(&content);
-                        if let Some(opt) = option {
-                            let _ = sender.send(ExternalInput::Confirmation {
-                                request_id,
-                                option: opt,
-                            });
-                            // 清除等待状态
-                            unsafe { PENDING_CONFIRMATION = None };
-                            continue;
-                        }
-                    }
-
-                    // 普通文本输入
-                    let _ = sender.send(ExternalInput::Text(content));
-                }
-                Err(error) => {
-                    error!(?error, "failed to read stdin");
-                    let _ = sender.send(ExternalInput::Shutdown);
-                    break;
-                }
-            }
-        }
-    })
-}
-
-/// 解析用户确认响应
-fn parse_confirmation_response(input: &str) -> Option<String> {
-    let trimmed = input.trim().to_lowercase();
-    match trimmed.as_str() {
-        "1" | "y" | "yes" | "once" => Some("allow_once".to_string()),
-        "2" | "always" | "permanent" => Some("allow_always".to_string()),
-        "3" | "n" | "no" | "deny" => Some("deny".to_string()),
-        _ => None,
+impl Drop for TuiGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
     }
 }
 
-/// 启动输出线程并将结果写回 stdout。
-fn spawn_output_thread(receiver: Receiver<OutputMessage>) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        while let Ok(message) = receiver.recv() {
-            match &message.kind {
-                OutputKind::Text => {
-                    println!("{}", message.content);
-                }
-                OutputKind::ConfirmationRequest {
-                    request_id,
-                    title,
-                    options,
-                } => {
-                    // 设置等待确认状态
-                    // SAFETY: 单线程访问
-                    unsafe { PENDING_CONFIRMATION = Some(*request_id) };
-
-                    // 格式化输出确认请求
-                    println!("\n{}", title);
-                    println!("Options:");
-                    for (i, opt) in options.iter().enumerate() {
-                        println!("  [{}] {}", i + 1, opt.label);
-                    }
-                    print!("Enter choice (1/2/3): ");
-                    let _ = io::stdout().flush();
-                }
-            }
-        }
-    })
-}
-
-/// 运行应用主循环，直到收到关闭请求且内部状态全部清空。
-fn run_event_loop(app: &mut bevy::app::App) {
-    loop {
-        app.update();
-
-        let shutdown_requested = app.world().resource::<ShutdownState>().requested;
-        if shutdown_requested && app_is_idle(app.world_mut()) {
-            break;
-        }
-
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// 组装线程、运行时与 ECS 应用，启动 MVP 主程序。
 fn main() -> Result<()> {
-    // 加载 .env.local 文件（如果存在）
     dotenvy::from_filename(".env.local").ok();
     let _log_guard = init_tracing();
+
+    // 安装 panic hook：确保 panic 时日志能 flush，并恢复终端
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(
+            event = "PanicCaught",
+            panic_info = %info,
+            "panic occurred in main thread"
+        );
+        ratatui::restore();
+        default_hook(info);
+    }));
+
+    info!(
+        event = "HarnessStarting",
+        version = env!("CARGO_PKG_VERSION"),
+        "AI Harness TUI starting"
+    );
 
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);
     let config = HarnessConfig::from_env()?;
     let executor = create_executor_from_config(&config.llm)?;
-    let (input_tx, input_rx) = unbounded();
-    let (output_tx, output_rx) = unbounded();
 
-    let input_handle = spawn_input_thread(input_tx);
-    let output_handle = spawn_output_thread(output_rx);
-    let mut app = build_harness_app(config, runtime, executor, input_rx, output_tx);
+    // 创建 Frontend channel
+    let (event_tx, event_rx) = unbounded::<EngineEvent>();
+    let (action_tx, action_rx) = unbounded::<UserAction>();
 
-    run_event_loop(&mut app);
-    drop(app);
+    let tui_frontend = TuiFrontend::new(event_tx, action_rx);
 
-    input_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("input thread panicked"))?;
-    output_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("output thread panicked"))?;
+    // 为 build_harness_app 提供空的 input_rx（输入已由 FrontendRegistry 接管）
+    let (_input_tx, input_rx) = unbounded::<ExternalInput>();
+
+    // 构建 ECS app
+    let mut app = build_harness_app(
+        config,
+        runtime,
+        executor,
+        input_rx,
+        vec![Box::new(tui_frontend)],
+    );
+
+    info!(
+        event = "EcsAppBuilt",
+        "ECS app built, entering TUI main loop"
+    );
+
+    // 启用 crossterm 的鼠标和粘贴支持
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste,
+    )?;
+
+    // 启动 ratatui
+    let _guard = TuiGuard;
+    let mut terminal = ratatui::init();
+    let mut app_state = App::new(action_tx);
+
+    let mut tick: u64 = 0;
+
+    loop {
+        // 1. 处理 crossterm 事件
+        let mut key_count = 0u32;
+        let mut paste_count = 0u32;
+
+        // 用非致命方式读取事件，避免 IME 等场景下的错误导致整个程序退出
+        match event::poll(Duration::ZERO) {
+            Ok(true) => loop {
+                let ev = match event::read() {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        warn!(
+                            event = "CrosstermReadError",
+                            error = %e,
+                            "failed to read terminal event, skipping"
+                        );
+                        break;
+                    }
+                };
+                match ev {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        app_state.handle_key_event(key);
+                        key_count += 1;
+                    }
+                    Event::Key(key) => {
+                        // Release / Repeat 事件忽略，避免 IME 组合过程中的误触发
+                        debug!(
+                            event = "KeyEventIgnored",
+                            kind = ?key.kind,
+                            code = ?key.code,
+                            "ignored non-press key event"
+                        );
+                    }
+                    Event::Mouse(mouse) => {
+                        app_state.handle_mouse_event(mouse);
+                    }
+                    Event::Paste(text) => {
+                        app_state.handle_paste(&text);
+                        paste_count += 1;
+                    }
+                    _ => {}
+                }
+                // 检查是否还有待处理事件
+                match event::poll(Duration::ZERO) {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(e) => {
+                        warn!(
+                            event = "CrosstermPollError",
+                            error = %e,
+                            "failed to poll terminal events"
+                        );
+                        break;
+                    }
+                }
+            },
+            Ok(false) => {}
+            Err(e) => {
+                warn!(
+                    event = "CrosstermPollError",
+                    error = %e,
+                    "failed to poll terminal events"
+                );
+            }
+        }
+
+        if key_count > 0 || paste_count > 0 {
+            debug!(
+                event = "InputProcessed",
+                key_count,
+                paste_count,
+                mode = ?app_state.mode,
+                "processed input events"
+            );
+        }
+
+        // 2. 从 channel 拉取 EngineEvent，更新 TUI 状态
+        while let Ok(ev) = event_rx.try_recv() {
+            debug!(
+                event = "EngineEventReceived",
+                event_kind = ?ev,
+                "received engine event from channel"
+            );
+            app_state.handle_engine_event(ev);
+        }
+
+        // 3. 驱动 ECS
+        app.update();
+
+        let shutdown_requested = app.world().resource::<ShutdownState>().requested;
+        let idle = app_is_idle(app.world_mut());
+
+        if tick.is_multiple_of(300) {
+            debug!(
+                event = "TuiLoopHeartbeat",
+                tick,
+                shutdown_requested,
+                idle,
+                should_quit = app_state.should_quit,
+                messages = app_state.messages.len(),
+                agents = app_state.agents.len(),
+                tasks = app_state.tasks.len(),
+                pending_approvals = app_state.pending_approvals.len(),
+                "TUI main loop heartbeat"
+            );
+        }
+
+        if shutdown_requested && idle {
+            info!(
+                event = "GracefulShutdown",
+                tick, "shutdown requested and app is idle, exiting"
+            );
+            break;
+        }
+
+        // 4. 退出检查
+        if app_state.should_quit {
+            info!(event = "UserQuit", tick, "user requested quit, exiting");
+            break;
+        }
+
+        // 5. 渲染 TUI
+        if let Err(e) = terminal.draw(|frame| app_state.render(frame)) {
+            warn!(
+                event = "RenderError",
+                error = %e,
+                "TUI render failed"
+            );
+        }
+
+        thread::sleep(Duration::from_millis(16));
+        tick += 1;
+    }
+
+    info!(
+        event = "HarnessExiting",
+        total_ticks = tick,
+        "AI Harness TUI exiting"
+    );
 
     Ok(())
 }

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use bevy::{app::App, prelude::*};
 use chrono::{DateTime, Utc};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use tokio::{runtime::Runtime, sync::mpsc};
 
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, BuiltinToolExecutors, OutputMessage, RetryReadyMessage, Signal,
+        AgentSpawnRequestMessage, BuiltinToolExecutors, Frontend, RetryReadyMessage, Signal,
         SpaceAgentRegistry, SpaceKnowledge, SpacePreferences, SpaceRuntimeContext,
         SpaceToolRegistry, Task, TaskEvaluationConfig, TaskTerminatedMessage, ToolCallingState,
         UserInputMessage, UserOutputMessage,
@@ -20,15 +20,15 @@ use crate::{
         approval_dispatch_system, approval_result_system, brain_decision_system,
         brain_dispatch_system, command_parse_system, continue_task_system,
         evaluation_result_system, evaluation_trigger_system, finish_task_system,
-        ingest_execution_results_system, init_agent_memory_system, input_ingress_system,
-        llm_response_system, load_agents_system, memory_absorption_system,
-        memory_compression_system, memory_contribution_system, register_builtin_tools,
-        retry_ready_system, retry_wakeup_system, signal_ingest_system, sub_task_batch_block_system,
-        sub_task_completion_system, summarization_dispatch_system, summarization_result_system,
-        task_dispatch_system, task_termination_system, tick_clock_system,
-        tool_calling_orchestrator_system, tool_confirmation_request_system,
+        frontend_input_system, frontend_output_system, ingest_execution_results_system,
+        init_agent_memory_system, input_ingress_system, llm_response_system, load_agents_system,
+        memory_absorption_system, memory_compression_system, memory_contribution_system,
+        register_builtin_tools, retry_ready_system, retry_wakeup_system, signal_ingest_system,
+        sub_task_batch_block_system, sub_task_completion_system, summarization_dispatch_system,
+        summarization_result_system, task_dispatch_system, task_termination_system,
+        tick_clock_system, tool_calling_orchestrator_system, tool_confirmation_request_system,
         tool_confirmation_result_system, tool_dispatch_system, tool_result_system,
-        user_input_routing_system, user_message_to_task_system, user_output_system,
+        user_input_routing_system, user_message_to_task_system,
     },
 };
 
@@ -98,8 +98,10 @@ impl Default for HarnessConfig {
 #[derive(Resource)]
 pub struct InputReceiver(pub Receiver<crate::domain::ExternalInput>);
 
-#[derive(Resource, Clone)]
-pub struct OutputSender(pub Sender<OutputMessage>);
+#[derive(Resource)]
+pub struct FrontendRegistry {
+    pub frontends: Vec<Box<dyn Frontend>>,
+}
 
 #[derive(Resource, Clone)]
 pub struct AsyncRuntime(pub Arc<Runtime>);
@@ -158,13 +160,13 @@ pub fn build_harness_app(
     runtime: Arc<Runtime>,
     executor: Arc<dyn AgentExecutor>,
     input_rx: Receiver<crate::domain::ExternalInput>,
-    output_tx: Sender<OutputMessage>,
+    frontends: Vec<Box<dyn Frontend>>,
 ) -> App {
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
 
     app.insert_resource(InputReceiver(input_rx));
-    app.insert_resource(OutputSender(output_tx));
+    app.insert_resource(FrontendRegistry { frontends });
     app.insert_resource(AsyncRuntime(runtime));
     app.insert_resource(ExecutorHandle(executor));
     app.insert_resource(ExecutionResultSender(result_tx));
@@ -209,6 +211,7 @@ pub fn build_harness_app(
         Update,
         (
             tick_clock_system.in_set(HarnessSet::Ingress),
+            frontend_input_system.in_set(HarnessSet::Ingress),
             input_ingress_system.in_set(HarnessSet::Ingress),
             retry_wakeup_system.in_set(HarnessSet::Signal),
             signal_ingest_system.in_set(HarnessSet::Signal),
@@ -262,7 +265,7 @@ pub fn build_harness_app(
             tool_dispatch_system.in_set(HarnessSet::Dispatch),
             evaluation_trigger_system.in_set(HarnessSet::Dispatch),
             agent_execution_system.in_set(HarnessSet::Execution),
-            user_output_system.in_set(HarnessSet::Output),
+            frontend_output_system.in_set(HarnessSet::Output),
         ),
     );
 

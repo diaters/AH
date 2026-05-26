@@ -30,10 +30,13 @@ pub(crate) fn input_ingress_system(
 ) {
     while let Ok(input) = receiver.0.try_recv() {
         match input {
-            ExternalInput::Text(content) => {
+            ExternalInput::TextWithChannel {
+                channel: _,
+                content,
+            } => {
                 debug!(
                     event = "ExternalInputReceived",
-                    kind = "Text",
+                    kind = "TextWithChannel",
                     content = %content,
                     content_len = content.len(),
                     "received external text input"

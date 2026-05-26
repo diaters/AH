@@ -6,10 +6,17 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutorFuture,
-    HarnessConfig, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
+    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus, WaitingReason,
     build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
+}
 use tokio::runtime::Runtime;
 
 /// Mock executor that returns different responses based on request kind
@@ -69,14 +76,7 @@ fn task_completion_triggers_summarization() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor.clone(),
-        input_rx,
-        output_tx,
-    );
+    let mut app = build_harness_app(test_config(), runtime, executor.clone(), input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -103,7 +103,8 @@ fn task_completion_triggers_summarization() {
                 last_error: None,
                 multi_turn: false,
                 parent_task_id: None,
-                batch_id: None, // Single turn - will complete
+                batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory {
                 entries: vec![
@@ -143,8 +144,7 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -170,6 +170,7 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
+            origin_channel: default_channel(),
         },
         ShortTermMemory {
             entries: vec![
@@ -200,8 +201,7 @@ fn summarization_preserves_terminal_task_status() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -210,7 +210,7 @@ fn summarization_preserves_terminal_task_status() {
     let entity_id = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("complete this task", 3),
+            Task::from_user_input_ready("complete this task", 3, default_channel()),
             ShortTermMemory {
                 entries: vec![harness::MemoryEntry::new(harness::EntryRole::User, "hello")],
                 summary_prefix: None,
@@ -259,14 +259,7 @@ fn execution_populates_memory_and_triggers_summarization() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor.clone(),
-        input_rx,
-        output_tx,
-    );
+    let mut app = build_harness_app(test_config(), runtime, executor.clone(), input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -276,7 +269,7 @@ fn execution_populates_memory_and_triggers_summarization() {
     let entity_id = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test", 3),
+            Task::from_user_input_ready("test", 3, default_channel()),
             ShortTermMemory {
                 entries: vec![harness::MemoryEntry::new(
                     harness::EntryRole::User,

@@ -3,10 +3,11 @@ mod contribution;
 mod dispatch;
 mod evaluation;
 mod execution;
+mod frontend_input;
+mod frontend_output;
 mod ingress;
 mod maintenance;
 mod memory;
-mod output;
 mod routing;
 mod summarization;
 mod tool;
@@ -21,10 +22,11 @@ pub(crate) use contribution::{
 pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system};
 pub(crate) use evaluation::{evaluation_result_system, evaluation_trigger_system};
 pub(crate) use execution::agent_execution_system;
+pub(crate) use frontend_input::frontend_input_system;
+pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
 pub(crate) use maintenance::{agent_factory_system, load_agents_system};
 pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
-pub(crate) use output::user_output_system;
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
 pub(crate) use summarization::{summarization_dispatch_system, summarization_result_system};
 pub(crate) use tool::{

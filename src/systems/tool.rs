@@ -9,31 +9,15 @@ use uuid::Uuid;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
     ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
-    BuiltinToolExecutors, ConfirmationOption, ConfirmationSource, ExecutionError, GrantMode,
-    OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskStatus, ToolAction,
-    ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext,
-    ToolDefinition, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    ToolPermission, WaitingReason,
+    BuiltinToolExecutors, ChannelId, ConfirmationOption, ConfirmationSource, ExecutionError,
+    FrontendKind, GrantMode, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
+    TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
 };
 
 // ========== Builtin Tool Implementations ==========
-
-struct EchoTool;
-
-impl BuiltinTool for EchoTool {
-    fn name(&self) -> &str {
-        "echo"
-    }
-
-    fn execute(
-        &self,
-        input: &serde_json::Value,
-        _ctx: &ToolContext,
-    ) -> Result<ToolAction, ToolError> {
-        Ok(ToolAction::Direct(input.clone()))
-    }
-}
 
 struct KnowledgeSearchTool;
 
@@ -118,16 +102,6 @@ pub fn register_builtin_tools(
     executors: &mut BuiltinToolExecutors,
 ) {
     use crate::domain::{ToolExecutorKind, ToolSchema};
-
-    registry.register(ToolDefinition {
-        name: "echo".to_string(),
-        description: "Echo back the input message".to_string(),
-        parameters: ToolSchema::default(),
-        default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("echo".to_string()),
-        required_tag: None,
-    });
-    executors.register(Box::new(EchoTool));
 
     registry.register(ToolDefinition {
         name: "knowledge_search".to_string(),
@@ -519,6 +493,10 @@ fn spawn_create_tasks_messages(
             multi_turn: false,
             parent_task_id: Some(task_id),
             batch_id: Some(batch_id),
+            origin_channel: ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
         };
 
         let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();
@@ -1211,64 +1189,13 @@ pub(crate) fn agent_evolution_system(agents: Query<&Agent>) {
 
 /// Tool 确认请求输出 System
 ///
-/// 将确认请求发送到输出 channel
+/// 将确认请求通过 frontend_output_system 推送给前端（ToolConfirmationRequestMessage 已被该 system 捕获）
 pub(crate) fn tool_confirmation_request_system(
-    mut commands: Commands,
-    agents: Query<&Agent>,
-    sender: Res<crate::app::OutputSender>,
-    requests: Query<(Entity, &ToolConfirmationRequestMessage)>,
+    _agents: Query<&Agent>,
+    _requests: Query<(Entity, &ToolConfirmationRequestMessage)>,
 ) {
-    for (entity, request) in &requests {
-        // 获取 Agent 名称
-        let agent_name = agents
-            .iter()
-            .find(|a| a.id == request.agent_id)
-            .map(|a| a.profile.name.as_str())
-            .unwrap_or("unknown");
-
-        // 格式化 tool_input 摘要（处理 UTF-8 边界）
-        let input_summary = serde_json::to_string(&request.tool_input)
-            .unwrap_or_else(|_| request.tool_input.to_string());
-        let input_display = if input_summary.chars().count() > 100 {
-            let truncated: String = input_summary.chars().take(100).collect();
-            format!("{}...", truncated)
-        } else {
-            input_summary.clone()
-        };
-
-        debug!(
-            event = "ToolConfirmationRequest",
-            request_id = %request.request_id,
-            tool_name = %request.tool_name,
-            agent_id = %request.agent_id,
-            agent_name = %agent_name,
-            task_id = %request.task_id,
-            tool_input = ?request.tool_input,
-            options_count = request.options.len(),
-            "sending tool confirmation request to user"
-        );
-
-        // 构建标题
-        let title = format!(
-            "[Tool Confirm] Agent \"{}\" requests to execute \"{}\"\nInput: {}",
-            agent_name, request.tool_name, input_display
-        );
-
-        // 发送确认请求
-        let output =
-            OutputMessage::confirmation_request(request.request_id, title, request.options.clone());
-
-        if let Err(e) = sender.0.send(output) {
-            warn!(
-                event = "ConfirmationRequestSendFailed",
-                request_id = %request.request_id,
-                error = %e,
-                "failed to send confirmation request"
-            );
-        }
-
-        commands.entity(entity).despawn();
-    }
+    // frontend_output_system 负责监听 Added<ToolConfirmationRequestMessage> 并推送给前端，
+    // 此 system 保留为占位，后续可在此添加额外逻辑（如日志增强）
 }
 
 /// Tool 确认响应处理 System
@@ -1450,31 +1377,6 @@ mod tests {
     }
 
     #[test]
-    fn register_builtin_tools_adds_echo() {
-        let mut registry = SpaceToolRegistry::default();
-        let mut executors = BuiltinToolExecutors::default();
-        register_builtin_tools(&mut registry, &mut executors);
-        assert!(registry.exists("echo"));
-        assert!(executors.get("echo").is_some());
-    }
-
-    #[test]
-    fn executor_echo_direct_action() {
-        let input = serde_json::json!({"message": "hello"});
-        let knowledge = SpaceKnowledge::default();
-        let ctx = ToolContext {
-            knowledge: &knowledge,
-        };
-        let executor = EchoTool;
-        let result = executor.execute(&input, &ctx);
-        assert!(result.is_ok());
-        match result.unwrap() {
-            ToolAction::Direct(value) => assert_eq!(value, input),
-            other => panic!("expected Direct action, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn executor_knowledge_search() {
         let mut knowledge = SpaceKnowledge::default();
         knowledge.entries.push(MemoryEntry::new(
@@ -1543,7 +1445,7 @@ mod tests {
             "name": "child",
             "model": "gpt-4",
             "description": "A child agent",
-            "tools": ["echo", "knowledge_search"]
+            "tools": ["knowledge_search"]
         });
         let result = executor.execute(&input, &ctx);
         assert!(result.is_ok());
@@ -1557,7 +1459,7 @@ mod tests {
                 assert_eq!(name, "child");
                 assert_eq!(model, Some("gpt-4".to_string()));
                 assert_eq!(description, "A child agent");
-                assert_eq!(tools, vec!["echo", "knowledge_search"]);
+                assert_eq!(tools, vec!["knowledge_search"]);
             }
             other => panic!("expected SpawnAgent action, got {:?}", other),
         }
@@ -1575,12 +1477,12 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "do something",
-                    "tools": ["echo"]
+                    "tools": ["knowledge_search"]
                 },
                 {
                     "name": "task-b",
                     "content": "do something else",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -1616,9 +1518,12 @@ mod tests {
         };
         perms
             .overrides
-            .insert("echo".to_string(), ToolPermission::Allow);
+            .insert("knowledge_search".to_string(), ToolPermission::Allow);
 
-        assert_eq!(perms.get_permission("echo"), ToolPermission::Allow);
+        assert_eq!(
+            perms.get_permission("knowledge_search"),
+            ToolPermission::Allow
+        );
         assert_eq!(perms.get_permission("other"), ToolPermission::Deny);
     }
 
@@ -1629,12 +1534,12 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "do something",
-                    "tools": ["echo"]
+                    "tools": ["knowledge_search"]
                 },
                 {
                     "name": "task-b",
                     "content": "do something else",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -1682,7 +1587,7 @@ mod tests {
                 {
                     "name": "only-task",
                     "content": "do something",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["nonexistent"]
                 }
             ]
@@ -1699,13 +1604,13 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "first",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-b"]
                 },
                 {
                     "name": "task-b",
                     "content": "second",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -1722,7 +1627,7 @@ mod tests {
                 {
                     "name": "self-ref",
                     "content": "bad",
-                    "tools": ["echo"],
+                    "tools": ["knowledge_search"],
                     "depends_on": ["self-ref"]
                 }
             ]
@@ -1739,7 +1644,7 @@ mod tests {
                 {
                     "name": "minimal",
                     "content": "just content",
-                    "tools": ["echo"]
+                    "tools": ["knowledge_search"]
                 }
             ]
         });

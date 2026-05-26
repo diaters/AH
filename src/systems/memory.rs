@@ -93,7 +93,7 @@ pub(crate) fn init_agent_memory_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{EntryRole, Task};
+    use crate::domain::{ChannelId, EntryRole, FrontendKind, Task};
 
     #[test]
     fn memory_compression_by_tokens() {
@@ -104,7 +104,14 @@ mod tests {
             summary_target_tokens: 50,
         });
 
-        let task = Task::from_user_input("test", 3);
+        let task = Task::from_user_input(
+            "test",
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
+        );
         let entity = world.spawn((task, ShortTermMemory::default())).id();
 
         // Add entries with known token counts

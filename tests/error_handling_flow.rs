@@ -6,10 +6,17 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture,
-    ExternalInput, HarnessConfig, OutputMessage, Task, TaskStatus, WaitingReason,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutionError,
+    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus, WaitingReason,
     build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
+}
 use tokio::runtime::Runtime;
 
 fn test_config() -> HarnessConfig {
@@ -46,8 +53,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(RateLimitExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -56,7 +62,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
     let entity_id = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test retry", 3),
+            Task::from_user_input_ready("test retry", 3, default_channel()),
             harness::ShortTermMemory::default(),
         ))
         .id();
@@ -103,8 +109,7 @@ fn non_retryable_error_causes_immediate_failure() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NonRetryableErrorExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -113,7 +118,7 @@ fn non_retryable_error_causes_immediate_failure() {
     let entity_id = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test non-retryable", 3),
+            Task::from_user_input_ready("test non-retryable", 3, default_channel()),
             harness::ShortTermMemory::default(),
         ))
         .id();
@@ -160,15 +165,17 @@ fn empty_user_input_creates_task() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
 
     // Send empty input
     input_tx
-        .send(ExternalInput::Text("".to_string()))
+        .send(ExternalInput::TextWithChannel {
+            channel: default_channel(),
+            content: "".to_string(),
+        })
         .expect("should send");
 
     // Run updates
@@ -213,8 +220,7 @@ fn large_input_is_handled() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -222,7 +228,10 @@ fn large_input_is_handled() {
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);
     input_tx
-        .send(ExternalInput::Text(large_content.clone()))
+        .send(ExternalInput::TextWithChannel {
+            channel: default_channel(),
+            content: large_content.clone(),
+        })
         .expect("should send");
 
     // Run updates
@@ -272,8 +281,7 @@ fn multiple_concurrent_tasks_are_handled() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -282,7 +290,7 @@ fn multiple_concurrent_tasks_are_handled() {
     let task_count = 5;
     for i in 0..task_count {
         app.world_mut().spawn((
-            Task::from_user_input_ready(format!("task {}", i), 3),
+            Task::from_user_input_ready(format!("task {}", i), 3, default_channel()),
             harness::ShortTermMemory::default(),
         ));
     }
@@ -332,8 +340,7 @@ fn waiting_task_waits_for_user_input() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -359,6 +366,7 @@ fn waiting_task_waits_for_user_input() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
+            origin_channel: default_channel(),
         },
         harness::ShortTermMemory::default(),
     ));
@@ -401,8 +409,7 @@ fn task_failure_sets_error_message() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(FailExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -411,7 +418,7 @@ fn task_failure_sets_error_message() {
     let entity_id = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test failure", 3),
+            Task::from_user_input_ready("test failure", 3, default_channel()),
             harness::ShortTermMemory::default(),
         ))
         .id();

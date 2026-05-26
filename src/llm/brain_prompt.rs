@@ -81,11 +81,18 @@ fn extract_json_block(raw: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile};
+    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, ChannelId, FrontendKind};
     use uuid::Uuid;
 
     fn test_task(content: &str) -> Task {
-        Task::from_user_input(content, 3)
+        Task::from_user_input(
+            content,
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
+        )
     }
 
     fn test_agent(name: &str) -> Agent {

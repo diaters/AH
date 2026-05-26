@@ -1,0 +1,110 @@
+<h2>审批交互：方向键选择</h2>
+<p class="subtitle">用 ↑↓ 选择选项，Enter 确认</p>
+
+<div class="mockup">
+  <div class="mockup-header">方案 B 细化：方向键审批</div>
+  <div class="mockup-body" style="display:flex;flex-direction:column;height:420px;font-size:12px;">
+    <div style="flex:1;display:flex;">
+      <div style="flex:1;padding:6px;overflow:hidden;border-right:1px solid #444;">
+        <div style="color:#9ece6a;margin-bottom:4px;"><b>You:</b> 请创建3个子任务计算兔子和苍蝇...</div>
+        <div style="color:#c0caf5;margin-bottom:4px;"><b>default-llm:</b> 已创建子任务批次...</div>
+
+        <!-- 审批卡片 1：已处理，折叠 -->
+        <div style="background:#1a2e1a;border-radius:4px;padding:6px;margin-bottom:6px;border-left:3px solid #9ece6a;">
+          <div style="display:flex;justify-content:space-between;">
+            <span style="color:#9ece6a;">✓ create_tasks</span>
+            <span style="color:#565f89;font-size:10px;">已批准 (Always)</span>
+          </div>
+        </div>
+
+        <!-- 审批卡片 2：当前活跃，方向键选择 -->
+        <div style="background:#33467c;border-radius:4px;padding:8px;margin-bottom:6px;border-left:3px solid #e0af68;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+            <span style="color:#e0af68;">⚡ Approval Required</span>
+            <span style="color:#565f89;font-size:10px;">2/3</span>
+          </div>
+          <div style="margin-bottom:4px;">
+            <span style="color:#bb9af7;">spawn_agent</span>
+            <span style="color:#565f89;"> from default-llm-agent</span>
+          </div>
+          <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:6px;font-size:10px;color:#c0caf5;">
+            Create child agent "兔子繁衍计算" with tools [knowledge_search]
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <!-- 选中项：高亮背景 + 左侧指示器 -->
+            <div style="background:#3d59a1;border-radius:3px;padding:4px 8px;display:flex;align-items:center;gap:6px;">
+              <span style="color:#7aa2f7;font-weight:bold;">›</span>
+              <span style="color:#c0caf5;">Allow Once</span>
+              <span style="color:#565f89;margin-left:auto;font-size:10px;">仅本次允许</span>
+            </div>
+            <div style="padding:4px 8px;display:flex;align-items:center;gap:6px;">
+              <span style="color:#565f89;"> </span>
+              <span style="color:#565f89;">Always Allow</span>
+              <span style="color:#565f89;margin-left:auto;font-size:10px;">永久允许此工具</span>
+            </div>
+            <div style="padding:4px 8px;display:flex;align-items:center;gap:6px;">
+              <span style="color:#565f89;"> </span>
+              <span style="color:#565f89;">Deny</span>
+              <span style="color:#565f89;margin-left:auto;font-size:10px;">拒绝执行</span>
+            </div>
+          </div>
+          <div style="margin-top:6px;color:#565f89;font-size:10px;text-align:center;">
+            ↑↓ 选择 · Enter 确认
+          </div>
+        </div>
+
+        <!-- 审批卡片 3：排队等待 -->
+        <div style="background:#1a1b26;border-radius:4px;padding:6px;margin-bottom:6px;border-left:3px solid #565f89;">
+          <div style="display:flex;justify-content:space-between;">
+            <span style="color:#565f89;">⏳ spawn_agent</span>
+            <span style="color:#565f89;font-size:10px;">3/3 · 排队中</span>
+          </div>
+          <div style="color:#565f89;font-size:10px;">Create child agent "苍蝇繁衍计算" — 处理完上一个后显示</div>
+        </div>
+      </div>
+      <div style="width:28%;padding:6px;overflow:hidden;display:flex;flex-direction:column;">
+        <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;">Agents</div>
+        <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;font-size:10px;">
+          <span style="color:#9ece6a;">●</span> brain <span style="color:#565f89;">idle</span>
+        </div>
+        <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;font-size:10px;">
+          <span style="color:#e0af68;">●</span> default-llm <span style="color:#e0af68;">waiting approval</span>
+        </div>
+        <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;font-size:10px;">
+          <span style="color:#565f89;">●</span> summarizer <span style="color:#565f89;">idle</span>
+        </div>
+
+        <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;margin-top:10px;">Tasks</div>
+        <div style="font-size:10px;">
+          <div style="color:#9ece6a;">● 兔子 ✓</div>
+          <div style="color:#e0af68;">● 苍蝇 ⏳</div>
+          <div style="color:#565f89;">● 分析 ⏸</div>
+        </div>
+
+        <!-- 底部审批队列指示器 -->
+        <div style="margin-top:auto;background:#33467c;border-radius:4px;padding:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#e0af68;">⚡ Approvals</span>
+            <span style="background:#f7768e;color:#1a1b26;border-radius:10px;padding:0 6px;font-size:10px;font-weight:bold;">1</span>
+          </div>
+          <div style="color:#565f89;font-size:10px;margin-top:2px;">1 pending · 1 approved</div>
+        </div>
+      </div>
+    </div>
+    <div style="border-top:1px solid #444;padding:4px 6px;display:flex;gap:4px;background:#1a1b26;">
+      <span style="color:#565f89;">❯</span>
+      <span style="color:#c0caf5;flex:1;">↑↓ 选择审批选项 · Enter 确认 · 或输入文本发送消息</span>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:16px;padding:12px;background:#1a1b26;border-radius:8px;">
+  <h3 style="color:#7aa2f7;margin:0 0 8px;">方向键审批交互</h3>
+  <ul style="color:#c0caf5;font-size:13px;line-height:1.6;">
+    <li><b style="color:#7aa2f7;">↑↓ 切换选项</b>：蓝色高亮当前选中项，左侧 › 指示器</li>
+    <li><b style="color:#9ece6a;">Enter 确认</b>：执行当前高亮选项</li>
+    <li><b style="color:#e0af68;">输入框自动切换</b>：有活跃审批时输入框提示变为审批操作；无审批时恢复为普通消息输入</li>
+    <li><b style="color:#565f89;">已处理折叠</b>：审批通过后卡片折叠为一行摘要</li>
+    <li><b style="color:#f7768e;">右栏徽章</b>：底部始终显示待处理数量</li>
+  </ul>
+</div>
