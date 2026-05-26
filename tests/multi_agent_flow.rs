@@ -5,7 +5,7 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, OutputMessage, Task, TaskStatus,
+    ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus,
     TaskTerminatedMessage, build_harness_app,
 };
 
@@ -48,8 +48,7 @@ fn loads_persistent_agents_from_config() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -84,8 +83,7 @@ fn selects_agent_by_tags_match() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
 
     input_tx
         .send(ExternalInput::TextWithChannel { channel: default_channel(), content: "帮我写一段 general 代码".to_string() })
@@ -95,11 +93,6 @@ fn selects_agent_by_tags_match() {
         app.update();
         thread::sleep(Duration::from_millis(20));
     }
-
-    let output = output_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("output should be produced");
-    assert!(output.content.starts_with("echo:"));
 
     let tasks: Vec<Task> = {
         let world = app.world_mut();
@@ -121,8 +114,7 @@ fn task_scoped_agent_lifecycle() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 

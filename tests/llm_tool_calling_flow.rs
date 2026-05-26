@@ -9,7 +9,7 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, HarnessConfig, LlmToolCall, FrontendKind, OutputMessage, ShortTermMemory,
+    ChannelId, HarnessConfig, LlmToolCall, FrontendKind, ShortTermMemory,
     SpaceToolRegistry, Task, TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind,
     ToolPermission, ToolSchema, WaitingReason, build_harness_app,
 };
@@ -140,8 +140,7 @@ fn llm_tool_calling_complete_loop() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(ToolCallingMockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -199,8 +198,7 @@ fn tool_calling_exceeds_max_iterations() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(InfiniteToolCallExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -255,8 +253,7 @@ fn tool_calling_records_to_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(ToolCallingMockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 

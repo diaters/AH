@@ -7,7 +7,7 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutionError,
-    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, OutputMessage, Task, TaskStatus,
+    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus,
     WaitingReason, build_harness_app,
 };
 
@@ -50,8 +50,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(RateLimitExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -107,8 +106,7 @@ fn non_retryable_error_causes_immediate_failure() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NonRetryableErrorExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -164,8 +162,7 @@ fn empty_user_input_creates_task() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -217,8 +214,7 @@ fn large_input_is_handled() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -276,8 +272,7 @@ fn multiple_concurrent_tasks_are_handled() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -336,8 +331,7 @@ fn waiting_task_waits_for_user_input() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
 
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -406,8 +400,7 @@ fn task_failure_sets_error_message() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(FailExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Initialize
     app.update();

@@ -10,7 +10,7 @@ use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
     ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
     BuiltinToolExecutors, ChannelId, ConfirmationOption, ConfirmationSource, ExecutionError,
-    FrontendKind, GrantMode, OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
+    FrontendKind, GrantMode, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
     TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
     ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
@@ -1186,64 +1186,13 @@ pub(crate) fn agent_evolution_system(agents: Query<&Agent>) {
 
 /// Tool 确认请求输出 System
 ///
-/// 将确认请求发送到输出 channel
+/// 将确认请求通过 frontend_output_system 推送给前端（ToolConfirmationRequestMessage 已被该 system 捕获）
 pub(crate) fn tool_confirmation_request_system(
-    mut commands: Commands,
-    agents: Query<&Agent>,
-    sender: Res<crate::app::OutputSender>,
-    requests: Query<(Entity, &ToolConfirmationRequestMessage)>,
+    _agents: Query<&Agent>,
+    _requests: Query<(Entity, &ToolConfirmationRequestMessage)>,
 ) {
-    for (entity, request) in &requests {
-        // 获取 Agent 名称
-        let agent_name = agents
-            .iter()
-            .find(|a| a.id == request.agent_id)
-            .map(|a| a.profile.name.as_str())
-            .unwrap_or("unknown");
-
-        // 格式化 tool_input 摘要（处理 UTF-8 边界）
-        let input_summary = serde_json::to_string(&request.tool_input)
-            .unwrap_or_else(|_| request.tool_input.to_string());
-        let input_display = if input_summary.chars().count() > 100 {
-            let truncated: String = input_summary.chars().take(100).collect();
-            format!("{}...", truncated)
-        } else {
-            input_summary.clone()
-        };
-
-        debug!(
-            event = "ToolConfirmationRequest",
-            request_id = %request.request_id,
-            tool_name = %request.tool_name,
-            agent_id = %request.agent_id,
-            agent_name = %agent_name,
-            task_id = %request.task_id,
-            tool_input = ?request.tool_input,
-            options_count = request.options.len(),
-            "sending tool confirmation request to user"
-        );
-
-        // 构建标题
-        let title = format!(
-            "[Tool Confirm] Agent \"{}\" requests to execute \"{}\"\nInput: {}",
-            agent_name, request.tool_name, input_display
-        );
-
-        // 发送确认请求
-        let output =
-            OutputMessage::confirmation_request(request.request_id, title, request.options.clone());
-
-        if let Err(e) = sender.0.send(output) {
-            warn!(
-                event = "ConfirmationRequestSendFailed",
-                request_id = %request.request_id,
-                error = %e,
-                "failed to send confirmation request"
-            );
-        }
-
-        commands.entity(entity).despawn();
-    }
+    // frontend_output_system 负责监听 Added<ToolConfirmationRequestMessage> 并推送给前端，
+    // 此 system 保留为占位，后续可在此添加额外逻辑（如日志增强）
 }
 
 /// Tool 确认响应处理 System

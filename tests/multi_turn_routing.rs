@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, OutputMessage, ShortTermMemory, Task, TaskStatus,
+    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus,
     WaitingReason, build_harness_app,
 };
 
@@ -35,8 +35,7 @@ fn user_input_creates_new_task_when_no_waiting_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -58,8 +57,7 @@ fn user_input_continues_waiting_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -124,8 +122,7 @@ fn evaluation_triggered_on_turn_limit() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     // Configure evaluation with max_turns = 2
     app.insert_resource(harness::TaskEvaluationConfig {
@@ -193,8 +190,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 
@@ -283,8 +279,7 @@ fn finish_command_ends_multi_turn_conversation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let (output_tx, _output_rx) = unbounded::<OutputMessage>();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
 
     app.update();
 

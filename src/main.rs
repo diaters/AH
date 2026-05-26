@@ -1,15 +1,14 @@
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, BufRead},
     sync::Arc,
     thread,
     time::Duration,
 };
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Sender, unbounded};
 use harness::{
-    ChannelId, ExternalInput, FrontendKind, HarnessConfig, OutputKind, OutputMessage,
-    ShutdownState, app_is_idle, build_harness_app, create_executor_from_config,
+    ChannelId, ExternalInput, FrontendKind, HarnessConfig, ShutdownState, app_is_idle, build_harness_app, create_executor_from_config,
 };
 use tokio::runtime::Runtime;
 use tracing::error;
@@ -121,37 +120,6 @@ fn parse_confirmation_response(input: &str) -> Option<String> {
     }
 }
 
-/// 启动输出线程并将结果写回 stdout。
-fn spawn_output_thread(receiver: Receiver<OutputMessage>) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        while let Ok(message) = receiver.recv() {
-            match &message.kind {
-                OutputKind::Text => {
-                    println!("{}", message.content);
-                }
-                OutputKind::ConfirmationRequest {
-                    request_id,
-                    title,
-                    options,
-                } => {
-                    // 设置等待确认状态
-                    // SAFETY: 单线程访问
-                    unsafe { PENDING_CONFIRMATION = Some(*request_id) };
-
-                    // 格式化输出确认请求
-                    println!("\n{}", title);
-                    println!("Options:");
-                    for (i, opt) in options.iter().enumerate() {
-                        println!("  [{}] {}", i + 1, opt.label);
-                    }
-                    print!("Enter choice (1/2/3): ");
-                    let _ = io::stdout().flush();
-                }
-            }
-        }
-    })
-}
-
 /// 运行应用主循环，直到收到关闭请求且内部状态全部清空。
 fn run_event_loop(app: &mut bevy::app::App) {
     loop {
@@ -176,11 +144,9 @@ fn main() -> Result<()> {
     let config = HarnessConfig::from_env()?;
     let executor = create_executor_from_config(&config.llm)?;
     let (input_tx, input_rx) = unbounded();
-    let (output_tx, output_rx) = unbounded();
 
     let input_handle = spawn_input_thread(input_tx);
-    let output_handle = spawn_output_thread(output_rx);
-    let mut app = build_harness_app(config, runtime, executor, input_rx, output_tx);
+    let mut app = build_harness_app(config, runtime, executor, input_rx, vec![]);
 
     run_event_loop(&mut app);
     drop(app);
@@ -188,9 +154,6 @@ fn main() -> Result<()> {
     input_handle
         .join()
         .map_err(|_| anyhow::anyhow!("input thread panicked"))?;
-    output_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("output thread panicked"))?;
 
     Ok(())
 }
