@@ -100,10 +100,41 @@ impl App {
         }
     }
 
+    /// 将消息列表中匹配的 Queued 审批卡片提升为 Active
+    fn promote_queued_card(&mut self, pending: &PendingApproval) {
+        for msg in &mut self.messages {
+            if let ChatMessage::ApprovalCard(ApprovalCardState::Queued { tool_name }) = msg
+                && tool_name == &pending.tool_name
+            {
+                *msg = ChatMessage::ApprovalCard(ApprovalCardState::Active {
+                    request_id: pending.request_id,
+                    agent_name: pending.agent_name.clone(),
+                    tool_name: pending.tool_name.clone(),
+                    tool_input: pending.tool_input.clone(),
+                    options: pending.options.clone(),
+                    selected_index: 0,
+                });
+                break;
+            }
+        }
+    }
+
     fn handle_chat_key(&mut self, key: KeyEvent) {
+        use crossterm::event::KeyModifiers;
         match key.code {
-            KeyCode::Char('q') => {
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
+            }
+            KeyCode::Tab if !self.pending_approvals.is_empty() => {
+                let first = self.pending_approvals.first().cloned();
+                if let Some(pending) = first {
+                    self.mode = AppMode::Approval {
+                        request_id: pending.request_id,
+                        selected_index: 0,
+                        options: pending.options.clone(),
+                    };
+                    self.promote_queued_card(&pending);
+                }
             }
             KeyCode::Enter => {
                 let content = self.input_buffer.clone();
@@ -199,19 +230,44 @@ impl App {
                         .retain(|a| a.request_id != request_id);
 
                     // 切换到下一个审批或回到 Chat 模式
-                    if let Some(next) = self.pending_approvals.first() {
+                    let next = self.pending_approvals.first().cloned();
+                    if let Some(next) = next {
                         self.mode = AppMode::Approval {
                             request_id: next.request_id,
                             selected_index: 0,
                             options: next.options.clone(),
                         };
+                        self.promote_queued_card(&next);
                     } else {
                         self.mode = AppMode::Chat;
                     }
                 }
             }
             KeyCode::Esc => {
-                self.mode = AppMode::Chat;
+                // 将当前审批移到队列末尾，激活下一个
+                if self.pending_approvals.len() > 1 {
+                    let current_id = request_id;
+                    // 把当前审批移到末尾
+                    if let Some(idx) = self
+                        .pending_approvals
+                        .iter()
+                        .position(|a| a.request_id == current_id)
+                    {
+                        let deferred = self.pending_approvals.remove(idx);
+                        self.pending_approvals.push(deferred);
+                    }
+                    let next = self.pending_approvals.first().cloned();
+                    if let Some(next) = next {
+                        self.mode = AppMode::Approval {
+                            request_id: next.request_id,
+                            selected_index: 0,
+                            options: next.options.clone(),
+                        };
+                        self.promote_queued_card(&next);
+                    }
+                } else {
+                    self.mode = AppMode::Chat;
+                }
             }
             _ => {}
         }

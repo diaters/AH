@@ -38,6 +38,15 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
     guard
 }
 
+/// RAII guard ensuring terminal is restored even on panic.
+struct TuiGuard;
+
+impl Drop for TuiGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
+
 fn main() -> Result<()> {
     dotenvy::from_filename(".env.local").ok();
     let _log_guard = init_tracing();
@@ -65,6 +74,7 @@ fn main() -> Result<()> {
     );
 
     // 启动 ratatui
+    let _guard = TuiGuard;
     let mut terminal = ratatui::init();
     let mut app_state = App::new(action_tx);
 
@@ -98,6 +108,5 @@ fn main() -> Result<()> {
         thread::sleep(Duration::from_millis(16));
     }
 
-    ratatui::restore();
     Ok(())
 }
