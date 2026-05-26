@@ -17,7 +17,9 @@ impl StatusPanel {
         // Agent 列表
         lines.push(Line::from(Span::styled(
             "Agents",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
 
         for agent in &app.agents {
@@ -35,8 +37,14 @@ impl StatusPanel {
             };
             lines.push(Line::from(vec![
                 Span::styled(icon.to_string(), Style::default().fg(color)),
-                Span::styled(format!(" {} ", agent.name), Style::default().fg(Color::White)),
-                Span::styled(status_text.to_string(), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" {} ", agent.name),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    status_text.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
 
@@ -45,7 +53,9 @@ impl StatusPanel {
         // Task 列表
         lines.push(Line::from(Span::styled(
             "Tasks",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
 
         for task in &app.tasks {

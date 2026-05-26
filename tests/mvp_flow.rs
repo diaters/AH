@@ -7,7 +7,10 @@ use harness::{
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 

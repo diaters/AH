@@ -51,9 +51,7 @@ impl Frontend for SpyFrontend {
         }];
         let for_me = match event.target() {
             EventTarget::Broadcast => true,
-            EventTarget::Directed(targets) => {
-                targets.iter().any(|t| my_channels.contains(t))
-            }
+            EventTarget::Directed(targets) => targets.iter().any(|t| my_channels.contains(t)),
         };
         if for_me {
             self.events.lock().unwrap().push(event);
@@ -108,7 +106,10 @@ fn broadcast_event_reaches_all_frontends() {
 fn multi_directed_event_reaches_specified_frontends() {
     let tui = Arc::new(SpyFrontend::new(FrontendKind::Tui));
     // Create telegram frontend with the specific user_id that will be targeted
-    let telegram = Arc::new(SpyFrontend::new_with_user(FrontendKind::Telegram, "chat_123"));
+    let telegram = Arc::new(SpyFrontend::new_with_user(
+        FrontendKind::Telegram,
+        "chat_123",
+    ));
 
     let event = EngineEvent::Text {
         target: EventTarget::Directed(vec![

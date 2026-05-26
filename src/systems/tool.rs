@@ -493,7 +493,10 @@ fn spawn_create_tasks_messages(
             multi_turn: false,
             parent_task_id: Some(task_id),
             batch_id: Some(batch_id),
-            origin_channel: ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() },
+            origin_channel: ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
         };
 
         let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();

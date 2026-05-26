@@ -4,12 +4,15 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus,
-    WaitingReason, build_harness_app,
+    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 
@@ -40,7 +43,10 @@ fn user_input_creates_new_task_when_no_waiting_task() {
     app.update();
 
     input_tx
-        .send(ExternalInput::TextWithChannel { channel: default_channel(), content: "new task".to_string() })
+        .send(ExternalInput::TextWithChannel {
+            channel: default_channel(),
+            content: "new task".to_string(),
+        })
         .unwrap();
 
     for _ in 0..5 {

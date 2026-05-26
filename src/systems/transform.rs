@@ -76,7 +76,10 @@ pub(crate) fn user_message_to_task_system(
         let task = Task::from_user_input(
             message.content.clone(),
             settings.0.max_retries,
-            ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() },
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
         );
         debug!(
             event = "TaskCreated",

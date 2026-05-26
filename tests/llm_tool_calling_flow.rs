@@ -9,13 +9,16 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, HarnessConfig, LlmToolCall, FrontendKind, ShortTermMemory,
-    SpaceToolRegistry, Task, TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind,
-    ToolPermission, ToolSchema, WaitingReason, build_harness_app,
+    ChannelId, FrontendKind, HarnessConfig, LlmToolCall, ShortTermMemory, SpaceToolRegistry, Task,
+    TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 use uuid::Uuid;

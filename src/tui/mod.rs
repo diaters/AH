@@ -5,9 +5,7 @@ pub mod status;
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::domain::{
-    ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, UserAction,
-};
+use crate::domain::{ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, UserAction};
 
 pub use app::App;
 
@@ -44,9 +42,7 @@ impl Frontend for TuiFrontend {
         let my_channels = self.my_channels();
         let for_me = match event.target() {
             EventTarget::Broadcast => true,
-            EventTarget::Directed(targets) => {
-                targets.iter().any(|t| my_channels.contains(t))
-            }
+            EventTarget::Directed(targets) => targets.iter().any(|t| my_channels.contains(t)),
         };
         if for_me {
             let _ = self.event_tx.send(event);

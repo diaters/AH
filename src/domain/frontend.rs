@@ -128,10 +128,7 @@ impl EngineEvent {
 #[derive(Debug, Clone)]
 pub enum UserAction {
     /// 用户发送文本消息
-    Text {
-        channel: ChannelId,
-        content: String,
-    },
+    Text { channel: ChannelId, content: String },
     /// 用户响应审批请求
     Confirmation {
         channel: ChannelId,

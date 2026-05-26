@@ -7,12 +7,15 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus,
-    WaitingReason, build_harness_app,
+    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 
@@ -73,13 +76,7 @@ fn task_completion_triggers_summarization() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor.clone(),
-        input_rx,
-        vec![],
-    );
+    let mut app = build_harness_app(test_config(), runtime, executor.clone(), input_rx, vec![]);
 
     // Initialize
     app.update();
@@ -262,13 +259,7 @@ fn execution_populates_memory_and_triggers_summarization() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor.clone(),
-        input_rx,
-        vec![],
-    );
+    let mut app = build_harness_app(test_config(), runtime, executor.clone(), input_rx, vec![]);
 
     // Initialize
     app.update();

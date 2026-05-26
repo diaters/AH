@@ -50,7 +50,10 @@ pub(crate) fn command_parse_system(
                             &topic
                         },
                         parent.max_retries,
-                        ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() },
+                        ChannelId {
+                            frontend: FrontendKind::Tui,
+                            user_id: "default".to_string(),
+                        },
                     );
                     commands.spawn((child_task, ShortTermMemory::default()));
                 } else {

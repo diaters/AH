@@ -1,5 +1,5 @@
-use crossterm::event::{KeyCode, KeyEvent};
 use crossbeam_channel::Sender;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -7,8 +7,8 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, FrontendKind,
-    MessageRole, TaskStatusKind, UserAction,
+    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, FrontendKind, MessageRole,
+    TaskStatusKind, UserAction,
 };
 
 use super::chat::{ApprovalCardState, ChatMessage, ChatPanel};
@@ -90,7 +90,11 @@ impl App {
     pub fn handle_key_event(&mut self, key: KeyEvent) {
         match &self.mode {
             AppMode::Chat => self.handle_chat_key(key),
-            AppMode::Approval { request_id, selected_index, options } => {
+            AppMode::Approval {
+                request_id,
+                selected_index,
+                options,
+            } => {
                 self.handle_approval_key(key, *request_id, *selected_index, options.clone());
             }
         }
@@ -108,7 +112,10 @@ impl App {
                         frontend: FrontendKind::Tui,
                         user_id: "default".to_string(),
                     };
-                    let _ = self.action_tx.send(UserAction::Text { channel, content: content.clone() });
+                    let _ = self.action_tx.send(UserAction::Text {
+                        channel,
+                        content: content.clone(),
+                    });
                     self.messages.push(ChatMessage::User(content));
                     self.input_buffer.clear();
                     self.cursor_position = 0;
@@ -118,31 +125,21 @@ impl App {
                 self.input_buffer.insert(self.cursor_position, c);
                 self.cursor_position += 1;
             }
-            KeyCode::Backspace => {
-                if self.cursor_position > 0 {
-                    self.cursor_position -= 1;
-                    self.input_buffer.remove(self.cursor_position);
-                }
+            KeyCode::Backspace if self.cursor_position > 0 => {
+                self.cursor_position -= 1;
+                self.input_buffer.remove(self.cursor_position);
             }
-            KeyCode::Delete => {
-                if self.cursor_position < self.input_buffer.len() {
-                    self.input_buffer.remove(self.cursor_position);
-                }
+            KeyCode::Delete if self.cursor_position < self.input_buffer.len() => {
+                self.input_buffer.remove(self.cursor_position);
             }
-            KeyCode::Left => {
-                if self.cursor_position > 0 {
-                    self.cursor_position -= 1;
-                }
+            KeyCode::Left if self.cursor_position > 0 => {
+                self.cursor_position -= 1;
             }
-            KeyCode::Right => {
-                if self.cursor_position < self.input_buffer.len() {
-                    self.cursor_position += 1;
-                }
+            KeyCode::Right if self.cursor_position < self.input_buffer.len() => {
+                self.cursor_position += 1;
             }
-            KeyCode::Up => {
-                if self.scroll_offset > 0 {
-                    self.scroll_offset -= 1;
-                }
+            KeyCode::Up if self.scroll_offset > 0 => {
+                self.scroll_offset -= 1;
             }
             KeyCode::Down => {
                 self.scroll_offset += 1;
@@ -162,23 +159,19 @@ impl App {
             KeyCode::Char('q') => {
                 self.should_quit = true;
             }
-            KeyCode::Up => {
-                if selected_index > 0 {
-                    self.mode = AppMode::Approval {
-                        request_id,
-                        selected_index: selected_index - 1,
-                        options,
-                    };
-                }
+            KeyCode::Up if selected_index > 0 => {
+                self.mode = AppMode::Approval {
+                    request_id,
+                    selected_index: selected_index - 1,
+                    options,
+                };
             }
-            KeyCode::Down => {
-                if selected_index < options.len() - 1 {
-                    self.mode = AppMode::Approval {
-                        request_id,
-                        selected_index: selected_index + 1,
-                        options,
-                    };
-                }
+            KeyCode::Down if selected_index < options.len() - 1 => {
+                self.mode = AppMode::Approval {
+                    request_id,
+                    selected_index: selected_index + 1,
+                    options,
+                };
             }
             KeyCode::Enter => {
                 if let Some(option) = options.get(selected_index) {
@@ -194,15 +187,16 @@ impl App {
 
                     // 更新消息列表中的审批卡片状态
                     for msg in &mut self.messages {
-                        if let ChatMessage::ApprovalCard(state) = msg {
-                            if state.is_active_for(request_id) {
-                                state.mark_done(option.label.clone());
-                            }
+                        if let ChatMessage::ApprovalCard(state) = msg
+                            && state.is_active_for(request_id)
+                        {
+                            state.mark_done(option.label.clone());
                         }
                     }
 
                     // 移除已处理的审批
-                    self.pending_approvals.retain(|a| a.request_id != request_id);
+                    self.pending_approvals
+                        .retain(|a| a.request_id != request_id);
 
                     // 切换到下一个审批或回到 Chat 模式
                     if let Some(next) = self.pending_approvals.first() {
@@ -256,8 +250,8 @@ impl App {
                     options: options.clone(),
                 };
 
-                let is_first = matches!(self.mode, AppMode::Chat)
-                    && self.pending_approvals.is_empty();
+                let is_first =
+                    matches!(self.mode, AppMode::Chat) && self.pending_approvals.is_empty();
 
                 self.pending_approvals.push(pending);
 
@@ -267,20 +261,24 @@ impl App {
                         selected_index: 0,
                         options,
                     };
-                    self.messages.push(ChatMessage::ApprovalCard(
-                        ApprovalCardState::Active {
+                    self.messages
+                        .push(ChatMessage::ApprovalCard(ApprovalCardState::Active {
                             request_id,
                             agent_name,
                             tool_name,
                             tool_input: tool_input_str,
-                            options: self.pending_approvals.last().map(|p| p.options.clone()).unwrap_or_default(),
+                            options: self
+                                .pending_approvals
+                                .last()
+                                .map(|p| p.options.clone())
+                                .unwrap_or_default(),
                             selected_index: 0,
-                        },
-                    ));
+                        }));
                 } else {
-                    self.messages.push(ChatMessage::ApprovalCard(
-                        ApprovalCardState::Queued { tool_name },
-                    ));
+                    self.messages
+                        .push(ChatMessage::ApprovalCard(ApprovalCardState::Queued {
+                            tool_name,
+                        }));
                 }
             }
             EngineEvent::ApprovalResult {
@@ -289,10 +287,10 @@ impl App {
                 ..
             } => {
                 for msg in &mut self.messages {
-                    if let ChatMessage::ApprovalCard(state) = msg {
-                        if state.is_active_for(request_id) {
-                            state.mark_done(decision.clone());
-                        }
+                    if let ChatMessage::ApprovalCard(state) = msg
+                        && state.is_active_for(request_id)
+                    {
+                        state.mark_done(decision.clone());
                     }
                 }
                 self.pending_approvals
@@ -344,18 +342,12 @@ impl App {
 
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(3),
-            ])
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
             .split(area);
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(30),
-            ])
+            .constraints([Constraint::Min(1), Constraint::Length(30)])
             .split(main_layout[0]);
 
         ChatPanel::render(self, frame, content_layout[0]);
@@ -370,8 +362,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::domain::{
-        AgentStatusKind, ApprovalOption, EngineEvent, EventTarget,
-        MessageRole, TaskStatusKind,
+        AgentStatusKind, ApprovalOption, EngineEvent, EventTarget, MessageRole, TaskStatusKind,
     };
     use crate::tui::chat::{ApprovalCardState, ChatMessage};
 
@@ -407,13 +398,11 @@ mod tests {
             agent_name: "test-agent".to_string(),
             tool_name: "create_tasks".to_string(),
             tool_input: serde_json::json!({"tasks": []}),
-            options: vec![
-                ApprovalOption {
-                    id: "allow_once".to_string(),
-                    label: "Allow Once".to_string(),
-                    description: "仅本次允许".to_string(),
-                },
-            ],
+            options: vec![ApprovalOption {
+                id: "allow_once".to_string(),
+                label: "Allow Once".to_string(),
+                description: "仅本次允许".to_string(),
+            }],
         });
         assert!(matches!(app.mode, AppMode::Approval { .. }));
         assert_eq!(app.pending_approvals.len(), 1);
@@ -483,7 +472,12 @@ mod tests {
         let queued_count = app
             .messages
             .iter()
-            .filter(|m| matches!(m, ChatMessage::ApprovalCard(ApprovalCardState::Queued { .. })))
+            .filter(|m| {
+                matches!(
+                    m,
+                    ChatMessage::ApprovalCard(ApprovalCardState::Queued { .. })
+                )
+            })
             .count();
         assert_eq!(queued_count, 1);
     }

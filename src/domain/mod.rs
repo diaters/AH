@@ -1,6 +1,6 @@
-pub mod frontend;
 mod contribution;
 mod evaluation;
+pub mod frontend;
 mod memory;
 mod space;
 
@@ -21,6 +21,10 @@ pub use evaluation::{
     EvaluationDecision, EvaluationRequestMessage, EvaluationResult, EvaluationResultMessage,
     EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
 };
+pub use frontend::{
+    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
+    MessageRole, TaskStatusKind, UserAction,
+};
 pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
     estimate_tokens,
@@ -29,10 +33,6 @@ pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, PersistentAgentConfig, SpaceAgentRegistry,
     SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, SystemStatus,
     ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
-};
-pub use frontend::{
-    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
-    MessageRole, TaskStatusKind, UserAction,
 };
 
 pub type TaskId = Uuid;
@@ -433,7 +433,11 @@ pub struct Task {
 
 impl Task {
     /// 基于用户输入创建一个处于 Pending 状态的新任务（支持多轮对话）。
-    pub fn from_user_input(content: impl Into<String>, max_retries: u32, channel: ChannelId) -> Self {
+    pub fn from_user_input(
+        content: impl Into<String>,
+        max_retries: u32,
+        channel: ChannelId,
+    ) -> Self {
         let content = content.into();
         let now = Utc::now();
 
@@ -460,7 +464,11 @@ impl Task {
     }
 
     /// 基于用户输入创建一个处于 Ready 状态的新任务（用于测试或单轮场景）。
-    pub fn from_user_input_ready(content: impl Into<String>, max_retries: u32, channel: ChannelId) -> Self {
+    pub fn from_user_input_ready(
+        content: impl Into<String>,
+        max_retries: u32,
+        channel: ChannelId,
+    ) -> Self {
         let content = content.into();
         let now = Utc::now();
 

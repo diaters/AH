@@ -1,17 +1,13 @@
-use std::{
-    sync::Arc,
-    thread,
-    time::Duration,
-};
+use std::{sync::Arc, thread, time::Duration};
 
 use anyhow::{Context, Result};
 use crossbeam_channel::unbounded;
 use crossterm::event::{self, Event};
+use harness::tui::{App, TuiFrontend};
 use harness::{
     EngineEvent, ExternalInput, HarnessConfig, ShutdownState, UserAction, app_is_idle,
     build_harness_app, create_executor_from_config,
 };
-use harness::tui::{App, TuiFrontend};
 use tokio::runtime::Runtime;
 
 fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
@@ -37,9 +33,7 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
         .with_ansi(false)
         .with_filter(file_filter);
 
-    tracing_subscriber::registry()
-        .with(file_layer)
-        .init();
+    tracing_subscriber::registry().with(file_layer).init();
 
     guard
 }
@@ -62,8 +56,13 @@ fn main() -> Result<()> {
     let (_input_tx, input_rx) = unbounded::<ExternalInput>();
 
     // 构建 ECS app
-    let mut app =
-        build_harness_app(config, runtime, executor, input_rx, vec![Box::new(tui_frontend)]);
+    let mut app = build_harness_app(
+        config,
+        runtime,
+        executor,
+        input_rx,
+        vec![Box::new(tui_frontend)],
+    );
 
     // 启动 ratatui
     let mut terminal = ratatui::init();

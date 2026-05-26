@@ -7,14 +7,14 @@ use crate::{
 };
 
 /// 从前端拉取用户动作，转为 ECS 内部消息
-pub(crate) fn frontend_input_system(
-    registry: Res<FrontendRegistry>,
-    mut commands: Commands,
-) {
+pub(crate) fn frontend_input_system(registry: Res<FrontendRegistry>, mut commands: Commands) {
     for frontend in &registry.frontends {
         for action in frontend.poll_actions() {
             match action {
-                UserAction::Text { channel: _, content } => {
+                UserAction::Text {
+                    channel: _,
+                    content,
+                } => {
                     debug!(
                         event = "FrontendInputText",
                         content_len = content.len(),

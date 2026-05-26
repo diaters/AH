@@ -1,0 +1,167 @@
+<h2>Harness TUI 布局方案对比</h2>
+<p class="subtitle">三种终端 TUI 布局思路，点击选择你偏好的方向</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 A：三栏布局</div>
+        <div class="mockup-body" style="display:flex;height:320px;font-size:12px;">
+          <div style="width:22%;border-right:1px solid #444;padding:6px;overflow:hidden;">
+            <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;">Agents</div>
+            <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;">
+              <span style="color:#9ece6a;">●</span> brain<br><span style="color:#565f89;font-size:10px;">idle</span>
+            </div>
+            <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;">
+              <span style="color:#9ece6a;">●</span> default-llm<br><span style="color:#565f89;font-size:10px;">running task#3</span>
+            </div>
+            <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;">
+              <span style="color:#565f89;">●</span> summarizer<br><span style="color:#565f89;font-size:10px;">idle</span>
+            </div>
+            <div style="background:#33467c;border-radius:3px;padding:4px;margin-bottom:4px;border-left:2px solid #7aa2f7;">
+              <span style="color:#bb9af7;">◆</span> 兔子计算<br><span style="color:#e0af68;font-size:10px;">Running</span>
+            </div>
+            <div style="background:#33467c;border-radius:3px;padding:4px;border-left:2px solid #7aa2f7;">
+              <span style="color:#bb9af7;">◆</span> 苍蝇计算<br><span style="color:#e0af68;font-size:10px;">Running</span>
+            </div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;">
+            <div style="flex:1;padding:6px;overflow:hidden;">
+              <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;">Chat</div>
+              <div style="color:#9ece6a;margin-bottom:4px;"><b>You:</b> 请创建3个子任务计算兔子和苍蝇...</div>
+              <div style="color:#c0caf5;margin-bottom:4px;"><b>default-llm:</b> 已创建子任务批次...</div>
+              <div style="color:#bb9af7;margin-bottom:4px;">├ 兔子计算 <span style="color:#9ece6a;">Done</span></div>
+              <div style="color:#bb9af7;margin-bottom:4px;">├ 苍蝇计算 <span style="color:#e0af68;">Running...</span></div>
+              <div style="color:#bb9af7;">└ 差距分析 <span style="color:#565f89;">Waiting</span></div>
+            </div>
+            <div style="border-top:1px solid #444;padding:6px;display:flex;gap:4px;">
+              <span style="color:#565f89;">❯</span>
+              <span style="color:#c0caf5;flex:1;border-bottom:1px solid #444;">输入消息...</span>
+            </div>
+          </div>
+          <div style="width:26%;border-left:1px solid #444;padding:6px;overflow:hidden;">
+            <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;">Tasks</div>
+            <div style="font-size:10px;margin-bottom:6px;">
+              <div style="color:#c0caf5;">● Parent Task</div>
+              <div style="margin-left:8px;color:#9ece6a;">├ 兔子 ✓</div>
+              <div style="margin-left:8px;color:#e0af68;">├ 苍蝇 ⏳</div>
+              <div style="margin-left:8px;color:#565f89;">└ 分析 ⏸</div>
+            </div>
+            <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;margin-top:10px;">Approvals</div>
+            <div style="background:#33467c;border-radius:3px;padding:4px;font-size:10px;">
+              <span style="color:#e0af68;">⚡ create_tasks</span><br>
+              <span style="color:#565f89;">from default-llm</span><br>
+              <div style="margin-top:4px;">
+                <span style="background:#9ece6a;color:#1a1b26;padding:1px 6px;border-radius:2px;margin-right:4px;">[1] Once</span>
+                <span style="background:#7aa2f7;color:#1a1b26;padding:1px 6px;border-radius:2px;margin-right:4px;">[2] Always</span>
+                <span style="background:#f7768e;color:#1a1b26;padding:1px 6px;border-radius:2px;">[3] Deny</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A：三栏布局</h3>
+      <p>左栏 Agent 列表，中栏对话区，右栏任务/审批。信息密度最高，适合大终端。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>一屏看清全局状态</li><li>任务和审批信息常驻可见</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>窄终端（<100列）体验差</li><li>三栏信息量对简单任务过重</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 B：双栏 + 底部状态</div>
+        <div class="mockup-body" style="display:flex;flex-direction:column;height:320px;font-size:12px;">
+          <div style="flex:1;display:flex;">
+            <div style="flex:1;padding:6px;overflow:hidden;border-right:1px solid #444;">
+              <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;">Chat</div>
+              <div style="color:#9ece6a;margin-bottom:4px;"><b>You:</b> 请创建3个子任务计算兔子和苍蝇...</div>
+              <div style="color:#c0caf5;margin-bottom:4px;"><b>default-llm:</b> 已创建子任务批次...</div>
+              <div style="color:#bb9af7;margin-bottom:4px;">├ 兔子计算 <span style="color:#9ece6a;">Done ✓</span></div>
+              <div style="color:#bb9af7;margin-bottom:4px;">├ 苍蝇计算 <span style="color:#e0af68;">Running...</span></div>
+              <div style="color:#bb9af7;">└ 差距分析 <span style="color:#565f89;">Waiting</span></div>
+              <div style="margin-top:8px;background:#33467c;border-radius:3px;padding:6px;">
+                <span style="color:#e0af68;">⚡ Approval:</span> default-llm → <b>create_tasks</b><br>
+                <span style="margin-top:4px;display:inline-block;">
+                  <span style="background:#9ece6a;color:#1a1b26;padding:1px 6px;border-radius:2px;margin-right:4px;">[1] Once</span>
+                  <span style="background:#7aa2f7;color:#1a1b26;padding:1px 6px;border-radius:2px;margin-right:4px;">[2] Always</span>
+                  <span style="background:#f7768e;color:#1a1b26;padding:1px 6px;border-radius:2px;">[3] Deny</span>
+                </span>
+              </div>
+            </div>
+            <div style="width:28%;padding:6px;overflow:hidden;">
+              <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;">Agents</div>
+              <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;font-size:10px;">
+                <span style="color:#9ece6a;">●</span> brain <span style="color:#565f89;">idle</span>
+              </div>
+              <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;font-size:10px;">
+                <span style="color:#9ece6a;">●</span> default-llm <span style="color:#e0af68;">running</span>
+              </div>
+              <div style="background:#1a1b26;border-radius:3px;padding:4px;margin-bottom:4px;font-size:10px;">
+                <span style="color:#565f89;">●</span> summarizer <span style="color:#565f89;">idle</span>
+              </div>
+              <div style="font-weight:bold;margin-bottom:6px;color:#7aa2f7;margin-top:10px;">Tasks</div>
+              <div style="font-size:10px;">
+                <div style="color:#9ece6a;">● 兔子 ✓</div>
+                <div style="color:#e0af68;">● 苍蝇 ⏳</div>
+                <div style="color:#565f89;">● 分析 ⏸</div>
+              </div>
+            </div>
+          </div>
+          <div style="border-top:1px solid #444;padding:4px 6px;display:flex;gap:4px;background:#1a1b26;">
+            <span style="color:#565f89;">❯</span>
+            <span style="color:#c0caf5;flex:1;">输入消息...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B：双栏 + 底部输入</h3>
+      <p>左栏对话区（含审批卡片），右栏 Agent/任务状态。审批嵌入对话流。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>对话体验更沉浸</li><li>适应中等终端（≥80列）</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>审批信息需滚动查找</li><li>任务状态面板空间有限</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 C：Tab 切换布局</div>
+        <div class="mockup-body" style="display:flex;flex-direction:column;height:320px;font-size:12px;">
+          <div style="display:flex;border-bottom:1px solid #444;padding:0 6px;">
+            <div style="padding:4px 12px;color:#7aa2f7;border-bottom:2px solid #7aa2f7;">Chat</div>
+            <div style="padding:4px 12px;color:#565f89;">Agents</div>
+            <div style="padding:4px 12px;color:#565f89;">Tasks</div>
+            <div style="padding:4px 12px;color:#565f89;">Approvals</div>
+          </div>
+          <div style="flex:1;padding:6px;overflow:hidden;">
+            <div style="color:#9ece6a;margin-bottom:4px;"><b>You:</b> 请创建3个子任务计算兔子和苍蝇...</div>
+            <div style="color:#c0caf5;margin-bottom:4px;"><b>default-llm:</b> 已创建子任务批次...</div>
+            <div style="color:#bb9af7;margin-bottom:4px;">├ 兔子计算 <span style="color:#9ece6a;">Done ✓</span></div>
+            <div style="color:#bb9af7;margin-bottom:4px;">├ 苍蝇计算 <span style="color:#e0af68;">Running...</span></div>
+            <div style="color:#bb9af7;">└ 差距分析 <span style="color:#565f89;">Waiting</span></div>
+          </div>
+          <div style="border-top:1px solid #444;padding:4px 6px;display:flex;gap:4px;background:#1a1b26;">
+            <span style="color:#565f89;">❯</span>
+            <span style="color:#c0caf5;flex:1;">输入消息...</span>
+            <span style="color:#565f89;font-size:10px;">[Tab] 切换面板</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C：Tab 切换布局</h3>
+      <p>单栏全屏，通过 Tab 键切换 Chat/Agents/Tasks/Approvals 视图。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>全屏展示各视角，信息最充足</li><li>窄终端也完全可用</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>无法同时看对话和状态</li><li>需频繁切换 Tab</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -5,12 +5,15 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole,
-    ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory,
-    Task, TaskStatus, WaitingReason, build_harness_app,
+    ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskStatus,
+    WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 

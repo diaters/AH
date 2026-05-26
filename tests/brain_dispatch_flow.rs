@@ -3,12 +3,14 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, BrainConfig, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, Task, TaskStatus,
-    build_harness_app,
+    ExecutorFuture, FrontendKind, HarnessConfig, Task, TaskStatus, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 

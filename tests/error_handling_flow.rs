@@ -7,12 +7,15 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutionError,
-    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus,
-    WaitingReason, build_harness_app,
+    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 
@@ -169,7 +172,10 @@ fn empty_user_input_creates_task() {
 
     // Send empty input
     input_tx
-        .send(ExternalInput::TextWithChannel { channel: default_channel(), content: "".to_string() })
+        .send(ExternalInput::TextWithChannel {
+            channel: default_channel(),
+            content: "".to_string(),
+        })
         .expect("should send");
 
     // Run updates
@@ -222,7 +228,10 @@ fn large_input_is_handled() {
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);
     input_tx
-        .send(ExternalInput::TextWithChannel { channel: default_channel(), content: large_content.clone() })
+        .send(ExternalInput::TextWithChannel {
+            channel: default_channel(),
+            content: large_content.clone(),
+        })
         .expect("should send");
 
     // Run updates

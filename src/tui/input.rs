@@ -33,10 +33,7 @@ impl InputBar {
         };
 
         let paragraph = Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!("{prompt} "),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!("{prompt} "), Style::default().fg(Color::DarkGray)),
             Span::styled(content, Style::default().fg(content_color)),
         ]))
         .block(

@@ -16,7 +16,10 @@ pub(crate) fn frontend_output_system(
     outputs: Query<(Entity, &UserOutputMessage)>,
     tasks: Query<&Task, Changed<Task>>,
     agents: Query<&Agent, Changed<Agent>>,
-    confirmations: Query<(Entity, &ToolConfirmationRequestMessage), Added<ToolConfirmationRequestMessage>>,
+    confirmations: Query<
+        (Entity, &ToolConfirmationRequestMessage),
+        Added<ToolConfirmationRequestMessage>,
+    >,
 ) {
     // 用户可见文本输出
     for (entity, output) in &outputs {

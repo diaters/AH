@@ -5,12 +5,15 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus,
-    TaskTerminatedMessage, build_harness_app,
+    ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus, TaskTerminatedMessage,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
-    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+    ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    }
 }
 use tokio::runtime::Runtime;
 
@@ -86,7 +89,10 @@ fn selects_agent_by_tags_match() {
     let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
 
     input_tx
-        .send(ExternalInput::TextWithChannel { channel: default_channel(), content: "帮我写一段 general 代码".to_string() })
+        .send(ExternalInput::TextWithChannel {
+            channel: default_channel(),
+            content: "帮我写一段 general 代码".to_string(),
+        })
         .expect("input should be accepted");
 
     for _ in 0..8 {
