@@ -363,3 +363,128 @@ impl App {
         InputBar::render(self, frame, main_layout[1]);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crossbeam_channel::unbounded;
+    use uuid::Uuid;
+
+    use crate::domain::{
+        AgentStatusKind, ApprovalOption, EngineEvent, EventTarget,
+        MessageRole, TaskStatusKind,
+    };
+    use crate::tui::chat::{ApprovalCardState, ChatMessage};
+
+    use super::{App, AppMode};
+
+    fn test_app() -> App {
+        let (action_tx, _) = unbounded();
+        App::new(action_tx)
+    }
+
+    #[test]
+    fn handle_text_event_adds_agent_message() {
+        let mut app = test_app();
+        app.handle_engine_event(EngineEvent::Text {
+            target: EventTarget::Broadcast,
+            role: MessageRole::Agent,
+            content: "hello world".to_string(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            &app.messages[0],
+            ChatMessage::Agent { content, .. } if content == "hello world"
+        ));
+    }
+
+    #[test]
+    fn handle_approval_request_enters_approval_mode() {
+        let mut app = test_app();
+        let request_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id,
+            agent_name: "test-agent".to_string(),
+            tool_name: "create_tasks".to_string(),
+            tool_input: serde_json::json!({"tasks": []}),
+            options: vec![
+                ApprovalOption {
+                    id: "allow_once".to_string(),
+                    label: "Allow Once".to_string(),
+                    description: "仅本次允许".to_string(),
+                },
+            ],
+        });
+        assert!(matches!(app.mode, AppMode::Approval { .. }));
+        assert_eq!(app.pending_approvals.len(), 1);
+    }
+
+    #[test]
+    fn handle_agent_status_adds_agent() {
+        let mut app = test_app();
+        let agent_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::AgentStatusChanged {
+            target: EventTarget::Broadcast,
+            agent_id,
+            name: "brain".to_string(),
+            status: AgentStatusKind::Idle,
+        });
+        assert_eq!(app.agents.len(), 1);
+        assert_eq!(app.agents[0].name, "brain");
+    }
+
+    #[test]
+    fn handle_task_status_adds_task() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "test task".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+        });
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].name, "test task");
+    }
+
+    #[test]
+    fn second_approval_goes_to_queued() {
+        let mut app = test_app();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id: id1,
+            agent_name: "agent1".to_string(),
+            tool_name: "tool1".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![ApprovalOption {
+                id: "allow_once".to_string(),
+                label: "Allow Once".to_string(),
+                description: "仅本次允许".to_string(),
+            }],
+        });
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id: id2,
+            agent_name: "agent2".to_string(),
+            tool_name: "tool2".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![ApprovalOption {
+                id: "allow_once".to_string(),
+                label: "Allow Once".to_string(),
+                description: "仅本次允许".to_string(),
+            }],
+        });
+
+        assert_eq!(app.pending_approvals.len(), 2);
+        let queued_count = app
+            .messages
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::ApprovalCard(ApprovalCardState::Queued { .. })))
+            .count();
+        assert_eq!(queued_count, 1);
+    }
+}
