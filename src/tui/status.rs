@@ -11,8 +11,33 @@ use crate::domain::{AgentStatusKind, TaskStatusKind};
 pub struct StatusPanel;
 
 impl StatusPanel {
-    pub fn render(app: &super::app::App, frame: &mut Frame, area: Rect) {
+    pub fn render(app: &crate::tui::app::App, frame: &mut Frame, area: Rect) {
         let mut lines: Vec<Line> = Vec::new();
+
+        // 当前模式指示
+        let (mode_label, mode_color) = match &app.mode {
+            crate::tui::app::AppMode::Chat => ("CHAT", Color::Green),
+            crate::tui::app::AppMode::Approval { .. } => ("REVIEW", Color::Yellow),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {mode_label} "),
+                Style::default().fg(Color::Black).bg(mode_color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        // 审批待处理
+        if !app.pending_approvals.is_empty() {
+            let count = app.pending_approvals.len();
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {count} approval{}", if count > 1 { "s" } else { "" }),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+        }
+
+        lines.push(Line::from(""));
 
         // Agent 列表
         lines.push(Line::from(Span::styled(
@@ -32,13 +57,13 @@ impl StatusPanel {
             let status_text = match agent.status {
                 AgentStatusKind::Idle => "idle",
                 AgentStatusKind::Running => "running",
-                AgentStatusKind::WaitingApproval => "waiting approval",
-                AgentStatusKind::WaitingTool => "waiting tool",
+                AgentStatusKind::WaitingApproval => "waiting",
+                AgentStatusKind::WaitingTool => "waiting",
             };
             lines.push(Line::from(vec![
-                Span::styled(icon.to_string(), Style::default().fg(color)),
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
                 Span::styled(
-                    format!(" {} ", agent.name),
+                    format!("{} ", agent.name),
                     Style::default().fg(Color::White),
                 ),
                 Span::styled(
@@ -60,9 +85,9 @@ impl StatusPanel {
 
         for task in &app.tasks {
             let (icon, color) = match task.status {
-                TaskStatusKind::Pending => ("\u{25cf}", Color::DarkGray),
+                TaskStatusKind::Pending => ("\u{25cb}", Color::DarkGray),
                 TaskStatusKind::Running => ("\u{25cf}", Color::Yellow),
-                TaskStatusKind::Waiting => ("\u{25cf}", Color::Cyan),
+                TaskStatusKind::Waiting => ("\u{25cb}", Color::Cyan),
                 TaskStatusKind::Done => ("\u{2713}", Color::Green),
                 TaskStatusKind::Failed => ("\u{2717}", Color::Red),
             };
@@ -72,17 +97,45 @@ impl StatusPanel {
             ]));
         }
 
-        // 审批徽章
-        if !app.pending_approvals.is_empty() {
-            lines.push(Line::from(""));
-            let count = app.pending_approvals.len();
-            lines.push(Line::from(vec![
-                Span::styled("\u{26a1} Approvals", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    format!(" [{count}]"),
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-            ]));
+        // 快捷键提示（底部）
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Shortcuts",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        match &app.mode {
+            crate::tui::app::AppMode::Chat => {
+                lines.push(Line::from(Span::styled(
+                    "Enter  发送",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "Ctrl+Q 退出",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                if !app.pending_approvals.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "Tab    审批",
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+            }
+            crate::tui::app::AppMode::Approval { .. } => {
+                lines.push(Line::from(Span::styled(
+                    "\u{2191}\u{2193}     选择",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "Enter  确认",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "Esc    跳过",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
         }
 
         let paragraph = Paragraph::new(lines).block(
