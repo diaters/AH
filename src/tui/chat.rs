@@ -66,14 +66,24 @@ impl ChatPanel {
             match msg {
                 ChatMessage::User(content) => {
                     lines.push(Line::from(vec![
-                        Span::styled("You", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "You",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(": ", Style::default().fg(Color::Green)),
                         Span::styled(content.clone(), Style::default().fg(Color::Green)),
                     ]));
                 }
                 ChatMessage::Agent { name, content } => {
                     lines.push(Line::from(vec![
-                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            name.clone(),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(": ", Style::default().fg(Color::Cyan)),
                     ]));
                     for line in content.lines() {
@@ -102,11 +112,16 @@ impl ChatPanel {
                         lines.push(Line::from(vec![
                             Span::styled(
                                 " REVIEW ".to_string(),
-                                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 format!(" {tool_name}"),
-                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                         ]));
 
@@ -157,17 +172,23 @@ impl ChatPanel {
                         lines.push(Line::from(vec![
                             Span::styled(
                                 "  \u{2191}\u{2193}",
-                                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(" 选择 ", Style::default().fg(Color::DarkGray)),
                             Span::styled(
                                 "Enter",
-                                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(" 确认 ", Style::default().fg(Color::DarkGray)),
                             Span::styled(
                                 "Esc",
-                                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(" 跳过", Style::default().fg(Color::DarkGray)),
                         ]));
@@ -208,7 +229,9 @@ impl ChatPanel {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Welcome to AI Harness",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(Span::styled(
                 "Type a message below to get started",

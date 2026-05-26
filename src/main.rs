@@ -144,6 +144,9 @@ fn main() -> Result<()> {
                             "ignored non-press key event"
                         );
                     }
+                    Event::Mouse(mouse) => {
+                        app_state.handle_mouse_event(mouse);
+                    }
                     Event::Paste(text) => {
                         app_state.handle_paste(&text);
                         paste_count += 1;
@@ -218,19 +221,14 @@ fn main() -> Result<()> {
         if shutdown_requested && idle {
             info!(
                 event = "GracefulShutdown",
-                tick,
-                "shutdown requested and app is idle, exiting"
+                tick, "shutdown requested and app is idle, exiting"
             );
             break;
         }
 
         // 4. 退出检查
         if app_state.should_quit {
-            info!(
-                event = "UserQuit",
-                tick,
-                "user requested quit, exiting"
-            );
+            info!(event = "UserQuit", tick, "user requested quit, exiting");
             break;
         }
 

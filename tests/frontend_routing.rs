@@ -45,7 +45,7 @@ impl Frontend for SpyFrontend {
     }
 
     fn push_event(&self, event: EngineEvent) {
-        let my_channels = vec![ChannelId {
+        let my_channels = [ChannelId {
             frontend: self.kind_val.clone(),
             user_id: self.user_id.clone(),
         }];

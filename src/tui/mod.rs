@@ -19,10 +19,7 @@ pub struct TuiFrontend {
 
 impl TuiFrontend {
     pub fn new(event_tx: Sender<EngineEvent>, action_rx: Receiver<UserAction>) -> Self {
-        debug!(
-            event = "TuiFrontendCreated",
-            "TUI frontend channel created"
-        );
+        debug!(event = "TuiFrontendCreated", "TUI frontend channel created");
         Self {
             user_id: "default".to_string(),
             event_tx,

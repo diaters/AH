@@ -1,5 +1,5 @@
 use crossbeam_channel::Sender;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -105,6 +105,19 @@ impl App {
         if matches!(self.mode, AppMode::Chat) {
             self.input_buffer.insert_str(self.byte_index(), text);
             self.cursor_position += text.chars().count();
+        }
+    }
+
+    /// 处理鼠标事件（滚轮翻页）
+    pub fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp if self.scroll_offset > 0 => {
+                self.scroll_offset -= 1;
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset += 1;
+            }
+            _ => {}
         }
     }
 
@@ -222,18 +235,44 @@ impl App {
                 self.should_quit = true;
             }
             KeyCode::Up if selected_index > 0 => {
+                let new_index = selected_index - 1;
                 self.mode = AppMode::Approval {
                     request_id,
-                    selected_index: selected_index - 1,
+                    selected_index: new_index,
                     options,
                 };
+                // 同步更新对应 ApprovalCard 的 selected_index
+                for msg in &mut self.messages {
+                    if let ChatMessage::ApprovalCard(ApprovalCardState::Active {
+                        request_id: rid,
+                        selected_index: si,
+                        ..
+                    }) = msg
+                        && *rid == request_id
+                    {
+                        *si = new_index;
+                    }
+                }
             }
             KeyCode::Down if selected_index < options.len() - 1 => {
+                let new_index = selected_index + 1;
                 self.mode = AppMode::Approval {
                     request_id,
-                    selected_index: selected_index + 1,
+                    selected_index: new_index,
                     options,
                 };
+                // 同步更新对应 ApprovalCard 的 selected_index
+                for msg in &mut self.messages {
+                    if let ChatMessage::ApprovalCard(ApprovalCardState::Active {
+                        request_id: rid,
+                        selected_index: si,
+                        ..
+                    }) = msg
+                        && *rid == request_id
+                    {
+                        *si = new_index;
+                    }
+                }
             }
             KeyCode::Enter => {
                 if let Some(option) = options.get(selected_index) {
@@ -446,6 +485,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::unbounded;
+    use crossterm::event::{KeyCode, KeyEvent};
     use uuid::Uuid;
 
     use crate::domain::{
@@ -567,5 +607,148 @@ mod tests {
             })
             .count();
         assert_eq!(queued_count, 1);
+    }
+
+    #[test]
+    fn approval_mode_up_down_updates_selected_index() {
+        let mut app = test_app();
+        let request_id = Uuid::new_v4();
+
+        // 创建有3个选项的审批
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id,
+            agent_name: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![
+                ApprovalOption {
+                    id: "opt1".to_string(),
+                    label: "Option 1".to_string(),
+                    description: "desc1".to_string(),
+                },
+                ApprovalOption {
+                    id: "opt2".to_string(),
+                    label: "Option 2".to_string(),
+                    description: "desc2".to_string(),
+                },
+                ApprovalOption {
+                    id: "opt3".to_string(),
+                    label: "Option 3".to_string(),
+                    description: "desc3".to_string(),
+                },
+            ],
+        });
+
+        // 初始状态应该是 Approval 模式，selected_index = 0
+        assert!(matches!(
+            app.mode,
+            AppMode::Approval {
+                selected_index: 0,
+                ..
+            }
+        ));
+
+        // 按 Down 键，应该移动到 index 1
+        app.handle_key_event(KeyEvent::from(KeyCode::Down));
+        match &app.mode {
+            AppMode::Approval { selected_index, .. } => {
+                assert_eq!(*selected_index, 1);
+            }
+            _ => panic!("should be in Approval mode"),
+        }
+
+        // 再按 Down 键，应该移动到 index 2
+        app.handle_key_event(KeyEvent::from(KeyCode::Down));
+        match &app.mode {
+            AppMode::Approval { selected_index, .. } => {
+                assert_eq!(*selected_index, 2);
+            }
+            _ => panic!("should be in Approval mode"),
+        }
+
+        // 再按 Down 键，应该保持在 index 2（已经是最后一个）
+        app.handle_key_event(KeyEvent::from(KeyCode::Down));
+        match &app.mode {
+            AppMode::Approval { selected_index, .. } => {
+                assert_eq!(*selected_index, 2);
+            }
+            _ => panic!("should be in Approval mode"),
+        }
+
+        // 按 Up 键，应该移动到 index 1
+        app.handle_key_event(KeyEvent::from(KeyCode::Up));
+        match &app.mode {
+            AppMode::Approval { selected_index, .. } => {
+                assert_eq!(*selected_index, 1);
+            }
+            _ => panic!("should be in Approval mode"),
+        }
+
+        // 按 Up 键，应该移动到 index 0
+        app.handle_key_event(KeyEvent::from(KeyCode::Up));
+        match &app.mode {
+            AppMode::Approval { selected_index, .. } => {
+                assert_eq!(*selected_index, 0);
+            }
+            _ => panic!("should be in Approval mode"),
+        }
+
+        // 再按 Up 键，应该保持在 index 0（已经是第一个）
+        app.handle_key_event(KeyEvent::from(KeyCode::Up));
+        match &app.mode {
+            AppMode::Approval { selected_index, .. } => {
+                assert_eq!(*selected_index, 0);
+            }
+            _ => panic!("should be in Approval mode"),
+        }
+    }
+
+    #[test]
+    fn approval_card_selected_index_synced_on_key_press() {
+        let mut app = test_app();
+        let request_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id,
+            agent_name: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![
+                ApprovalOption {
+                    id: "opt1".to_string(),
+                    label: "Option 1".to_string(),
+                    description: "desc1".to_string(),
+                },
+                ApprovalOption {
+                    id: "opt2".to_string(),
+                    label: "Option 2".to_string(),
+                    description: "desc2".to_string(),
+                },
+            ],
+        });
+
+        // 按 Down 键
+        app.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+        // 检查 ApprovalCard 中的 selected_index 是否同步更新
+        let mut card_selected_index = None;
+        for msg in &app.messages {
+            if let ChatMessage::ApprovalCard(ApprovalCardState::Active {
+                request_id: rid,
+                selected_index,
+                ..
+            }) = msg
+                && *rid == request_id
+            {
+                card_selected_index = Some(*selected_index);
+            }
+        }
+        assert_eq!(
+            card_selected_index,
+            Some(1),
+            "ApprovalCard selected_index should be synced"
+        );
     }
 }

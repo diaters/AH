@@ -180,17 +180,19 @@ fn handle_spawn_request(
         .cloned()
         .collect();
 
-    if allowed_tools.is_empty() {
+    // 只在请求了工具但全部无效时才拒绝
+    // 空工具列表是合法的，表示纯 LLM 对话任务
+    if allowed_tools.is_empty() && !request.tools.is_empty() {
         warn!(
             event = "SpawnRequestRejected",
             parent_id = %request.parent_agent_id,
             task_id = %request.task_id,
             requested_tools = ?request.tools,
-            reason = "no_valid_tools",
-            "spawn rejected: no valid tools after filtering"
+            reason = "all_requested_tools_denied",
+            "spawn rejected: all requested tools are denied for parent agent"
         );
         let msg = format!(
-            "Agent spawn rejected: requested tools {:?} not available in parent agent",
+            "Agent spawn rejected: all requested tools {:?} are denied for parent agent",
             request.tools
         );
         mark_task_failed(tasks, clock, request.task_id, &msg);

@@ -19,22 +19,21 @@ impl StatusPanel {
             crate::tui::app::AppMode::Chat => ("CHAT", Color::Green),
             crate::tui::app::AppMode::Approval { .. } => ("REVIEW", Color::Yellow),
         };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {mode_label} "),
-                Style::default().fg(Color::Black).bg(mode_color).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!(" {mode_label} "),
+            Style::default()
+                .fg(Color::Black)
+                .bg(mode_color)
+                .add_modifier(Modifier::BOLD),
+        )]));
 
         // 审批待处理
         if !app.pending_approvals.is_empty() {
             let count = app.pending_approvals.len();
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" {count} approval{}", if count > 1 { "s" } else { "" }),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                format!(" {count} approval{}", if count > 1 { "s" } else { "" }),
+                Style::default().fg(Color::Yellow),
+            )]));
         }
 
         lines.push(Line::from(""));
