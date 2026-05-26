@@ -9,12 +9,12 @@ use uuid::Uuid;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
     ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
-    BuiltinToolExecutors, ConfirmationOption, ConfirmationSource, ExecutionError, GrantMode,
-    OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskStatus, ToolAction,
-    ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext,
-    ToolDefinition, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    ToolPermission, WaitingReason,
+    BuiltinToolExecutors, ChannelId, ConfirmationOption, ConfirmationSource, ExecutionError,
+    FrontendKind, GrantMode, OutputMessage, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
+    TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
 };
 
 // ========== Builtin Tool Implementations ==========
@@ -493,6 +493,7 @@ fn spawn_create_tasks_messages(
             multi_turn: false,
             parent_task_id: Some(task_id),
             batch_id: Some(batch_id),
+            origin_channel: ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() },
         };
 
         let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();

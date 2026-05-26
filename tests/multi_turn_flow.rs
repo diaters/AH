@@ -4,10 +4,14 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, EntryRole, ExecutorFuture,
-    HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole,
+    ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, OutputMessage, ShortTermMemory,
+    Task, TaskStatus, WaitingReason, build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+}
 use tokio::runtime::Runtime;
 
 struct EchoExecutor;
@@ -61,6 +65,7 @@ fn multi_turn_task_lifecycle() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ))
@@ -143,6 +148,7 @@ fn short_term_memory_tracks_turns() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ));
@@ -311,6 +317,7 @@ fn memory_contribution_on_agent_termination() {
         multi_turn: true,
         parent_task_id: None,
         batch_id: None,
+        origin_channel: default_channel(),
     });
 
     // Trigger termination by spawning TaskTerminatedMessage
@@ -400,6 +407,7 @@ fn multi_turn_memory_records_user_and_assistant() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ))
@@ -549,6 +557,7 @@ fn prompt_includes_conversation_history() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory {
                 entries: vec![
@@ -791,6 +800,7 @@ fn second_dispatch_prompt_includes_correct_history() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory {
                 entries: vec![
@@ -882,6 +892,7 @@ fn task_content_updates_on_continue() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
+                origin_channel: default_channel(),
             },
             ShortTermMemory::default(),
         ))

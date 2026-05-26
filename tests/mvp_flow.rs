@@ -2,9 +2,13 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutorFuture, HarnessConfig,
-    OutputMessage, Task, TaskStatus, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
+    FrontendKind, HarnessConfig, OutputMessage, Task, TaskStatus, build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+}
 use tokio::runtime::Runtime;
 
 struct EchoExecutor;
@@ -48,7 +52,7 @@ fn completes_single_turn_conversation_flow() {
     app.update();
 
     // 创建一个 Ready 状态的任务（单轮场景）
-    let task = Task::from_user_input_ready("你好，Harness", 3);
+    let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
     app.world_mut()
         .spawn((task, harness::ShortTermMemory::default()));
 

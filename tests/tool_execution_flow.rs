@@ -7,11 +7,15 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    EntryRole, ExecutorFuture, HarnessConfig, OutputMessage, ShortTermMemory, SpaceToolRegistry,
-    Task, TaskStatus, ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
-    build_harness_app,
+    ChannelId, EntryRole, ExecutorFuture, FrontendKind, HarnessConfig, OutputMessage,
+    ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
+    ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind,
+    ToolPermission, ToolSchema, WaitingReason, build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+}
 use tokio::runtime::Runtime;
 
 struct MockExecutor;
@@ -125,7 +129,7 @@ fn allowed_tool_executes_directly() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -197,7 +201,7 @@ fn denied_tool_does_not_execute() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -270,7 +274,7 @@ fn confirm_tool_requires_user_confirmation() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -355,7 +359,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -458,7 +462,7 @@ fn user_denies_tool_confirmation() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -552,7 +556,7 @@ fn user_allows_tool_once() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -702,7 +706,7 @@ fn spawn_agent_creates_child_agent() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -794,7 +798,7 @@ fn spawn_agent_confirm_routes_to_user() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -888,7 +892,7 @@ fn child_agent_confirm_routes_to_parent() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("child task", 3),
+            Task::from_user_input_ready("child task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -1017,7 +1021,7 @@ fn user_confirms_spawn_agent_creates_child() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -1123,7 +1127,7 @@ fn confirmation_denied_rejects_tool() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("child task", 3),
+            Task::from_user_input_ready("child task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -1228,7 +1232,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("child task", 3),
+            Task::from_user_input_ready("child task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
@@ -1335,7 +1339,7 @@ fn user_allows_tool_always() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("test task", 3),
+            Task::from_user_input_ready("test task", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();

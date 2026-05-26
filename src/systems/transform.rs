@@ -5,10 +5,10 @@ use crate::{
     app::{Clock, ExecutionResultReceiver, HarnessSettings, MemoryConfig},
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
-        AgentExecutionResultMessage, AgentRequestKind, BrainDecisionError, ConversationMessage,
-        CreateTaskMessage, EntryMetadata, EntryRole, FailureReason, FinishTaskMessage,
-        OutputContent, RetryReadyMessage, ShortTermMemory, Signal, SignalPayload,
-        SubTaskBatchCreatedMessage, SubTaskCompletedMessage, SubTaskConfig,
+        AgentExecutionResultMessage, AgentRequestKind, BrainDecisionError, ChannelId,
+        ConversationMessage, CreateTaskMessage, EntryMetadata, EntryRole, FailureReason,
+        FinishTaskMessage, FrontendKind, OutputContent, RetryReadyMessage, ShortTermMemory, Signal,
+        SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage, SubTaskConfig,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
         ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         UserInputMessage, UserOutputMessage, WaitingReason,
@@ -73,7 +73,11 @@ pub(crate) fn user_message_to_task_system(
         stm.add_entry(EntryRole::User, &message.content, EntryMetadata::default());
         let stm_tokens = stm.estimated_tokens;
 
-        let task = Task::from_user_input(message.content.clone(), settings.0.max_retries);
+        let task = Task::from_user_input(
+            message.content.clone(),
+            settings.0.max_retries,
+            ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() },
+        );
         debug!(
             event = "TaskCreated",
             task_id = %task.id,

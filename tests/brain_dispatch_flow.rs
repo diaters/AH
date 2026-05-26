@@ -2,9 +2,14 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, BrainConfig, ExecutorFuture,
-    HarnessConfig, OutputMessage, Task, TaskStatus, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, BrainConfig, ChannelId,
+    ExecutorFuture, FrontendKind, HarnessConfig, OutputMessage, Task, TaskStatus,
+    build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+}
 use tokio::runtime::Runtime;
 
 struct BrainMockExecutor;
@@ -79,7 +84,7 @@ fn completes_brain_dispatch_flow() {
     app.update();
 
     // 创建一个 Ready 状态的任务
-    let task = Task::from_user_input_ready("你好，Harness", 3);
+    let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
     app.world_mut()
         .spawn((task, harness::ShortTermMemory::default()));
 
@@ -119,7 +124,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     app.update();
 
     // 创建一个 Ready 状态的任务
-    let task = Task::from_user_input_ready("你好，Harness", 3);
+    let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
     app.world_mut()
         .spawn((task, harness::ShortTermMemory::default()));
 

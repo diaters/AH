@@ -9,10 +9,14 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    HarnessConfig, LlmToolCall, OutputMessage, ShortTermMemory, SpaceToolRegistry, Task,
-    TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
-    WaitingReason, build_harness_app,
+    ChannelId, HarnessConfig, LlmToolCall, FrontendKind, OutputMessage, ShortTermMemory,
+    SpaceToolRegistry, Task, TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind,
+    ToolPermission, ToolSchema, WaitingReason, build_harness_app,
 };
+
+fn default_channel() -> ChannelId {
+    ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() }
+}
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -124,7 +128,7 @@ fn get_all_tools(world: &World) -> Vec<ToolDefinition> {
 /// Helper: spawn a task+STM with Waiting(Agent) status to prevent
 /// task_dispatch_system from creating a duplicate request.
 fn spawn_task_with_stm(world: &mut World) -> (Entity, Task) {
-    let mut task = Task::from_user_input_ready("test prompt", 3);
+    let mut task = Task::from_user_input_ready("test prompt", 3, default_channel());
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
     let entity = world.spawn((task.clone(), ShortTermMemory::default())).id();
     (entity, task)

@@ -99,7 +99,10 @@ pub enum SignalPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExternalInput {
-    Text(String),
+    TextWithChannel {
+        channel: ChannelId,
+        content: String,
+    },
     Shutdown,
     /// Tool 确认响应
     Confirmation {
@@ -424,11 +427,13 @@ pub struct Task {
     pub parent_task_id: Option<TaskId>,
     /// 批次 ID（同一批 create_tasks 调用共享）
     pub batch_id: Option<Uuid>,
+    /// 任务来源的前端通道
+    pub origin_channel: ChannelId,
 }
 
 impl Task {
     /// 基于用户输入创建一个处于 Pending 状态的新任务（支持多轮对话）。
-    pub fn from_user_input(content: impl Into<String>, max_retries: u32) -> Self {
+    pub fn from_user_input(content: impl Into<String>, max_retries: u32, channel: ChannelId) -> Self {
         let content = content.into();
         let now = Utc::now();
 
@@ -450,11 +455,12 @@ impl Task {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
+            origin_channel: channel,
         }
     }
 
     /// 基于用户输入创建一个处于 Ready 状态的新任务（用于测试或单轮场景）。
-    pub fn from_user_input_ready(content: impl Into<String>, max_retries: u32) -> Self {
+    pub fn from_user_input_ready(content: impl Into<String>, max_retries: u32, channel: ChannelId) -> Self {
         let content = content.into();
         let now = Utc::now();
 
@@ -476,6 +482,7 @@ impl Task {
             multi_turn: false,
             parent_task_id: None,
             batch_id: None,
+            origin_channel: channel,
         }
     }
 

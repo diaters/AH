@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use harness::{
-    ExternalInput, HarnessConfig, OutputKind, OutputMessage, ShutdownState, app_is_idle,
-    build_harness_app, create_executor_from_config,
+    ChannelId, ExternalInput, FrontendKind, HarnessConfig, OutputKind, OutputMessage,
+    ShutdownState, app_is_idle, build_harness_app, create_executor_from_config,
 };
 use tokio::runtime::Runtime;
 use tracing::error;
@@ -95,7 +95,10 @@ fn spawn_input_thread(sender: Sender<ExternalInput>) -> thread::JoinHandle<()> {
                     }
 
                     // 普通文本输入
-                    let _ = sender.send(ExternalInput::Text(content));
+                    let _ = sender.send(ExternalInput::TextWithChannel {
+                        channel: ChannelId { frontend: FrontendKind::Tui, user_id: "default".to_string() },
+                        content,
+                    });
                 }
                 Err(error) => {
                     error!(?error, "failed to read stdin");
