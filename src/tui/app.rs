@@ -100,6 +100,14 @@ impl App {
         }
     }
 
+    /// 处理粘贴事件（IME 输入提交的中文等多字节文本）
+    pub fn handle_paste(&mut self, text: &str) {
+        if matches!(self.mode, AppMode::Chat) {
+            self.input_buffer.insert_str(self.cursor_position, text);
+            self.cursor_position += text.len();
+        }
+    }
+
     /// 将消息列表中匹配的 Queued 审批卡片提升为 Active
     fn promote_queued_card(&mut self, pending: &PendingApproval) {
         for msg in &mut self.messages {
