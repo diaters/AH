@@ -103,8 +103,8 @@ impl App {
     /// 处理粘贴事件（IME 输入提交的中文等多字节文本）
     pub fn handle_paste(&mut self, text: &str) {
         if matches!(self.mode, AppMode::Chat) {
-            self.input_buffer.insert_str(self.cursor_position, text);
-            self.cursor_position += text.len();
+            self.input_buffer.insert_str(self.byte_index(), text);
+            self.cursor_position += text.chars().count();
         }
     }
 
@@ -125,6 +125,15 @@ impl App {
                 break;
             }
         }
+    }
+
+    /// 将 char 索引转为 byte 索引
+    fn byte_index(&self) -> usize {
+        self.input_buffer
+            .char_indices()
+            .nth(self.cursor_position)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input_buffer.len())
     }
 
     fn handle_chat_key(&mut self, key: KeyEvent) {
@@ -161,20 +170,34 @@ impl App {
                 }
             }
             KeyCode::Char(c) => {
-                self.input_buffer.insert(self.cursor_position, c);
+                self.input_buffer.insert(self.byte_index(), c);
                 self.cursor_position += 1;
             }
             KeyCode::Backspace if self.cursor_position > 0 => {
                 self.cursor_position -= 1;
-                self.input_buffer.remove(self.cursor_position);
+                let bi = self.byte_index();
+                // 删除 cursor 位置处的一整个字符
+                if let Some((char_byte_len, _)) = self.input_buffer[bi..].char_indices().nth(1) {
+                    self.input_buffer.drain(bi..bi + char_byte_len);
+                } else {
+                    // 删除最后一个字符
+                    self.input_buffer.drain(bi..);
+                }
             }
-            KeyCode::Delete if self.cursor_position < self.input_buffer.len() => {
-                self.input_buffer.remove(self.cursor_position);
+            KeyCode::Delete if self.cursor_position < self.input_buffer.chars().count() => {
+                let bi = self.byte_index();
+                // 找到下一个字符的 byte 边界
+                if let Some((next_byte, _)) = self.input_buffer[bi..].char_indices().nth(1) {
+                    self.input_buffer.drain(bi..bi + next_byte);
+                } else if bi < self.input_buffer.len() {
+                    // 删除最后一个字符
+                    self.input_buffer.drain(bi..);
+                }
             }
             KeyCode::Left if self.cursor_position > 0 => {
                 self.cursor_position -= 1;
             }
-            KeyCode::Right if self.cursor_position < self.input_buffer.len() => {
+            KeyCode::Right if self.cursor_position < self.input_buffer.chars().count() => {
                 self.cursor_position += 1;
             }
             KeyCode::Up if self.scroll_offset > 0 => {

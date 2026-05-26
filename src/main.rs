@@ -52,6 +52,18 @@ fn main() -> Result<()> {
     dotenvy::from_filename(".env.local").ok();
     let _log_guard = init_tracing();
 
+    // 安装 panic hook：确保 panic 时日志能 flush，并恢复终端
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(
+            event = "PanicCaught",
+            panic_info = %info,
+            "panic occurred in main thread"
+        );
+        ratatui::restore();
+        default_hook(info);
+    }));
+
     info!(
         event = "HarnessStarting",
         version = env!("CARGO_PKG_VERSION"),
