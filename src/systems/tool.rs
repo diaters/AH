@@ -110,29 +110,44 @@ impl BuiltinTool for WaitTasksTool {
         input: &serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<ToolAction, ToolError> {
-        // Parse task_ids
-        let task_ids: Vec<crate::domain::TaskId> = input
-            .get("task_ids")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| ToolError::InvalidInput("missing 'task_ids' parameter".to_string()))?
-            .iter()
-            .filter_map(|v| v.as_str().and_then(|s| s.parse().ok()))
-            .collect();
-
-        if task_ids.is_empty() {
-            return Err(ToolError::InvalidInput("task_ids cannot be empty".to_string()));
-        }
-
-        let timeout_secs = input
-            .get("timeout_secs")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(ctx.default_wait_tasks_timeout_secs);
+        let task_ids = parse_wait_tasks_ids(input)?;
+        let timeout_secs = parse_wait_tasks_timeout(input, ctx.default_wait_tasks_timeout_secs);
 
         Ok(ToolAction::WaitForTasks {
             task_ids,
             timeout_secs,
         })
     }
+}
+
+fn parse_wait_tasks_ids(input: &serde_json::Value) -> Result<Vec<crate::domain::TaskId>, ToolError> {
+    let ids_value = input
+        .get("task_ids")
+        .ok_or_else(|| ToolError::InvalidInput("missing 'task_ids' parameter".to_string()))?;
+
+    let ids_array = ids_value
+        .as_array()
+        .ok_or_else(|| ToolError::InvalidInput("'task_ids' must be an array".to_string()))?;
+
+    let mut task_ids = Vec::new();
+    for id_str in ids_array.iter().filter_map(|v| v.as_str()) {
+        let id = uuid::Uuid::parse_str(id_str)
+            .map_err(|_| ToolError::InvalidInput(format!("invalid task id: {}", id_str)))?;
+        task_ids.push(id);
+    }
+
+    if task_ids.is_empty() {
+        return Err(ToolError::InvalidInput("'task_ids' cannot be empty".to_string()));
+    }
+
+    Ok(task_ids)
+}
+
+fn parse_wait_tasks_timeout(input: &serde_json::Value, default: u64) -> u64 {
+    input
+        .get("timeout_secs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(default)
 }
 
 // ========== Registration ==========
