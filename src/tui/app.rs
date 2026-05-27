@@ -151,6 +151,38 @@ impl App {
             .unwrap_or(self.input_buffer.len())
     }
 
+    /// 计算指定主任务的子任务进度
+    fn calculate_subtask_progress(&self, parent_id: Uuid) -> (u32, u32) {
+        let subtasks: Vec<_> = self.tasks.iter()
+            .filter(|t| t.parent_id == Some(parent_id))
+            .collect();
+
+        let total = subtasks.len() as u32;
+        let completed = subtasks.iter()
+            .filter(|t| matches!(t.status, TaskStatusKind::Done | TaskStatusKind::Failed))
+            .count() as u32;
+
+        (total, completed)
+    }
+
+    /// 更新所有主任务的子任务进度
+    fn update_all_subtask_progress(&mut self) {
+        // 收集主任务 ID
+        let main_task_ids: Vec<Uuid> = self.tasks.iter()
+            .filter(|t| t.parent_id.is_none())
+            .map(|t| t.id)
+            .collect();
+
+        // 更新每个主任务的进度
+        for id in main_task_ids {
+            let (total, completed) = self.calculate_subtask_progress(id);
+            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+                task.subtask_count = total;
+                task.completed_count = completed;
+            }
+        }
+    }
+
     fn handle_chat_key(&mut self, key: KeyEvent) {
         use crossterm::event::KeyModifiers;
         match key.code {
@@ -463,6 +495,9 @@ impl App {
                         completed_count: 0,
                     });
                 }
+
+                // 更新子任务进度
+                self.update_all_subtask_progress();
             }
             EngineEvent::BatchProgress { .. } => {}
         }
