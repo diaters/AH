@@ -46,6 +46,8 @@ pub struct HarnessConfig {
     pub llm: LlmProviderConfig,
     pub brain: Option<BrainConfig>,
     pub agents_config_path: String,
+    /// wait_tasks 工具的默认超时时间（秒）
+    pub default_wait_tasks_timeout_secs: u64,
 }
 
 impl HarnessConfig {
@@ -74,6 +76,7 @@ impl HarnessConfig {
             llm,
             brain,
             agents_config_path,
+            default_wait_tasks_timeout_secs: 300, // 5 minutes default
         })
     }
 }
@@ -91,6 +94,7 @@ impl Default for HarnessConfig {
             },
             brain: None,
             agents_config_path: "agents.toml".to_string(),
+            default_wait_tasks_timeout_secs: 300, // 5 minutes default
         }
     }
 }
