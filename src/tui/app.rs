@@ -167,18 +167,31 @@ impl App {
 
     /// 更新所有主任务的子任务进度
     fn update_all_subtask_progress(&mut self) {
-        // 收集主任务 ID
-        let main_task_ids: Vec<Uuid> = self.tasks.iter()
-            .filter(|t| t.parent_id.is_none())
-            .map(|t| t.id)
-            .collect();
+        use std::collections::HashMap;
 
-        // 更新每个主任务的进度
-        for id in main_task_ids {
-            let (total, completed) = self.calculate_subtask_progress(id);
-            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                task.subtask_count = total;
-                task.completed_count = completed;
+        // Build parent -> children map in O(n)
+        let mut parent_to_children: HashMap<Uuid, Vec<_>> = HashMap::new();
+        for task in &self.tasks {
+            if let Some(parent_id) = task.parent_id {
+                parent_to_children
+                    .entry(parent_id)
+                    .or_default()
+                    .push((task.id, task.status));
+            }
+        }
+
+        // Update all main tasks in O(n)
+        for task in self.tasks.iter_mut() {
+            if task.parent_id.is_none() {
+                let children = parent_to_children
+                    .get(&task.id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                task.subtask_count = children.len() as u32;
+                task.completed_count = children
+                    .iter()
+                    .filter(|(_, status)| matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed))
+                    .count() as u32;
             }
         }
     }
