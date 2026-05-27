@@ -431,6 +431,20 @@ pub struct Task {
     pub origin_channel: ChannelId,
 }
 
+/// Task 等待其他任务完成的状态信息
+/// 此组件添加到发起等待的 Task Entity 上
+#[derive(Component, Debug, Clone)]
+pub struct WaitingForTasksInfo {
+    /// 等待的目标任务 ID 列表
+    pub target_task_ids: Vec<TaskId>,
+    /// 超时时刻
+    pub timeout_at: DateTime<Utc>,
+    /// Tool call ID（用于返回结果给 LLM）
+    pub tool_call_id: String,
+    /// 发起等待的 Agent ID
+    pub agent_id: AgentId,
+}
+
 impl Task {
     /// 基于用户输入创建一个处于 Pending 状态的新任务（支持多轮对话）。
     pub fn from_user_input(
