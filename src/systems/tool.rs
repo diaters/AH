@@ -98,6 +98,43 @@ impl BuiltinTool for CreateTasksTool {
     }
 }
 
+struct WaitTasksTool;
+
+impl BuiltinTool for WaitTasksTool {
+    fn name(&self) -> &str {
+        "wait_tasks"
+    }
+
+    fn execute(
+        &self,
+        input: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolAction, ToolError> {
+        // Parse task_ids
+        let task_ids: Vec<crate::domain::TaskId> = input
+            .get("task_ids")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::InvalidInput("missing 'task_ids' parameter".to_string()))?
+            .iter()
+            .filter_map(|v| v.as_str().and_then(|s| s.parse().ok()))
+            .collect();
+
+        if task_ids.is_empty() {
+            return Err(ToolError::InvalidInput("task_ids cannot be empty".to_string()));
+        }
+
+        let timeout_secs = input
+            .get("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(ctx.default_wait_tasks_timeout_secs);
+
+        Ok(ToolAction::WaitForTasks {
+            task_ids,
+            timeout_secs,
+        })
+    }
+}
+
 // ========== Registration ==========
 
 /// 注册内置 Tool
@@ -215,6 +252,32 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(CreateTasksTool));
+
+    registry.register(ToolDefinition {
+        name: "wait_tasks".to_string(),
+        description: "Wait for child tasks to complete and collect their results. Returns the status and results of all specified tasks when all complete or timeout is reached.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of child task IDs to wait for"
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (default: 300)"
+                    }
+                },
+                "required": ["task_ids"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("wait_tasks".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(WaitTasksTool));
 }
 
 // ========== Helpers ==========
