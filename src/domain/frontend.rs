@@ -100,6 +100,7 @@ pub enum EngineEvent {
         name: String,
         status: TaskStatusKind,
         result: Option<String>,
+        parent_id: Option<TaskId>,
     },
     /// 子任务批次进度
     BatchProgress {

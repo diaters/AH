@@ -443,18 +443,20 @@ impl App {
                 name,
                 status,
                 result,
+                parent_id,
                 ..
             } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
                     task.status = status;
                     task.result = result;
+                    task.parent_id = parent_id;
                 } else {
                     self.tasks.push(TaskState {
                         id: task_id,
                         name,
                         status,
                         result,
-                        parent_id: None,
+                        parent_id,
                     });
                 }
             }
@@ -559,6 +561,7 @@ mod tests {
             name: "test task".to_string(),
             status: TaskStatusKind::Running,
             result: None,
+            parent_id: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
