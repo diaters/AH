@@ -3,6 +3,7 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 use bevy::prelude::*;
+use serde::Serialize;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -14,8 +15,10 @@ use crate::domain::{
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
     TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
     ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingForTasksInfo,
+    WaitingReason,
 };
+use chrono::Duration as ChronoDuration;
 
 // ========== Builtin Tool Implementations ==========
 
@@ -584,6 +587,75 @@ fn spawn_create_tasks_messages(
     });
 
     commands.entity(request_entity).despawn();
+}
+
+/// 生成等待任务的消息和状态
+fn spawn_wait_for_tasks(
+    commands: &mut Commands,
+    request_entity: Entity,
+    task_entity: Entity,
+    agent_id: crate::domain::AgentId,
+    tool_call_id: String,
+    task_ids: Vec<crate::domain::TaskId>,
+    timeout_secs: u64,
+) {
+    debug!(
+        event = "WaitForTasksInitiated",
+        task_ids = ?task_ids,
+        timeout_secs = timeout_secs,
+        "task entering wait state for child tasks"
+    );
+
+    // 在 Task Entity 上添加等待信息组件
+    commands.entity(task_entity).insert(WaitingForTasksInfo {
+        target_task_ids: task_ids,
+        timeout_at: chrono::Utc::now() + ChronoDuration::seconds(timeout_secs as i64),
+        tool_call_id,
+        agent_id,
+    });
+
+    // 清理请求实体
+    commands.entity(request_entity).despawn();
+}
+
+/// 等待任务结果
+#[derive(Debug, Clone, Serialize)]
+struct TaskWaitResult {
+    task_id: String,
+    status: TaskStatus,
+    result: Option<String>,
+    error: Option<String>,
+}
+
+/// 收集目标任务的结果
+fn collect_task_results(
+    task_ids: &[crate::domain::TaskId],
+    tasks: &Query<&Task>,
+) -> Vec<TaskWaitResult> {
+    task_ids
+        .iter()
+        .map(|id| {
+            let task = tasks.iter().find(|t| t.id == *id);
+            TaskWaitResult {
+                task_id: id.to_string(),
+                status: task.map(|t| t.status.clone()).unwrap_or(TaskStatus::Pending),
+                result: task.and_then(|t| {
+                    if t.status == TaskStatus::Done {
+                        Some(t.result_summary.clone())
+                    } else {
+                        None
+                    }
+                }),
+                error: task.and_then(|t| {
+                    if matches!(t.status, TaskStatus::Failed(_)) {
+                        t.last_error.clone()
+                    } else {
+                        None
+                    }
+                }),
+            }
+        })
+        .collect()
 }
 
 /// 统一处理 Tool 执行动作
