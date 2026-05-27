@@ -18,6 +18,7 @@ use crate::domain::{
     ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingForTasksInfo,
     WaitingReason,
 };
+use crate::app::HarnessSettings;
 use chrono::Duration as ChronoDuration;
 
 // ========== Builtin Tool Implementations ==========
@@ -662,6 +663,7 @@ fn collect_task_results(
 fn handle_tool_action(
     commands: &mut Commands,
     request_entity: Entity,
+    task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
 ) {
@@ -718,6 +720,17 @@ fn handle_tool_action(
                 request.tool_call_id.clone(),
             );
         }
+        Ok(ToolAction::WaitForTasks { task_ids, timeout_secs }) => {
+            spawn_wait_for_tasks(
+                commands,
+                request_entity,
+                task_entity,
+                request.request.agent_id,
+                request.tool_call_id.clone().unwrap_or_default(),
+                task_ids,
+                timeout_secs,
+            );
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
@@ -726,11 +739,11 @@ fn handle_tool_action(
 
 /// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
 fn restore_task_after_tool(
-    tasks: &mut Query<&mut Task>,
+    tasks: &mut Query<(Entity, &mut Task)>,
     calling_states: &Query<&ToolCallingState>,
     task_id: crate::domain::TaskId,
 ) {
-    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id) {
+    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
         if !matches!(task.status, TaskStatus::Waiting(_)) {
             return;
         }
@@ -779,12 +792,13 @@ fn spawn_tool_error(
 /// 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批
 pub(crate) fn tool_dispatch_system(
     mut commands: Commands,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     agents: Query<&Agent>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
+    settings: Res<HarnessSettings>,
 ) {
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -893,9 +907,14 @@ pub(crate) fn tool_dispatch_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                 };
                 let action = executor.execute(&request.tool_input, &ctx);
-                handle_tool_action(&mut commands, entity, &request, action);
+
+                // Find the task entity
+                if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == request.request.task_id) {
+                    handle_tool_action(&mut commands, entity, task_entity, &request, action);
+                }
             }
             ToolPermission::Confirm => {
                 // 检查 Agent 是否有父 Agent，且父 Agent 有该工具的 Allow 权限
@@ -913,8 +932,8 @@ pub(crate) fn tool_dispatch_system(
                     );
 
                     // 将 Task 设置为等待父 Agent 审批状态
-                    if let Some(mut task) =
-                        tasks.iter_mut().find(|t| t.id == request.request.task_id)
+                    if let Some((_, mut task)) =
+                        tasks.iter_mut().find(|(_, t)| t.id == request.request.task_id)
                     {
                         task.status = TaskStatus::Waiting(WaitingReason::Approval);
                     }
@@ -946,7 +965,7 @@ pub(crate) fn tool_dispatch_system(
                 );
 
                 // 将 Task 设置为等待用户确认状态
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == request.request.task_id) {
                     task.status = TaskStatus::Waiting(WaitingReason::User);
                 }
 
@@ -996,6 +1015,7 @@ pub(crate) fn tool_result_system(
     mut results: Query<(Entity, &mut ToolExecutionResultMessage)>,
     mut tasks: Query<(&Task, Option<&mut ShortTermMemory>)>,
     calling_states: Query<&ToolCallingState>,
+    _settings: Res<HarnessSettings>,
 ) {
     for (entity, mut result) in &mut results {
         if result.processed {
@@ -1128,12 +1148,13 @@ pub(crate) fn approval_dispatch_system(
 pub(crate) fn approval_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
+    settings: Res<HarnessSettings>,
 ) {
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -1234,9 +1255,14 @@ pub(crate) fn approval_result_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
-                handle_tool_action(&mut commands, request_entity, tool_request, action);
+
+                // Find the task entity
+                if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == tool_request.request.task_id) {
+                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action);
+                }
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
             }
@@ -1277,12 +1303,13 @@ pub(crate) fn tool_confirmation_request_system(
 pub(crate) fn tool_confirmation_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
+    settings: Res<HarnessSettings>,
 ) {
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -1398,9 +1425,14 @@ pub(crate) fn tool_confirmation_result_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
-                handle_tool_action(&mut commands, request_entity, tool_request, action);
+
+                // Find the task entity
+                if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == tool_request.request.task_id) {
+                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action);
+                }
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
             }
@@ -1462,6 +1494,7 @@ mod tests {
 
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = KnowledgeSearchTool;
 
@@ -1498,6 +1531,7 @@ mod tests {
         let knowledge = SpaceKnowledge::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = KnowledgeSearchTool;
         let input = serde_json::json!({"limit": 5});
@@ -1511,6 +1545,7 @@ mod tests {
         let knowledge = SpaceKnowledge::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = SpawnAgentTool;
         let input = serde_json::json!({
@@ -1542,6 +1577,7 @@ mod tests {
         let knowledge = SpaceKnowledge::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = CreateTasksTool;
         let input = serde_json::json!({
