@@ -12,7 +12,7 @@ use crate::domain::{
     ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
     BuiltinToolExecutors, ChannelId, ConfirmationOption, ConfirmationSource, ExecutionError,
     FrontendKind, GrantMode, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
-    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage, SubTaskConfig, SubTaskDefinition, Task,
     TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
     ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
     ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingForTasksInfo,
@@ -737,6 +737,49 @@ fn collect_task_results(
         .collect()
 }
 
+/// 生成等待结果消息
+fn spawn_wait_result_message(
+    commands: &mut Commands,
+    task_id: crate::domain::TaskId,
+    info: &WaitingForTasksInfo,
+    results: Vec<TaskWaitResult>,
+    timed_out: bool,
+) {
+    let output = serde_json::json!({
+        "results": results,
+        "timed_out": timed_out,
+    });
+
+    debug!(
+        event = "WaitForTasksCompleted",
+        task_id = %task_id,
+        results_count = results.len(),
+        timed_out = timed_out,
+        "wait_tasks completed, resuming task"
+    );
+
+    // 生成工具执行结果消息
+    commands.spawn(ToolExecutionResultMessage {
+        result: AgentExecutionResult {
+            task_id,
+            agent_id: info.agent_id,
+            request_kind: crate::domain::AgentRequestKind::LlmCompletion,
+            result: Ok(AgentExecutionOutput {
+                content: crate::domain::OutputContent::Text("wait_tasks completed".to_string()),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+        },
+        tool_name: "wait_tasks".to_string(),
+        tool_output: Ok(output),
+        tool_call_id: Some(info.tool_call_id.clone()),
+        processed: false,
+    });
+}
+
 /// 统一处理 Tool 执行动作
 fn handle_tool_action(
     commands: &mut Commands,
@@ -744,6 +787,7 @@ fn handle_tool_action(
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
+    tasks: &Query<&Task>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -991,7 +1035,7 @@ pub(crate) fn tool_dispatch_system(
 
                 // Find the task entity
                 if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == request.request.task_id) {
-                    handle_tool_action(&mut commands, entity, task_entity, &request, action);
+                    handle_tool_action(&mut commands, entity, task_entity, &request, action, &tasks);
                 }
             }
             ToolPermission::Confirm => {
@@ -1339,7 +1383,7 @@ pub(crate) fn approval_result_system(
 
                 // Find the task entity
                 if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == tool_request.request.task_id) {
-                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action);
+                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action, &tasks);
                 }
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
@@ -1509,7 +1553,7 @@ pub(crate) fn tool_confirmation_result_system(
 
                 // Find the task entity
                 if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == tool_request.request.task_id) {
-                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action);
+                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action, &tasks);
                 }
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
@@ -1527,6 +1571,34 @@ pub(crate) fn tool_confirmation_result_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+/// 子任务完成时检查是否有任务在等待（事件驱动优化）
+pub(crate) fn on_subtask_completed_check_waiting(
+    mut messages: Query<(Entity, &SubTaskCompletedMessage)>,
+    waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
+    all_tasks: Query<&Task>,
+    mut commands: Commands,
+) {
+    for (msg_entity, msg) in &messages {
+        // 检查是否有任务在等待这个完成的子任务
+        for (entity, task, info) in &waiting_tasks {
+            if info.target_task_ids.contains(&msg.child_task_id) {
+                // 检查是否所有目标都完成
+                let all_terminal = info.target_task_ids.iter().all(|id| {
+                    all_tasks
+                        .iter()
+                        .any(|t| t.id == *id && t.status.is_terminal())
+                });
+
+                if all_terminal {
+                    let results = collect_task_results(&info.target_task_ids, &all_tasks);
+                    spawn_wait_result_message(&mut commands, task.id, info, results, false);
+                    commands.entity(entity).remove::<WaitingForTasksInfo>();
+                }
+            }
+        }
     }
 }
 
