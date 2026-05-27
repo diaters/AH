@@ -44,6 +44,8 @@ pub struct TaskState {
     pub status: TaskStatusKind,
     pub result: Option<String>,
     pub parent_id: Option<uuid::Uuid>,
+    pub subtask_count: u32,
+    pub completed_count: u32,
 }
 
 /// 待处理审批
@@ -457,6 +459,8 @@ impl App {
                         status,
                         result,
                         parent_id,
+                        subtask_count: 0,
+                        completed_count: 0,
                     });
                 }
             }
