@@ -101,15 +101,13 @@ impl StatusPanel {
             )));
         } else {
             // 分离主任务和子任务
-            let main_tasks: Vec<_> = app.tasks.iter()
-                .filter(|t| t.parent_id.is_none())
-                .collect();
+            let main_tasks: Vec<_> = app.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
 
-            let subtasks_by_parent: std::collections::HashMap<uuid::Uuid, Vec<_>> = app.tasks.iter()
+            let subtasks_by_parent: std::collections::HashMap<uuid::Uuid, Vec<_>> = app
+                .tasks
+                .iter()
                 .filter(|t| t.parent_id.is_some())
-                .filter_map(|t| {
-                    t.parent_id.map(|pid| (pid, t))
-                })
+                .filter_map(|t| t.parent_id.map(|pid| (pid, t)))
                 .fold(std::collections::HashMap::new(), |mut acc, (pid, task)| {
                     acc.entry(pid).or_default().push(task);
                     acc
@@ -133,7 +131,8 @@ impl StatusPanel {
                 let progress_text = if let Some(subs) = subtasks {
                     let total = subs.len();
                     if total > 0 {
-                        let completed = subs.iter()
+                        let completed = subs
+                            .iter()
                             .filter(|s| Self::is_task_completed(s.status))
                             .count();
                         format!(" ({}/{})", completed, total)
@@ -168,12 +167,16 @@ impl StatusPanel {
                         };
 
                         // 子任务颜色（已完成则变暗）
-                        let sub_task_color = Self::get_dimmed_color_if_completed(subtask.status, sub_color);
+                        let sub_task_color =
+                            Self::get_dimmed_color_if_completed(subtask.status, sub_color);
 
                         // 子任务行：缩进 + 虚线前缀
                         lines.push(Line::from(vec![
                             Span::styled("  │ ", Style::default().fg(Color::DarkGray)), // 虚线效果
-                            Span::styled(format!("{sub_icon} "), Style::default().fg(sub_task_color)),
+                            Span::styled(
+                                format!("{sub_icon} "),
+                                Style::default().fg(sub_task_color),
+                            ),
                             Span::styled(&subtask.name, Style::default().fg(sub_task_color)),
                         ]));
                     }

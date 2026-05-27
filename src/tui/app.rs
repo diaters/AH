@@ -176,7 +176,9 @@ impl App {
                 task.subtask_count = children.len() as u32;
                 task.completed_count = children
                     .iter()
-                    .filter(|(_, status)| matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed))
+                    .filter(|(_, status)| {
+                        matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed)
+                    })
                     .count() as u32;
             }
         }
