@@ -151,20 +151,6 @@ impl App {
             .unwrap_or(self.input_buffer.len())
     }
 
-    /// 计算指定主任务的子任务进度
-    fn calculate_subtask_progress(&self, parent_id: Uuid) -> (u32, u32) {
-        let subtasks: Vec<_> = self.tasks.iter()
-            .filter(|t| t.parent_id == Some(parent_id))
-            .collect();
-
-        let total = subtasks.len() as u32;
-        let completed = subtasks.iter()
-            .filter(|t| matches!(t.status, TaskStatusKind::Done | TaskStatusKind::Failed))
-            .count() as u32;
-
-        (total, completed)
-    }
-
     /// 更新所有主任务的子任务进度
     fn update_all_subtask_progress(&mut self) {
         use std::collections::HashMap;
@@ -617,6 +603,52 @@ mod tests {
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
+        assert_eq!(app.tasks[0].parent_id, None);
+        assert_eq!(app.tasks[0].subtask_count, 0);
+        assert_eq!(app.tasks[0].completed_count, 0);
+    }
+
+    #[test]
+    fn subtask_progress_calculated_correctly() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+        let sub1_id = Uuid::new_v4();
+        let sub2_id = Uuid::new_v4();
+
+        // 添加主任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "main task".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: None,
+        });
+
+        // 添加子任务 1（已完成）
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub1_id,
+            name: "subtask 1".to_string(),
+            status: TaskStatusKind::Done,
+            result: None,
+            parent_id: Some(main_id),
+        });
+
+        // 添加子任务 2（运行中）
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub2_id,
+            name: "subtask 2".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: Some(main_id),
+        });
+
+        // 验证主任务进度
+        let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
+        assert_eq!(main_task.subtask_count, 2);
+        assert_eq!(main_task.completed_count, 1);
     }
 
     #[test]
