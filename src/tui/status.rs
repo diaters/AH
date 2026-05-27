@@ -128,9 +128,18 @@ impl StatusPanel {
                 // 主任务颜色（已完成则变暗）
                 let main_color = Self::get_dimmed_color_if_completed(main_task.status, color);
 
-                // 构建主任务文本（包含进度）
-                let progress_text = if main_task.subtask_count > 0 {
-                    format!(" ({}/{})", main_task.completed_count, main_task.subtask_count)
+                // Calculate progress from actual subtasks instead of stored fields
+                let subtasks = subtasks_by_parent.get(&main_task.id);
+                let progress_text = if let Some(subs) = subtasks {
+                    let total = subs.len();
+                    if total > 0 {
+                        let completed = subs.iter()
+                            .filter(|s| Self::is_task_completed(s.status))
+                            .count();
+                        format!(" ({}/{})", completed, total)
+                    } else {
+                        String::new()
+                    }
                 } else {
                     String::new()
                 };
@@ -143,9 +152,13 @@ impl StatusPanel {
                     ),
                 ]));
 
-                // 渲染子任务
+                // Render subtasks
                 if let Some(subtasks) = subtasks_by_parent.get(&main_task.id) {
-                    for subtask in subtasks {
+                    // Sort subtasks by id for consistent ordering
+                    let mut sorted_subtasks: Vec<_> = subtasks.iter().collect();
+                    sorted_subtasks.sort_by_key(|t| t.id);
+
+                    for subtask in sorted_subtasks {
                         let (sub_icon, sub_color) = match subtask.status {
                             TaskStatusKind::Pending => ("○", Color::DarkGray),
                             TaskStatusKind::Running => ("●", Color::Yellow),
