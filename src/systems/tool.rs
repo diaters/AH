@@ -1615,12 +1615,12 @@ pub(crate) fn tool_confirmation_result_system(
 
 /// 子任务完成时检查是否有任务在等待（事件驱动优化）
 pub(crate) fn on_subtask_completed_check_waiting(
-    mut messages: Query<(Entity, &SubTaskCompletedMessage)>,
+    messages: Query<(Entity, &SubTaskCompletedMessage)>,
     waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
     all_tasks: Query<&Task>,
     mut commands: Commands,
 ) {
-    for (msg_entity, msg) in &messages {
+    for (_msg_entity, msg) in &messages {
         // 检查是否有任务在等待这个完成的子任务
         for (entity, task, info) in &waiting_tasks {
             if info.target_task_ids.contains(&msg.child_task_id) {
