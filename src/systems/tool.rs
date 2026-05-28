@@ -818,7 +818,7 @@ fn handle_tool_action(
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
-    tasks: &Query<&Task>,
+    tasks: &Query<(Entity, &mut Task)>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -874,15 +874,23 @@ fn handle_tool_action(
             );
         }
         Ok(ToolAction::WaitForTasks { task_ids, timeout_secs }) => {
-            spawn_wait_for_tasks(
-                commands,
-                request_entity,
-                task_entity,
-                request.request.agent_id,
-                request.tool_call_id.clone().unwrap_or_default(),
-                task_ids,
-                timeout_secs,
-            );
+            // 验证任务归属
+            match validate_task_ownership(request.request.task_id, &task_ids, tasks) {
+                Ok(()) => {
+                    spawn_wait_for_tasks(
+                        commands,
+                        request_entity,
+                        task_entity,
+                        request.request.agent_id,
+                        request.tool_call_id.clone().unwrap_or_default(),
+                        task_ids,
+                        timeout_secs,
+                    );
+                }
+                Err(e) => {
+                    spawn_tool_error(commands, request_entity, request, e);
+                }
+            }
         }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
