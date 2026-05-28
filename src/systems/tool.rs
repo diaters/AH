@@ -697,6 +697,37 @@ fn spawn_wait_for_tasks(
     commands.entity(request_entity).despawn();
 }
 
+/// 验证目标任务是否为当前任务的子任务
+fn validate_task_ownership(
+    current_task_id: crate::domain::TaskId,
+    target_task_ids: &[crate::domain::TaskId],
+    tasks: &Query<(Entity, &mut Task)>,
+) -> Result<(), ToolError> {
+    let current_task = tasks
+        .iter()
+        .find(|(_, t)| t.id == current_task_id)
+        .map(|(_, t)| t)
+        .ok_or_else(|| ToolError::NotFound(format!("current task {}", current_task_id)))?;
+
+    for target_id in target_task_ids {
+        let target = tasks
+            .iter()
+            .find(|(_, t)| t.id == *target_id)
+            .map(|(_, t)| t)
+            .ok_or_else(|| ToolError::NotFound(format!("task {}", target_id)))?;
+
+        // 目标任务必须是当前任务的子任务（parent_task_id 匹配）
+        if target.parent_task_id != Some(current_task_id) {
+            return Err(ToolError::PermissionDenied(format!(
+                "task {} is not a child of current task",
+                target_id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// 等待任务结果
 #[derive(Debug, Clone, Serialize)]
 struct TaskWaitResult {
@@ -1598,6 +1629,33 @@ pub(crate) fn on_subtask_completed_check_waiting(
                     commands.entity(entity).remove::<WaitingForTasksInfo>();
                 }
             }
+        }
+    }
+}
+
+/// 轮询检查等待中的任务（超时兜底）
+pub(crate) fn check_waiting_tasks_system(
+    clock: Res<crate::app::Clock>,
+    mut commands: Commands,
+    waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
+    all_tasks: Query<&Task>,
+) {
+    for (entity, task, info) in &waiting_tasks {
+        let timed_out = clock.0 >= info.timeout_at;
+
+        // 检查所有目标任务是否都已终态
+        let all_terminal = info.target_task_ids.iter().all(|id| {
+            all_tasks
+                .iter()
+                .any(|t| t.id == *id && t.status.is_terminal())
+        });
+
+        if timed_out || all_terminal {
+            let results = collect_task_results(&info.target_task_ids, &all_tasks);
+            spawn_wait_result_message(&mut commands, task.id, info, results, timed_out);
+
+            // 移除等待信息组件
+            commands.entity(entity).remove::<WaitingForTasksInfo>();
         }
     }
 }
