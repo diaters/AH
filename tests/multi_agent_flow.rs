@@ -41,6 +41,7 @@ fn multi_agent_config() -> HarnessConfig {
         },
         brain: None,
         agents_config_path: "agents.toml".to_string(),
+        default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
     }
 }

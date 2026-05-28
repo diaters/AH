@@ -7,18 +7,18 @@ use serde::Serialize;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::app::HarnessSettings;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
     ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
     BuiltinToolExecutors, ChannelId, ConfirmationOption, ConfirmationSource, ExecutionError,
     FrontendKind, GrantMode, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
-    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage, SubTaskConfig, SubTaskDefinition, Task,
-    TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingForTasksInfo,
-    WaitingReason,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage, SubTaskConfig,
+    SubTaskDefinition, Task, TaskStatus, ToolAction, ToolCallingState,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolDefinition,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+    WaitingForTasksInfo, WaitingReason,
 };
-use crate::app::HarnessSettings;
 use chrono::Duration as ChronoDuration;
 
 // ========== Builtin Tool Implementations ==========
@@ -120,7 +120,9 @@ impl BuiltinTool for WaitTasksTool {
     }
 }
 
-fn parse_wait_tasks_ids(input: &serde_json::Value) -> Result<Vec<crate::domain::TaskId>, ToolError> {
+fn parse_wait_tasks_ids(
+    input: &serde_json::Value,
+) -> Result<Vec<crate::domain::TaskId>, ToolError> {
     let ids_value = input
         .get("task_ids")
         .ok_or_else(|| ToolError::InvalidInput("missing 'task_ids' parameter".to_string()))?;
@@ -137,7 +139,9 @@ fn parse_wait_tasks_ids(input: &serde_json::Value) -> Result<Vec<crate::domain::
     }
 
     if task_ids.is_empty() {
-        return Err(ToolError::InvalidInput("'task_ids' cannot be empty".to_string()));
+        return Err(ToolError::InvalidInput(
+            "'task_ids' cannot be empty".to_string(),
+        ));
     }
 
     Ok(task_ids)
@@ -748,7 +752,9 @@ fn collect_task_results(
             let task = tasks.iter().find(|t| t.id == *id);
             TaskWaitResult {
                 task_id: id.to_string(),
-                status: task.map(|t| t.status.clone()).unwrap_or(TaskStatus::Pending),
+                status: task
+                    .map(|t| t.status.clone())
+                    .unwrap_or(TaskStatus::Pending),
                 result: task.and_then(|t| {
                     if t.status == TaskStatus::Done {
                         Some(t.result_summary.clone())
@@ -873,7 +879,10 @@ fn handle_tool_action(
                 request.tool_call_id.clone(),
             );
         }
-        Ok(ToolAction::WaitForTasks { task_ids, timeout_secs }) => {
+        Ok(ToolAction::WaitForTasks {
+            task_ids,
+            timeout_secs,
+        }) => {
             // 验证任务归属
             match validate_task_ownership(request.request.task_id, &task_ids, tasks) {
                 Ok(()) => {
@@ -1073,8 +1082,17 @@ pub(crate) fn tool_dispatch_system(
                 let action = executor.execute(&request.tool_input, &ctx);
 
                 // Find the task entity
-                if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == request.request.task_id) {
-                    handle_tool_action(&mut commands, entity, task_entity, &request, action, &tasks);
+                if let Some((task_entity, _)) =
+                    tasks.iter().find(|(_, t)| t.id == request.request.task_id)
+                {
+                    handle_tool_action(
+                        &mut commands,
+                        entity,
+                        task_entity,
+                        &request,
+                        action,
+                        &tasks,
+                    );
                 }
             }
             ToolPermission::Confirm => {
@@ -1093,8 +1111,9 @@ pub(crate) fn tool_dispatch_system(
                     );
 
                     // 将 Task 设置为等待父 Agent 审批状态
-                    if let Some((_, mut task)) =
-                        tasks.iter_mut().find(|(_, t)| t.id == request.request.task_id)
+                    if let Some((_, mut task)) = tasks
+                        .iter_mut()
+                        .find(|(_, t)| t.id == request.request.task_id)
                     {
                         task.status = TaskStatus::Waiting(WaitingReason::Approval);
                     }
@@ -1126,7 +1145,10 @@ pub(crate) fn tool_dispatch_system(
                 );
 
                 // 将 Task 设置为等待用户确认状态
-                if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == request.request.task_id) {
+                if let Some((_, mut task)) = tasks
+                    .iter_mut()
+                    .find(|(_, t)| t.id == request.request.task_id)
+                {
                     task.status = TaskStatus::Waiting(WaitingReason::User);
                 }
 
@@ -1421,8 +1443,18 @@ pub(crate) fn approval_result_system(
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
                 // Find the task entity
-                if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == tool_request.request.task_id) {
-                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action, &tasks);
+                if let Some((task_entity, _)) = tasks
+                    .iter()
+                    .find(|(_, t)| t.id == tool_request.request.task_id)
+                {
+                    handle_tool_action(
+                        &mut commands,
+                        request_entity,
+                        task_entity,
+                        tool_request,
+                        action,
+                        &tasks,
+                    );
                 }
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
@@ -1591,8 +1623,18 @@ pub(crate) fn tool_confirmation_result_system(
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
                 // Find the task entity
-                if let Some((task_entity, _)) = tasks.iter().find(|(_, t)| t.id == tool_request.request.task_id) {
-                    handle_tool_action(&mut commands, request_entity, task_entity, tool_request, action, &tasks);
+                if let Some((task_entity, _)) = tasks
+                    .iter()
+                    .find(|(_, t)| t.id == tool_request.request.task_id)
+                {
+                    handle_tool_action(
+                        &mut commands,
+                        request_entity,
+                        task_entity,
+                        tool_request,
+                        action,
+                        &tasks,
+                    );
                 }
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);

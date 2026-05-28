@@ -69,6 +69,7 @@ fn brain_test_config() -> HarnessConfig {
             agent_name: "brain".to_string(),
         }),
         agents_config_path: "agents.toml".to_string(),
+        default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
     }
 }
