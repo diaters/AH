@@ -8,6 +8,7 @@ use harness::{
 };
 use uuid::Uuid;
 
+#[allow(dead_code)]
 fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
@@ -15,6 +16,7 @@ fn default_channel() -> ChannelId {
     }
 }
 
+#[allow(dead_code)]
 struct MockExecutor;
 
 impl AgentExecutor for MockExecutor {
@@ -28,11 +30,13 @@ impl AgentExecutor for MockExecutor {
     }
 }
 
+#[allow(dead_code)]
 fn test_config() -> HarnessConfig {
     HarnessConfig::default()
 }
 
 /// 创建测试用的 Agent
+#[allow(dead_code)]
 fn create_test_agent(world: &mut World) -> AgentId {
     let id = Uuid::new_v4();
     world.spawn(Agent {

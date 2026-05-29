@@ -1,0 +1,108 @@
+<h2>任务层级视觉设计方案</h2>
+<p class="subtitle">如何区分主任务和子任务的显示效果？</p>
+
+<div class="section">
+  <p>当前状态：所有任务以平铺列表显示，主任务和子任务没有视觉区分。</p>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="indent" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Status Panel</div>
+        <div class="mockup-body" style="font-family: monospace; font-size: 12px; line-height: 1.6;">
+          <div style="color: #8be9fd; font-weight: bold;">Tasks</div>
+          <div><span style="color: #f1fa8c;">●</span> 分析用户需求</div>
+          <div style="padding-left: 16px; color: #6272a4;">├─ <span style="color: #f1fa8c;">●</span> 解析意图</div>
+          <div style="padding-left: 16px; color: #6272a4;">└─ <span style="color: #50fa7b;">✓</span> 提取实体</div>
+          <div><span style="color: #50fa7b;">✓</span> 生成响应</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 缩进 + 树形连接线</h3>
+      <p>使用缩进和树形线条表示层级关系，直观展示父子关系</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>层级关系一目了然</li><li>符合文件树的认知习惯</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>多层嵌套时占用空间较大</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="badge" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Status Panel</div>
+        <div class="mockup-body" style="font-family: monospace; font-size: 12px; line-height: 1.6;">
+          <div style="color: #8be9fd; font-weight: bold;">Tasks</div>
+          <div><span style="color: #f1fa8c;">●</span> 分析用户需求 <span style="background: #8be9fd; color: #282a36; padding: 0 4px; border-radius: 3px; font-size: 10px;">MAIN</span></div>
+          <div><span style="color: #f1fa8c;">●</span> 解析意图 <span style="background: #6272a4; color: #f8f8f2; padding: 0 4px; border-radius: 3px; font-size: 10px;">SUB</span></div>
+          <div><span style="color: #50fa7b;">✓</span> 提取实体 <span style="background: #6272a4; color: #f8f8f2; padding: 0 4px; border-radius: 3px; font-size: 10px;">SUB</span></div>
+          <div><span style="color: #50fa7b;">✓</span> 生成响应 <span style="background: #8be9fd; color: #282a36; padding: 0 4px; border-radius: 3px; font-size: 10px;">MAIN</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 标签区分</h3>
+      <p>通过 MAIN/SUB 标签明确标识任务类型</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>空间紧凑</li><li>标签颜色可区分状态</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>无法直观看出父子对应关系</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="group" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Status Panel</div>
+        <div class="mockup-body" style="font-family: monospace; font-size: 12px; line-height: 1.6;">
+          <div style="color: #8be9fd; font-weight: bold;">Tasks</div>
+          <div style="border-left: 2px solid #f1fa8c; padding-left: 8px; margin: 4px 0;">
+            <div><span style="color: #f1fa8c;">●</span> <strong>分析用户需求</strong></div>
+            <div style="padding-left: 12px; color: #6272a4;"><span style="color: #f1fa8c;">●</span> 解析意图</div>
+            <div style="padding-left: 12px; color: #6272a4;"><span style="color: #50fa7b;">✓</span> 提取实体</div>
+          </div>
+          <div style="border-left: 2px solid #50fa7b; padding-left: 8px; margin: 4px 0;">
+            <div><span style="color: #50fa7b;">✓</span> <strong>生成响应</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 分组边框</h3>
+      <p>用左侧边框将主任务及其子任务分组，主任务加粗</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>分组关系清晰</li><li>主任务视觉突出</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>多个主任务时边框可能杂乱</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="hybrid" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Status Panel</div>
+        <div class="mockup-body" style="font-family: monospace; font-size: 12px; line-height: 1.6;">
+          <div style="color: #8be9fd; font-weight: bold;">Tasks</div>
+          <div><span style="color: #f1fa8c;">●</span> <strong>分析用户需求</strong></div>
+          <div style="padding-left: 12px; border-left: 1px dashed #6272a4; margin-left: 6px;">
+            <div><span style="color: #f1fa8c;">●</span> 解析意图</div>
+            <div><span style="color: #50fa7b;">✓</span> 提取实体</div>
+          </div>
+          <div><span style="color: #50fa7b;">✓</span> <strong>生成响应</strong></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>D. 缩进 + 虚线边框（推荐）</h3>
+      <p>结合缩进与虚线边框，主任务加粗，简洁且层级清晰</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>层级清晰但不突兀</li><li>视觉层次分明</li><li>空间利用合理</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>实现稍复杂</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top: 20px; color: #6272a4;">点击选择您偏好的方案，或选择后在终端告诉我您的想法。</p>

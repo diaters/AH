@@ -707,7 +707,7 @@ fn validate_task_ownership(
     target_task_ids: &[crate::domain::TaskId],
     tasks: &Query<(Entity, &mut Task)>,
 ) -> Result<(), ToolError> {
-    let current_task = tasks
+    let _current_task = tasks
         .iter()
         .find(|(_, t)| t.id == current_task_id)
         .map(|(_, t)| t)
@@ -960,6 +960,7 @@ fn spawn_tool_error(
 /// Tool 分发 System
 ///
 /// 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tool_dispatch_system(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut Task)>,
