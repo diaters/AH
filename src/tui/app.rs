@@ -44,6 +44,8 @@ pub struct TaskState {
     pub status: TaskStatusKind,
     pub result: Option<String>,
     pub parent_id: Option<uuid::Uuid>,
+    pub subtask_count: u32,
+    pub completed_count: u32,
 }
 
 /// 待处理审批
@@ -147,6 +149,39 @@ impl App {
             .nth(self.cursor_position)
             .map(|(i, _)| i)
             .unwrap_or(self.input_buffer.len())
+    }
+
+    /// 更新所有主任务的子任务进度
+    fn update_all_subtask_progress(&mut self) {
+        use std::collections::HashMap;
+
+        // Build parent -> children map in O(n)
+        let mut parent_to_children: HashMap<Uuid, Vec<_>> = HashMap::new();
+        for task in &self.tasks {
+            if let Some(parent_id) = task.parent_id {
+                parent_to_children
+                    .entry(parent_id)
+                    .or_default()
+                    .push((task.id, task.status));
+            }
+        }
+
+        // Update all main tasks in O(n)
+        for task in self.tasks.iter_mut() {
+            if task.parent_id.is_none() {
+                let children = parent_to_children
+                    .get(&task.id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                task.subtask_count = children.len() as u32;
+                task.completed_count = children
+                    .iter()
+                    .filter(|(_, status)| {
+                        matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed)
+                    })
+                    .count() as u32;
+            }
+        }
     }
 
     fn handle_chat_key(&mut self, key: KeyEvent) {
@@ -443,20 +478,27 @@ impl App {
                 name,
                 status,
                 result,
+                parent_id,
                 ..
             } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
                     task.status = status;
                     task.result = result;
+                    task.parent_id = parent_id;
                 } else {
                     self.tasks.push(TaskState {
                         id: task_id,
                         name,
                         status,
                         result,
-                        parent_id: None,
+                        parent_id,
+                        subtask_count: 0,
+                        completed_count: 0,
                     });
                 }
+
+                // 更新子任务进度
+                self.update_all_subtask_progress();
             }
             EngineEvent::BatchProgress { .. } => {}
         }
@@ -559,9 +601,56 @@ mod tests {
             name: "test task".to_string(),
             status: TaskStatusKind::Running,
             result: None,
+            parent_id: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
+        assert_eq!(app.tasks[0].parent_id, None);
+        assert_eq!(app.tasks[0].subtask_count, 0);
+        assert_eq!(app.tasks[0].completed_count, 0);
+    }
+
+    #[test]
+    fn subtask_progress_calculated_correctly() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+        let sub1_id = Uuid::new_v4();
+        let sub2_id = Uuid::new_v4();
+
+        // 添加主任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "main task".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: None,
+        });
+
+        // 添加子任务 1（已完成）
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub1_id,
+            name: "subtask 1".to_string(),
+            status: TaskStatusKind::Done,
+            result: None,
+            parent_id: Some(main_id),
+        });
+
+        // 添加子任务 2（运行中）
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub2_id,
+            name: "subtask 2".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: Some(main_id),
+        });
+
+        // 验证主任务进度
+        let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
+        assert_eq!(main_task.subtask_count, 2);
+        assert_eq!(main_task.completed_count, 1);
     }
 
     #[test]
@@ -750,5 +839,79 @@ mod tests {
             Some(1),
             "ApprovalCard selected_index should be synced"
         );
+    }
+
+    #[test]
+    fn failed_status_counted_as_completed() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+        let sub1_id = Uuid::new_v4();
+        let sub2_id = Uuid::new_v4();
+
+        // 添加主任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "main task".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: None,
+        });
+
+        // 添加子任务 1（已完成）
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub1_id,
+            name: "subtask 1".to_string(),
+            status: TaskStatusKind::Done,
+            result: None,
+            parent_id: Some(main_id),
+        });
+
+        // 添加子任务 2（失败）
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub2_id,
+            name: "subtask 2".to_string(),
+            status: TaskStatusKind::Failed,
+            result: Some("error".to_string()),
+            parent_id: Some(main_id),
+        });
+
+        // 验证：Done 和 Failed 都计入已完成
+        let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
+        assert_eq!(main_task.subtask_count, 2);
+        assert_eq!(main_task.completed_count, 2);
+    }
+
+    #[test]
+    fn main_task_without_subtasks_has_zero_progress() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+
+        // 添加主任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "lonely task".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: None,
+        });
+
+        // 触发另一个任务更新，确保零进度保持
+        let other_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: other_id,
+            name: "other task".to_string(),
+            status: TaskStatusKind::Running,
+            result: None,
+            parent_id: None,
+        });
+
+        let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
+        assert_eq!(main_task.subtask_count, 0);
+        assert_eq!(main_task.completed_count, 0);
     }
 }

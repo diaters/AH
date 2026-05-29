@@ -18,11 +18,12 @@ use crate::{
     systems::{
         HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
         approval_dispatch_system, approval_result_system, brain_decision_system,
-        brain_dispatch_system, command_parse_system, continue_task_system,
-        evaluation_result_system, evaluation_trigger_system, finish_task_system,
-        frontend_input_system, frontend_output_system, ingest_execution_results_system,
-        init_agent_memory_system, input_ingress_system, llm_response_system, load_agents_system,
-        memory_absorption_system, memory_compression_system, memory_contribution_system,
+        brain_dispatch_system, check_waiting_tasks_system, command_parse_system,
+        continue_task_system, evaluation_result_system, evaluation_trigger_system,
+        finish_task_system, frontend_input_system, frontend_output_system,
+        ingest_execution_results_system, init_agent_memory_system, input_ingress_system,
+        llm_response_system, load_agents_system, memory_absorption_system,
+        memory_compression_system, memory_contribution_system, on_subtask_completed_check_waiting,
         register_builtin_tools, retry_ready_system, retry_wakeup_system, signal_ingest_system,
         sub_task_batch_block_system, sub_task_completion_system, summarization_dispatch_system,
         summarization_result_system, task_dispatch_system, task_termination_system,
@@ -46,6 +47,8 @@ pub struct HarnessConfig {
     pub llm: LlmProviderConfig,
     pub brain: Option<BrainConfig>,
     pub agents_config_path: String,
+    /// wait_tasks 工具的默认超时时间（秒）
+    pub default_wait_tasks_timeout_secs: u64,
 }
 
 impl HarnessConfig {
@@ -74,6 +77,7 @@ impl HarnessConfig {
             llm,
             brain,
             agents_config_path,
+            default_wait_tasks_timeout_secs: 300, // 5 minutes default
         })
     }
 }
@@ -91,6 +95,7 @@ impl Default for HarnessConfig {
             },
             brain: None,
             agents_config_path: "agents.toml".to_string(),
+            default_wait_tasks_timeout_secs: 300, // 5 minutes default
         }
     }
 }
@@ -266,6 +271,10 @@ pub fn build_harness_app(
             evaluation_trigger_system.in_set(HarnessSet::Dispatch),
             agent_execution_system.in_set(HarnessSet::Execution),
             frontend_output_system.in_set(HarnessSet::Output),
+            check_waiting_tasks_system.in_set(HarnessSet::Transform),
+            on_subtask_completed_check_waiting
+                .in_set(HarnessSet::Transform)
+                .after(sub_task_completion_system),
         ),
     );
 

@@ -8,7 +8,7 @@ use bevy::prelude::Resource;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentCapabilities, AgentProfile, MemoryEntry, SubTaskDefinition, ToolError};
+use super::{AgentCapabilities, AgentProfile, MemoryEntry, SubTaskDefinition, TaskId, ToolError};
 
 /// Space 级别的长期知识（用户相关）
 #[derive(Resource, Default)]
@@ -140,11 +140,18 @@ pub enum ToolAction {
     },
     /// 创建子任务批次
     CreateBatch(Vec<SubTaskDefinition>),
+    /// 等待子任务完成
+    WaitForTasks {
+        task_ids: Vec<TaskId>,
+        timeout_secs: u64,
+    },
 }
 
 /// 内置 Tool 执行上下文
 pub struct ToolContext<'a> {
     pub knowledge: &'a SpaceKnowledge,
+    /// wait_tasks 工具的默认超时时间（秒）
+    pub default_wait_tasks_timeout_secs: u64,
 }
 
 /// 内置 Tool trait

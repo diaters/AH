@@ -1,0 +1,94 @@
+<h2>任务层级显示设计方案</h2>
+<p class="subtitle">完整设计规格</p>
+
+<div class="section">
+  <h3>设计决策摘要</h3>
+  <table style="width: 100%; border-collapse: collapse;">
+    <tr style="border-bottom: 1px solid #44475a;">
+      <td style="padding: 8px; color: #8be9fd;">视觉风格</td>
+      <td style="padding: 8px;">缩进 + 虚线边框</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #44475a;">
+      <td style="padding: 8px; color: #8be9fd;">折叠功能</td>
+      <td style="padding: 8px;">始终展开</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #44475a;">
+      <td style="padding: 8px; color: #8be9fd;">进度显示</td>
+      <td style="padding: 8px;">主任务显示子任务完成进度 (n/m)</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #44475a;">
+      <td style="padding: 8px; color: #8be9fd;">嵌套深度</td>
+      <td style="padding: 8px;">两级（主任务 + 子任务）</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px; color: #8be9fd;">已完成样式</td>
+      <td style="padding: 8px;">已完成子任务变暗显示</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>视觉效果预览</h3>
+  <div class="mockup">
+    <div class="mockup-header">Status Panel - Tasks</div>
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; line-height: 1.8; padding: 16px;">
+      <div style="margin-bottom: 8px;">
+        <span style="color: #f1fa8c;">●</span> <strong>分析用户需求 (2/3)</strong>
+      </div>
+      <div style="padding-left: 16px; border-left: 1px dashed #6272a4; margin-left: 6px; margin-bottom: 12px;">
+        <div style="color: #6272a4;"><span style="color: #50fa7b;">✓</span> 解析意图</div>
+        <div style="color: #6272a4;"><span style="color: #50fa7b;">✓</span> 提取实体</div>
+        <div><span style="color: #f1fa8c;">●</span> 生成查询计划</div>
+      </div>
+
+      <div style="margin-bottom: 8px;">
+        <span style="color: #50fa7b;">✓</span> <strong style="color: #6272a4;">执行检索 (3/3)</strong>
+      </div>
+      <div style="padding-left: 16px; border-left: 1px dashed #44475a; margin-left: 6px; margin-bottom: 12px;">
+        <div style="color: #6272a4;"><span style="color: #50fa7b;">✓</span> 向量搜索</div>
+        <div style="color: #6272a4;"><span style="color: #50fa7b;">✓</span> 关键词匹配</div>
+        <div style="color: #6272a4;"><span style="color: #50fa7b;">✓</span> 结果合并</div>
+      </div>
+
+      <div style="margin-bottom: 8px;">
+        <span style="color: #ff5555;">✗</span> <strong>生成响应</strong>
+      </div>
+      <div style="padding-left: 16px; border-left: 1px dashed #6272a4; margin-left: 6px;">
+        <div><span style="color: #ff5555;">✗</span> 格式化输出 <span style="color: #ff5555; font-size: 11px;">API 超时</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>实现要点</h3>
+  <ul style="line-height: 1.8;">
+    <li><strong>数据结构变更</strong>：TaskState 需新增 <code style="background: #44475a; padding: 2px 6px; border-radius: 3px;">subtask_count</code> 和 <code style="background: #44475a; padding: 2px 6px; border-radius: 3px;">completed_count</code> 字段</li>
+    <li><strong>渲染逻辑</strong>：按 parent_id 分组，主任务在上，子任务缩进显示</li>
+    <li><strong>样式规则</strong>：
+      <ul>
+        <li>主任务：加粗 + 进度显示</li>
+        <li>子任务：缩进 16px + 左侧虚线边框</li>
+        <li>已完成：整体颜色变为 <code style="background: #44475a; padding: 2px 6px; border-radius: 3px;">#6272a4</code> (暗灰色)</li>
+      </ul>
+    </li>
+    <li><strong>状态图标</strong>：沿用现有设计（○ Pending, ● Running, ✓ Done, ✗ Failed）</li>
+  </ul>
+</div>
+
+<div class="options" data-multiselect="false">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>批准此设计</h3>
+      <p>设计完整，可以开始实现</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content">
+      <h3>需要修改</h3>
+      <p>请在终端说明需要调整的部分</p>
+    </div>
+  </div>
+</div>

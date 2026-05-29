@@ -3,19 +3,23 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 use bevy::prelude::*;
+use serde::Serialize;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::app::HarnessSettings;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentSpawnRequestMessage, ApprovalDecision,
     ApprovalRequestMessage, ApprovalResultMessage, BatchTaskState, BuiltinTool,
     BuiltinToolExecutors, ChannelId, ConfirmationOption, ConfirmationSource, ExecutionError,
     FrontendKind, GrantMode, ShortTermMemory, SpaceKnowledge, SpaceToolRegistry,
-    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task,
-    TaskStatus, ToolAction, ToolCallingState, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, ToolContext, ToolDefinition, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission, WaitingReason,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage, SubTaskConfig,
+    SubTaskDefinition, Task, TaskStatus, ToolAction, ToolCallingState,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolDefinition,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+    WaitingForTasksInfo, WaitingReason,
 };
+use chrono::Duration as ChronoDuration;
 
 // ========== Builtin Tool Implementations ==========
 
@@ -92,6 +96,62 @@ impl BuiltinTool for CreateTasksTool {
         let definitions = parse_create_tasks_params(input).map_err(ToolError::InvalidInput)?;
         Ok(ToolAction::CreateBatch(definitions))
     }
+}
+
+struct WaitTasksTool;
+
+impl BuiltinTool for WaitTasksTool {
+    fn name(&self) -> &str {
+        "wait_tasks"
+    }
+
+    fn execute(
+        &self,
+        input: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolAction, ToolError> {
+        let task_ids = parse_wait_tasks_ids(input)?;
+        let timeout_secs = parse_wait_tasks_timeout(input, ctx.default_wait_tasks_timeout_secs);
+
+        Ok(ToolAction::WaitForTasks {
+            task_ids,
+            timeout_secs,
+        })
+    }
+}
+
+fn parse_wait_tasks_ids(
+    input: &serde_json::Value,
+) -> Result<Vec<crate::domain::TaskId>, ToolError> {
+    let ids_value = input
+        .get("task_ids")
+        .ok_or_else(|| ToolError::InvalidInput("missing 'task_ids' parameter".to_string()))?;
+
+    let ids_array = ids_value
+        .as_array()
+        .ok_or_else(|| ToolError::InvalidInput("'task_ids' must be an array".to_string()))?;
+
+    let mut task_ids = Vec::new();
+    for id_str in ids_array.iter().filter_map(|v| v.as_str()) {
+        let id = uuid::Uuid::parse_str(id_str)
+            .map_err(|_| ToolError::InvalidInput(format!("invalid task id: {}", id_str)))?;
+        task_ids.push(id);
+    }
+
+    if task_ids.is_empty() {
+        return Err(ToolError::InvalidInput(
+            "'task_ids' cannot be empty".to_string(),
+        ));
+    }
+
+    Ok(task_ids)
+}
+
+fn parse_wait_tasks_timeout(input: &serde_json::Value, default: u64) -> u64 {
+    input
+        .get("timeout_secs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(default)
 }
 
 // ========== Registration ==========
@@ -211,6 +271,32 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(CreateTasksTool));
+
+    registry.register(ToolDefinition {
+        name: "wait_tasks".to_string(),
+        description: "Wait for child tasks to complete and collect their results. Returns the status and results of all specified tasks when all complete or timeout is reached.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of child task IDs to wait for"
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (default: 300)"
+                    }
+                },
+                "required": ["task_ids"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("wait_tasks".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(WaitTasksTool));
 }
 
 // ========== Helpers ==========
@@ -586,12 +672,159 @@ fn spawn_create_tasks_messages(
     commands.entity(request_entity).despawn();
 }
 
+/// 生成等待任务的消息和状态
+fn spawn_wait_for_tasks(
+    commands: &mut Commands,
+    request_entity: Entity,
+    task_entity: Entity,
+    agent_id: crate::domain::AgentId,
+    tool_call_id: String,
+    task_ids: Vec<crate::domain::TaskId>,
+    timeout_secs: u64,
+) {
+    debug!(
+        event = "WaitForTasksInitiated",
+        task_ids = ?task_ids,
+        timeout_secs = timeout_secs,
+        "task entering wait state for child tasks"
+    );
+
+    // 在 Task Entity 上添加等待信息组件
+    commands.entity(task_entity).insert(WaitingForTasksInfo {
+        target_task_ids: task_ids,
+        timeout_at: chrono::Utc::now() + ChronoDuration::seconds(timeout_secs as i64),
+        tool_call_id,
+        agent_id,
+    });
+
+    // 清理请求实体
+    commands.entity(request_entity).despawn();
+}
+
+/// 验证目标任务是否为当前任务的子任务
+fn validate_task_ownership(
+    current_task_id: crate::domain::TaskId,
+    target_task_ids: &[crate::domain::TaskId],
+    tasks: &Query<(Entity, &mut Task)>,
+) -> Result<(), ToolError> {
+    let _current_task = tasks
+        .iter()
+        .find(|(_, t)| t.id == current_task_id)
+        .map(|(_, t)| t)
+        .ok_or_else(|| ToolError::NotFound(format!("current task {}", current_task_id)))?;
+
+    for target_id in target_task_ids {
+        let target = tasks
+            .iter()
+            .find(|(_, t)| t.id == *target_id)
+            .map(|(_, t)| t)
+            .ok_or_else(|| ToolError::NotFound(format!("task {}", target_id)))?;
+
+        // 目标任务必须是当前任务的子任务（parent_task_id 匹配）
+        if target.parent_task_id != Some(current_task_id) {
+            return Err(ToolError::PermissionDenied(format!(
+                "task {} is not a child of current task",
+                target_id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 等待任务结果
+#[derive(Debug, Clone, Serialize)]
+struct TaskWaitResult {
+    task_id: String,
+    status: TaskStatus,
+    result: Option<String>,
+    error: Option<String>,
+}
+
+/// 收集目标任务的结果
+fn collect_task_results(
+    task_ids: &[crate::domain::TaskId],
+    tasks: &Query<&Task>,
+) -> Vec<TaskWaitResult> {
+    task_ids
+        .iter()
+        .map(|id| {
+            let task = tasks.iter().find(|t| t.id == *id);
+            TaskWaitResult {
+                task_id: id.to_string(),
+                status: task
+                    .map(|t| t.status.clone())
+                    .unwrap_or(TaskStatus::Pending),
+                result: task.and_then(|t| {
+                    if t.status == TaskStatus::Done {
+                        Some(t.result_summary.clone())
+                    } else {
+                        None
+                    }
+                }),
+                error: task.and_then(|t| {
+                    if matches!(t.status, TaskStatus::Failed(_)) {
+                        t.last_error.clone()
+                    } else {
+                        None
+                    }
+                }),
+            }
+        })
+        .collect()
+}
+
+/// 生成等待结果消息
+fn spawn_wait_result_message(
+    commands: &mut Commands,
+    task_id: crate::domain::TaskId,
+    info: &WaitingForTasksInfo,
+    results: Vec<TaskWaitResult>,
+    timed_out: bool,
+) {
+    let output = serde_json::json!({
+        "results": results,
+        "timed_out": timed_out,
+    });
+
+    debug!(
+        event = "WaitForTasksCompleted",
+        task_id = %task_id,
+        results_count = results.len(),
+        timed_out = timed_out,
+        "wait_tasks completed, resuming task"
+    );
+
+    // 生成工具执行结果消息
+    commands.spawn(ToolExecutionResultMessage {
+        result: AgentExecutionResult {
+            task_id,
+            agent_id: info.agent_id,
+            request_kind: crate::domain::AgentRequestKind::LlmCompletion,
+            result: Ok(AgentExecutionOutput {
+                content: crate::domain::OutputContent::Text("wait_tasks completed".to_string()),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+        },
+        tool_name: "wait_tasks".to_string(),
+        tool_output: Ok(output),
+        tool_call_id: Some(info.tool_call_id.clone()),
+        processed: false,
+    });
+}
+
 /// 统一处理 Tool 执行动作
 fn handle_tool_action(
     commands: &mut Commands,
     request_entity: Entity,
+    task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
+    tasks: &Query<(Entity, &mut Task)>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -646,6 +879,28 @@ fn handle_tool_action(
                 request.tool_call_id.clone(),
             );
         }
+        Ok(ToolAction::WaitForTasks {
+            task_ids,
+            timeout_secs,
+        }) => {
+            // 验证任务归属
+            match validate_task_ownership(request.request.task_id, &task_ids, tasks) {
+                Ok(()) => {
+                    spawn_wait_for_tasks(
+                        commands,
+                        request_entity,
+                        task_entity,
+                        request.request.agent_id,
+                        request.tool_call_id.clone().unwrap_or_default(),
+                        task_ids,
+                        timeout_secs,
+                    );
+                }
+                Err(e) => {
+                    spawn_tool_error(commands, request_entity, request, e);
+                }
+            }
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
@@ -654,11 +909,11 @@ fn handle_tool_action(
 
 /// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
 fn restore_task_after_tool(
-    tasks: &mut Query<&mut Task>,
+    tasks: &mut Query<(Entity, &mut Task)>,
     calling_states: &Query<&ToolCallingState>,
     task_id: crate::domain::TaskId,
 ) {
-    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id) {
+    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
         if !matches!(task.status, TaskStatus::Waiting(_)) {
             return;
         }
@@ -705,14 +960,16 @@ fn spawn_tool_error(
 /// Tool 分发 System
 ///
 /// 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tool_dispatch_system(
     mut commands: Commands,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     agents: Query<&Agent>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
+    settings: Res<HarnessSettings>,
 ) {
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -821,9 +1078,23 @@ pub(crate) fn tool_dispatch_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                 };
                 let action = executor.execute(&request.tool_input, &ctx);
-                handle_tool_action(&mut commands, entity, &request, action);
+
+                // Find the task entity
+                if let Some((task_entity, _)) =
+                    tasks.iter().find(|(_, t)| t.id == request.request.task_id)
+                {
+                    handle_tool_action(
+                        &mut commands,
+                        entity,
+                        task_entity,
+                        &request,
+                        action,
+                        &tasks,
+                    );
+                }
             }
             ToolPermission::Confirm => {
                 // 检查 Agent 是否有父 Agent，且父 Agent 有该工具的 Allow 权限
@@ -841,8 +1112,9 @@ pub(crate) fn tool_dispatch_system(
                     );
 
                     // 将 Task 设置为等待父 Agent 审批状态
-                    if let Some(mut task) =
-                        tasks.iter_mut().find(|t| t.id == request.request.task_id)
+                    if let Some((_, mut task)) = tasks
+                        .iter_mut()
+                        .find(|(_, t)| t.id == request.request.task_id)
                     {
                         task.status = TaskStatus::Waiting(WaitingReason::Approval);
                     }
@@ -874,7 +1146,10 @@ pub(crate) fn tool_dispatch_system(
                 );
 
                 // 将 Task 设置为等待用户确认状态
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.request.task_id) {
+                if let Some((_, mut task)) = tasks
+                    .iter_mut()
+                    .find(|(_, t)| t.id == request.request.task_id)
+                {
                     task.status = TaskStatus::Waiting(WaitingReason::User);
                 }
 
@@ -924,6 +1199,7 @@ pub(crate) fn tool_result_system(
     mut results: Query<(Entity, &mut ToolExecutionResultMessage)>,
     mut tasks: Query<(&Task, Option<&mut ShortTermMemory>)>,
     calling_states: Query<&ToolCallingState>,
+    _settings: Res<HarnessSettings>,
 ) {
     for (entity, mut result) in &mut results {
         if result.processed {
@@ -1056,12 +1332,13 @@ pub(crate) fn approval_dispatch_system(
 pub(crate) fn approval_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
+    settings: Res<HarnessSettings>,
 ) {
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -1162,9 +1439,24 @@ pub(crate) fn approval_result_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
-                handle_tool_action(&mut commands, request_entity, tool_request, action);
+
+                // Find the task entity
+                if let Some((task_entity, _)) = tasks
+                    .iter()
+                    .find(|(_, t)| t.id == tool_request.request.task_id)
+                {
+                    handle_tool_action(
+                        &mut commands,
+                        request_entity,
+                        task_entity,
+                        tool_request,
+                        action,
+                        &tasks,
+                    );
+                }
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
             }
@@ -1205,12 +1497,13 @@ pub(crate) fn tool_confirmation_request_system(
 pub(crate) fn tool_confirmation_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
+    settings: Res<HarnessSettings>,
 ) {
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -1326,9 +1619,24 @@ pub(crate) fn tool_confirmation_result_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
-                handle_tool_action(&mut commands, request_entity, tool_request, action);
+
+                // Find the task entity
+                if let Some((task_entity, _)) = tasks
+                    .iter()
+                    .find(|(_, t)| t.id == tool_request.request.task_id)
+                {
+                    handle_tool_action(
+                        &mut commands,
+                        request_entity,
+                        task_entity,
+                        tool_request,
+                        action,
+                        &tasks,
+                    );
+                }
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
             }
@@ -1345,6 +1653,61 @@ pub(crate) fn tool_confirmation_result_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+/// 子任务完成时检查是否有任务在等待（事件驱动优化）
+pub(crate) fn on_subtask_completed_check_waiting(
+    messages: Query<(Entity, &SubTaskCompletedMessage)>,
+    waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
+    all_tasks: Query<&Task>,
+    mut commands: Commands,
+) {
+    for (_msg_entity, msg) in &messages {
+        // 检查是否有任务在等待这个完成的子任务
+        for (entity, task, info) in &waiting_tasks {
+            if info.target_task_ids.contains(&msg.child_task_id) {
+                // 检查是否所有目标都完成
+                let all_terminal = info.target_task_ids.iter().all(|id| {
+                    all_tasks
+                        .iter()
+                        .any(|t| t.id == *id && t.status.is_terminal())
+                });
+
+                if all_terminal {
+                    let results = collect_task_results(&info.target_task_ids, &all_tasks);
+                    spawn_wait_result_message(&mut commands, task.id, info, results, false);
+                    commands.entity(entity).remove::<WaitingForTasksInfo>();
+                }
+            }
+        }
+    }
+}
+
+/// 轮询检查等待中的任务（超时兜底）
+pub(crate) fn check_waiting_tasks_system(
+    clock: Res<crate::app::Clock>,
+    mut commands: Commands,
+    waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
+    all_tasks: Query<&Task>,
+) {
+    for (entity, task, info) in &waiting_tasks {
+        let timed_out = clock.0 >= info.timeout_at;
+
+        // 检查所有目标任务是否都已终态
+        let all_terminal = info.target_task_ids.iter().all(|id| {
+            all_tasks
+                .iter()
+                .any(|t| t.id == *id && t.status.is_terminal())
+        });
+
+        if timed_out || all_terminal {
+            let results = collect_task_results(&info.target_task_ids, &all_tasks);
+            spawn_wait_result_message(&mut commands, task.id, info, results, timed_out);
+
+            // 移除等待信息组件
+            commands.entity(entity).remove::<WaitingForTasksInfo>();
+        }
     }
 }
 
@@ -1390,6 +1753,7 @@ mod tests {
 
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = KnowledgeSearchTool;
 
@@ -1426,6 +1790,7 @@ mod tests {
         let knowledge = SpaceKnowledge::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = KnowledgeSearchTool;
         let input = serde_json::json!({"limit": 5});
@@ -1439,6 +1804,7 @@ mod tests {
         let knowledge = SpaceKnowledge::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = SpawnAgentTool;
         let input = serde_json::json!({
@@ -1470,6 +1836,7 @@ mod tests {
         let knowledge = SpaceKnowledge::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
         };
         let executor = CreateTasksTool;
         let input = serde_json::json!({

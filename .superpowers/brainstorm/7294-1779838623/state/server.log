@@ -1,0 +1,11 @@
+{"type":"server-started","port":56958,"host":"0.0.0.0","url_host":"0.0.0.0","url":"http://0.0.0.0:56958","screen_dir":"/Users/diater/workspace/Harness/.superpowers/brainstorm/7294-1779838623/content","state_dir":"/Users/diater/workspace/Harness/.superpowers/brainstorm/7294-1779838623/state"}
+{"type":"screen-added","file":"/Users/diater/workspace/Harness/.superpowers/brainstorm/7294-1779838623/content/task-hierarchy-design.html"}
+{"type":"screen-added","file":"/Users/diater/workspace/Harness/.superpowers/brainstorm/7294-1779838623/content/waiting.html"}
+{"type":"screen-added","file":"/Users/diater/workspace/Harness/.superpowers/brainstorm/7294-1779838623/content/final-design.html"}
+{"source":"user-event","type":"click","text":"✓\n    \n      批准此设计\n      设计完整，可以开始实现","choice":"approve","id":null,"timestamp":1779839439816}
+{"source":"user-event","type":"click","text":"✓\n    \n      批准此设计\n      设计完整，可以开始实现","choice":"approve","id":null,"timestamp":1779839446508}
+{"source":"user-event","type":"click","text":"✓\n    \n      批准此设计\n      设计完整，可以开始实现","choice":"approve","id":null,"timestamp":1779839446966}
+{"source":"user-event","type":"click","text":"✓\n    \n      批准此设计\n      设计完整，可以开始实现","choice":"approve","id":null,"timestamp":1779839447898}
+{"source":"user-event","type":"click","text":"✓\n    \n      批准此设计\n      设计完整，可以开始实现","choice":"approve","id":null,"timestamp":1779839450255}
+{"type":"screen-added","file":"/Users/diater/workspace/Harness/.superpowers/brainstorm/7294-1779838623/content/waiting-final.html"}
+{"type":"server-stopped","reason":"idle timeout"}

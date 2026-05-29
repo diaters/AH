@@ -54,6 +54,7 @@ pub(crate) fn frontend_output_system(
             name: task.input_summary.clone(),
             status,
             result,
+            parent_id: task.parent_task_id,
         };
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
