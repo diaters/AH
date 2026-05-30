@@ -20,7 +20,7 @@
 1. **删除废弃实现**：不保留旧方案兼容层
 2. **拆分过大文件**：降低单文件复杂度
 3. **模块化架构**：将系统改造为可替换的模块化架构
-4. **重新定位 Brain/Summary**：明确其在框架中的职责与流程
+4. **重新定位 Brain/Plan/Summary**：明确其在框架中的职责与流程
 
 ### 1.2 重构原则
 
@@ -35,6 +35,7 @@
 src/
 ├── contracts/           # 契约层：trait 接口、事件、协议
 │   ├── mod.rs
+│   ├── dispatch.rs
 │   ├── planning.rs
 │   ├── execution.rs
 │   ├── memory.rs
@@ -48,10 +49,12 @@ src/
 │   ├── error.rs
 │   ├── workflow.rs
 │   ├── tool_runtime.rs
+│   ├── work_item.rs
 │   └── ...
 ├── systems/             # 系统层：按模块分目录
 │   ├── mod.rs
 │   ├── intake/
+│   ├── dispatch/
 │   ├── planning/
 │   ├── execution/
 │   ├── tools/
@@ -60,6 +63,7 @@ src/
 └── plugins/             # 插件层：模块装配
     ├── mod.rs
     ├── task_runtime.rs
+    ├── dispatch.rs
     ├── planning.rs
     ├── execution.rs
     ├── tools.rs
@@ -75,7 +79,7 @@ src/
 flowchart LR
     P0[P0: 文件拆分] --> P1[P1: 契约定义]
     P1 --> P2[P2: Plugin 化]
-    P2 --> P3[P3: Brain/Summary 重构]
+    P2 --> P3[P3: Brain/Plan/Summary 重构]
 ```
 
 | 阶段 | 名称 | 预估工作量 | 风险等级 |
@@ -83,7 +87,7 @@ flowchart LR
 | P0 | 文件拆分 | 2-3 人日 | 中 |
 | P1 | 契约定义 | 3-4 人日 | 中高 |
 | P2 | Plugin 化 | 2-3 人日 | 中 |
-| P3 | Brain/Summary 重构 | 5-7 人日 | 高 |
+| P3 | Brain/Plan/Summary 重构 | 5-7 人日 | 高 |
 
 ---
 
@@ -118,10 +122,10 @@ src/domain/
 ```
 
 **验收标准**：
-- [ ] 所有类型迁移到对应文件
-- [ ] `domain/mod.rs` 仅包含 `pub use` 语句
-- [ ] 所有测试通过
-- [ ] `cargo clippy` 无警告
+- [x] 所有类型迁移到对应文件
+- [x] `domain/mod.rs` 仅包含 `pub use` 语句
+- [x] 所有测试通过
+- [x] `cargo clippy` 无警告
 
 #### 3.2.2 拆分 `systems/tool.rs`
 
@@ -146,10 +150,10 @@ src/systems/tools/
 ```
 
 **验收标准**：
-- [ ] 每个 Tool 独立一个文件
-- [ ] 每个System按职责分组
-- [ ] 所有测试通过
-- [ ] `cargo clippy` 无警告
+- [x] 每个 Tool 独立一个文件
+- [x] 每个System按职责分组
+- [x] 所有测试通过
+- [x] `cargo clippy` 无警告
 
 #### 3.2.3 拆分 `systems/transform.rs`
 
@@ -168,9 +172,9 @@ src/systems/transform/
 ```
 
 **验收标准**：
-- [ ] 系统按职责分组
-- [ ] 所有测试通过
-- [ ] `cargo clippy` 无警告
+- [x] 系统按职责分组
+- [x] 所有测试通过
+- [x] `cargo clippy` 无警告
 
 #### 3.2.4 拆分 `systems/dispatch.rs`
 
@@ -186,9 +190,9 @@ src/systems/dispatch/
 ```
 
 **验收标准**：
-- [ ] Brain 和普通分发分离
-- [ ] 所有测试通过
-- [ ] `cargo clippy` 无警告
+- [x] Brain 和普通分发分离
+- [x] 所有测试通过
+- [x] `cargo clippy` 无警告
 
 ### 3.3 执行顺序
 
@@ -234,7 +238,8 @@ src/systems/dispatch/
 ```
 src/contracts/
 ├── mod.rs           # 导出所有契约
-├── planning.rs      # PlanPolicy, PlanArtifactBuilder, ReplanPolicy
+├── dispatch.rs      # DispatchPolicy, AgentSelector, AssignmentResult, TagMatcher
+├── planning.rs      # PlanPolicy, PlanArtifactBuilder, ReplanPolicy, WorkItemDeriver
 ├── execution.rs     # ExecutionBackend, ExecutionPolicy
 ├── memory.rs        # MemoryStore, MemoryCompactor, CompactionPolicy, ContributionPolicy
 ├── tools.rs         # ToolCatalog, ToolExecutor, ToolApprovalPolicy
@@ -243,12 +248,83 @@ src/contracts/
 
 ### 4.3 任务清单
 
-#### 4.3.1 定义 Planning 契约
+#### 4.3.1 定义 Dispatch 契约
+
+```rust
+// src/contracts/dispatch.rs
+
+use crate::domain::{AgentId, TaskId, WorkItem, WorkItemType};
+
+/// WorkItem 的标签集合
+#[derive(Debug, Clone, Default)]
+pub struct TagSet {
+    pub tags: Vec<String>,
+}
+
+/// Agent 的可见能力摘要
+#[derive(Debug, Clone)]
+pub struct AgentCapabilitySummary {
+    pub agent_id: AgentId,
+    pub name: String,
+    pub tags: Vec<String>,
+    pub model: String,
+}
+
+/// 派发上下文
+#[derive(Debug, Clone)]
+pub struct DispatchContext {
+    pub task_id: TaskId,
+    pub work_type: WorkItemType,
+    pub available_agents: Vec<AgentCapabilitySummary>,
+}
+
+/// 分配结果
+#[derive(Debug, Clone)]
+pub struct AssignmentResult {
+    pub agent_id: AgentId,
+    pub reasoning: String,
+}
+
+/// 标签匹配器
+pub trait TagMatcher: Send + Sync + 'static {
+    fn matches(&self, agent_tags: &[String], required_tags: &TagSet) -> bool;
+}
+
+/// 候选 Agent 选择器
+pub trait AgentSelector: Send + Sync + 'static {
+    fn select_candidates(
+        &self,
+        work_item: &WorkItem,
+        agents: &[AgentCapabilitySummary],
+    ) -> Vec<AgentCapabilitySummary>;
+}
+
+/// 派发策略
+pub trait DispatchPolicy: Send + Sync + 'static {
+    fn assign(
+        &self,
+        work_item: &WorkItem,
+        context: &DispatchContext,
+    ) -> Option<AssignmentResult>;
+}
+```
+
+**验收标准**：
+- [ ] trait 定义完成
+- [ ] 支持多标签组合匹配
+- [ ] 匹配规则采用“Agent tags 全包含 WorkItem tags”
+- [ ] 提供 Mock 实现
+- [ ] 单元测试通过
+
+#### 4.3.2 定义 Planning 契约
 
 ```rust
 // src/contracts/planning.rs
 
-use crate::domain::TaskId;
+use crate::{
+    contracts::dispatch::{AgentCapabilitySummary, TagSet},
+    domain::{TaskId, WorkItemType},
+};
 
 /// 规划结果
 pub struct PlanArtifact {
@@ -266,6 +342,8 @@ pub struct PlanStep {
 pub struct SubtaskSpec {
     pub name: String,
     pub content: String,
+    pub work_type: WorkItemType,
+    pub tags: TagSet,
     pub required_tools: Vec<String>,
     pub depends_on: Vec<String>,
 }
@@ -291,6 +369,20 @@ pub trait ReplanPolicy: Send + Sync + 'static {
     fn should_replan(&self, event: &ReplanEvent) -> bool;
 }
 
+/// 将规划结果标准化为后续 WorkItem 草案
+pub trait WorkItemDeriver: Send + Sync + 'static {
+    fn derive(&self, task_id: TaskId, artifact: &PlanArtifact) -> Vec<PlannedWorkItemSpec>;
+}
+
+pub struct PlannedWorkItemSpec {
+    pub name: String,
+    pub work_type: WorkItemType,
+    pub prompt: String,
+    pub tags: TagSet,
+    pub required_tools: Vec<String>,
+    pub depends_on: Vec<String>,
+}
+
 pub struct PlanContext {
     pub task_id: TaskId,
     pub stm_entries: usize,
@@ -314,15 +406,19 @@ pub enum PlanError {
 
 **验收标准**：
 - [ ] trait 定义完成
+- [ ] 明确 `PlanArtifact -> WorkItem` 协议
 - [ ] 提供 Mock 实现
 - [ ] 单元测试通过
 
-#### 4.3.2 定义 Memory 契约
+#### 4.3.3 定义 Memory 契约
 
 ```rust
 // src/contracts/memory.rs
 
-use crate::domain::{MemoryEntry, TaskId};
+use crate::{
+    contracts::dispatch::TagSet,
+    domain::{AgentId, MemoryEntry, TaskId, WorkItemType},
+};
 
 /// 长期记忆存储
 pub trait MemoryStore: Send + Sync + 'static {
@@ -331,29 +427,41 @@ pub trait MemoryStore: Send + Sync + 'static {
     fn remove_entry(&mut self, agent_id: AgentId, entry_id: Uuid);
 }
 
-/// 记忆压缩触发器
+/// 记忆治理协调器
 pub trait MemoryCompactor: Send + Sync + 'static {
-    fn check_compression_needed(&self, stm: &ShortTermMemory) -> Option<CompressionRequest>;
+    fn build_summary_request(
+        &self,
+        context: &MemoryCompactionContext,
+    ) -> Option<SummaryWorkRequest>;
 }
 
 /// 压缩策略
 pub trait CompactionPolicy: Send + Sync + 'static {
-    fn should_compress(&self, token_count: usize, threshold: usize) -> bool;
-    fn target_tokens(&self) -> usize;
+    fn should_compact(&self, context: &MemoryCompactionContext) -> bool;
+    fn target_tokens(&self, context: &MemoryCompactionContext) -> usize;
     fn preserve_recent_turns(&self) -> usize;
 }
 
 /// 经验沉淀策略
 pub trait ContributionPolicy: Send + Sync + 'static {
-    fn should_contribute(&self, result: &TaskResult) -> bool;
-    fn build_contribution(&self, result: &TaskResult) -> MemoryEntry;
+    fn decide_writeback(&self, result: &SummaryResult) -> WritebackDecision;
 }
 
-pub struct CompressionRequest {
+pub struct MemoryCompactionContext {
     pub task_id: TaskId,
+    pub owner_agent_id: Option<AgentId>,
     pub content_to_compress: String,
-    pub target_tokens: usize,
+    pub token_count: usize,
     pub trigger: CompressionTrigger,
+}
+
+pub struct SummaryWorkRequest {
+    pub task_id: TaskId,
+    pub work_type: WorkItemType,
+    pub prompt: String,
+    pub tags: TagSet,
+    pub target_tokens: usize,
+    pub writeback_target: MemoryWritebackTarget,
 }
 
 pub enum CompressionTrigger {
@@ -361,14 +469,33 @@ pub enum CompressionTrigger {
     TaskComplete,
     UserCommand,
 }
+
+pub enum MemoryWritebackTarget {
+    ShortTermContext,
+    LongTermMemory { agent_id: AgentId },
+    SharedKnowledge,
+}
+
+pub struct SummaryResult {
+    pub task_id: TaskId,
+    pub content: String,
+}
+
+pub enum WritebackDecision {
+    UpdateShortTermContext,
+    AddLongTermMemory(MemoryEntry),
+    AddSharedKnowledge(MemoryEntry),
+    Drop,
+}
 ```
 
 **验收标准**：
 - [ ] trait 定义完成
+- [ ] 明确 `MemoryCompactor -> Summary WorkItem` 协议
 - [ ] 提供 Mock 实现
 - [ ] 单元测试通过
 
-#### 4.3.3 定义 Tool 契约
+#### 4.3.4 定义 Tool 契约
 
 ```rust
 // src/contracts/tools.rs
@@ -400,7 +527,7 @@ pub enum ApprovalRoute {
 - [ ] 提供 Mock 实现
 - [ ] 单元测试通过
 
-#### 4.3.4 定义 Execution 契约
+#### 4.3.5 定义 Execution 契约
 
 ```rust
 // src/contracts/execution.rs
@@ -433,6 +560,7 @@ pub trait ExecutionPolicy: Send + Sync + 'static {
 
 | 现有实现 | 适配到契约 |
 |----------|------------|
+| `brain_dispatch_system` 中的选择逻辑 | 拆到 `DispatchPolicy` + `AgentSelector` |
 | `Frontend` trait | 保持不变，扩展 `FrontendProjection` |
 | `AgentExecutor` trait | 迁移到 `ExecutionBackend` |
 | `BuiltinTool` trait | 保持不变 |
@@ -455,6 +583,7 @@ pub trait ExecutionPolicy: Send + Sync + 'static {
 src/plugins/
 ├── mod.rs                    # 导出所有 Plugin
 ├── task_runtime.rs           # TaskRuntimePlugin
+├── dispatch.rs               # DispatchPlugin
 ├── planning.rs               # PlanningPlugin
 ├── execution.rs              # ExecutionPlugin
 ├── tools.rs                  # ToolRuntimePlugin
@@ -489,7 +618,30 @@ impl Plugin for TaskRuntimePlugin {
 }
 ```
 
-#### 5.3.2 创建 ToolRuntimePlugin
+#### 5.3.2 创建 DispatchPlugin
+
+```rust
+// src/plugins/dispatch.rs
+
+use bevy::prelude::*;
+
+pub struct DispatchPlugin;
+
+impl Plugin for DispatchPlugin {
+    fn build(&self, app: &mut App) {
+        // 注册派发策略资源
+        app.insert_resource(DispatchServices::default());
+
+        // 注册派发相关 System
+        app.add_systems(Update, (
+            brain_dispatch_system.in_set(HarnessSet::Dispatch),
+            task_dispatch_system.in_set(HarnessSet::Dispatch),
+        ));
+    }
+}
+```
+
+#### 5.3.3 创建 ToolRuntimePlugin
 
 ```rust
 // src/plugins/tools.rs
@@ -519,7 +671,7 @@ impl Plugin for ToolRuntimePlugin {
 }
 ```
 
-#### 5.3.3 创建 DefaultRuntimePluginGroup
+#### 5.3.4 创建 DefaultRuntimePluginGroup
 
 ```rust
 // src/plugins/default_runtime.rs
@@ -532,6 +684,7 @@ impl PluginGroup for DefaultRuntimePluginGroup {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(TaskRuntimePlugin)
+            .add(DispatchPlugin)
             .add(ToolRuntimePlugin)
             .add(ExecutionPlugin)
             .add(MemoryPlugin)
@@ -541,7 +694,7 @@ impl PluginGroup for DefaultRuntimePluginGroup {
 }
 ```
 
-#### 5.3.4 重构 build_harness_app
+#### 5.3.5 重构 build_harness_app
 
 ```rust
 // src/app/mod.rs
@@ -578,11 +731,12 @@ pub fn build_harness_app(
 
 ---
 
-## 6. 阶段四（P3）：Brain/Summary 重构
+## 6. 阶段四（P3）：Brain/Plan/Summary 重构
 
 ### 6.1 目标
 
 - Brain 改造为纯派发模块
+- Plan 改造为独立规划模块
 - Summary 改造为记忆治理模块
 - 引入 WorkItem 统一工作单元
 
@@ -594,7 +748,10 @@ pub fn build_harness_app(
 // src/domain/work_item.rs
 
 use uuid::Uuid;
-use crate::domain::{AgentId, TaskId};
+use crate::{
+    contracts::dispatch::TagSet,
+    domain::{AgentId, TaskId},
+};
 
 /// 统一工作单元
 #[derive(Debug, Clone, Component)]
@@ -603,9 +760,11 @@ pub struct WorkItem {
     pub task_id: TaskId,
     pub work_type: WorkItemType,
     pub input: WorkItemInput,
-    pub expected_tags: Vec<String>,
+    pub tags: TagSet,
     pub status: WorkItemStatus,
     pub assigned_agent: Option<AgentId>,
+    pub origin: WorkItemOrigin,
+    pub writeback_target: WorkItemWritebackTarget,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -629,6 +788,22 @@ pub struct WorkItemContext {
     pub system_prompt: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub enum WorkItemOrigin {
+    UserTask,
+    PlanArtifact,
+    MemoryCompaction,
+    Evaluation,
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkItemWritebackTarget {
+    TaskResult,
+    PlanArtifact,
+    ShortTermContext,
+    LongTermMemory,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkItemStatus {
     Pending,
@@ -644,28 +819,49 @@ pub enum WorkItemStatus {
 ```rust
 // src/systems/dispatch/brain_dispatch.rs
 
+#[derive(Resource)]
+pub struct DispatchServices {
+    pub policy: Arc<dyn DispatchPolicy>,
+}
+
 /// Brain 派发系统：为未分配工作项选择 Agent
 pub fn brain_dispatch_system(
-    mut work_items: Query<&mut WorkItem, (Added<WorkItem>, With<WorkItemStatus::Pending>)>,
+    mut commands: Commands,
+    mut work_items: Query<(Entity, &mut WorkItem)>,
     agents: Query<&Agent>,
-    dispatch_policy: Res<Box<dyn DispatchPolicy>>,
+    dispatch_services: Res<DispatchServices>,
 ) {
-    for mut work_item in &mut work_items {
-        // 根据 tag 和上下文选择 Agent
-        let selected = dispatch_policy.select_agent(&work_item, &agents);
-        
-        if let Some(agent) = selected {
-            work_item.assigned_agent = Some(agent.id);
+    for (entity, mut work_item) in &mut work_items {
+        if work_item.status != WorkItemStatus::Pending {
+            continue;
+        }
+
+        // BrainDispatch 自身不被递归派发；其他工作项按多标签规则筛选候选 Agent
+        let context = build_dispatch_context(&work_item, &agents);
+        let selected = dispatch_services.policy.assign(&work_item, &context);
+
+        if let Some(result) = selected {
+            let agent_id = result.agent_id;
+            work_item.assigned_agent = Some(agent_id);
             work_item.status = WorkItemStatus::Assigned;
-            
-            // 生成执行请求
+
+            // 生成后续执行请求或执行消息，继续交给执行模块处理
             commands.spawn(AgentExecutionRequestMessage {
-                request: build_request(&work_item, &agent),
+                request: build_request(&work_item, agent_id),
             });
+        } else {
+            commands.entity(entity).insert(DispatchFailedMarker);
         }
     }
 }
 ```
+
+**关键约束**：
+
+- `BrainDispatch` 是模块，不是普通规划 Agent。
+- `BrainDispatch` 自身固定绑定 `BrainAgent` 用于复杂派发决策。
+- 除 `BrainDispatch` 外，`plan`、`summary`、`worker` 等工作项都通过多标签匹配动态选择 Agent。
+- 第一版多标签匹配只要求：`Agent.tags` 必须包含 `WorkItem.tags` 的全部元素。
 
 ### 6.3 任务清单
 
@@ -673,28 +869,44 @@ pub fn brain_dispatch_system(
 
 - [ ] 创建 `src/domain/work_item.rs`
 - [ ] 定义 `WorkItem`, `WorkItemType`, `WorkItemStatus`
+- [ ] 定义 `TagSet`, `WorkItemOrigin`, `WorkItemWritebackTarget`
 - [ ] 创建 `WorkItemMessage` 消息类型
 - [ ] 添加 WorkItem 到 ECS 测试
 
 #### 6.3.2 重构 BrainDispatch
 
 - [ ] 创建 `src/systems/dispatch/brain_dispatch.rs`
+- [ ] 创建 `src/contracts/dispatch.rs`
 - [ ] 实现 `DispatchPolicy` trait
+- [ ] 实现多标签匹配规则
+- [ ] 采用“全包含匹配”作为第一版默认规则
+- [ ] 固化 `BrainDispatch -> BrainAgent` 的固定绑定约束
 - [ ] 重写 `brain_dispatch_system` 使用 WorkItem
 - [ ] 更新所有调用点
 
-#### 6.3.3 重构 MemoryCompactor
+#### 6.3.3 重构 Plan 模块
+
+- [ ] 创建 `src/contracts/planning.rs`
+- [ ] 定义 `PlanArtifact`, `WorkItemDeriver`
+- [ ] 将规划结果统一转化为 `Planning WorkItem / Worker WorkItem`
+- [ ] 验证 `Task -> PlanArtifact -> WorkItem` 流程闭环
+
+#### 6.3.4 重构 MemoryCompactor
 
 - [ ] 创建 `src/systems/memory/compactor.rs`
 - [ ] 实现 `MemoryCompactor` trait
 - [ ] 分离压缩触发和压缩执行
+- [ ] 让 `MemoryCompactor` 生成 `Summary WorkItem`
+- [ ] 让 `ContributionPolicy` 负责摘要结果写回决策
 - [ ] 更新 `summarization_dispatch_system`
 
-#### 6.3.4 流程验证
+#### 6.3.5 流程验证
 
 - [ ] 更新集成测试
-- [ ] 验证 Brain → WorkItem → Agent 流程
-- [ ] 验证 Summary → WorkItem → Agent 流程
+- [ ] 验证 `Plan -> WorkItem -> BrainDispatch -> Agent` 流程
+- [ ] 验证 `Worker -> BrainDispatch -> Agent` 流程
+- [ ] 验证 `Summary -> WorkItem -> BrainDispatch -> Agent` 流程
+- [ ] 验证多标签匹配与回退策略
 
 ### 6.4 迁移路径
 
@@ -703,16 +915,20 @@ pub fn brain_dispatch_system(
 Task → Brain Agent → select agent → execute
 
 目标流程:
-Task → PlanPolicy → WorkItem(Planning) → BrainDispatch → Agent
-     → WorkItem(Execution) → BrainDispatch → Agent
-     → MemoryCompactor → WorkItem(Summarization) → BrainDispatch → Agent
+Task → PlanPolicy
+     → Planning WorkItem → BrainDispatch → Planning Agent
+     → PlanArtifact → Worker WorkItem → BrainDispatch → Worker Agent
+     → MemoryCompactor → Summary WorkItem → BrainDispatch → Summary Agent
 ```
 
 ### 6.5 验收标准
 
 - [ ] WorkItem 概念完整实现
 - [ ] Brain 仅负责派发，不做规划
+- [ ] Plan 独立为 Planning 模块
 - [ ] Summary 作为 MemoryCompactor 模块
+- [ ] `BrainDispatch` 固定 `BrainAgent`
+- [ ] 普通工作项支持多标签组合匹配
 - [ ] 所有测试通过
 - [ ] 文档更新完成
 
@@ -743,10 +959,10 @@ Task → PlanPolicy → WorkItem(Planning) → BrainDispatch → Agent
 
 | 阶段 | 完成标准 | 状态 |
 |------|----------|------|
-| P0 | 文件拆分完成，所有测试通过 | 待开始 |
+| P0 | 文件拆分完成，所有测试通过 | ✅ 已完成 |
 | P1 | 契约定义完成，Mock 实现可用 | 待开始 |
 | P2 | Plugin 化完成，build_harness_app 使用 PluginGroup | 待开始 |
-| P3 | Brain/Summary 重构完成，流程验证通过 | 待开始 |
+| P3 | Brain/Plan/Summary 重构完成，流程验证通过 | 待开始 |
 
 ### 8.2 提交规范
 
@@ -755,7 +971,7 @@ Task → PlanPolicy → WorkItem(Planning) → BrainDispatch → Agent
 - `refactor(p0): split domain and systems files`
 - `refactor(p1): add contracts layer`
 - `refactor(p2): convert to plugin architecture`
-- `refactor(p3): redesign brain and summary modules`
+- `refactor(p3): redesign brain plan and summary modules`
 
 ---
 
