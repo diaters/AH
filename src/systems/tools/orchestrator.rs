@@ -1,0 +1,502 @@
+//! Tool 执行协调器
+//!
+//! 处理 Tool 执行动作和消息生成。
+
+use bevy::prelude::*;
+use serde::Serialize;
+use tracing::debug;
+use uuid::Uuid;
+
+use crate::domain::{
+    AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage,
+    BatchTaskState, ChannelId, FrontendKind, OutputContent,
+    ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus,
+    ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
+};
+
+/// 等待任务结果
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskWaitResult {
+    pub task_id: String,
+    pub status: TaskStatus,
+    pub result: Option<String>,
+    pub error: Option<String>,
+}
+
+/// 为 spawn_agent 生成 AgentSpawnRequestMessage 和 ToolExecutionResultMessage，并清理请求 entity
+pub fn spawn_spawn_agent_messages(
+    commands: &mut Commands,
+    request_entity: Entity,
+    agent_id: AgentId,
+    task_id: TaskId,
+    request_kind: crate::domain::AgentRequestKind,
+    params: (String, Option<String>, String, Vec<String>),
+    tool_call_id: Option<String>,
+) {
+    let (name, model, description, tools) = params;
+    debug!(
+        event = "SpawnAgentRequestCreated",
+        %agent_id,
+        %task_id,
+        %name,
+        ?model,
+        %description,
+        ?tools,
+        ?tool_call_id,
+        "spawn_agent request submitted"
+    );
+
+    commands.spawn(AgentSpawnRequestMessage {
+        parent_agent_id: agent_id,
+        task_id,
+        name,
+        model,
+        description,
+        tools,
+        task_prompt: String::new(),
+        task_system_prompt: None,
+    });
+
+    commands.spawn(ToolExecutionResultMessage {
+        result: AgentExecutionResult {
+            task_id,
+            agent_id,
+            request_kind,
+            result: Ok(AgentExecutionOutput {
+                content: OutputContent::Text(
+                    "spawn_agent request submitted".to_string(),
+                ),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+        },
+        tool_name: "spawn_agent".to_string(),
+        tool_output: Ok(serde_json::json!({
+            "status": "spawn_request_created"
+        })),
+        tool_call_id,
+        processed: false,
+    });
+
+    commands.entity(request_entity).despawn();
+}
+
+/// 为 create_tasks 生成子 Task 实体、SubTaskBatchState 和消息
+pub fn spawn_create_tasks_messages(
+    commands: &mut Commands,
+    request_entity: Entity,
+    agent_id: AgentId,
+    task_id: TaskId,
+    request_kind: crate::domain::AgentRequestKind,
+    definitions: Vec<SubTaskDefinition>,
+    tool_call_id: Option<String>,
+) {
+    let batch_id = Uuid::new_v4();
+    let total_count = definitions.len();
+
+    // 计算反向依赖：对每个任务，找出哪些任务依赖它
+    let mut depended_by_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for def in &definitions {
+        for dep in &def.depends_on {
+            depended_by_map
+                .entry(dep.clone())
+                .or_default()
+                .push(def.name.clone());
+        }
+    }
+
+    let mut batch_tasks = std::collections::HashMap::new();
+
+    for def in &definitions {
+        let child_task_id = Uuid::new_v4();
+        let child_task = Task {
+            id: child_task_id,
+            content: def.content.clone(),
+            creator: agent_id,
+            delegate: None,
+            status: TaskStatus::Pending,
+            input_summary: def.name.clone(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: Some(task_id),
+            batch_id: Some(batch_id),
+            origin_channel: ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
+        };
+
+        let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();
+
+        let sub_task_config = SubTaskConfig {
+            batch_id,
+            child_agent_name: def.name.clone(),
+            child_agent_model: def.model.clone(),
+            allowed_tools: def.tools.clone(),
+            parent_agent_id: agent_id,
+            depends_on: def.depends_on.clone(),
+            depended_by,
+        };
+
+        commands.spawn((child_task, sub_task_config, ShortTermMemory::default()));
+
+        batch_tasks.insert(
+            def.name.clone(),
+            crate::domain::BatchTaskStatus {
+                task_id: child_task_id,
+                state: BatchTaskState::Pending,
+                result_summary: None,
+            },
+        );
+    }
+
+    debug!(
+        event = "CreateTasksBatchCreated",
+        %batch_id,
+        parent_task_id = %task_id,
+        parent_agent_id = %agent_id,
+        task_count = total_count,
+        task_names = ?definitions.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        ?tool_call_id,
+        "sub-task batch created"
+    );
+
+    // 产出 SubTaskBatchState（附加到父 Task 实体以便后续查询）
+    commands.spawn(SubTaskBatchState {
+        batch_id,
+        parent_tool_call_id: tool_call_id.clone().unwrap_or_default(),
+        tasks: batch_tasks.clone(),
+        completed_count: 0,
+        total_count,
+    });
+
+    // 产出 SubTaskBatchCreatedMessage（触发父 Task 阻塞 + Brain 分发）
+    commands.spawn(SubTaskBatchCreatedMessage {
+        parent_task_id: task_id,
+        batch_id,
+        parent_tool_call_id: tool_call_id.clone().unwrap_or_default(),
+        tasks: definitions,
+    });
+
+    // 产出 ToolExecutionResultMessage（让 tool calling loop 收到结果）
+    let task_names: Vec<String> = batch_tasks.keys().cloned().collect();
+    commands.spawn(ToolExecutionResultMessage {
+        result: AgentExecutionResult {
+            task_id,
+            agent_id,
+            request_kind,
+            result: Ok(AgentExecutionOutput {
+                content: OutputContent::Text(format!(
+                    "created {} sub-tasks (batch {}): {}",
+                    total_count,
+                    batch_id,
+                    task_names.join(", ")
+                )),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+        },
+        tool_name: "create_tasks".to_string(),
+        tool_output: Ok(serde_json::json!({
+            "status": "batch_created",
+            "batch_id": batch_id.to_string(),
+            "task_count": total_count,
+            "tasks": task_names,
+        })),
+        tool_call_id,
+        processed: false,
+    });
+
+    commands.entity(request_entity).despawn();
+}
+
+/// 生成等待任务的消息和状态
+pub fn spawn_wait_for_tasks(
+    commands: &mut Commands,
+    request_entity: Entity,
+    task_entity: Entity,
+    agent_id: AgentId,
+    tool_call_id: String,
+    task_ids: Vec<TaskId>,
+    timeout_secs: u64,
+) {
+    debug!(
+        event = "WaitForTasksInitiated",
+        task_ids = ?task_ids,
+        timeout_secs = timeout_secs,
+        "task entering wait state for child tasks"
+    );
+
+    // 在 Task Entity 上添加等待信息组件
+    commands.entity(task_entity).insert(WaitingForTasksInfo {
+        target_task_ids: task_ids,
+        timeout_at: chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64),
+        tool_call_id,
+        agent_id,
+    });
+
+    // 清理请求实体
+    commands.entity(request_entity).despawn();
+}
+
+/// 验证目标任务是否为当前任务的子任务
+pub fn validate_task_ownership(
+    current_task_id: TaskId,
+    target_task_ids: &[TaskId],
+    tasks: &Query<(Entity, &mut Task)>,
+) -> Result<(), ToolError> {
+    let _current_task = tasks
+        .iter()
+        .find(|(_, t)| t.id == current_task_id)
+        .map(|(_, t)| t)
+        .ok_or_else(|| ToolError::NotFound(format!("current task {}", current_task_id)))?;
+
+    for target_id in target_task_ids {
+        let target = tasks
+            .iter()
+            .find(|(_, t)| t.id == *target_id)
+            .map(|(_, t)| t)
+            .ok_or_else(|| ToolError::NotFound(format!("task {}", target_id)))?;
+
+        // 目标任务必须是当前任务的子任务（parent_task_id 匹配）
+        if target.parent_task_id != Some(current_task_id) {
+            return Err(ToolError::PermissionDenied(format!(
+                "task {} is not a child of current task",
+                target_id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 收集目标任务的结果
+pub fn collect_task_results(
+    task_ids: &[TaskId],
+    tasks: &Query<&Task>,
+) -> Vec<TaskWaitResult> {
+    task_ids
+        .iter()
+        .map(|id| {
+            let task = tasks.iter().find(|t| t.id == *id);
+            TaskWaitResult {
+                task_id: id.to_string(),
+                status: task
+                    .map(|t| t.status.clone())
+                    .unwrap_or(TaskStatus::Pending),
+                result: task.and_then(|t| {
+                    if t.status == TaskStatus::Done {
+                        Some(t.result_summary.clone())
+                    } else {
+                        None
+                    }
+                }),
+                error: task.and_then(|t| {
+                    if matches!(t.status, TaskStatus::Failed(_)) {
+                        t.last_error.clone()
+                    } else {
+                        None
+                    }
+                }),
+            }
+        })
+        .collect()
+}
+
+/// 生成等待结果消息
+pub fn spawn_wait_result_message(
+    commands: &mut Commands,
+    task_id: TaskId,
+    info: &WaitingForTasksInfo,
+    results: Vec<TaskWaitResult>,
+    timed_out: bool,
+) {
+    let output = serde_json::json!({
+        "results": results,
+        "timed_out": timed_out,
+    });
+
+    debug!(
+        event = "WaitForTasksCompleted",
+        task_id = %task_id,
+        results_count = results.len(),
+        timed_out = timed_out,
+        "wait_tasks completed, resuming task"
+    );
+
+    // 生成工具执行结果消息
+    commands.spawn(ToolExecutionResultMessage {
+        result: AgentExecutionResult {
+            task_id,
+            agent_id: info.agent_id,
+            request_kind: crate::domain::AgentRequestKind::LlmCompletion,
+            result: Ok(AgentExecutionOutput {
+                content: OutputContent::Text("wait_tasks completed".to_string()),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+        },
+        tool_name: "wait_tasks".to_string(),
+        tool_output: Ok(output),
+        tool_call_id: Some(info.tool_call_id.clone()),
+        processed: false,
+    });
+}
+
+/// 统一处理 Tool 执行动作
+#[allow(clippy::too_many_arguments)]
+pub fn handle_tool_action(
+    commands: &mut Commands,
+    request_entity: Entity,
+    task_entity: Entity,
+    request: &ToolExecutionRequestMessage,
+    action: Result<ToolAction, ToolError>,
+    tasks: &Query<(Entity, &mut Task)>,
+) {
+    match action {
+        Ok(ToolAction::Direct(value)) => {
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text("tool executed".to_string()),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+            };
+
+            commands.spawn(ToolExecutionResultMessage {
+                result: execution_result,
+                tool_name: request.tool_name.clone(),
+                tool_output: Ok(value),
+                tool_call_id: request.tool_call_id.clone(),
+                processed: false,
+            });
+
+            commands.entity(request_entity).despawn();
+        }
+        Ok(ToolAction::SpawnAgent {
+            name,
+            model,
+            description,
+            tools,
+        }) => {
+            spawn_spawn_agent_messages(
+                commands,
+                request_entity,
+                request.request.agent_id,
+                request.request.task_id,
+                request.request.request_kind.clone(),
+                (name, model, description, tools),
+                request.tool_call_id.clone(),
+            );
+        }
+        Ok(ToolAction::CreateBatch(definitions)) => {
+            spawn_create_tasks_messages(
+                commands,
+                request_entity,
+                request.request.agent_id,
+                request.request.task_id,
+                request.request.request_kind.clone(),
+                definitions,
+                request.tool_call_id.clone(),
+            );
+        }
+        Ok(ToolAction::WaitForTasks {
+            task_ids,
+            timeout_secs,
+        }) => {
+            // 验证任务归属
+            match validate_task_ownership(request.request.task_id, &task_ids, tasks) {
+                Ok(()) => {
+                    spawn_wait_for_tasks(
+                        commands,
+                        request_entity,
+                        task_entity,
+                        request.request.agent_id,
+                        request.tool_call_id.clone().unwrap_or_default(),
+                        task_ids,
+                        timeout_secs,
+                    );
+                }
+                Err(e) => {
+                    spawn_tool_error(commands, request_entity, request, e);
+                }
+            }
+        }
+        Err(e) => {
+            spawn_tool_error(commands, request_entity, request, e);
+        }
+    }
+}
+
+/// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
+pub fn restore_task_after_tool(
+    tasks: &mut Query<(Entity, &mut Task)>,
+    calling_states: &Query<&ToolCallingState>,
+    task_id: TaskId,
+) {
+    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
+        if !matches!(task.status, TaskStatus::Waiting(_)) {
+            return;
+        }
+        let has_calling_state = calling_states.iter().any(|cs| cs.task_id == task.id);
+        task.status = if has_calling_state {
+            TaskStatus::Waiting(WaitingReason::ToolExecution)
+        } else {
+            TaskStatus::Ready
+        };
+    }
+}
+
+/// 生成 Tool 错误结果
+pub fn spawn_tool_error(
+    commands: &mut Commands,
+    request_entity: Entity,
+    request: &ToolExecutionRequestMessage,
+    error: ToolError,
+) {
+    let execution_result = AgentExecutionResult {
+        task_id: request.request.task_id,
+        agent_id: request.request.agent_id,
+        request_kind: request.request.request_kind.clone(),
+        result: Err(crate::domain::ExecutionError::Unknown(error.to_string())),
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        reasoning_content: None,
+    };
+
+    commands.spawn(ToolExecutionResultMessage {
+        result: execution_result,
+        tool_name: request.tool_name.clone(),
+        tool_output: Err(error),
+        tool_call_id: request.tool_call_id.clone(),
+        processed: false,
+    });
+
+    commands.entity(request_entity).despawn();
+}
