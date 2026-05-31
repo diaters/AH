@@ -129,7 +129,9 @@ pub fn brain_dispatch_system(
     // 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的
     let brain_candidates: Vec<AgentCapabilitySummary> = agents
         .iter()
-        .filter(|a| a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string()))
+        .filter(|a| {
+            a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string())
+        })
         .map(AgentCapabilitySummary::from_agent)
         .collect();
 

@@ -6,9 +6,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::Clock,
-    domain::{
-        SubTaskCompletedMessage, Task, WaitingForTasksInfo,
-    },
+    domain::{SubTaskCompletedMessage, Task, WaitingForTasksInfo},
 };
 
 use super::orchestrator::{collect_task_results, spawn_wait_result_message};

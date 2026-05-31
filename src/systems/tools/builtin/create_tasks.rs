@@ -22,7 +22,9 @@ impl crate::domain::BuiltinTool for CreateTasksTool {
 }
 
 /// 解析 create_tasks tool 输入参数，包含循环依赖检测
-pub fn parse_create_tasks_params(input: &serde_json::Value) -> Result<Vec<SubTaskDefinition>, String> {
+pub fn parse_create_tasks_params(
+    input: &serde_json::Value,
+) -> Result<Vec<SubTaskDefinition>, String> {
     let tasks_array = input
         .get("tasks")
         .and_then(|v| v.as_array())

@@ -8,8 +8,8 @@ use crate::{
     app::MemoryConfig,
     domain::TaskEvaluationConfig,
     systems::{
-        llm_response_system, retry_ready_system, sub_task_batch_block_system,
-        sub_task_completion_system, task_termination_system, tool_result_system, HarnessSet,
+        HarnessSet, llm_response_system, retry_ready_system, sub_task_batch_block_system,
+        sub_task_completion_system, task_termination_system, tool_result_system,
     },
 };
 

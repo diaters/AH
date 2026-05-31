@@ -8,12 +8,11 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage,
-    BatchTaskState, ChannelId, FrontendKind, OutputContent,
-    ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
-    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus,
-    ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
+    AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
+    ChannelId, FrontendKind, OutputContent, ShortTermMemory, SubTaskBatchCreatedMessage,
+    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
+    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -65,9 +64,7 @@ pub fn spawn_spawn_agent_messages(
             agent_id,
             request_kind,
             result: Ok(AgentExecutionOutput {
-                content: OutputContent::Text(
-                    "spawn_agent request submitted".to_string(),
-                ),
+                content: OutputContent::Text("spawn_agent request submitted".to_string()),
                 reasoning_content: None,
             }),
             prompt: String::new(),
@@ -287,10 +284,7 @@ pub fn validate_task_ownership(
 }
 
 /// 收集目标任务的结果
-pub fn collect_task_results(
-    task_ids: &[TaskId],
-    tasks: &Query<&Task>,
-) -> Vec<TaskWaitResult> {
+pub fn collect_task_results(task_ids: &[TaskId], tasks: &Query<&Task>) -> Vec<TaskWaitResult> {
     task_ids
         .iter()
         .map(|id| {

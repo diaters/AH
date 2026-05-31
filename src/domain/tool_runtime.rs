@@ -4,7 +4,7 @@
 
 use bevy::prelude::Component;
 
-use super::{AgentId, TaskId, ConversationMessage, ToolDefinition};
+use super::{AgentId, ConversationMessage, TaskId, ToolDefinition};
 
 /// Tool 调用循环状态
 #[derive(Debug, Clone, Component)]

@@ -81,7 +81,10 @@ mod tests {
         let result = executor.execute(&input, &ctx);
         assert!(result.is_ok());
         match result.unwrap() {
-            ToolAction::WaitForTasks { task_ids, timeout_secs } => {
+            ToolAction::WaitForTasks {
+                task_ids,
+                timeout_secs,
+            } => {
                 assert_eq!(task_ids.len(), 2);
                 assert_eq!(timeout_secs, 600);
             }

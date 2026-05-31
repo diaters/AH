@@ -268,7 +268,7 @@ src/systems/
 
 这类拆分中，最重要的一条是：
 
-**每个 Tool 必须独立一个** **`rs`** **文件。**
+__每个 Tool 必须独立一个__ __`rs`__ __文件。__
 
 新增 Tool 时只需要：
 
@@ -1012,7 +1012,10 @@ flowchart TD
 
 如果只保留一句总体建议，那就是：
 
-**以 Plugin 作为模块装配单元，以 contracts 作为替换边界，以 ECS 数据作为运行时真相，以 BrainDispatch / Planning / Memory / Tool / Execution / Frontend 六大模块重构现有系统；其中 Brain 负责派发，Plan 与 Summary 负责策略，而所有 LLM 能力统一通过被动态选出的 Agent 执行。**
+__以 Plugin 作为模块装配单元，以 contracts 作为替换边界，以 ECS 数据作为运行时真相，__
+__以 BrainDispatch / Planning / Memory / Tool / Execution / Frontend 六大模块重构现有系统；__
+__其中 Brain 负责派发，Plan 与 Summary 负责策略，__
+__而所有 LLM 能力统一通过被动态选出的 Agent 执行。__
 
 ## 优先级排序
 

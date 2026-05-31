@@ -5,8 +5,8 @@
 use bevy::prelude::*;
 
 use crate::systems::{
-    agent_execution_system, ingest_execution_results_system, llm_response_system,
-    memory_contribution_system, tool_calling_orchestrator_system, HarnessSet,
+    HarnessSet, agent_execution_system, ingest_execution_results_system, llm_response_system,
+    memory_contribution_system, tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin

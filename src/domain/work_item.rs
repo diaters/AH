@@ -157,11 +157,7 @@ impl WorkItem {
     }
 
     /// 创建执行工作项
-    pub fn execution(
-        task_id: TaskId,
-        prompt: String,
-        tags: TagSet,
-    ) -> Self {
+    pub fn execution(task_id: TaskId, prompt: String, tags: TagSet) -> Self {
         Self::new(
             task_id,
             WorkItemType::Execution,
@@ -173,11 +169,7 @@ impl WorkItem {
     }
 
     /// 创建摘要工作项
-    pub fn summarization(
-        task_id: TaskId,
-        content: String,
-        target_tokens: usize,
-    ) -> Self {
+    pub fn summarization(task_id: TaskId, content: String, target_tokens: usize) -> Self {
         let tags = TagSet::from_tags(["summarization"]);
         let input = WorkItemInput::new(format!(
             "请对以下内容进行摘要，目标约 {} tokens:\n\n{}",
@@ -276,11 +268,7 @@ mod tests {
     #[test]
     fn work_item_state_transitions() {
         let task_id = Uuid::nil();
-        let mut work_item = WorkItem::execution(
-            task_id,
-            "test".to_string(),
-            TagSet::empty(),
-        );
+        let mut work_item = WorkItem::execution(task_id, "test".to_string(), TagSet::empty());
 
         assert!(work_item.is_pending());
         work_item.assign(Uuid::new_v4());
@@ -297,11 +285,7 @@ mod tests {
     #[test]
     fn work_item_summarization() {
         let task_id = Uuid::nil();
-        let work_item = WorkItem::summarization(
-            task_id,
-            "content to summarize".to_string(),
-            500,
-        );
+        let work_item = WorkItem::summarization(task_id, "content to summarize".to_string(), 500);
         assert_eq!(work_item.work_type, WorkItemType::Summarization);
         assert!(work_item.tags.tags.contains(&"summarization".to_string()));
     }

@@ -17,21 +17,21 @@
 
 根据架构师提出的优化建议，本次重构旨在：
 
-1. **删除废弃实现**：不保留旧方案兼容层
-2. **拆分过大文件**：降低单文件复杂度
-3. **模块化架构**：将系统改造为可替换的模块化架构
-4. **重新定位 Brain/Plan/Summary**：明确其在框架中的职责与流程
+1. __删除废弃实现__：不保留旧方案兼容层
+2. __拆分过大文件__：降低单文件复杂度
+3. __模块化架构__：将系统改造为可替换的模块化架构
+4. __重新定位 Brain/Plan/Summary__：明确其在框架中的职责与流程
 
 ### 1.2 重构原则
 
-- **硬切换策略**：不做旧方案兼容
-- **契约先行**：先定义接口，再实现
-- **小步提交**：每个 PR 只改一个模块
-- **测试保障**：所有测试始终通过
+- __硬切换策略__：不做旧方案兼容
+- __契约先行__：先定义接口，再实现
+- __小步提交__：每个 PR 只改一个模块
+- __测试保障__：所有测试始终通过
 
 ### 1.3 目标架构
 
-```
+```text
 src/
 ├── contracts/           # 契约层：trait 接口、事件、协议
 │   ├── mod.rs
@@ -69,7 +69,7 @@ src/
     ├── tools.rs
     ├── memory.rs
     └── frontend.rs
-```
+```text
 
 ---
 
@@ -80,7 +80,7 @@ flowchart LR
     P0[P0: 文件拆分] --> P1[P1: 契约定义]
     P1 --> P2[P2: Plugin 化]
     P2 --> P3[P3: Brain/Plan/Summary 重构]
-```
+```text
 
 | 阶段 | 名称 | 预估工作量 | 风险等级 |
 |------|------|------------|----------|
@@ -103,10 +103,10 @@ flowchart LR
 
 #### 3.2.1 拆分 `domain/mod.rs`
 
-**当前状态**：1227 行，包含约 15 个核心类型
+__当前状态__：1227 行，包含约 15 个核心类型
 
-**目标结构**：
-```
+__目标结构__：
+```text
 src/domain/
 ├── mod.rs          # 仅保留 pub use 导出
 ├── task.rs         # Task, TaskStatus, WaitingReason, FailureReason
@@ -119,9 +119,9 @@ src/domain/
 ├── command.rs      # UserCommand
 ├── confirmation.rs # ConfirmationOption, GrantMode, ApprovalDecision
 └── brain.rs        # BrainDecisionOutput, BrainDecisionError
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [x] 所有类型迁移到对应文件
 - [x] `domain/mod.rs` 仅包含 `pub use` 语句
 - [x] 所有测试通过
@@ -129,10 +129,10 @@ src/domain/
 
 #### 3.2.2 拆分 `systems/tool.rs`
 
-**当前状态**：2027 行，包含 4 个 Tool 实现 + 8 个 System
+__当前状态__：2027 行，包含 4 个 Tool 实现 + 8 个 System
 
-**目标结构**：
-```
+__目标结构__：
+```text
 src/systems/tools/
 ├── mod.rs              # 模块导出 + register_builtin_tools
 ├── dispatch.rs         # tool_dispatch_system
@@ -147,9 +147,9 @@ src/systems/tools/
     ├── spawn_agent.rs
     ├── create_tasks.rs
     └── wait_tasks.rs
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [x] 每个 Tool 独立一个文件
 - [x] 每个System按职责分组
 - [x] 所有测试通过
@@ -157,10 +157,10 @@ src/systems/tools/
 
 #### 3.2.3 拆分 `systems/transform.rs`
 
-**当前状态**：1050 行，11 个 System
+__当前状态__：1050 行，11 个 System
 
-**目标结构**：
-```
+__目标结构__：
+```text
 src/systems/transform/
 ├── mod.rs                  # 模块导出
 ├── signal_ingest.rs        # signal_ingest_system
@@ -169,39 +169,39 @@ src/systems/transform/
 ├── task_lifecycle.rs       # task_termination_system, retry_ready_system, finish_task_system
 ├── subtask.rs              # sub_task_batch_block_system, sub_task_completion_system
 └── task_creation.rs        # user_message_to_task_system
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [x] 系统按职责分组
 - [x] 所有测试通过
 - [x] `cargo clippy` 无警告
 
 #### 3.2.4 拆分 `systems/dispatch.rs`
 
-**当前状态**：644 行，混合 Brain 和普通任务分发
+__当前状态__：644 行，混合 Brain 和普通任务分发
 
-**目标结构**：
-```
+__目标结构__：
+```text
 src/systems/dispatch/
 ├── mod.rs              # 模块导出
 ├── task_dispatch.rs    # task_dispatch_system（普通任务）
 ├── brain_dispatch.rs   # brain_dispatch_system（Brain 决策）
 └── agent_selection.rs  # select_agent_with_memory, match_score 等辅助函数
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [x] Brain 和普通分发分离
 - [x] 所有测试通过
 - [x] `cargo clippy` 无警告
 
 ### 3.3 执行顺序
 
-```
+```text
 1. domain/mod.rs 拆分（最底层，无依赖）
 2. systems/tool.rs 拆分（依赖 domain）
 3. systems/transform.rs 拆分（依赖 domain + tool）
 4. systems/dispatch.rs 拆分（依赖 domain）
-```
+```text
 
 ### 3.4 迁移映射表
 
@@ -235,7 +235,7 @@ src/systems/dispatch/
 
 ### 4.2 契约层结构
 
-```
+```text
 src/contracts/
 ├── mod.rs           # 导出所有契约
 ├── dispatch.rs      # DispatchPolicy, AgentSelector, AssignmentResult, TagMatcher
@@ -244,7 +244,7 @@ src/contracts/
 ├── memory.rs        # MemoryStore, MemoryCompactor, CompactionPolicy, ContributionPolicy
 ├── tools.rs         # ToolCatalog, ToolExecutor, ToolApprovalPolicy
 └── frontend.rs      # FrontendProjection（扩展现有 Frontend）
-```
+```text
 
 ### 4.3 任务清单
 
@@ -307,9 +307,9 @@ pub trait DispatchPolicy: Send + Sync + 'static {
         context: &DispatchContext,
     ) -> Option<AssignmentResult>;
 }
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [ ] trait 定义完成
 - [ ] 支持多标签组合匹配
 - [ ] 匹配规则采用“Agent tags 全包含 WorkItem tags”
@@ -402,9 +402,9 @@ pub enum PlanError {
     #[error("invalid plan: {0}")]
     InvalidPlan(String),
 }
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [ ] trait 定义完成
 - [ ] 明确 `PlanArtifact -> WorkItem` 协议
 - [ ] 提供 Mock 实现
@@ -487,9 +487,9 @@ pub enum WritebackDecision {
     AddSharedKnowledge(MemoryEntry),
     Drop,
 }
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [ ] trait 定义完成
 - [ ] 明确 `MemoryCompactor -> Summary WorkItem` 协议
 - [ ] 提供 Mock 实现
@@ -520,9 +520,9 @@ pub enum ApprovalRoute {
     ParentApproval { parent_agent_id: AgentId },
     Deny,
 }
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [ ] trait 定义完成
 - [ ] 提供 Mock 实现
 - [ ] 单元测试通过
@@ -549,9 +549,9 @@ pub trait ExecutionPolicy: Send + Sync + 'static {
     fn retry_delay(&self, retry_count: u32) -> std::time::Duration;
     fn timeout(&self) -> std::time::Duration;
 }
-```
+```text
 
-**验收标准**：
+__验收标准__：
 - [ ] trait 定义完成
 - [ ] 现有 `AgentExecutor` 迁移到此契约
 - [ ] 单元测试通过
@@ -579,7 +579,7 @@ pub trait ExecutionPolicy: Send + Sync + 'static {
 
 ### 5.2 目标结构
 
-```
+```text
 src/plugins/
 ├── mod.rs                    # 导出所有 Plugin
 ├── task_runtime.rs           # TaskRuntimePlugin
@@ -590,7 +590,7 @@ src/plugins/
 ├── memory.rs                 # MemoryPlugin
 ├── frontend.rs               # FrontendPlugin
 └── default_runtime.rs        # DefaultRuntimePluginGroup
-```
+```text
 
 ### 5.3 任务清单
 
@@ -616,7 +616,7 @@ impl Plugin for TaskRuntimePlugin {
         ).in_set(HarnessSet::Transform));
     }
 }
-```
+```text
 
 #### 5.3.2 创建 DispatchPlugin
 
@@ -639,7 +639,7 @@ impl Plugin for DispatchPlugin {
         ));
     }
 }
-```
+```text
 
 #### 5.3.3 创建 ToolRuntimePlugin
 
@@ -669,7 +669,7 @@ impl Plugin for ToolRuntimePlugin {
         ));
     }
 }
-```
+```text
 
 #### 5.3.4 创建 DefaultRuntimePluginGroup
 
@@ -692,7 +692,7 @@ impl PluginGroup for DefaultRuntimePluginGroup {
             .add(PlanningPlugin)
     }
 }
-```
+```text
 
 #### 5.3.5 重构 build_harness_app
 
@@ -720,7 +720,7 @@ pub fn build_harness_app(
     
     app
 }
-```
+```text
 
 ### 5.4 验收标准
 
@@ -812,7 +812,7 @@ pub enum WorkItemStatus {
     Completed,
     Failed,
 }
-```
+```text
 
 #### 6.2.2 BrainDispatch 模块
 
@@ -854,9 +854,9 @@ pub fn brain_dispatch_system(
         }
     }
 }
-```
+```text
 
-**关键约束**：
+__关键约束__：
 
 - `BrainDispatch` 是模块，不是普通规划 Agent。
 - `BrainDispatch` 自身固定绑定 `BrainAgent` 用于复杂派发决策。
@@ -910,7 +910,7 @@ pub fn brain_dispatch_system(
 
 ### 6.4 迁移路径
 
-```
+```text
 当前流程:
 Task → Brain Agent → select agent → execute
 
@@ -919,7 +919,7 @@ Task → PlanPolicy
      → Planning WorkItem → BrainDispatch → Planning Agent
      → PlanArtifact → Worker WorkItem → BrainDispatch → Worker Agent
      → MemoryCompactor → Summary WorkItem → BrainDispatch → Summary Agent
-```
+```text
 
 ### 6.5 验收标准
 

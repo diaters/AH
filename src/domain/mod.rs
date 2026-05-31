@@ -46,9 +46,7 @@ pub use brain::{BrainDecisionError, BrainDecisionOutput};
 pub use command::UserCommand;
 
 // confirmation
-pub use confirmation::{
-    ApprovalDecision, ConfirmationOption, ConfirmationSource, GrantMode,
-};
+pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource, GrantMode};
 
 // contribution
 pub use contribution::{
@@ -87,12 +85,11 @@ pub use memory::{
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExternalInput, FinishTaskMessage, OutputKind, OutputMessage,
-    RetryReadyMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
-    SubTaskCompletedMessage, SummarizationRequestMessage, SummarizationResultMessage,
-    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
-    WaitingReason,
+    ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage, Signal,
+    SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    SummarizationRequestMessage, SummarizationResultMessage, TaskTerminatedMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
 };
 
 // space
@@ -113,8 +110,8 @@ pub use tool_runtime::ToolCallingState;
 
 // work_item
 pub use work_item::{
-    WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage,
-    WorkItemInput, WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
+    WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage, WorkItemInput,
+    WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
 };
 
 // workflow

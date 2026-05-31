@@ -15,7 +15,11 @@ pub trait ToolCatalog: Send + Sync + 'static {
     fn get_tool(&self, name: &str) -> Option<ToolDefinition>;
 
     /// 根据 Agent 权限筛选工具
-    fn filter_by_permission(&self, agent_id: AgentId, permission: ToolPermission) -> Vec<ToolDefinition>;
+    fn filter_by_permission(
+        &self,
+        agent_id: AgentId,
+        permission: ToolPermission,
+    ) -> Vec<ToolDefinition>;
 }
 
 /// 审批路由
@@ -67,7 +71,9 @@ impl ToolApprovalPolicy for DefaultToolApprovalPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions};
+    use crate::domain::{
+        AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
+    };
 
     fn test_agent_with_permission(permission: ToolPermission) -> Agent {
         Agent {

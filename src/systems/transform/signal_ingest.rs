@@ -5,9 +5,7 @@
 use bevy::prelude::*;
 use tracing::debug;
 
-use crate::domain::{
-    RetryReadyMessage, Signal, SignalPayload, UserInputMessage,
-};
+use crate::domain::{RetryReadyMessage, Signal, SignalPayload, UserInputMessage};
 
 /// 信号转换 System
 ///

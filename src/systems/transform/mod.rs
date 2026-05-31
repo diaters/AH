@@ -18,10 +18,7 @@ pub use task_lifecycle::{finish_task_system, retry_ready_system, task_terminatio
 
 use bevy::prelude::*;
 
-use crate::{
-    app::ExecutionResultReceiver,
-    domain::AgentExecutionResultMessage,
-};
+use crate::{app::ExecutionResultReceiver, domain::AgentExecutionResultMessage};
 
 /// 执行结果接收 System
 ///

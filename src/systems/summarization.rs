@@ -36,8 +36,7 @@ pub(crate) fn summarization_dispatch_system(
         .collect();
 
     let summarizer_policy = FirstSummarizerPolicy;
-    let Some(summarizer_id) = summarizer_policy.select_summarizer(&summarizer_candidates)
-    else {
+    let Some(summarizer_id) = summarizer_policy.select_summarizer(&summarizer_candidates) else {
         debug!(
             event = "SummarizerNotFound",
             pending_requests = requests.iter().count(),

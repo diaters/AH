@@ -8,10 +8,10 @@ use tracing::debug;
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, ApprovalDecision, ApprovalRequestMessage,
-        ApprovalResultMessage, ExecutionError, GrantMode, SpaceKnowledge,
-        Task, TaskStatus, ToolCallingState, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolError, WaitingReason, BuiltinToolExecutors, ToolContext,
+        Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
+        BuiltinToolExecutors, ExecutionError, GrantMode, SpaceKnowledge, Task, TaskStatus,
+        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, WaitingReason,
     },
 };
 

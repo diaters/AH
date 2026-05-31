@@ -9,10 +9,10 @@ use uuid::Uuid;
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, ApprovalRequestMessage, ConfirmationOption, ConfirmationSource,
-        SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
-        ToolConfirmationRequestMessage, ToolExecutionRequestMessage, ToolError, ToolPermission, WaitingReason,
-        BuiltinToolExecutors, ToolContext,
+        Agent, ApprovalRequestMessage, BuiltinToolExecutors, ConfirmationOption,
+        ConfirmationSource, SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
+        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolPermission, WaitingReason,
     },
 };
 

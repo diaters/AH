@@ -5,10 +5,10 @@
 use bevy::prelude::*;
 
 use crate::systems::{
-    command_parse_system, continue_task_system, finish_task_system, frontend_input_system,
-    frontend_output_system, input_ingress_system, retry_wakeup_system, signal_ingest_system,
-    tick_clock_system, tool_confirmation_request_system, user_input_routing_system,
-    user_message_to_task_system, HarnessSet,
+    HarnessSet, command_parse_system, continue_task_system, finish_task_system,
+    frontend_input_system, frontend_output_system, input_ingress_system, retry_wakeup_system,
+    signal_ingest_system, tick_clock_system, tool_confirmation_request_system,
+    user_input_routing_system, user_message_to_task_system,
 };
 
 /// 前端 Plugin

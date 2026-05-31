@@ -101,7 +101,10 @@ pub struct AssignmentResult {
 
 impl AssignmentResult {
     pub fn new(agent_id: AgentId, reasoning: String) -> Self {
-        Self { agent_id, reasoning }
+        Self {
+            agent_id,
+            reasoning,
+        }
     }
 }
 
@@ -130,11 +133,7 @@ pub trait AgentSelector: Send + Sync + 'static {
 /// 决定将任务分配给哪个 Agent。
 pub trait DispatchPolicy: Send + Sync + 'static {
     /// 将任务分配给合适的 Agent
-    fn assign(
-        &self,
-        task: &Task,
-        context: &DispatchContext,
-    ) -> Option<AssignmentResult>;
+    fn assign(&self, task: &Task, context: &DispatchContext) -> Option<AssignmentResult>;
 }
 
 /// 默认标签匹配器：Agent tags 必须全部包含 required tags
@@ -164,10 +163,7 @@ pub struct FirstByTagPolicy;
 
 impl TagBasedSelector for FirstByTagPolicy {
     fn select_by_tag(&self, agents: &[AgentCapabilitySummary], tag: &str) -> Option<AgentId> {
-        agents
-            .iter()
-            .find(|a| a.has_tag(tag))
-            .map(|a| a.agent_id)
+        agents.iter().find(|a| a.has_tag(tag)).map(|a| a.agent_id)
     }
 }
 
@@ -244,11 +240,7 @@ impl DefaultDispatchPolicy {
 }
 
 impl DispatchPolicy for DefaultDispatchPolicy {
-    fn assign(
-        &self,
-        task: &Task,
-        context: &DispatchContext,
-    ) -> Option<AssignmentResult> {
+    fn assign(&self, task: &Task, context: &DispatchContext) -> Option<AssignmentResult> {
         // 过滤出可用候选（排除 brain Agent）
         let candidates: Vec<_> = context
             .available_agents

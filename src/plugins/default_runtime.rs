@@ -5,7 +5,10 @@
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 
-use super::{DispatchPlugin, ExecutionPlugin, FrontendPlugin, MemoryPlugin, TaskRuntimePlugin, ToolRuntimePlugin};
+use super::{
+    DispatchPlugin, ExecutionPlugin, FrontendPlugin, MemoryPlugin, TaskRuntimePlugin,
+    ToolRuntimePlugin,
+};
 
 /// 默认运行时 Plugin 组
 ///

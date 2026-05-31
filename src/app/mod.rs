@@ -9,16 +9,13 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, Signal,
-        SpaceAgentRegistry, SpaceKnowledge, SpacePreferences, SpaceRuntimeContext,
-        Task, TaskTerminatedMessage, ToolCallingState,
-        UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, Signal, SpaceAgentRegistry,
+        SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, Task, TaskTerminatedMessage,
+        ToolCallingState, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     plugins::DefaultRuntimePluginGroup,
-    systems::{
-        agent_factory_system, agent_termination_system, load_agents_system, HarnessSet,
-    },
+    systems::{HarnessSet, agent_factory_system, agent_termination_system, load_agents_system},
 };
 
 #[derive(Debug, Clone)]

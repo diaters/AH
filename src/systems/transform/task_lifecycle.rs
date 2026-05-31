@@ -9,8 +9,8 @@ use crate::{
     app::{Clock, MemoryConfig},
     domain::{
         FailureReason, FinishTaskMessage, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
-        ToolCallingState, TaskTerminatedMessage,
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+        ToolCallingState,
     },
 };
 

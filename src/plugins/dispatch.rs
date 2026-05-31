@@ -5,9 +5,9 @@
 use bevy::prelude::*;
 
 use crate::systems::{
-    approval_dispatch_system, approval_result_system, brain_decision_system, brain_dispatch_system,
-    evaluation_result_system, evaluation_trigger_system, task_dispatch_system,
-    tool_confirmation_result_system, HarnessSet,
+    HarnessSet, approval_dispatch_system, approval_result_system, brain_decision_system,
+    brain_dispatch_system, evaluation_result_system, evaluation_trigger_system,
+    task_dispatch_system, tool_confirmation_result_system,
 };
 
 /// 派发 Plugin

@@ -5,8 +5,8 @@
 use bevy::prelude::*;
 
 use crate::systems::{
-    init_agent_memory_system, memory_absorption_system, memory_compression_system,
-    summarization_dispatch_system, summarization_result_system, HarnessSet,
+    HarnessSet, init_agent_memory_system, memory_absorption_system, memory_compression_system,
+    summarization_dispatch_system, summarization_result_system,
 };
 
 /// 记忆 Plugin

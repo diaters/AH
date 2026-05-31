@@ -7,9 +7,7 @@ use tracing::{debug, warn};
 
 use crate::{
     app::{Clock, HarnessSettings},
-    domain::{
-        ShortTermMemory, Task, ToolCallingState, ToolExecutionResultMessage,
-    },
+    domain::{ShortTermMemory, Task, ToolCallingState, ToolExecutionResultMessage},
 };
 
 /// Tool 结果处理 System
