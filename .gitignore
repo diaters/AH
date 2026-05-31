@@ -35,3 +35,6 @@ node_modules/
 
 # Manual test cases (not tracked)
 MANUAL_TEST_CASES.md
+
+# Wiki documentation (not tracked)
+docs/wiki/
