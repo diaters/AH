@@ -150,6 +150,68 @@ impl TagMatcher for AllMatchTagMatcher {
     }
 }
 
+/// 基于 Tag 的 Agent 选择策略
+///
+/// 从带指定标签的 Agent 中选择第一个（配置中最前的）。
+pub trait TagBasedSelector: Send + Sync + 'static {
+    /// 从符合条件的 Agent 中选择一个
+    fn select_by_tag(&self, agents: &[AgentCapabilitySummary], tag: &str) -> Option<AgentId>;
+}
+
+/// 默认实现：选择配置中最前的 Agent
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FirstByTagPolicy;
+
+impl TagBasedSelector for FirstByTagPolicy {
+    fn select_by_tag(&self, agents: &[AgentCapabilitySummary], tag: &str) -> Option<AgentId> {
+        agents
+            .iter()
+            .find(|a| a.has_tag(tag))
+            .map(|a| a.agent_id)
+    }
+}
+
+/// Brain 选择策略
+///
+/// 定义如何从多个带 "brain" 标签的 Agent 中选择一个。
+pub trait BrainSelectionPolicy: Send + Sync + 'static {
+    /// 从带 brain 标签的 Agent 中选择一个
+    fn select_brain(&self, brain_agents: &[AgentCapabilitySummary]) -> Option<AgentId>;
+}
+
+/// 默认 Brain 选择策略：选择配置中最前的 Brain Agent
+///
+/// 按列表顺序选择第一个带 "brain" 标签的 Agent。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FirstBrainPolicy;
+
+impl BrainSelectionPolicy for FirstBrainPolicy {
+    fn select_brain(&self, brain_agents: &[AgentCapabilitySummary]) -> Option<AgentId> {
+        brain_agents.first().map(|a| a.agent_id)
+    }
+}
+
+/// Summarizer 选择策略
+///
+/// 定义如何选择 Summarizer Agent。
+pub trait SummarizerSelectionPolicy: Send + Sync + 'static {
+    /// 从可用 Agent 中选择 Summarizer
+    fn select_summarizer(&self, agents: &[AgentCapabilitySummary]) -> Option<AgentId>;
+}
+
+/// 默认 Summarizer 选择策略：选择配置中最前的带 "summarization" 标签的 Agent
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FirstSummarizerPolicy;
+
+impl SummarizerSelectionPolicy for FirstSummarizerPolicy {
+    fn select_summarizer(&self, agents: &[AgentCapabilitySummary]) -> Option<AgentId> {
+        agents
+            .iter()
+            .find(|a| a.has_tag("summarization"))
+            .map(|a| a.agent_id)
+    }
+}
+
 /// 默认派发策略
 ///
 /// 基于任务内容与 Agent 标签的匹配分数选择 Agent。

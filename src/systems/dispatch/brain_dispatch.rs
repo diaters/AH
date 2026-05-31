@@ -1,12 +1,18 @@
 //! Brain 分发 System
 //!
 //! 使用 Brain Agent 进行任务分发决策。
+//!
+//! ## Brain Agent 选择规则
+//!
+//! 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的那个。
+//! 这允许灵活配置多个 Brain Agent（如不同模型），同时保持确定性选择。
 
 use bevy::prelude::*;
 use tracing::{debug, trace};
 
 use crate::{
     app::{Clock, HarnessSettings},
+    contracts::{AgentCapabilitySummary, BrainSelectionPolicy, FirstBrainPolicy},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory, ShortTermMemory,
@@ -101,6 +107,10 @@ fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMe
 /// Brain 分发 System
 ///
 /// 使用 Brain Agent 进行任务分发决策。
+///
+/// ## Brain Agent 选择
+///
+/// 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的那个。
 pub fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
@@ -116,17 +126,23 @@ pub fn brain_dispatch_system(
         return;
     }
 
-    let brain_agent = agents.iter().find(|a| {
-        a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string())
-    });
+    // 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的
+    let brain_candidates: Vec<AgentCapabilitySummary> = agents
+        .iter()
+        .filter(|a| a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string()))
+        .map(AgentCapabilitySummary::from_agent)
+        .collect();
 
-    let Some(brain_agent) = brain_agent else {
+    let brain_policy = FirstBrainPolicy;
+    let Some(brain_agent_id) = brain_policy.select_brain(&brain_candidates) else {
         debug!(
             event = "BrainAgentNotFound",
-            "no brain agent found, skipping brain dispatch"
+            "no brain agent found with 'brain' tag, skipping brain dispatch"
         );
         return;
     };
+
+    let brain_agent = agents.iter().find(|a| a.id == brain_agent_id).unwrap();
 
     let all_agent_descriptions: Vec<AgentDescription> = agents
         .iter()

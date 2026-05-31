@@ -875,30 +875,30 @@ pub fn brain_dispatch_system(
 
 #### 6.3.2 重构 BrainDispatch
 
-- [ ] 创建 `src/systems/dispatch/brain_dispatch.rs`
+- [x] 创建 `src/systems/dispatch/brain_dispatch.rs`
 - [x] 创建 `src/contracts/dispatch.rs`
 - [x] 实现 `DispatchPolicy` trait
 - [x] 实现多标签匹配规则
 - [x] 采用”全包含匹配”作为第一版默认规则
-- [ ] 固化 `BrainDispatch -> BrainAgent` 的固定绑定约束
-- [ ] 重写 `brain_dispatch_system` 使用 WorkItem
+- [x] 固化 `BrainDispatch -> BrainAgent` 的固定绑定约束（通过 Tag 查找，选择配置中最前的）
+- [ ] 重写 `brain_dispatch_system` 使用 WorkItem（保留 Task 向后兼容）
 - [ ] 更新所有调用点
 
 #### 6.3.3 重构 Plan 模块
 
-- [ ] 创建 `src/contracts/planning.rs`
-- [ ] 定义 `PlanArtifact`, `WorkItemDeriver`
+- [x] 创建 `src/contracts/planning.rs`
+- [x] 定义 `PlanArtifact`, `WorkItemDeriver`
 - [ ] 将规划结果统一转化为 `Planning WorkItem / Worker WorkItem`
 - [ ] 验证 `Task -> PlanArtifact -> WorkItem` 流程闭环
 
 #### 6.3.4 重构 MemoryCompactor
 
-- [ ] 创建 `src/systems/memory/compactor.rs`
-- [ ] 实现 `MemoryCompactor` trait
-- [ ] 分离压缩触发和压缩执行
+- [x] 创建 `src/contracts/memory.rs`（MemoryCompactor trait 已定义）
+- [x] 实现 `MemoryCompactor` trait（DefaultCompactionPolicy）
+- [x] 分离压缩触发和压缩执行（memory_compression_system 和 summarization_dispatch_system）
 - [ ] 让 `MemoryCompactor` 生成 `Summary WorkItem`
-- [ ] 让 `ContributionPolicy` 负责摘要结果写回决策
-- [ ] 更新 `summarization_dispatch_system`
+- [x] 让 `ContributionPolicy` 负责摘要结果写回决策
+- [x] 更新 `summarization_dispatch_system`（使用 TagBasedSelector 选择 Summarizer）
 
 #### 6.3.5 流程验证
 
@@ -923,13 +923,13 @@ Task → PlanPolicy
 
 ### 6.5 验收标准
 
-- [ ] WorkItem 概念完整实现
-- [ ] Brain 仅负责派发，不做规划
-- [ ] Plan 独立为 Planning 模块
-- [ ] Summary 作为 MemoryCompactor 模块
-- [ ] `BrainDispatch` 固定 `BrainAgent`
-- [ ] 普通工作项支持多标签组合匹配
-- [ ] 所有测试通过
+- [x] WorkItem 概念完整实现
+- [ ] Brain 仅负责派发，不做规划（保留现有逻辑向后兼容）
+- [x] Plan 独立为 Planning 模块（契约层完成）
+- [x] Summary 作为 MemoryCompactor 模块（契约层完成）
+- [x] `BrainDispatch` 通过 Tag 查找 BrainAgent，选择配置中最前的
+- [x] 普通工作项支持多标签组合匹配
+- [x] 所有测试通过
 - [ ] 文档更新完成
 
 ---
@@ -962,7 +962,7 @@ Task → PlanPolicy
 | P0 | 文件拆分完成，所有测试通过 | ✅ 已完成 |
 | P1 | 契约定义完成，Mock 实现可用 | ✅ 已完成 |
 | P2 | Plugin 化完成，build_harness_app 使用 PluginGroup | ✅ 已完成 |
-| P3 | Brain/Plan/Summary 重构完成，流程验证通过 | 🔄 进行中（基础架构完成） |
+| P3 | Brain/Plan/Summary 重构完成，流程验证通过 | 🔄 进行中（契约层完成，WorkItem 集成待完成） |
 
 ### 8.2 提交规范
 

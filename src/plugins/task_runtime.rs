@@ -8,8 +8,8 @@ use crate::{
     app::MemoryConfig,
     domain::TaskEvaluationConfig,
     systems::{
-        finish_task_system, retry_ready_system, sub_task_batch_block_system,
-        sub_task_completion_system, task_termination_system, HarnessSet,
+        llm_response_system, retry_ready_system, sub_task_batch_block_system,
+        sub_task_completion_system, task_termination_system, tool_result_system, HarnessSet,
     },
 };
 
@@ -24,15 +24,21 @@ impl Plugin for TaskRuntimePlugin {
         app.init_resource::<MemoryConfig>();
         app.init_resource::<TaskEvaluationConfig>();
 
-        // 注册 Task 生命周期系统
+        // 注册 Task 生命周期系统（保留原始依赖顺序）
+        // 注意：finish_task_system 在 FrontendPlugin 中注册（带 after 依赖）
         app.add_systems(
             Update,
             (
                 retry_ready_system.in_set(HarnessSet::Transform),
-                finish_task_system.in_set(HarnessSet::Transform),
-                task_termination_system.in_set(HarnessSet::Transform),
-                sub_task_completion_system.in_set(HarnessSet::Transform),
-                sub_task_batch_block_system.in_set(HarnessSet::Transform),
+                task_termination_system
+                    .in_set(HarnessSet::Transform)
+                    .after(llm_response_system),
+                sub_task_completion_system
+                    .in_set(HarnessSet::Transform)
+                    .after(task_termination_system),
+                sub_task_batch_block_system
+                    .in_set(HarnessSet::Transform)
+                    .after(tool_result_system),
             ),
         );
     }
