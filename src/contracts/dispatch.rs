@@ -216,16 +216,12 @@ impl SummarizerSelectionPolicy for FirstSummarizerPolicy {
 /// 2. 计算任务内容与 Agent 标签的匹配分数
 /// 3. 选择分数最高的 Agent
 /// 4. 如果所有分数为 0，选择带有 "default" 标签的 Agent 作为 fallback
-#[derive(Debug, Clone, Default)]
-pub struct DefaultDispatchPolicy {
-    tag_matcher: AllMatchTagMatcher,
-}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefaultDispatchPolicy;
 
 impl DefaultDispatchPolicy {
     pub fn new() -> Self {
-        Self {
-            tag_matcher: AllMatchTagMatcher,
-        }
+        Self
     }
 
     /// 计算任务内容与 Agent 标签的匹配分数

@@ -36,6 +36,7 @@ pub trait ExecutionPolicy: Send + Sync + 'static {
 
 /// 默认执行策略
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DefaultExecutionPolicy {
     pub max_retries: u32,
     pub base_retry_delay: Duration,
