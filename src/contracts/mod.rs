@@ -8,8 +8,8 @@ mod memory;
 mod tools;
 
 pub use dispatch::{
-    AgentCapabilitySummary, AgentSelector, AssignmentResult, DispatchContext, DispatchPolicy,
-    TagMatcher, TagSet,
+    AgentCapabilitySummary, AgentSelector, AllMatchTagMatcher, AssignmentResult,
+    DefaultDispatchPolicy, DispatchContext, DispatchPolicy, TagMatcher, TagSet,
 };
 pub use execution::{ExecutionBackend, ExecutionPolicy};
 pub use memory::{

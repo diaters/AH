@@ -17,6 +17,7 @@ mod space;
 mod summarization;
 mod task;
 mod tool_runtime;
+mod work_item;
 mod workflow;
 
 use std::{future::Future, pin::Pin};
@@ -109,6 +110,12 @@ pub use task::{Task, TaskStatus, WaitingForTasksInfo};
 
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
+
+// work_item
+pub use work_item::{
+    WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage,
+    WorkItemInput, WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
+};
 
 // workflow
 pub use workflow::{

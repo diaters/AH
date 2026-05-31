@@ -24,6 +24,16 @@ impl TagSet {
             tags: iter.into_iter().map(|s| s.into()).collect(),
         }
     }
+
+    /// 检查是否为空
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty()
+    }
+
+    /// 检查是否包含指定标签
+    pub fn contains(&self, tag: &str) -> bool {
+        self.tags.contains(&tag.to_string())
+    }
 }
 
 /// Agent 的可见能力摘要
@@ -43,6 +53,26 @@ impl AgentCapabilitySummary {
             tags,
             model,
         }
+    }
+
+    /// 从 Agent 创建摘要
+    pub fn from_agent(agent: &crate::domain::Agent) -> Self {
+        Self {
+            agent_id: agent.id,
+            name: agent.profile.name.clone(),
+            tags: agent.capabilities.tags.clone(),
+            model: agent.profile.model.clone(),
+        }
+    }
+
+    /// 检查是否包含所有指定标签
+    pub fn has_all_tags(&self, required: &TagSet) -> bool {
+        required.tags.iter().all(|t| self.tags.contains(t))
+    }
+
+    /// 检查是否包含指定标签
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.contains(&tag.to_string())
     }
 }
 
@@ -117,6 +147,98 @@ impl TagMatcher for AllMatchTagMatcher {
             .tags
             .iter()
             .all(|required| agent_tags.contains(required))
+    }
+}
+
+/// 默认派发策略
+///
+/// 基于任务内容与 Agent 标签的匹配分数选择 Agent。
+/// 支持以下规则：
+/// 1. 排除 brain 标签的 Agent（由 BrainDispatch 专门处理）
+/// 2. 计算任务内容与 Agent 标签的匹配分数
+/// 3. 选择分数最高的 Agent
+/// 4. 如果所有分数为 0，选择带有 "default" 标签的 Agent 作为 fallback
+#[derive(Debug, Clone, Default)]
+pub struct DefaultDispatchPolicy {
+    tag_matcher: AllMatchTagMatcher,
+}
+
+impl DefaultDispatchPolicy {
+    pub fn new() -> Self {
+        Self {
+            tag_matcher: AllMatchTagMatcher,
+        }
+    }
+
+    /// 计算任务内容与 Agent 标签的匹配分数
+    fn match_score(&self, agent: &AgentCapabilitySummary, task_content: &str) -> usize {
+        let lower = task_content.to_lowercase();
+        agent
+            .tags
+            .iter()
+            .filter(|tag| lower.contains(&tag.to_lowercase()))
+            .count()
+    }
+}
+
+impl DispatchPolicy for DefaultDispatchPolicy {
+    fn assign(
+        &self,
+        task: &Task,
+        context: &DispatchContext,
+    ) -> Option<AssignmentResult> {
+        // 过滤出可用候选（排除 brain Agent）
+        let candidates: Vec<_> = context
+            .available_agents
+            .iter()
+            .filter(|a| !a.has_tag("brain"))
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // 计算匹配分数
+        let max_score = candidates
+            .iter()
+            .map(|a| self.match_score(a, &task.content))
+            .max()
+            .unwrap_or(0);
+
+        // 选择 Agent
+        let selected = if max_score > 0 {
+            // 有正向匹配：选最高分，同分时优先 "default" tag
+            candidates
+                .iter()
+                .filter(|a| self.match_score(a, &task.content) == max_score)
+                .max_by_key(|a| a.has_tag("default") as usize)
+        } else {
+            // 全部评分为 0：fallback 到带 "default" tag 的 agent
+            candidates
+                .iter()
+                .filter(|a| a.has_tag("default"))
+                .max_by_key(|a| a.tags.len())
+        };
+
+        match selected {
+            Some(agent) => Some(AssignmentResult::new(
+                agent.agent_id,
+                format!(
+                    "Selected {} with score {}",
+                    agent.name,
+                    if max_score > 0 { max_score } else { 0 }
+                ),
+            )),
+            None => {
+                // 无 "default" tag 的 fallback：选第一个候选
+                candidates.first().map(|agent| {
+                    AssignmentResult::new(
+                        agent.agent_id,
+                        format!("Selected {} as fallback (no default found)", agent.name),
+                    )
+                })
+            }
+        }
     }
 }
 
