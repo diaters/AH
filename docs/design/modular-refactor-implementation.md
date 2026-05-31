@@ -867,19 +867,19 @@ pub fn brain_dispatch_system(
 
 #### 6.3.1 引入 WorkItem
 
-- [ ] 创建 `src/domain/work_item.rs`
-- [ ] 定义 `WorkItem`, `WorkItemType`, `WorkItemStatus`
-- [ ] 定义 `TagSet`, `WorkItemOrigin`, `WorkItemWritebackTarget`
-- [ ] 创建 `WorkItemMessage` 消息类型
-- [ ] 添加 WorkItem 到 ECS 测试
+- [x] 创建 `src/domain/work_item.rs`
+- [x] 定义 `WorkItem`, `WorkItemType`, `WorkItemStatus`
+- [x] 定义 `TagSet`, `WorkItemOrigin`, `WorkItemWritebackTarget`
+- [x] 创建 `WorkItemCreatedMessage`, `WorkItemCompletedMessage` 消息类型
+- [x] 添加 WorkItem 到 ECS 测试
 
 #### 6.3.2 重构 BrainDispatch
 
 - [ ] 创建 `src/systems/dispatch/brain_dispatch.rs`
-- [ ] 创建 `src/contracts/dispatch.rs`
-- [ ] 实现 `DispatchPolicy` trait
-- [ ] 实现多标签匹配规则
-- [ ] 采用“全包含匹配”作为第一版默认规则
+- [x] 创建 `src/contracts/dispatch.rs`
+- [x] 实现 `DispatchPolicy` trait
+- [x] 实现多标签匹配规则
+- [x] 采用”全包含匹配”作为第一版默认规则
 - [ ] 固化 `BrainDispatch -> BrainAgent` 的固定绑定约束
 - [ ] 重写 `brain_dispatch_system` 使用 WorkItem
 - [ ] 更新所有调用点
@@ -962,7 +962,7 @@ Task → PlanPolicy
 | P0 | 文件拆分完成，所有测试通过 | ✅ 已完成 |
 | P1 | 契约定义完成，Mock 实现可用 | ✅ 已完成 |
 | P2 | Plugin 化完成，build_harness_app 使用 PluginGroup | ✅ 已完成 |
-| P3 | Brain/Plan/Summary 重构完成，流程验证通过 | 待开始 |
+| P3 | Brain/Plan/Summary 重构完成，流程验证通过 | 🔄 进行中（基础架构完成） |
 
 ### 8.2 提交规范
 
