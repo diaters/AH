@@ -9,28 +9,13 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, BuiltinToolExecutors, Frontend, RetryReadyMessage, Signal,
-        SpaceAgentRegistry, SpaceKnowledge, SpacePreferences, SpaceRuntimeContext,
-        SpaceToolRegistry, Task, TaskEvaluationConfig, TaskTerminatedMessage, ToolCallingState,
-        UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, Signal, SpaceAgentRegistry,
+        SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, Task, TaskTerminatedMessage,
+        ToolCallingState, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
-    systems::{
-        HarnessSet, agent_execution_system, agent_factory_system, agent_termination_system,
-        approval_dispatch_system, approval_result_system, brain_decision_system,
-        brain_dispatch_system, check_waiting_tasks_system, command_parse_system,
-        continue_task_system, evaluation_result_system, evaluation_trigger_system,
-        finish_task_system, frontend_input_system, frontend_output_system,
-        ingest_execution_results_system, init_agent_memory_system, input_ingress_system,
-        llm_response_system, load_agents_system, memory_absorption_system,
-        memory_compression_system, memory_contribution_system, on_subtask_completed_check_waiting,
-        register_builtin_tools, retry_ready_system, retry_wakeup_system, signal_ingest_system,
-        sub_task_batch_block_system, sub_task_completion_system, summarization_dispatch_system,
-        summarization_result_system, task_dispatch_system, task_termination_system,
-        tick_clock_system, tool_calling_orchestrator_system, tool_confirmation_request_system,
-        tool_confirmation_result_system, tool_dispatch_system, tool_result_system,
-        user_input_routing_system, user_message_to_task_system,
-    },
+    plugins::DefaultRuntimePluginGroup,
+    systems::{HarnessSet, agent_factory_system, agent_termination_system, load_agents_system},
 };
 
 #[derive(Debug, Clone)]
@@ -170,6 +155,7 @@ pub fn build_harness_app(
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
 
+    // 基础 Resource
     app.insert_resource(InputReceiver(input_rx));
     app.insert_resource(FrontendRegistry { frontends });
     app.insert_resource(AsyncRuntime(runtime));
@@ -179,8 +165,6 @@ pub fn build_harness_app(
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());
-    app.insert_resource(MemoryConfig::default());
-    app.insert_resource(TaskEvaluationConfig::default());
 
     // Space Resources
     app.insert_resource(SpaceKnowledge::default());
@@ -188,16 +172,10 @@ pub fn build_harness_app(
     app.insert_resource(SpaceAgentRegistry::default());
     app.insert_resource(SpaceRuntimeContext::default());
 
-    // Tool Registry with builtin tools
-    let mut tool_registry = SpaceToolRegistry::default();
-    let mut tool_executors = BuiltinToolExecutors::default();
-    register_builtin_tools(&mut tool_registry, &mut tool_executors);
-    app.insert_resource(tool_registry);
-    app.insert_resource(tool_executors);
-
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);
 
+    // Configure SystemSets
     app.configure_sets(
         Update,
         (
@@ -212,79 +190,10 @@ pub fn build_harness_app(
             .chain(),
     );
 
-    app.add_systems(
-        Update,
-        (
-            tick_clock_system.in_set(HarnessSet::Ingress),
-            frontend_input_system.in_set(HarnessSet::Ingress),
-            input_ingress_system.in_set(HarnessSet::Ingress),
-            retry_wakeup_system.in_set(HarnessSet::Signal),
-            signal_ingest_system.in_set(HarnessSet::Signal),
-            ingest_execution_results_system.in_set(HarnessSet::Transform),
-            brain_decision_system
-                .in_set(HarnessSet::Transform)
-                .after(ingest_execution_results_system),
-            command_parse_system.in_set(HarnessSet::Transform),
-            finish_task_system
-                .in_set(HarnessSet::Transform)
-                .after(command_parse_system),
-            user_input_routing_system
-                .in_set(HarnessSet::Transform)
-                .after(command_parse_system),
-            user_message_to_task_system
-                .in_set(HarnessSet::Transform)
-                .after(user_input_routing_system),
-            continue_task_system
-                .in_set(HarnessSet::Transform)
-                .after(user_input_routing_system),
-            retry_ready_system.in_set(HarnessSet::Transform),
-            llm_response_system
-                .in_set(HarnessSet::Transform)
-                .after(ingest_execution_results_system),
-            task_termination_system
-                .in_set(HarnessSet::Transform)
-                .after(llm_response_system),
-            sub_task_completion_system
-                .in_set(HarnessSet::Transform)
-                .after(task_termination_system),
-            evaluation_result_system.in_set(HarnessSet::Transform),
-            tool_result_system
-                .in_set(HarnessSet::Transform)
-                .after(ingest_execution_results_system),
-            sub_task_batch_block_system
-                .in_set(HarnessSet::Transform)
-                .after(tool_result_system),
-            tool_calling_orchestrator_system
-                .in_set(HarnessSet::Transform)
-                .after(sub_task_batch_block_system),
-        ),
-    );
+    // 注册 PluginGroup
+    app.add_plugins(DefaultRuntimePluginGroup);
 
-    app.add_systems(
-        Update,
-        (
-            brain_dispatch_system
-                .in_set(HarnessSet::Dispatch)
-                .before(task_dispatch_system),
-            task_dispatch_system.in_set(HarnessSet::Dispatch),
-            tool_dispatch_system.in_set(HarnessSet::Dispatch),
-            evaluation_trigger_system.in_set(HarnessSet::Dispatch),
-            agent_execution_system.in_set(HarnessSet::Execution),
-            frontend_output_system.in_set(HarnessSet::Output),
-            check_waiting_tasks_system.in_set(HarnessSet::Transform),
-            on_subtask_completed_check_waiting
-                .in_set(HarnessSet::Transform)
-                .after(sub_task_completion_system),
-        ),
-    );
-
-    app.add_systems(
-        Update,
-        (summarization_result_system
-            .in_set(HarnessSet::Transform)
-            .after(llm_response_system),),
-    );
-
+    // Maintenance 系统（需要在 Plugin 外部注册以控制顺序）
     app.add_systems(
         Update,
         (
@@ -292,21 +201,6 @@ pub fn build_harness_app(
                 .in_set(HarnessSet::Maintenance)
                 .before(agent_factory_system),
             agent_factory_system.in_set(HarnessSet::Maintenance),
-            memory_compression_system.in_set(HarnessSet::Maintenance),
-            init_agent_memory_system.in_set(HarnessSet::Maintenance),
-            memory_contribution_system.in_set(HarnessSet::Execution),
-            memory_absorption_system.in_set(HarnessSet::Maintenance),
-            summarization_dispatch_system
-                .in_set(HarnessSet::Maintenance)
-                .after(agent_factory_system),
-            // 审批系统
-            approval_dispatch_system.in_set(HarnessSet::Dispatch),
-            approval_result_system.in_set(HarnessSet::Transform),
-            // 用户确认系统
-            tool_confirmation_request_system.in_set(HarnessSet::Output),
-            tool_confirmation_result_system
-                .in_set(HarnessSet::Dispatch)
-                .after(tool_dispatch_system),
         ),
     );
 

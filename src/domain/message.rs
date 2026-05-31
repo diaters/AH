@@ -1,0 +1,333 @@
+//! 消息类型定义
+//!
+//! 定义 ECS 中使用的各种消息组件。
+
+use bevy::prelude::Component;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use super::{AgentExecutionRequest, AgentExecutionResult, AgentId, SummarizationTrigger, TaskId};
+
+// ============ 信号与输入 ============
+
+/// 信号类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SignalType {
+    UserInput,
+    RetryWakeup,
+    SystemWakeup,
+}
+
+/// 等待原因
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WaitingReason {
+    Agent,
+    User,      // 等待用户输入
+    Evaluator, // 等待评估器判定
+    RetryBackoff,
+    Approval,      // 等待审批
+    Summarization, // 等待摘要完成
+    ToolExecution, // 等待工具执行结果
+    /// 等待一批子任务全部完成（create_tasks 工具调用后）
+    SubTaskBatch {
+        batch_id: Uuid,
+    },
+}
+
+/// 信号载荷
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SignalPayload {
+    UserInput(String),
+    RetryWakeup(TaskId),
+    SystemWakeup,
+}
+
+/// 信号组件
+#[derive(Debug, Clone, Component)]
+pub struct Signal {
+    pub kind: SignalType,
+    pub payload: SignalPayload,
+}
+
+impl Signal {
+    /// 构造用户输入信号。
+    pub fn user_input(content: impl Into<String>) -> Self {
+        Self {
+            kind: SignalType::UserInput,
+            payload: SignalPayload::UserInput(content.into()),
+        }
+    }
+
+    /// 构造重试唤醒信号。
+    pub fn retry_wakeup(task_id: TaskId) -> Self {
+        Self {
+            kind: SignalType::RetryWakeup,
+            payload: SignalPayload::RetryWakeup(task_id),
+        }
+    }
+}
+
+/// 外部输入
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExternalInput {
+    TextWithChannel {
+        channel: super::ChannelId,
+        content: String,
+    },
+    Shutdown,
+    /// Tool 确认响应
+    Confirmation {
+        request_id: Uuid,
+        option: String,
+    },
+}
+
+/// 用户输入消息
+#[derive(Debug, Clone, Component)]
+pub struct UserInputMessage {
+    pub content: String,
+}
+
+/// 重试就绪消息
+#[derive(Debug, Clone, Component)]
+pub struct RetryReadyMessage {
+    pub task_id: TaskId,
+}
+
+// ============ 执行请求/响应 ============
+
+/// Agent 执行请求消息
+#[derive(Debug, Clone, Component)]
+pub struct AgentExecutionRequestMessage {
+    pub request: AgentExecutionRequest,
+}
+
+/// Agent 执行结果消息
+#[derive(Debug, Clone, Component)]
+pub struct AgentExecutionResultMessage {
+    pub result: AgentExecutionResult,
+}
+
+/// 用户输出消息
+#[derive(Debug, Clone, Component)]
+pub struct UserOutputMessage {
+    pub content: String,
+}
+
+// ============ 任务管理 ============
+
+/// 创建新任务消息
+#[derive(Debug, Clone, Component)]
+pub struct CreateTaskMessage {
+    pub content: String,
+}
+
+/// 继续现有任务消息
+#[derive(Debug, Clone, Component)]
+pub struct ContinueTaskMessage {
+    pub task_id: TaskId,
+    pub user_input: String,
+}
+
+/// 任务终止消息
+#[derive(Debug, Clone, Component)]
+pub struct TaskTerminatedMessage {
+    pub task_id: TaskId,
+}
+
+/// /finish 命令触发的任务完成消息
+#[derive(Debug, Clone, Component)]
+pub struct FinishTaskMessage {
+    pub task_id: TaskId,
+}
+
+// ============ Tool 执行 ============
+
+/// Tool 执行请求消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolExecutionRequestMessage {
+    pub request: AgentExecutionRequest,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    /// 确认请求 ID（当工具需要确认时设置）
+    pub pending_confirmation_id: Option<Uuid>,
+    /// LLM Tool 调用 ID（用于结果匹配，非 LLM 发起的为 None）
+    pub tool_call_id: Option<String>,
+    /// 确认请求的选项列表（用于匹配用户响应，避免硬编码 default_options）
+    pub pending_confirmation_options: Option<Vec<super::ConfirmationOption>>,
+}
+
+/// Tool 执行结果消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolExecutionResultMessage {
+    pub result: AgentExecutionResult,
+    pub tool_name: String,
+    pub tool_output: Result<serde_json::Value, super::ToolError>,
+    /// LLM Tool 调用 ID（从请求传递到结果，用于匹配）
+    pub tool_call_id: Option<String>,
+    /// 是否已被 tool_result_system 处理过，防止重复记录日志和 STM
+    pub processed: bool,
+}
+
+// ============ 审批与确认 ============
+
+/// Tool 确认请求消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolConfirmationRequestMessage {
+    pub request_id: Uuid,
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub options: Vec<super::ConfirmationOption>,
+    /// 审批来源
+    pub source: super::ConfirmationSource,
+    /// 父 Agent ID（当 source == ParentAgent 时）
+    pub parent_agent_id: Option<AgentId>,
+}
+
+/// Tool 确认响应消息
+#[derive(Debug, Clone, Component)]
+pub struct ToolConfirmationResponseMessage {
+    pub request_id: Uuid,
+    pub selected_option: String,
+}
+
+/// 审批请求消息
+#[derive(Debug, Clone, Component)]
+pub struct ApprovalRequestMessage {
+    pub request_id: Uuid,
+    pub source_task_id: TaskId,
+    pub approval_task_id: TaskId,
+    pub parent_agent_id: AgentId,
+    pub child_agent_id: AgentId,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub context: String,
+}
+
+/// 审批结果消息
+#[derive(Debug, Clone, Component)]
+pub struct ApprovalResultMessage {
+    pub request_id: Uuid,
+    pub source_task_id: TaskId,
+    pub approval_task_id: TaskId,
+    pub decision: super::ApprovalDecision,
+    pub reasoning: String,
+    /// 授权模式
+    pub grant_mode: super::GrantMode,
+}
+
+// ============ Agent 管理 ============
+
+/// Agent 创建请求消息
+#[derive(Debug, Clone, Component)]
+pub struct AgentSpawnRequestMessage {
+    pub parent_agent_id: AgentId,
+    pub task_id: TaskId,
+    pub name: String,
+    /// 可选，None 时继承父 Agent 的 model
+    pub model: Option<String>,
+    pub description: String,
+    /// 初始 Tool 权限列表（每个 Tool 设为 Allow）
+    pub tools: Vec<String>,
+    /// 子任务的 prompt 内容
+    pub task_prompt: String,
+    /// 子任务的 system prompt（可选）
+    pub task_system_prompt: Option<String>,
+}
+
+// ============ 子任务批次 ============
+
+/// create_tasks 工具调用后产出，触发父 Task 阻塞 + Brain 分发
+#[derive(Debug, Clone, Component)]
+pub struct SubTaskBatchCreatedMessage {
+    pub parent_task_id: TaskId,
+    pub batch_id: Uuid,
+    pub parent_tool_call_id: String,
+    pub tasks: Vec<super::SubTaskDefinition>,
+}
+
+/// 单个子任务完成时产出，用于更新 BatchState 并检查是否全部完成
+#[derive(Debug, Clone, Component)]
+pub struct SubTaskCompletedMessage {
+    pub parent_task_id: TaskId,
+    pub batch_id: Uuid,
+    pub child_task_id: TaskId,
+    pub child_task_name: String,
+    pub result_summary: String,
+    pub success: bool,
+}
+
+// ============ 摘要 ============
+
+/// 摘要请求消息
+#[derive(Debug, Clone, Component)]
+pub struct SummarizationRequestMessage {
+    /// 关联的任务 ID
+    pub task_id: TaskId,
+    /// 待压缩的内容
+    pub content_to_summarize: String,
+    /// 目标 token 数
+    pub target_tokens: u32,
+    /// 摘要触发来源
+    pub trigger: SummarizationTrigger,
+}
+
+/// 摘要结果消息
+#[derive(Debug, Clone, Component)]
+pub struct SummarizationResultMessage {
+    /// 关联的任务 ID
+    pub task_id: TaskId,
+    /// 生成的摘要
+    pub summary: Result<String, super::ExecutionError>,
+}
+
+// ============ 输出类型 ============
+
+/// 输出类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum OutputKind {
+    /// 普通文本输出
+    #[default]
+    Text,
+    /// Tool 确认请求
+    ConfirmationRequest {
+        request_id: Uuid,
+        title: String,
+        options: Vec<super::ConfirmationOption>,
+    },
+}
+
+/// 输出消息
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputMessage {
+    pub content: String,
+    pub kind: OutputKind,
+}
+
+impl OutputMessage {
+    /// 构造普通文本输出消息。
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            kind: OutputKind::Text,
+        }
+    }
+
+    /// 构造确认请求输出消息。
+    pub fn confirmation_request(
+        request_id: Uuid,
+        title: impl Into<String>,
+        options: Vec<super::ConfirmationOption>,
+    ) -> Self {
+        Self {
+            content: String::new(),
+            kind: OutputKind::ConfirmationRequest {
+                request_id,
+                title: title.into(),
+                options,
+            },
+        }
+    }
+}

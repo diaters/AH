@@ -1,8 +1,13 @@
+//! 摘要系统
+//!
+//! 处理记忆压缩的摘要请求和结果处理。
+
 use bevy::prelude::*;
 use tracing::debug;
 
 use crate::{
     app::{Clock, MemoryConfig},
+    contracts::{AgentCapabilitySummary, FirstSummarizerPolicy, SummarizerSelectionPolicy},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         ShortTermMemory, SummarizationRequestMessage, SummarizationResultMessage,
@@ -12,6 +17,10 @@ use crate::{
 };
 
 /// 摘要调度系统：将摘要请求转为 AgentExecutionRequest
+///
+/// ## Summarizer Agent 选择
+///
+/// 通过 Tag 查找所有带 "summarization" 标签的 Agent，选择配置中最前的那个。
 pub(crate) fn summarization_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
@@ -19,17 +28,19 @@ pub(crate) fn summarization_dispatch_system(
     requests: Query<(Entity, &SummarizationRequestMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
-    // 查找 summarizer Agent
-    let summarizer = agents.iter().find(|a| {
-        a.kind == AgentKind::Persistent
-            && a.capabilities.tags.contains(&"summarization".to_string())
-    });
+    // 通过 Tag 查找 Summarizer Agent，选择配置中最前的
+    let summarizer_candidates: Vec<AgentCapabilitySummary> = agents
+        .iter()
+        .filter(|a| a.kind == AgentKind::Persistent)
+        .map(AgentCapabilitySummary::from_agent)
+        .collect();
 
-    let Some(summarizer) = summarizer else {
+    let summarizer_policy = FirstSummarizerPolicy;
+    let Some(summarizer_id) = summarizer_policy.select_summarizer(&summarizer_candidates) else {
         debug!(
             event = "SummarizerNotFound",
             pending_requests = requests.iter().count(),
-            "no summarizer agent found, skipping summarization requests"
+            "no summarizer agent found with 'summarization' tag, skipping summarization requests"
         );
         // 没有 summarizer，清理所有请求
         for (entity, _) in &requests {
@@ -37,6 +48,8 @@ pub(crate) fn summarization_dispatch_system(
         }
         return;
     };
+
+    let summarizer = agents.iter().find(|a| a.id == summarizer_id).unwrap();
 
     for (entity, request) in &requests {
         // 对于非 TaskComplete 触发的摘要，标记任务为等待摘要

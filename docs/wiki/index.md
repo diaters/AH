@@ -10,6 +10,8 @@
 - [领域模型](./04-domain-model.md)
 - [LLM 与前端适配](./05-llm-and-frontend.md)
 - [待优化项](./06-optimization.md)
+- [模块化重构优化方案](./07-modular-refactor-plan.md)
+- [模块化重构实施计划](../design/modular-refactor-implementation.md) ⚡ 进行中
 
 ## 阅读顺序
 
@@ -30,6 +32,8 @@ flowchart TD
     A --> E[04-domain-model.md]
     A --> F[05-llm-and-frontend.md]
     A --> G[06-optimization.md]
+    A --> H[07-modular-refactor-plan.md]
+    A --> I[modular-refactor-implementation.md]
 
     C --> D
     C --> E
@@ -37,6 +41,8 @@ flowchart TD
     D --> G
     E --> G
     F --> G
+    G --> H
+    H --> I
 ```
 
 ## 代码目录映射
