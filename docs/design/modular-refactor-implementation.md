@@ -961,7 +961,7 @@ Task → PlanPolicy
 |------|----------|------|
 | P0 | 文件拆分完成，所有测试通过 | ✅ 已完成 |
 | P1 | 契约定义完成，Mock 实现可用 | ✅ 已完成 |
-| P2 | Plugin 化完成，build_harness_app 使用 PluginGroup | 待开始 |
+| P2 | Plugin 化完成，build_harness_app 使用 PluginGroup | ✅ 已完成 |
 | P3 | Brain/Plan/Summary 重构完成，流程验证通过 | 待开始 |
 
 ### 8.2 提交规范
