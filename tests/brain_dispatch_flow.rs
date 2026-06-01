@@ -63,11 +63,7 @@ fn brain_test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(BrainConfig {
-            enabled: true,
-            model: "test-brain-model".to_string(),
-            agent_name: "brain".to_string(),
-        }),
+        brain: Some(BrainConfig { enabled: true }),
         agents_config_path: "agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,

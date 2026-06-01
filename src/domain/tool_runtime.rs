@@ -4,7 +4,7 @@
 
 use bevy::prelude::Component;
 
-use super::{AgentId, ConversationMessage, TaskId, ToolDefinition};
+use super::{AgentId, AgentRequestKind, ConversationMessage, TaskId, ToolDefinition};
 
 /// Tool 调用循环状态
 #[derive(Debug, Clone, Component)]
@@ -21,4 +21,6 @@ pub struct ToolCallingState {
     pub conversation: Vec<ConversationMessage>,
     /// Agent 可用的 Tool 定义（后续请求需要重新发送）
     pub tools: Vec<ToolDefinition>,
+    /// 原始请求类型（follow-up 请求需要保留）
+    pub request_kind: AgentRequestKind,
 }

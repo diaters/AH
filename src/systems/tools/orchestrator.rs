@@ -189,7 +189,18 @@ pub fn spawn_create_tasks_messages(
     });
 
     // 产出 ToolExecutionResultMessage（让 tool calling loop 收到结果）
+    // 构建包含 name 和 task_id 映射的任务列表
     let task_names: Vec<String> = batch_tasks.keys().cloned().collect();
+    let tasks_with_ids: Vec<serde_json::Value> = batch_tasks
+        .iter()
+        .map(|(name, status)| {
+            serde_json::json!({
+                "name": name,
+                "task_id": status.task_id.to_string()
+            })
+        })
+        .collect();
+
     commands.spawn(ToolExecutionResultMessage {
         result: AgentExecutionResult {
             task_id,
@@ -214,7 +225,7 @@ pub fn spawn_create_tasks_messages(
             "status": "batch_created",
             "batch_id": batch_id.to_string(),
             "task_count": total_count,
-            "tasks": task_names,
+            "tasks": tasks_with_ids,
         })),
         tool_call_id,
         processed: false,

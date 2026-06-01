@@ -16,7 +16,8 @@ use crate::{
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory, ShortTermMemory,
-        SubTaskBatchState, SubTaskConfig, Task, TaskStatus, WaitingReason,
+        SpaceToolRegistry, SubTaskBatchState, SubTaskConfig, Task, TaskStatus, ToolPermission,
+        WaitingReason,
     },
     llm::brain_system_prompt,
 };
@@ -118,6 +119,7 @@ pub fn brain_dispatch_system(
     mut tasks: Query<(&mut Task, Option<&ShortTermMemory>, Option<&SubTaskConfig>)>,
     agents: Query<&Agent>,
     batch_states: Query<&SubTaskBatchState>,
+    registry: Res<SpaceToolRegistry>,
 ) {
     let Some(brain_config) = &settings.0.brain else {
         return;
@@ -303,13 +305,26 @@ pub fn brain_dispatch_system(
             "brain dispatching task"
         );
 
+        // 构建 Brain Agent 可用的工具列表（非 Deny）
+        let tools: Vec<_> = registry
+            .tools
+            .values()
+            .filter(|tool_def| {
+                !matches!(
+                    brain_agent.tool_permissions.get_permission(&tool_def.name),
+                    ToolPermission::Deny
+                )
+            })
+            .cloned()
+            .collect();
+
         let request = AgentExecutionRequest {
             task_id: task.id,
             agent_id: brain_agent.id,
             request_kind: AgentRequestKind::BrainDecision,
             prompt,
             system_prompt: Some(brain_system_prompt()),
-            tools: vec![],
+            tools,
             conversation: None,
         };
 
