@@ -147,10 +147,9 @@ pub fn brain_decision_system(
                 content: OutputContent::ToolCalls(_),
                 ..
             }) => {
-                task.last_error =
-                    Some("brain decision returned tool calls, not supported yet".to_string());
-                task.status = TaskStatus::Failed(FailureReason::AgentError);
-                task.updated_at = clock.0;
+                // Tool calls are handled by llm_response_system
+                // Skip entity despawn here so llm_response_system can process it
+                continue;
             }
             Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
                 task.schedule_retry(error, clock.0);

@@ -21,8 +21,6 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct BrainConfig {
     pub enabled: bool,
-    pub model: String,
-    pub agent_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -40,29 +38,34 @@ impl HarnessConfig {
     pub fn from_env() -> Result<Self> {
         let llm = LlmProviderConfig::from_env("gpt-4.1-mini")?;
 
-        let brain = if std::env::var("HARNESS_BRAIN_ENABLED")
-            .is_ok_and(|v| v.to_lowercase() == "true")
-        {
-            Some(BrainConfig {
-                enabled: true,
-                model: std::env::var("HARNESS_BRAIN_MODEL").unwrap_or_else(|_| llm.model.clone()),
-                agent_name: std::env::var("HARNESS_BRAIN_AGENT_NAME")
-                    .unwrap_or_else(|_| "brain".to_string()),
-            })
-        } else {
-            None
-        };
+        let brain =
+            if std::env::var("HARNESS_BRAIN_ENABLED").is_ok_and(|v| v.to_lowercase() == "true") {
+                Some(BrainConfig { enabled: true })
+            } else {
+                None
+            };
 
         let agents_config_path =
             std::env::var("HARNESS_AGENTS_CONFIG").unwrap_or_else(|_| "agents.toml".to_string());
 
         Ok(Self {
-            max_retries: 3,
-            max_tool_iterations: 5,
+            max_retries: std::env::var("HARNESS_MAX_RETRIES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3),
+            max_tool_iterations: std::env::var("HARNESS_MAX_TOOL_ITERATIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
             llm,
             brain,
             agents_config_path,
-            default_wait_tasks_timeout_secs: 300, // 5 minutes default
+            default_wait_tasks_timeout_secs: std::env::var(
+                "HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS",
+            )
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300),
         })
     }
 }

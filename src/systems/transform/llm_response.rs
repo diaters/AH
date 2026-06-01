@@ -64,6 +64,7 @@ pub fn llm_response_system(
         max_iterations: u32,
         conversation: Vec<ConversationMessage>,
         tools: Vec<ToolDefinition>,
+        request_kind: AgentRequestKind,
     }
     let state_info: Vec<CallingStateInfo> = calling_states
         .iter()
@@ -74,12 +75,25 @@ pub fn llm_response_system(
             max_iterations: s.max_iterations,
             conversation: s.conversation.clone(),
             tools: s.tools.clone(),
+            request_kind: s.request_kind.clone(),
         })
         .collect();
 
     for (entity, result_message) in &results {
+        // 非 LlmCompletion 的结果仅放行 BrainDecision+ToolCalls（让 tool calling 循环处理）
         if result_message.result.request_kind != AgentRequestKind::LlmCompletion {
-            continue;
+            let is_brain_tool_calls = result_message.result.request_kind
+                == AgentRequestKind::BrainDecision
+                && matches!(
+                    &result_message.result.result,
+                    Ok(AgentExecutionOutput {
+                        content: OutputContent::ToolCalls(_),
+                        ..
+                    })
+                );
+            if !is_brain_tool_calls {
+                continue;
+            }
         }
 
         let result = &result_message.result;
@@ -225,6 +239,7 @@ pub fn llm_response_system(
                             max_iterations: info.max_iterations,
                             conversation: new_conversation,
                             tools: info.tools.clone(),
+                            request_kind: info.request_kind.clone(),
                         });
                     } else {
                         // First iteration: create new ToolCallingState
@@ -265,6 +280,7 @@ pub fn llm_response_system(
                             max_iterations,
                             conversation,
                             tools: result.tools.clone(),
+                            request_kind: result.request_kind.clone(),
                         });
                     }
 
@@ -484,7 +500,7 @@ pub fn tool_calling_orchestrator_system(
         let request = AgentExecutionRequest {
             task_id: state.task_id,
             agent_id: state.agent_id,
-            request_kind: AgentRequestKind::LlmCompletion,
+            request_kind: state.request_kind.clone(),
             prompt: String::new(),
             system_prompt: None,
             tools: state.tools.clone(),

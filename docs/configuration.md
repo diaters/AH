@@ -29,9 +29,10 @@
 
 | 变量名                    | 必填 | 默认值                | 说明                        |
 |---------------------------|------|-----------------------|-----------------------------|
-| `HARNESS_BRAIN_ENABLED`   | 否   | `false`               | 是否启用 Brain Agent 调度   |
-| `HARNESS_BRAIN_MODEL`     | 否   | 与 `HARNESS_MODEL` 相同 | Brain Agent 使用的 LLM 模型 |
-| `HARNESS_BRAIN_AGENT_NAME`| 否   | `brain`               | Brain Agent 名称标识        |
+| `HARNESS_BRAIN_ENABLED`  | 否   | `false`              | 是否启用 Brain Agent 调度     |
+| `HARNESS_MAX_RETRIES`     | 否   | `3`                   | LLM 请求最大重试次数           |
+| `HARNESS_MAX_TOOL_ITERATIONS` | 否 | `5`                 | 工具调用循环最大迭代次数       |
+| `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS` | 否 | `300` | wait_tasks 工具默认超时时间（秒） |
 
 Brain 启用后，系统会在启动时创建 Brain Agent 实体，用户输入会先经过 Brain 决策再分派给具体 Agent 执行。Brain 不启用时行为与 MVP 完全一致。
 

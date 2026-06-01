@@ -10,6 +10,7 @@ read_file = "Allow"
 search_web = "Allow"
 write_file = "Confirm"
 execute_code = "Deny"
+spawn_agent = "Deny"
 
 [[agent]]
 name = "brain"
@@ -20,7 +21,7 @@ description = "Brain Agent，负责调度决策"
 [agent.tools]
 default_permission = "Deny"
 read_file = "Allow"
-spawn_agent = "Allow"
+spawn_agent = "Deny"
 
 [[agent]]
 name = "summarizer"

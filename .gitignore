@@ -27,7 +27,8 @@ node_modules/
 # Build artifacts
 /dist/
 /build/
-
+/logs
+/docs/wiki
 
 # Added by cargo
 
