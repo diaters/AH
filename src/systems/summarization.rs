@@ -150,22 +150,22 @@ pub(crate) fn summarization_result_system(
 
                 // 恢复任务状态：从 Waiting(Summarization) 恢复为 Waiting(User)
                 // 这适用于 UserCommand 和 TokenThreshold 触发的摘要
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                    if matches!(
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id)
+                    && matches!(
                         task.status,
                         TaskStatus::Waiting(WaitingReason::Summarization)
-                    ) {
-                        let old_status = task.status.clone();
-                        task.status = TaskStatus::Waiting(WaitingReason::User);
-                        task.updated_at = clock.0;
-                        debug!(
-                            event = "TaskStatusRestoredAfterSummarization",
-                            task_id = %task.id,
-                            from_status = ?old_status,
-                            to_status = ?task.status,
-                            "task restored to waiting for user after summarization"
-                        );
-                    }
+                    )
+                {
+                    let old_status = task.status.clone();
+                    task.status = TaskStatus::Waiting(WaitingReason::User);
+                    task.updated_at = clock.0;
+                    debug!(
+                        event = "TaskStatusRestoredAfterSummarization",
+                        task_id = %task.id,
+                        from_status = ?old_status,
+                        to_status = ?task.status,
+                        "task restored to waiting for user after summarization"
+                    );
                 }
             }
             Err(error) => {
@@ -184,22 +184,22 @@ pub(crate) fn summarization_result_system(
                 });
 
                 // 即使摘要失败，也恢复任务状态，避免任务卡住
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                    if matches!(
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id)
+                    && matches!(
                         task.status,
                         TaskStatus::Waiting(WaitingReason::Summarization)
-                    ) {
-                        let old_status = task.status.clone();
-                        task.status = TaskStatus::Waiting(WaitingReason::User);
-                        task.updated_at = clock.0;
-                        debug!(
-                            event = "TaskStatusRestoredAfterSummarizationFailed",
-                            task_id = %task.id,
-                            from_status = ?old_status,
-                            to_status = ?task.status,
-                            "task restored to waiting for user after summarization failed"
-                        );
-                    }
+                    )
+                {
+                    let old_status = task.status.clone();
+                    task.status = TaskStatus::Waiting(WaitingReason::User);
+                    task.updated_at = clock.0;
+                    debug!(
+                        event = "TaskStatusRestoredAfterSummarizationFailed",
+                        task_id = %task.id,
+                        from_status = ?old_status,
+                        to_status = ?task.status,
+                        "task restored to waiting for user after summarization failed"
+                    );
                 }
             }
         }

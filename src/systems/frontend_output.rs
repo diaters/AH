@@ -10,6 +10,7 @@ use crate::{
 };
 
 /// 将 ECS 状态变化转为 EngineEvent 推送给所有前端
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn frontend_output_system(
     registry: Res<FrontendRegistry>,
     mut commands: Commands,
