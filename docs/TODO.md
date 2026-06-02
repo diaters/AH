@@ -95,7 +95,7 @@
 
 ### 已知限制（待处理）
 
-- [ ] **父 Agent 真实审批**: approval_dispatch_system 当前硬编码自动通过，需替换为真正的父 Agent LLM 审查，
+- [ ] __父 Agent 真实审批__: approval_dispatch_system 当前硬编码自动通过，需替换为真正的父 Agent LLM 审查，
       支持 Approved / Rejected 决策和 GrantMode（Once / Permanent）选择
 
 #### Phase 4.2 Tool & Space 实现明细
