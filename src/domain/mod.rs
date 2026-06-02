@@ -87,9 +87,10 @@ pub use message::{
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
     ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage, Signal,
     SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
-    SummarizationRequestMessage, SummarizationResultMessage, TaskTerminatedMessage,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+    SummarizationRequestMessage, SummarizationResultMessage, SystemOutputMessage,
+    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
+    WaitingReason,
 };
 
 // space

@@ -88,9 +88,15 @@
 - [x] 用户指令解析（/btw, /finish, /summarize）
 - [x] Pending 状态支持多轮对话
 - [x] Tool / ToolCall 实现（Phase 4.2 MVP 完成）
+- [x] Phase 4.3 LLM 记忆摘要
 
 > 注：Session 概念已被 Phase 4.2 Space 设计取代，不再单独设计。
 > 注：Planner 功能已被 Brain Agent + TaskScoped Agent 覆盖，不再单独设计。
+
+### 已知限制（待处理）
+
+- [ ] **父 Agent 真实审批**: approval_dispatch_system 当前硬编码自动通过，需替换为真正的父 Agent LLM 审查，
+      支持 Approved / Rejected 决策和 GrantMode（Once / Permanent）选择
 
 #### Phase 4.2 Tool & Space 实现明细
 
@@ -105,6 +111,7 @@
 - [x] ToolCall 记录到 ShortTermMemory
 - [x] 审批消息（ApprovalRequestMessage, ApprovalResultMessage, ConfirmMode）
 - [x] 审批流 System（approval_dispatch_system, approval_result_system）
+  > ⚠️ approval_dispatch_system 当前为 MVP 硬编码自动通过，待替换为真实父 Agent LLM 审查
 - [x] Agent 演化 System（agent_evolution_system）
 - [x] 用户确认 UI（选项式交互、永久权限、CLI channel）
 - [x] 集成测试（Tool 执行流程、权限场景、确认流程）
@@ -112,24 +119,11 @@
 - [x] knowledge_search Tool 实现（从 SpaceKnowledge 检索）
 - [x] /remember 指令（添加知识到 SpaceKnowledge）
 
-#### Phase 4.3 LLM 记忆摘要
-
-- [x] 扩展数据结构（SummarizationTrigger, SummarizationRequestMessage, SummarizationResultMessage）
-- [x] 创建摘要 Prompt 模板（summarization_system_prompt, summarization_user_prompt）
-- [x] 创建摘要处理 Systems（summarization_dispatch_system, summarization_result_system）
-- [x] 修改 memory_compression_system 触发 TokenThreshold 摘要
-- [x] 修改 command_parse_system 处理 /summarize 指令
-- [x] 修改 task_termination_system 触发 TaskComplete 摘要
-- [x] 修改 llm_response_system 路由摘要结果
-- [x] 注册新 Systems 到 app/mod.rs
-- [x] 添加 summarizer Agent 配置（agents.toml）
-- [x] 修复 agent_execution_system 对 Summarization 请求的处理（不改变任务状态）
-
 ---
 
 ## 备注
 
-- 当前阶段：Phase 4.3 LLM 记忆摘要已完成
+- 当前阶段：Phase 4.3 LLM 记忆摘要已完成，详见「已知限制（待处理）」
 - 所有重大变更需要通过 PR 审核流程
 - 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
 - Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`

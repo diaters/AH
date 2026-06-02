@@ -20,7 +20,11 @@ use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_too
 /// 审批分发 System
 ///
 /// 为需要父 Agent 决策的请求创建审批任务。
-/// MVP 阶段：父 Agent 审批默认自动通过。
+///
+/// TODO: 当前为 MVP 硬编码自动通过，需替换为真实父 Agent LLM 审查：
+///       1. 给父 Agent 创建审批用 LLM 调用，传入 tool 信息和上下文
+///       2. 解析 LLM 返回的决策（Approved/Rejected + reasoning）
+///       3. 支持 GrantMode::Permanent 将权限写入 Agent
 pub fn approval_dispatch_system(
     mut commands: Commands,
     tasks: Query<&Task>,

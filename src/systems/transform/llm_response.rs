@@ -10,9 +10,9 @@ use crate::{
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
-        EntryRole, FailureReason, OutputContent, ShortTermMemory, Task, TaskStatus,
-        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        UserOutputMessage, WaitingReason,
+        EntryRole, FailureReason, OutputContent, ShortTermMemory, SummarizationResultMessage, Task,
+        TaskStatus, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, UserOutputMessage, WaitingReason,
     },
 };
 
@@ -80,12 +80,42 @@ pub fn llm_response_system(
         .collect();
 
     for (entity, result_message) in &results {
+        let result = &result_message.result;
+
+        // 处理 Summarization 请求：直接生成 SummarizationResultMessage
+        if result.request_kind == AgentRequestKind::Summarization {
+            let summary_result = match &result.result {
+                Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(text),
+                    ..
+                }) => Ok(text.clone()),
+                Ok(_) => Err(crate::domain::ExecutionError::Unknown(
+                    "Summarization returned non-text output".to_string(),
+                )),
+                Err(e) => Err(e.clone()),
+            };
+
+            debug!(
+                event = "SummarizationResultCreated",
+                task_id = %result.task_id,
+                success = summary_result.is_ok(),
+                summary_len = summary_result.as_ref().map(|s| s.len()).unwrap_or(0),
+                "created summarization result message"
+            );
+
+            commands.spawn(SummarizationResultMessage {
+                task_id: result.task_id,
+                summary: summary_result,
+            });
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 非 LlmCompletion 的结果仅放行 BrainDecision+ToolCalls（让 tool calling 循环处理）
-        if result_message.result.request_kind != AgentRequestKind::LlmCompletion {
-            let is_brain_tool_calls = result_message.result.request_kind
-                == AgentRequestKind::BrainDecision
+        if result.request_kind != AgentRequestKind::LlmCompletion {
+            let is_brain_tool_calls = result.request_kind == AgentRequestKind::BrainDecision
                 && matches!(
-                    &result_message.result.result,
+                    &result.result,
                     Ok(AgentExecutionOutput {
                         content: OutputContent::ToolCalls(_),
                         ..
@@ -95,8 +125,6 @@ pub fn llm_response_system(
                 continue;
             }
         }
-
-        let result = &result_message.result;
 
         for (mut task, short_term) in &mut tasks {
             if task.id != result.task_id {
