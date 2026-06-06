@@ -7,48 +7,19 @@ use tracing::debug;
 
 use crate::{
     app::Clock,
-    contracts::{AgentCapabilitySummary, FirstSummarizerPolicy, SummarizerSelectionPolicy},
-    domain::{
-        Agent, AgentKind, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
-        WaitingReason, WorkItem,
-    },
+    domain::{SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason, WorkItem},
 };
 
 /// 摘要调度系统：将摘要请求转为 WorkItem
 ///
-/// ## Summarizer Agent 选择
-///
-/// 通过 Tag 查找所有带 "summarization" 标签的 Agent，选择配置中最前的那个。
+/// 仅负责将 SummarizationRequestMessage 转换为 WorkItem，
+/// Agent 选择由 workitem_dispatch_system 统一处理。
 pub(crate) fn summarization_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    agents: Query<&Agent>,
     requests: Query<(Entity, &SummarizationRequestMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
-    // 通过 Tag 查找 Summarizer Agent，选择配置中最前的
-    let summarizer_candidates: Vec<AgentCapabilitySummary> = agents
-        .iter()
-        .filter(|a| a.kind == AgentKind::Persistent)
-        .map(AgentCapabilitySummary::from_agent)
-        .collect();
-
-    let summarizer_policy = FirstSummarizerPolicy;
-    let Some(summarizer_id) = summarizer_policy.select_summarizer(&summarizer_candidates) else {
-        debug!(
-            event = "SummarizerNotFound",
-            pending_requests = requests.iter().count(),
-            "no summarizer agent found with 'summarization' tag, skipping summarization requests"
-        );
-        // 没有 summarizer，清理所有请求
-        for (entity, _) in &requests {
-            commands.entity(entity).despawn();
-        }
-        return;
-    };
-
-    let summarizer = agents.iter().find(|a| a.id == summarizer_id).unwrap();
-
     for (entity, request) in &requests {
         // 对于非 TaskComplete 触发的摘要，标记任务为等待摘要
         // TaskComplete 触发的摘要不需要改变任务状态（任务已是终态）
@@ -81,12 +52,10 @@ pub(crate) fn summarization_dispatch_system(
         debug!(
             event = "SummarizationWorkItemCreated",
             task_id = %request.task_id,
-            summarizer_agent_id = %summarizer.id,
-            summarizer_agent_name = %summarizer.profile.name,
             trigger = ?request.trigger,
             target_tokens = request.target_tokens,
             content_len = request.content_to_summarize.len(),
-            "summarization work item created and pre-check passed"
+            "summarization work item created"
         );
         commands.entity(entity).despawn();
     }
@@ -94,37 +63,18 @@ pub(crate) fn summarization_dispatch_system(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::domain::{AgentCapabilities, AgentExperience, AgentProfile, AgentToolPermissions};
+    use crate::domain::{SummarizationTrigger, WorkItem, WorkItemType};
 
     #[test]
-    fn summarizer_agent_selection() {
-        let mut world = World::new();
-
-        let summarizer = Agent {
-            id: uuid::Uuid::nil(),
-            profile: AgentProfile {
-                name: "summarizer".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["summarization".to_string()],
-                description: "test".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
-        };
-
-        world.spawn(summarizer);
-
-        let found = world
-            .query::<&Agent>()
-            .iter(&world)
-            .find(|a| a.capabilities.tags.contains(&"summarization".to_string()));
-
-        assert!(found.is_some());
+    fn summarization_workitem_preserves_trigger() {
+        let task_id = uuid::Uuid::nil();
+        let work_item = WorkItem::summarization(
+            task_id,
+            "content".to_string(),
+            100,
+            SummarizationTrigger::TaskComplete,
+        );
+        assert_eq!(work_item.work_type, WorkItemType::Summarization);
+        assert_eq!(work_item.task_id, task_id);
     }
 }

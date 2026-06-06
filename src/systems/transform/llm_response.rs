@@ -72,7 +72,24 @@ fn handle_evaluation_work_item_result(
                     content = %content,
                     "failed to parse evaluation result"
                 );
-                // 解析失败，任务保持原状态
+                // 解析失败，恢复任务状态避免死锁
+                if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+                    && matches!(
+                        task.status,
+                        TaskStatus::Waiting(WaitingReason::Evaluator)
+                    )
+                {
+                    let old_status = task.status.clone();
+                    task.status = TaskStatus::Ready;
+                    task.updated_at = now;
+                    debug!(
+                        event = "TaskStatusRestoredAfterEvaluationFailed",
+                        task_id = %task.id,
+                        from_status = ?old_status,
+                        to_status = ?task.status,
+                        "task restored to Ready after evaluation parse failure"
+                    );
+                }
                 commands.entity(work_item_entity).despawn();
                 commands.entity(result_entity).despawn();
                 return;
@@ -85,6 +102,24 @@ fn handle_evaluation_work_item_result(
                 work_item_id = %work_item.id,
                 "evaluation returned non-text output"
             );
+            // 非文本输出，恢复任务状态避免死锁
+            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+                && matches!(
+                    task.status,
+                    TaskStatus::Waiting(WaitingReason::Evaluator)
+                )
+            {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Ready;
+                task.updated_at = now;
+                debug!(
+                    event = "TaskStatusRestoredAfterEvaluationFailed",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    "task restored to Ready after evaluation invalid output"
+                );
+            }
             commands.entity(work_item_entity).despawn();
             commands.entity(result_entity).despawn();
             return;
@@ -97,6 +132,24 @@ fn handle_evaluation_work_item_result(
                 error = %e.message(),
                 "evaluation execution failed"
             );
+            // 执行失败，恢复任务状态避免死锁
+            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+                && matches!(
+                    task.status,
+                    TaskStatus::Waiting(WaitingReason::Evaluator)
+                )
+            {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Ready;
+                task.updated_at = now;
+                debug!(
+                    event = "TaskStatusRestoredAfterEvaluationFailed",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    "task restored to Ready after evaluation execution failure"
+                );
+            }
             commands.entity(work_item_entity).despawn();
             commands.entity(result_entity).despawn();
             return;

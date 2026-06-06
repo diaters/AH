@@ -124,9 +124,9 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
     );
 }
 
-/// Test: WorkItem with no matching agent stays pending
+/// Test: WorkItem with no matching agent is marked as Failed
 #[test]
-fn workitem_without_matching_agent_stays_pending() {
+fn workitem_without_matching_agent_is_marked_failed() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
@@ -161,7 +161,7 @@ fn workitem_without_matching_agent_stays_pending() {
         .collect();
     assert_eq!(requests.len(), 0, "Should not create execution request");
 
-    // Verify work item stays pending
+    // Verify work item is marked as Failed (not stuck in Pending forever)
     let states: Vec<_> = app
         .world_mut()
         .query::<&WorkItem>()
@@ -170,7 +170,7 @@ fn workitem_without_matching_agent_stays_pending() {
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
         states[0].status,
-        WorkItemStatus::Pending,
-        "Work item should stay pending when no matching agent"
+        WorkItemStatus::Failed,
+        "Work item should be marked Failed when no matching agent"
     );
 }

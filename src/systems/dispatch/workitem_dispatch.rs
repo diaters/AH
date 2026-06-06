@@ -3,11 +3,11 @@
 //! 将 Pending 状态的治理型 WorkItem（Evaluation/Summarization）分发给合适的 Agent。
 
 use bevy::prelude::*;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-    TaskEvaluationConfig, WorkItem, WorkItemStatus, WorkItemType,
+    Task, TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
 };
 
 /// WorkItem 调度系统
@@ -15,9 +15,11 @@ use crate::domain::{
 /// 只处理 Evaluation 和 Summarization 类型的 WorkItem。
 /// 查找匹配的 Agent（通过 tags 或 name），创建执行请求。
 pub(crate) fn workitem_dispatch_system(
+    clock: Res<crate::app::Clock>,
     mut commands: Commands,
     config: Res<TaskEvaluationConfig>,
     agents: Query<&Agent>,
+    mut tasks: Query<&mut Task>,
     mut work_items: Query<(Entity, &mut WorkItem)>,
 ) {
     for (_entity, mut work_item) in &mut work_items {
@@ -45,13 +47,49 @@ pub(crate) fn workitem_dispatch_system(
         };
 
         let Some(agent) = agent else {
-            debug!(
+            // 找不到 Agent 时将 WorkItem 标记为 Failed，避免永远卡在 Pending
+            warn!(
                 event = "WorkItemNoAgentFound",
                 work_item_id = %work_item.id,
                 task_id = %work_item.task_id,
                 work_type = ?work_item.work_type,
-                "no suitable agent found for work item"
+                "no suitable agent found for work item, marking as failed"
             );
+            work_item.fail();
+
+            // 恢复关联任务的状态，避免任务死锁
+            if let Some(mut task) = tasks.iter_mut().find(|t| t.id == work_item.task_id) {
+                match task.status {
+                    TaskStatus::Waiting(WaitingReason::Evaluator) => {
+                        let old_status = task.status.clone();
+                        task.status = TaskStatus::Ready;
+                        task.updated_at = clock.0;
+                        debug!(
+                            event = "TaskStatusRestoredAfterWorkItemFailed",
+                            task_id = %task.id,
+                            from_status = ?old_status,
+                            to_status = ?task.status,
+                            work_type = ?work_item.work_type,
+                            "task restored to Ready after work item failed"
+                        );
+                    }
+                    TaskStatus::Waiting(WaitingReason::Summarization) => {
+                        let old_status = task.status.clone();
+                        task.status = TaskStatus::Waiting(WaitingReason::User);
+                        task.updated_at = clock.0;
+                        debug!(
+                            event = "TaskStatusRestoredAfterWorkItemFailed",
+                            task_id = %task.id,
+                            from_status = ?old_status,
+                            to_status = ?task.status,
+                            work_type = ?work_item.work_type,
+                            "task restored to Waiting(User) after work item failed"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+
             continue;
         };
 
