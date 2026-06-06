@@ -7,7 +7,7 @@
 | 状态 | 草稿 |
 | 创建日期 | 2026-06-06 |
 | 适用阶段 | MVP 主链路重评估 |
-| 相关文档 | `docs/design/modular-refactor-implementation.md` |
+| 相关文档 | `docs/design/modular-refactor-implementation.md`、`docs/design/2026-06-06-workitem-boundary-design.md` |
 
 ---
 
@@ -74,6 +74,16 @@
 ### 4.4 MVP 收敛优先
 
 本次重评估以收敛架构复杂度为目标，不追求一次性引入更强的 planner/evaluator 能力。
+
+### 4.5 以 WorkItem 边界为前提
+
+本设计中提到的“统一执行链”以 `WorkItem` 边界清晰为前提。
+
+需要明确：
+
+- `WorkItem` 只负责统一内部执行单元
+- `WorkItem` 不负责统一工具循环、等待、批次状态等控制流对象
+- `Evaluation` 收敛到 `WorkItem` 不等于所有内部动作都应被提升为 `WorkItem`
 
 ---
 
@@ -314,6 +324,7 @@ flowchart LR
 
 ### 10.1 第一阶段：文档与目标收敛
 
+- 明确 `WorkItem` 作为内部执行单元的边界，详见 `docs/design/2026-06-06-workitem-boundary-design.md`
 - 将 `Plan` 的目标从“独立模块”调整为“任务分解能力”
 - 将 `Evaluation` 的目标从“独立评估模块”调整为“评估语义层 + 统一执行链”
 - 更新相关设计文档中的阶段目标和验收标准
