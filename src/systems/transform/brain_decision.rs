@@ -101,6 +101,7 @@ pub fn brain_decision_system(
                             system_prompt: None,
                             tools,
                             conversation: None,
+                            work_item_id: None,
                         };
 
                         task.delegate = Some(fallback.id);
@@ -120,6 +121,7 @@ pub fn brain_decision_system(
                         system_prompt: None,
                         tools,
                         conversation: None,
+                        work_item_id: None,
                     };
 
                     task.delegate = Some(selected_agent.id);

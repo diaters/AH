@@ -59,8 +59,8 @@ pub use error::{ExecutionError, FailureReason, ToolError};
 
 // evaluation
 pub use evaluation::{
-    EvaluationDecision, EvaluationRequestMessage, EvaluationResult, EvaluationResultMessage,
-    EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
+    EvaluationDecision, EvaluationResult, EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
+    parse_evaluation_result,
 };
 
 // execution
@@ -87,10 +87,9 @@ pub use message::{
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
     ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage, Signal,
     SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
-    SummarizationRequestMessage, SummarizationResultMessage, SystemOutputMessage,
-    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
-    WaitingReason,
+    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
 };
 
 // space

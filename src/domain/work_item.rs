@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     contracts::TagSet,
-    domain::{AgentId, ConversationMessage, TaskId, ToolDefinition},
+    domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition},
 };
 
 /// 工作项类型
@@ -39,7 +39,7 @@ pub enum WorkItemStatus {
 }
 
 /// 工作项来源
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkItemOrigin {
     /// 用户任务
     UserTask,
@@ -52,7 +52,7 @@ pub enum WorkItemOrigin {
 }
 
 /// 工作项写回目标
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkItemWritebackTarget {
     /// 任务结果
     TaskResult,
@@ -169,12 +169,18 @@ impl WorkItem {
     }
 
     /// 创建摘要工作项
-    pub fn summarization(task_id: TaskId, content: String, target_tokens: usize) -> Self {
+    pub fn summarization(
+        task_id: TaskId,
+        content: String,
+        target_tokens: usize,
+        _trigger: SummarizationTrigger,
+    ) -> Self {
         let tags = TagSet::from_tags(["summarization"]);
         let input = WorkItemInput::new(format!(
             "请对以下内容进行摘要，目标约 {} tokens:\n\n{}",
             target_tokens, content
-        ));
+        ))
+        .with_system_prompt(crate::llm::summarization_system_prompt());
         Self::new(
             task_id,
             WorkItemType::Summarization,
@@ -182,6 +188,30 @@ impl WorkItem {
             tags,
             WorkItemOrigin::MemoryCompaction,
             WorkItemWritebackTarget::ShortTermContext,
+        )
+    }
+
+    /// 创建评估工作项
+    pub fn evaluation(task_id: TaskId, prompt: String, reasoning_hint: Option<String>) -> Self {
+        let tags = TagSet::from_tags(["evaluation"]);
+        let full_prompt = if let Some(hint) = reasoning_hint {
+            format!("{}\n\n评估提示: {}", prompt, hint)
+        } else {
+            prompt
+        };
+        let input = WorkItemInput::new(full_prompt)
+            .with_system_prompt(
+                "你是一个任务评估专家。请评估当前任务的执行状态，判断是否需要继续、完成、失败或偏航。\
+                 请以 JSON 格式返回评估结果，包含 decision (Continue/Complete/Failed/OffTrack)、reasoning 和 suggested_action (可选) 字段。"
+                    .to_string(),
+            );
+        Self::new(
+            task_id,
+            WorkItemType::Evaluation,
+            input,
+            tags,
+            WorkItemOrigin::Evaluation,
+            WorkItemWritebackTarget::TaskResult,
         )
     }
 
@@ -285,8 +315,62 @@ mod tests {
     #[test]
     fn work_item_summarization() {
         let task_id = Uuid::nil();
-        let work_item = WorkItem::summarization(task_id, "content to summarize".to_string(), 500);
+        let work_item = WorkItem::summarization(
+            task_id,
+            "content to summarize".to_string(),
+            500,
+            SummarizationTrigger::TaskComplete,
+        );
         assert_eq!(work_item.work_type, WorkItemType::Summarization);
         assert!(work_item.tags.tags.contains(&"summarization".to_string()));
+        // Verify system prompt is injected
+        assert!(work_item.input.context.system_prompt.is_some());
+        assert!(!work_item.input.context.system_prompt.unwrap().is_empty());
+        // Verify prompt contains target_tokens value
+        assert!(work_item.input.prompt.contains("500"));
+    }
+
+    #[test]
+    fn work_item_evaluation_creation() {
+        let task_id = uuid::Uuid::nil();
+        let work_item = WorkItem::evaluation(
+            task_id,
+            "请评估当前任务状态".to_string(),
+            Some("检查任务是否偏离目标".to_string()),
+        );
+
+        assert_eq!(work_item.work_type, WorkItemType::Evaluation);
+        assert_eq!(work_item.origin, WorkItemOrigin::Evaluation);
+        assert_eq!(
+            work_item.writeback_target,
+            WorkItemWritebackTarget::TaskResult
+        );
+        assert!(work_item.tags.tags.contains(&"evaluation".to_string()));
+
+        // Verify the prompt contains reasoning hint
+        assert!(work_item.input.prompt.contains("请评估当前任务状态"));
+        assert!(work_item.input.prompt.contains("检查任务是否偏离目标"));
+        assert!(work_item.input.prompt.contains("评估提示"));
+
+        // Verify the default system prompt is set
+        assert!(work_item.input.context.system_prompt.is_some());
+        let system_prompt = work_item.input.context.system_prompt.unwrap();
+        assert!(system_prompt.contains("你是一个任务评估专家"));
+        assert!(system_prompt.contains("JSON 格式"));
+        assert!(system_prompt.contains("Continue/Complete/Failed/OffTrack"));
+    }
+
+    #[test]
+    fn work_item_evaluation_without_reasoning_hint() {
+        let task_id = uuid::Uuid::nil();
+        let work_item = WorkItem::evaluation(task_id, "请评估当前任务状态".to_string(), None);
+
+        // Verify the prompt is unchanged when no reasoning hint is provided
+        assert_eq!(work_item.input.prompt, "请评估当前任务状态");
+
+        // Verify the default system prompt is still set
+        assert!(work_item.input.context.system_prompt.is_some());
+        let system_prompt = work_item.input.context.system_prompt.unwrap();
+        assert!(system_prompt.contains("你是一个任务评估专家"));
     }
 }

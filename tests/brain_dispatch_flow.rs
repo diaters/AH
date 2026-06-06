@@ -50,6 +50,14 @@ impl AgentExecutor for BrainMockExecutor {
                     ))
                 })
             }
+            harness::AgentRequestKind::Evaluation => {
+                // Evaluation 由专门的 workitem_dispatch 处理，此处不应到达
+                Box::pin(async move {
+                    Err(harness::ExecutionError::Unknown(
+                        "Evaluation not supported in mock executor".to_string(),
+                    ))
+                })
+            }
         }
     }
 }

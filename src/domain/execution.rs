@@ -3,6 +3,7 @@
 //! 定义 LLM 执行请求、响应、输出等。
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::{AgentId, TaskId, ToolDefinition};
 
@@ -13,6 +14,7 @@ pub enum AgentRequestKind {
     BrainDecision,
     ToolExecution { tool_name: String },
     Summarization,
+    Evaluation,
 }
 
 /// LLM 返回的 Tool 调用
@@ -88,6 +90,8 @@ pub struct AgentExecutionRequest {
     pub tools: Vec<ToolDefinition>,
     /// 结构化对话历史（后续请求使用，初始请求为 None）
     pub conversation: Option<Vec<ConversationMessage>>,
+    /// 关联的 WorkItem ID；普通 Task 直发请求时为 None。
+    pub work_item_id: Option<Uuid>,
 }
 
 /// Agent 执行结果
@@ -105,4 +109,27 @@ pub struct AgentExecutionResult {
     pub tools: Vec<ToolDefinition>,
     /// DeepSeek 等推理模型的思考内容，后续请求必须回传
     pub reasoning_content: Option<String>,
+    /// 回传请求关联的 WorkItem ID。
+    pub work_item_id: Option<Uuid>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_execution_request_carries_work_item_id() {
+        let request = AgentExecutionRequest {
+            task_id: uuid::Uuid::nil(),
+            agent_id: uuid::Uuid::nil(),
+            request_kind: AgentRequestKind::LlmCompletion,
+            prompt: "test".to_string(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: Some(uuid::Uuid::new_v4()),
+        };
+
+        assert!(request.work_item_id.is_some());
+    }
 }

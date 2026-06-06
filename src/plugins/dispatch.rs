@@ -6,8 +6,8 @@ use bevy::prelude::*;
 
 use crate::systems::{
     HarnessSet, approval_dispatch_system, approval_result_system, brain_decision_system,
-    brain_dispatch_system, evaluation_result_system, evaluation_trigger_system,
-    task_dispatch_system, tool_confirmation_result_system,
+    brain_dispatch_system, evaluation_trigger_system, task_dispatch_system,
+    tool_confirmation_result_system, workitem_dispatch_system,
 };
 
 /// 派发 Plugin
@@ -29,9 +29,12 @@ impl Plugin for DispatchPlugin {
                     .before(task_dispatch_system),
                 // 任务派发系统
                 task_dispatch_system.in_set(HarnessSet::Dispatch),
+                // WorkItem 派发系统
+                workitem_dispatch_system
+                    .in_set(HarnessSet::Dispatch)
+                    .after(task_dispatch_system),
                 // 评估系统
                 evaluation_trigger_system.in_set(HarnessSet::Dispatch),
-                evaluation_result_system.in_set(HarnessSet::Transform),
                 // 审批系统
                 approval_dispatch_system.in_set(HarnessSet::Dispatch),
                 approval_result_system.in_set(HarnessSet::Transform),

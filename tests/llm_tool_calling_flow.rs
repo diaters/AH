@@ -169,6 +169,7 @@ fn llm_tool_calling_complete_loop() {
         system_prompt: None,
         tools,
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
@@ -227,6 +228,7 @@ fn tool_calling_exceeds_max_iterations() {
         system_prompt: None,
         tools,
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
@@ -282,6 +284,7 @@ fn tool_calling_records_to_short_term_memory() {
         system_prompt: None,
         tools,
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
