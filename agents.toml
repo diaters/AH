@@ -31,3 +31,12 @@ description = "记忆摘要专家，负责压缩对话历史"
 
 [agent.tools]
 default_permission = "Deny"
+
+[[agent]]
+name = "evaluator"
+model = "gpt-4.1-mini"
+tags = ["evaluation"]
+description = "任务评估专家，负责评估任务执行状态"
+
+[agent.tools]
+default_permission = "Deny"

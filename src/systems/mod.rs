@@ -19,7 +19,7 @@ pub(crate) use command::command_parse_system;
 pub(crate) use contribution::{
     agent_termination_system, memory_absorption_system, memory_contribution_system,
 };
-pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system};
+pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system, workitem_dispatch_system};
 pub(crate) use evaluation::{evaluation_result_system, evaluation_trigger_system};
 pub(crate) use execution::agent_execution_system;
 pub(crate) use frontend_input::frontend_input_system;
