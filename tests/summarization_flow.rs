@@ -49,6 +49,9 @@ impl AgentExecutor for SummarizationMockExecutor {
                 AgentRequestKind::ToolExecution { .. } => {
                     Err(harness::ExecutionError::Unknown("Not supported".to_string()))
                 }
+                AgentRequestKind::Evaluation => {
+                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"decision":"Continue","reasoning":"test"}"#.to_string()), reasoning_content: None })
+                }
             }
         })
     }

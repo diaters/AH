@@ -58,12 +58,19 @@ pub(crate) fn workitem_dispatch_system(
         work_item.assign(agent.id);
         work_item.start();
 
+        // 根据工作项类型确定请求类型
+        let request_kind = match work_item.work_type {
+            WorkItemType::Evaluation => AgentRequestKind::Evaluation,
+            WorkItemType::Summarization => AgentRequestKind::Summarization,
+            _ => AgentRequestKind::LlmCompletion,
+        };
+
         // 创建执行请求
         commands.spawn(AgentExecutionRequestMessage {
             request: AgentExecutionRequest {
                 task_id: work_item.task_id,
                 agent_id: agent.id,
-                request_kind: AgentRequestKind::LlmCompletion,
+                request_kind,
                 prompt: work_item.input.prompt.clone(),
                 system_prompt: work_item.input.context.system_prompt.clone(),
                 tools: work_item.input.context.tools.clone(),

@@ -14,6 +14,7 @@ pub enum AgentRequestKind {
     BrainDecision,
     ToolExecution { tool_name: String },
     Summarization,
+    Evaluation,
 }
 
 /// LLM 返回的 Tool 调用
