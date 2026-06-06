@@ -114,6 +114,18 @@ pub struct UserOutputMessage {
     pub content: String,
 }
 
+/// 系统输出消息
+///
+/// 用于向用户发送系统通知，不会进入 task 的 STM 上下文。
+/// 例如：摘要完成通知、错误提示等。
+#[derive(Debug, Clone, Component)]
+pub struct SystemOutputMessage {
+    /// 关联的任务 ID，用于路由到正确的 channel
+    pub task_id: TaskId,
+    /// 通知内容
+    pub content: String,
+}
+
 // ============ 任务管理 ============
 
 /// 创建新任务消息

@@ -4,16 +4,19 @@ use tracing::debug;
 use crate::{
     app::FrontendRegistry,
     domain::{
-        Agent, AgentStatusKind, EngineEvent, EventTarget, MessageRole, Task, TaskStatusKind,
-        ToolConfirmationRequestMessage, UserOutputMessage,
+        Agent, AgentStatusKind, EngineEvent, EventTarget, MessageRole, SystemOutputMessage, Task,
+        TaskStatusKind, ToolConfirmationRequestMessage, UserOutputMessage,
     },
 };
 
 /// 将 ECS 状态变化转为 EngineEvent 推送给所有前端
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn frontend_output_system(
     registry: Res<FrontendRegistry>,
     mut commands: Commands,
     outputs: Query<(Entity, &UserOutputMessage)>,
+    system_outputs: Query<(Entity, &SystemOutputMessage)>,
+    all_tasks: Query<&Task>,
     tasks: Query<&Task, Changed<Task>>,
     agents: Query<&Agent, Changed<Agent>>,
     confirmations: Query<
@@ -31,6 +34,33 @@ pub(crate) fn frontend_output_system(
         let event = EngineEvent::Text {
             target: EventTarget::Broadcast,
             role: MessageRole::Agent,
+            content: output.content.clone(),
+        };
+        for frontend in &registry.frontends {
+            frontend.push_event(event.clone());
+        }
+        commands.entity(entity).despawn();
+    }
+
+    // 系统通知输出（不进入 STM，路由到 task 的 origin_channel）
+    for (entity, output) in &system_outputs {
+        // 查找关联的 task 以获取 origin_channel
+        let target = all_tasks
+            .iter()
+            .find(|t| t.id == output.task_id)
+            .map(|t| EventTarget::Directed(vec![t.origin_channel.clone()]))
+            .unwrap_or(EventTarget::Broadcast);
+
+        debug!(
+            event = "FrontendSystemOutput",
+            task_id = %output.task_id,
+            content_len = output.content.len(),
+            target = ?target,
+            "pushing system notification to frontends"
+        );
+        let event = EngineEvent::Text {
+            target,
+            role: MessageRole::System,
             content: output.content.clone(),
         };
         for frontend in &registry.frontends {
