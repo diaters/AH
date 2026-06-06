@@ -192,11 +192,7 @@ impl WorkItem {
     }
 
     /// 创建评估工作项
-    pub fn evaluation(
-        task_id: TaskId,
-        prompt: String,
-        reasoning_hint: Option<String>,
-    ) -> Self {
+    pub fn evaluation(task_id: TaskId, prompt: String, reasoning_hint: Option<String>) -> Self {
         let tags = TagSet::from_tags(["evaluation"]);
         let full_prompt = if let Some(hint) = reasoning_hint {
             format!("{}\n\n评估提示: {}", prompt, hint)
@@ -367,11 +363,7 @@ mod tests {
     #[test]
     fn work_item_evaluation_without_reasoning_hint() {
         let task_id = uuid::Uuid::nil();
-        let work_item = WorkItem::evaluation(
-            task_id,
-            "请评估当前任务状态".to_string(),
-            None,
-        );
+        let work_item = WorkItem::evaluation(task_id, "请评估当前任务状态".to_string(), None);
 
         // Verify the prompt is unchanged when no reasoning hint is provided
         assert_eq!(work_item.input.prompt, "请评估当前任务状态");

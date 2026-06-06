@@ -109,7 +109,8 @@ mod tests {
 
     #[test]
     fn parse_evaluation_json_from_text() {
-        let text = r#"{"decision":"Continue","reasoning":"still progressing","suggested_action":null}"#;
+        let text =
+            r#"{"decision":"Continue","reasoning":"still progressing","suggested_action":null}"#;
         let parsed = parse_evaluation_result(text).unwrap();
         assert_eq!(parsed.decision, EvaluationDecision::Continue);
         assert_eq!(parsed.reasoning, "still progressing");
@@ -144,10 +145,7 @@ Some text after"#;
             ("Failed", EvaluationDecision::Failed),
             ("OffTrack", EvaluationDecision::OffTrack),
         ] {
-            let text = format!(
-                r#"{{"decision":"{}","reasoning":"test"}}"#,
-                decision_str
-            );
+            let text = format!(r#"{{"decision":"{}","reasoning":"test"}}"#, decision_str);
             let parsed = parse_evaluation_result(&text).unwrap();
             assert_eq!(parsed.decision, decision);
         }

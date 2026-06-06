@@ -216,9 +216,8 @@ pub fn llm_response_system(
 
         // 处理 WorkItem 结果（Evaluation、Summarization 等）
         if let Some(work_item_id) = result.work_item_id
-            && let Some((work_item_entity, work_item)) = work_items
-                .iter()
-                .find(|(_, wi)| wi.id == work_item_id)
+            && let Some((work_item_entity, work_item)) =
+                work_items.iter().find(|(_, wi)| wi.id == work_item_id)
         {
             match work_item.work_type {
                 WorkItemType::Evaluation => {

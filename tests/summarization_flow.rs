@@ -304,3 +304,38 @@ fn execution_populates_memory_and_triggers_summarization() {
         "Summarization should be triggered when memory has entries after task completion"
     );
 }
+
+/// Test: Summarization request creates WorkItem instead of execution request
+#[test]
+fn summarization_request_creates_workitem_instead_of_execution_request() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor = Arc::new(SummarizationMockExecutor::new());
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    let task =
+        harness::domain::Task::from_user_input_ready("complete this task", 3, default_channel());
+    let task_id = task.id;
+    app.world_mut().spawn(task);
+
+    app.world_mut()
+        .spawn(harness::domain::SummarizationRequestMessage {
+            task_id,
+            trigger: harness::domain::SummarizationTrigger::UserCommand,
+            content_to_summarize: "abc".to_string(),
+            target_tokens: 64,
+        });
+
+    app.update();
+
+    let work_items: Vec<_> = app
+        .world_mut()
+        .query::<&harness::domain::WorkItem>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(work_items.len(), 1);
+    assert_eq!(
+        work_items[0].work_type,
+        harness::domain::WorkItemType::Summarization
+    );
+}

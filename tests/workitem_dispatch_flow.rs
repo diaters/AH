@@ -6,8 +6,8 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutorFuture,
-    HarnessConfig, WorkItem, WorkItemStatus, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutorFuture, HarnessConfig,
+    WorkItem, WorkItemStatus, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -54,11 +54,7 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
 
     // Create an evaluation work item
     let task_id = uuid::Uuid::new_v4();
-    let work_item = WorkItem::evaluation(
-        task_id,
-        "评估任务状态".to_string(),
-        None,
-    );
+    let work_item = WorkItem::evaluation(task_id, "评估任务状态".to_string(), None);
     let work_item_id = work_item.id;
     app.world_mut().spawn(work_item);
 
@@ -66,14 +62,22 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
     app.update();
 
     // Verify work item status changed to Running (dispatched successfully)
-    let states: Vec<_> = app.world_mut().query::<&WorkItem>().iter(app.world()).collect();
+    let states: Vec<_> = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status, WorkItemStatus::Running,
+        states[0].status,
+        WorkItemStatus::Running,
         "Work item should be in Running status after dispatch"
     );
     assert_eq!(states[0].id, work_item_id);
-    assert!(states[0].assigned_agent.is_some(), "Work item should have assigned agent");
+    assert!(
+        states[0].assigned_agent.is_some(),
+        "Work item should have assigned agent"
+    );
 }
 
 /// Test: Pending Summarization WorkItem is dispatched to execution request
@@ -102,14 +106,22 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
     app.update();
 
     // Verify work item status changed to Running (dispatched successfully)
-    let states: Vec<_> = app.world_mut().query::<&WorkItem>().iter(app.world()).collect();
+    let states: Vec<_> = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status, WorkItemStatus::Running,
+        states[0].status,
+        WorkItemStatus::Running,
         "Work item should be in Running status after dispatch"
     );
     assert_eq!(states[0].id, work_item_id);
-    assert!(states[0].assigned_agent.is_some(), "Work item should have assigned agent");
+    assert!(
+        states[0].assigned_agent.is_some(),
+        "Work item should have assigned agent"
+    );
 }
 
 /// Test: WorkItem with no matching agent stays pending
@@ -150,10 +162,15 @@ fn workitem_without_matching_agent_stays_pending() {
     assert_eq!(requests.len(), 0, "Should not create execution request");
 
     // Verify work item stays pending
-    let states: Vec<_> = app.world_mut().query::<&WorkItem>().iter(app.world()).collect();
+    let states: Vec<_> = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status, WorkItemStatus::Pending,
+        states[0].status,
+        WorkItemStatus::Pending,
         "Work item should stay pending when no matching agent"
     );
 }

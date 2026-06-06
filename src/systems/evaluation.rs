@@ -1,9 +1,7 @@
 use bevy::prelude::*;
 use tracing::debug;
 
-use crate::{
-    domain::{Agent, ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem},
-};
+use crate::domain::{Agent, ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem};
 
 /// 评估器触发系统：检测评估条件并生成 WorkItem
 pub(crate) fn evaluation_trigger_system(

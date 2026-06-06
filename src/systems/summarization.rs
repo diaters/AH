@@ -9,14 +9,12 @@ use crate::{
     app::{Clock, MemoryConfig},
     contracts::{AgentCapabilitySummary, FirstSummarizerPolicy, SummarizerSelectionPolicy},
     domain::{
-        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        ShortTermMemory, SummarizationRequestMessage, SummarizationResultMessage,
-        SummarizationTrigger, SystemOutputMessage, Task, TaskStatus, WaitingReason,
+        Agent, AgentKind, ShortTermMemory, SummarizationRequestMessage, SummarizationResultMessage,
+        SummarizationTrigger, SystemOutputMessage, Task, TaskStatus, WaitingReason, WorkItem,
     },
-    llm::{summarization_system_prompt, summarization_user_prompt},
 };
 
-/// 摘要调度系统：将摘要请求转为 AgentExecutionRequest
+/// 摘要调度系统：将摘要请求转为 WorkItem
 ///
 /// ## Summarizer Agent 选择
 ///
@@ -71,30 +69,24 @@ pub(crate) fn summarization_dispatch_system(
             );
         }
 
-        // 构建 AgentExecutionRequest
-        let execution_request = AgentExecutionRequest {
-            task_id: request.task_id,
-            agent_id: summarizer.id,
-            request_kind: AgentRequestKind::Summarization,
-            prompt: summarization_user_prompt(&request.content_to_summarize, request.target_tokens),
-            system_prompt: Some(summarization_system_prompt()),
-            tools: vec![],
-            conversation: None,
-            work_item_id: None,
-        };
+        // 创建 Summarization WorkItem
+        let work_item = WorkItem::summarization(
+            request.task_id,
+            request.content_to_summarize.clone(),
+            request.target_tokens as usize,
+            request.trigger,
+        );
+        commands.spawn(work_item);
 
-        commands.spawn(AgentExecutionRequestMessage {
-            request: execution_request,
-        });
         debug!(
-            event = "SummarizationDispatched",
+            event = "SummarizationWorkItemCreated",
             task_id = %request.task_id,
             summarizer_agent_id = %summarizer.id,
             summarizer_agent_name = %summarizer.profile.name,
             trigger = ?request.trigger,
             target_tokens = request.target_tokens,
             content_len = request.content_to_summarize.len(),
-            "dispatched summarization request"
+            "summarization work item created and pre-check passed"
         );
         commands.entity(entity).despawn();
     }

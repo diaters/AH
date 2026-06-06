@@ -93,12 +93,13 @@ fn turn_limit_creates_evaluation_workitem() {
     });
 
     // 配置评估：启用，最大 2 轮
-    app.world_mut().insert_resource(harness::TaskEvaluationConfig {
-        enabled: true,
-        max_turns: Some(2),
-        evaluator_agent_name: "evaluator".to_string(),
-        offtrack_policy: harness::OffTrackPolicy::AskUser,
-    });
+    app.world_mut()
+        .insert_resource(harness::TaskEvaluationConfig {
+            enabled: true,
+            max_turns: Some(2),
+            evaluator_agent_name: "evaluator".to_string(),
+            offtrack_policy: harness::OffTrackPolicy::AskUser,
+        });
 
     // 运行系统
     app.update();
@@ -110,8 +111,15 @@ fn turn_limit_creates_evaluation_workitem() {
         .iter(app.world())
         .collect();
 
-    assert_eq!(work_items.len(), 1, "should create exactly one evaluation work item");
-    assert_eq!(work_items[0].task_id, task_id, "work item should be associated with the task");
+    assert_eq!(
+        work_items.len(),
+        1,
+        "should create exactly one evaluation work item"
+    );
+    assert_eq!(
+        work_items[0].task_id, task_id,
+        "work item should be associated with the task"
+    );
     assert_eq!(
         work_items[0].work_type,
         WorkItemType::Evaluation,
@@ -119,11 +127,7 @@ fn turn_limit_creates_evaluation_workitem() {
     );
 
     // 验证：任务状态应该变为 Waiting(Evaluator)
-    let tasks: Vec<_> = app
-        .world_mut()
-        .query::<&Task>()
-        .iter(app.world())
-        .collect();
+    let tasks: Vec<_> = app.world_mut().query::<&Task>().iter(app.world()).collect();
 
     assert_eq!(tasks.len(), 1);
     println!("Task status: {:?}", tasks[0].status);

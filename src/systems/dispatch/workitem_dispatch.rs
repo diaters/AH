@@ -5,11 +5,9 @@
 use bevy::prelude::*;
 use tracing::debug;
 
-use crate::{
-    domain::{
-        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        TaskEvaluationConfig, WorkItem, WorkItemStatus, WorkItemType,
-    },
+use crate::domain::{
+    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
+    TaskEvaluationConfig, WorkItem, WorkItemStatus, WorkItemType,
 };
 
 /// WorkItem 调度系统
@@ -37,7 +35,10 @@ pub(crate) fn workitem_dispatch_system(
             }),
             WorkItemType::Summarization => agents.iter().find(|agent| {
                 agent.kind == AgentKind::Persistent
-                    && agent.capabilities.tags.contains(&"summarization".to_string())
+                    && agent
+                        .capabilities
+                        .tags
+                        .contains(&"summarization".to_string())
             }),
             // 其他类型暂不处理
             _ => None,

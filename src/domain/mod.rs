@@ -59,8 +59,8 @@ pub use error::{ExecutionError, FailureReason, ToolError};
 
 // evaluation
 pub use evaluation::{
-    parse_evaluation_result, EvaluationDecision, EvaluationResult, EvaluationTrigger,
-    OffTrackPolicy, TaskEvaluationConfig,
+    EvaluationDecision, EvaluationResult, EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
+    parse_evaluation_result,
 };
 
 // execution
