@@ -135,6 +135,7 @@ pub fn spawn_create_tasks_messages(
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
             },
+            last_evaluated_turn: None,
         };
 
         let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();

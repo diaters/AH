@@ -109,6 +109,7 @@ fn task_completion_triggers_summarization() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory {
                 entries: vec![
@@ -175,6 +176,7 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         },
         ShortTermMemory {
             entries: vec![

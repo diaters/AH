@@ -88,6 +88,7 @@ fn user_input_continues_waiting_task() {
         parent_task_id: None,
         batch_id: None,
         origin_channel: default_channel(),
+        last_evaluated_turn: None,
     });
 
     // Simulate user input
@@ -209,6 +210,7 @@ fn evaluation_triggered_on_turn_limit() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         },
         stm,
     ));
@@ -262,6 +264,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
     ));
@@ -287,6 +290,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
     ));
@@ -351,6 +355,7 @@ fn finish_command_ends_multi_turn_conversation() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
     ));

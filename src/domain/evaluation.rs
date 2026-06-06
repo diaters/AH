@@ -108,6 +108,22 @@ mod tests {
     }
 
     #[test]
+    fn off_track_policy_deserialize_all_variants() {
+        let ac: OffTrackPolicy = serde_json::from_str("\"AutoCorrect\"").unwrap();
+        assert_eq!(ac, OffTrackPolicy::AutoCorrect);
+        let au: OffTrackPolicy = serde_json::from_str("\"AskUser\"").unwrap();
+        assert_eq!(au, OffTrackPolicy::AskUser);
+        let f: OffTrackPolicy = serde_json::from_str("\"Fail\"").unwrap();
+        assert_eq!(f, OffTrackPolicy::Fail);
+    }
+
+    #[test]
+    fn off_track_policy_deserialize_invalid_returns_err() {
+        let result: Result<OffTrackPolicy, _> = serde_json::from_str("\"Unknown\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn parse_evaluation_json_from_text() {
         let text =
             r#"{"decision":"Continue","reasoning":"still progressing","suggested_action":null}"#;

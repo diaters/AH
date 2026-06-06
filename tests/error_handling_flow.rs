@@ -368,6 +368,7 @@ fn waiting_task_waits_for_user_input() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         },
         harness::ShortTermMemory::default(),
     ));
