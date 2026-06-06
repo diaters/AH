@@ -68,6 +68,7 @@ fn multi_turn_task_lifecycle() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ))
@@ -150,6 +151,7 @@ fn short_term_memory_tracks_turns() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ));
@@ -317,6 +319,7 @@ fn memory_contribution_on_agent_termination() {
         parent_task_id: None,
         batch_id: None,
         origin_channel: default_channel(),
+        last_evaluated_turn: None,
     });
 
     // Trigger termination by spawning TaskTerminatedMessage
@@ -406,6 +409,7 @@ fn multi_turn_memory_records_user_and_assistant() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ))
@@ -554,6 +558,7 @@ fn prompt_includes_conversation_history() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory {
                 entries: vec![
@@ -794,6 +799,7 @@ fn second_dispatch_prompt_includes_correct_history() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory {
                 entries: vec![
@@ -885,6 +891,7 @@ fn task_content_updates_on_continue() {
                 parent_task_id: None,
                 batch_id: None,
                 origin_channel: default_channel(),
+                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ))

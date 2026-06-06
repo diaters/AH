@@ -54,7 +54,8 @@ fn build_prompt_with_context(
             let role = match entry.role {
                 crate::domain::EntryRole::User => "User",
                 crate::domain::EntryRole::Assistant => "Assistant",
-                _ => continue,
+                crate::domain::EntryRole::Summary => "System note",
+                crate::domain::EntryRole::Archive => continue,
             };
             history.push_str(&format!("{}: {}\n", role, entry.content));
         }
@@ -179,5 +180,63 @@ pub fn task_dispatch_system(
 
         task.mark_waiting_for_agent(agent.id, clock.0);
         commands.spawn(AgentExecutionRequestMessage { request });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{EntryMetadata, EntryRole, ShortTermMemory};
+
+    #[test]
+    fn prompt_includes_summary_entries_as_system_notes() {
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(EntryRole::User, "user message", EntryMetadata::default());
+        stm.add_entry(
+            EntryRole::Assistant,
+            "assistant response",
+            EntryMetadata::default(),
+        );
+        // 模拟 AutoCorrect 注入的纠偏上下文
+        let metadata = EntryMetadata {
+            keywords: vec![
+                "evaluation".to_string(),
+                "offtrack".to_string(),
+                "autocorrect".to_string(),
+            ],
+            ..Default::default()
+        };
+        stm.add_entry(
+            EntryRole::Summary,
+            "[Evaluation AutoCorrect] refocus on original goal",
+            metadata,
+        );
+
+        let prompt = build_prompt_with_context("do the task", Some(&stm), None);
+
+        assert!(
+            prompt.contains("System note: [Evaluation AutoCorrect] refocus on original goal"),
+            "prompt should include Summary entry as System note, got: {}",
+            prompt
+        );
+    }
+
+    #[test]
+    fn prompt_excludes_archive_entries() {
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(EntryRole::User, "user message", EntryMetadata::default());
+        stm.add_entry(
+            EntryRole::Archive,
+            "archived content",
+            EntryMetadata::default(),
+        );
+
+        let prompt = build_prompt_with_context("do the task", Some(&stm), None);
+
+        assert!(
+            !prompt.contains("archived content"),
+            "prompt should NOT include Archive entries, got: {}",
+            prompt
+        );
     }
 }

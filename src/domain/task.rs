@@ -53,6 +53,8 @@ pub struct Task {
     pub batch_id: Option<Uuid>,
     /// 任务来源的前端通道
     pub origin_channel: ChannelId,
+    /// 最近一次由 TurnLimitReached 触发评估时的轮数（用于同进度去重）
+    pub last_evaluated_turn: Option<u32>,
 }
 
 /// Task 等待其他任务完成的状态信息
@@ -98,6 +100,7 @@ impl Task {
             parent_task_id: None,
             batch_id: None,
             origin_channel: channel,
+            last_evaluated_turn: None,
         }
     }
 
@@ -129,6 +132,7 @@ impl Task {
             parent_task_id: None,
             batch_id: None,
             origin_channel: channel,
+            last_evaluated_turn: None,
         }
     }
 
@@ -252,5 +256,45 @@ impl Task {
             reason = "mark_ready_for_retry",
             "task ready for retry"
         );
+    }
+
+    /// 记录最近一次评估对应的轮数，用于 TurnLimitReached 去重。
+    pub fn record_evaluation_at_turn(&mut self, turn: u32) {
+        self.last_evaluated_turn = Some(turn);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_evaluation_at_turn_sets_last_evaluated_turn() {
+        let mut task = Task::from_user_input(
+            "test",
+            3,
+            ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "test".to_string(),
+            },
+        );
+        assert!(task.last_evaluated_turn.is_none());
+        task.record_evaluation_at_turn(5);
+        assert_eq!(task.last_evaluated_turn, Some(5));
+        // 再次调用应覆盖
+        task.record_evaluation_at_turn(10);
+        assert_eq!(task.last_evaluated_turn, Some(10));
+    }
+
+    #[test]
+    fn task_constructors_initialize_last_evaluated_turn_to_none() {
+        let ch = ChannelId {
+            frontend: crate::domain::FrontendKind::Tui,
+            user_id: "test".to_string(),
+        };
+        let t1 = Task::from_user_input("a", 0, ch.clone());
+        assert!(t1.last_evaluated_turn.is_none());
+        let t2 = Task::from_user_input_ready("b", 0, ch);
+        assert!(t2.last_evaluated_turn.is_none());
     }
 }

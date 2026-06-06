@@ -10,9 +10,10 @@ use crate::{
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
-        EntryRole, FailureReason, OutputContent, ShortTermMemory, SystemOutputMessage, Task,
-        TaskStatus, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
+        EntryRole, FailureReason, OffTrackPolicy, OutputContent, ShortTermMemory,
+        SystemOutputMessage, Task, TaskStatus, ToolCallingState, ToolDefinition,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, UserOutputMessage, WaitingReason,
+        WorkItem, WorkItemType,
     },
 };
 
@@ -45,6 +46,7 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
 }
 
 /// 处理 Evaluation WorkItem 的执行结果
+#[allow(clippy::too_many_arguments, clippy::drop_non_drop)]
 fn handle_evaluation_work_item_result(
     commands: &mut Commands,
     tasks: &mut Query<(&mut Task, Option<&mut ShortTermMemory>)>,
@@ -53,6 +55,7 @@ fn handle_evaluation_work_item_result(
     work_item: &WorkItem,
     result: &crate::domain::AgentExecutionResult,
     now: chrono::DateTime<chrono::Utc>,
+    eval_config: &crate::domain::TaskEvaluationConfig,
 ) {
     use crate::domain::{EvaluationDecision, EvaluationResult};
 
@@ -148,10 +151,19 @@ fn handle_evaluation_work_item_result(
         }
     };
 
-    // 更新任务状态
+    // 更新任务状态（两阶段应用，避免借用冲突）
     if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id) {
         let old_status = task.status.clone();
-        match evaluation.decision {
+
+        // 第一阶段：推导出中间动作描述
+        struct EvaluationApplyEffects {
+            next_status: TaskStatus,
+            last_error: Option<String>,
+            stm_injection: Option<(EntryRole, String, EntryMetadata)>,
+            system_message: Option<String>,
+        }
+
+        let effects = match evaluation.decision {
             EvaluationDecision::Continue => {
                 debug!(
                     event = "EvaluationResultApplied",
@@ -161,8 +173,12 @@ fn handle_evaluation_work_item_result(
                     reasoning = %evaluation.reasoning,
                     "evaluation result: continue"
                 );
-                task.status = TaskStatus::Ready;
-                task.updated_at = now;
+                EvaluationApplyEffects {
+                    next_status: TaskStatus::Ready,
+                    last_error: None,
+                    stm_injection: None,
+                    system_message: None,
+                }
             }
             EvaluationDecision::Complete => {
                 debug!(
@@ -173,8 +189,12 @@ fn handle_evaluation_work_item_result(
                     reasoning = %evaluation.reasoning,
                     "evaluation result: complete"
                 );
-                task.status = TaskStatus::Done;
-                task.updated_at = now;
+                EvaluationApplyEffects {
+                    next_status: TaskStatus::Done,
+                    last_error: None,
+                    stm_injection: None,
+                    system_message: None,
+                }
             }
             EvaluationDecision::Failed => {
                 debug!(
@@ -185,8 +205,12 @@ fn handle_evaluation_work_item_result(
                     reasoning = %evaluation.reasoning,
                     "evaluation result: failed"
                 );
-                task.status = TaskStatus::Failed(FailureReason::AgentError);
-                task.updated_at = now;
+                EvaluationApplyEffects {
+                    next_status: TaskStatus::Failed(FailureReason::AgentError),
+                    last_error: None,
+                    stm_injection: None,
+                    system_message: None,
+                }
             }
             EvaluationDecision::OffTrack => {
                 debug!(
@@ -196,19 +220,98 @@ fn handle_evaluation_work_item_result(
                     decision = "OffTrack",
                     reasoning = %evaluation.reasoning,
                     suggested_action = ?evaluation.suggested_action,
+                    policy = ?eval_config.offtrack_policy,
                     "evaluation result: off-track"
                 );
-                // TODO: 根据 OffTrackPolicy 处理偏离
-                task.status = TaskStatus::Ready;
-                task.updated_at = now;
+                match eval_config.offtrack_policy {
+                    OffTrackPolicy::AutoCorrect => EvaluationApplyEffects {
+                        next_status: TaskStatus::Ready,
+                        last_error: None,
+                        stm_injection: evaluation.suggested_action.as_ref().map(|action| {
+                            (
+                                EntryRole::Summary,
+                                format!("[Evaluation AutoCorrect] {}", action),
+                                EntryMetadata {
+                                    keywords: vec![
+                                        "evaluation".to_string(),
+                                        "offtrack".to_string(),
+                                        "autocorrect".to_string(),
+                                    ],
+                                    ..Default::default()
+                                },
+                            )
+                        }),
+                        system_message: None,
+                    },
+                    OffTrackPolicy::AskUser => {
+                        let summary = format!(
+                            "[Evaluation AskUser] 任务偏航：{}；建议操作：{}",
+                            evaluation.reasoning,
+                            evaluation.suggested_action.as_deref().unwrap_or("无")
+                        );
+
+                        EvaluationApplyEffects {
+                            next_status: TaskStatus::Waiting(WaitingReason::User),
+                            last_error: None,
+                            stm_injection: Some((
+                                EntryRole::Summary,
+                                summary,
+                                EntryMetadata {
+                                    keywords: vec![
+                                        "evaluation".to_string(),
+                                        "offtrack".to_string(),
+                                        "askuser".to_string(),
+                                    ],
+                                    ..Default::default()
+                                },
+                            )),
+                            system_message: Some(format!(
+                                "任务偏航：{}\n建议操作：{}",
+                                evaluation.reasoning,
+                                evaluation.suggested_action.as_deref().unwrap_or("无")
+                            )),
+                        }
+                    }
+                    OffTrackPolicy::Fail => EvaluationApplyEffects {
+                        next_status: TaskStatus::Failed(FailureReason::AgentError),
+                        last_error: Some(format!("Evaluation OffTrack: {}", evaluation.reasoning)),
+                        stm_injection: None,
+                        system_message: None,
+                    },
+                }
             }
+        };
+
+        // 第二阶段：应用效果
+        task.status = effects.next_status;
+        task.updated_at = now;
+        if let Some(err) = effects.last_error {
+            task.last_error = Some(err);
+        }
+
+        let task_id = task.id;
+        // 释放 task 借用，以便后续再次查询 tasks
+        drop(task);
+
+        // 注入纠偏上下文到 STM（AutoCorrect / AskUser 均适用）
+        if let Some((role, content, metadata)) = effects.stm_injection
+            && let Some((_, Some(mut stm))) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+        {
+            stm.add_entry(role, &content, metadata);
+        }
+
+        // 发送系统通知（仅 AskUser）
+        if let Some(msg) = effects.system_message {
+            commands.spawn(SystemOutputMessage {
+                task_id,
+                content: msg,
+            });
         }
 
         debug!(
             event = "TaskStatusTransition",
-            task_id = %task.id,
+            task_id = %task_id,
             from_status = ?old_status,
-            to_status = ?task.status,
             reason = "evaluation_result",
             work_item_id = %work_item.id,
             "task status updated by evaluation"
@@ -381,6 +484,7 @@ pub fn llm_response_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     config: Res<MemoryConfig>,
+    eval_config: Res<crate::domain::TaskEvaluationConfig>,
     mut commands: Commands,
     mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
@@ -428,6 +532,7 @@ pub fn llm_response_system(
                         work_item,
                         result,
                         clock.0,
+                        &eval_config,
                     );
                     continue;
                 }

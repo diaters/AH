@@ -92,7 +92,8 @@ fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMe
         let role = match entry.role {
             EntryRole::User => "User",
             EntryRole::Assistant => "Assistant",
-            _ => continue,
+            EntryRole::Summary => "System note",
+            EntryRole::Archive => continue,
         };
         history.push_str(&format!("{}: {}\n", role, entry.content));
     }

@@ -187,6 +187,7 @@ fn task_scoped_agent_lifecycle() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: default_channel(),
+            last_evaluated_turn: None,
         });
         world.spawn(TaskTerminatedMessage { task_id });
     }

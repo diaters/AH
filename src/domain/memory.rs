@@ -116,6 +116,17 @@ pub struct ShortTermMemory {
 }
 
 impl ShortTermMemory {
+    /// 计算真实对话轮数（仅 User + Assistant 配对，Summary/Archive 不计入）
+    pub fn dialog_turn_count(&self) -> u32 {
+        let dialog_entries = self
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.role, EntryRole::User | EntryRole::Assistant))
+            .count();
+
+        (dialog_entries / 2) as u32
+    }
+
     /// 记录 Tool 调用
     ///
     /// 将 Tool 调用记录追加到最后一个 Assistant 条目的元数据中，
