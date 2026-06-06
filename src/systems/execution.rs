@@ -68,6 +68,7 @@ pub(crate) fn agent_execution_system(
                 system_prompt: request.system_prompt.clone(),
                 tools: request.tools.clone(),
                 reasoning_content,
+                work_item_id: request.work_item_id,
             });
         });
 

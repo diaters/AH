@@ -327,6 +327,7 @@ pub fn llm_response_system(
                                 system_prompt: None,
                                 tools: vec![],
                                 conversation: None,
+                                work_item_id: None,
                             },
                             tool_name: call.name.clone(),
                             tool_input,
@@ -533,6 +534,7 @@ pub fn tool_calling_orchestrator_system(
             system_prompt: None,
             tools: state.tools.clone(),
             conversation: Some(state.conversation.clone()),
+            work_item_id: None,
         };
 
         debug!(

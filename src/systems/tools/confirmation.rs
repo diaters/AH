@@ -90,6 +90,7 @@ pub fn tool_confirmation_result_system(
                     system_prompt: None,
                     tools: vec![],
                     reasoning_content: None,
+                    work_item_id: None,
                 };
 
                 commands.spawn(ToolExecutionResultMessage {

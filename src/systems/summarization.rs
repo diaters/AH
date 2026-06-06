@@ -80,6 +80,7 @@ pub(crate) fn summarization_dispatch_system(
             system_prompt: Some(summarization_system_prompt()),
             tools: vec![],
             conversation: None,
+            work_item_id: None,
         };
 
         commands.spawn(AgentExecutionRequestMessage {

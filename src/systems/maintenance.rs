@@ -269,6 +269,7 @@ fn handle_spawn_request(
         system_prompt: request.task_system_prompt.clone(),
         tools: child_tools,
         conversation: None,
+        work_item_id: None,
     };
 
     commands.spawn(AgentExecutionRequestMessage {

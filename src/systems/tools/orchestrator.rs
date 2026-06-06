@@ -71,6 +71,7 @@ pub fn spawn_spawn_agent_messages(
             system_prompt: None,
             tools: vec![],
             reasoning_content: None,
+            work_item_id: None,
         },
         tool_name: "spawn_agent".to_string(),
         tool_output: Ok(serde_json::json!({
@@ -219,6 +220,7 @@ pub fn spawn_create_tasks_messages(
             system_prompt: None,
             tools: vec![],
             reasoning_content: None,
+            work_item_id: None,
         },
         tool_name: "create_tasks".to_string(),
         tool_output: Ok(serde_json::json!({
@@ -359,6 +361,7 @@ pub fn spawn_wait_result_message(
             system_prompt: None,
             tools: vec![],
             reasoning_content: None,
+            work_item_id: None,
         },
         tool_name: "wait_tasks".to_string(),
         tool_output: Ok(output),
@@ -391,6 +394,7 @@ pub fn handle_tool_action(
                 system_prompt: None,
                 tools: vec![],
                 reasoning_content: None,
+                work_item_id: None,
             };
 
             commands.spawn(ToolExecutionResultMessage {
@@ -493,6 +497,7 @@ pub fn spawn_tool_error(
         system_prompt: None,
         tools: vec![],
         reasoning_content: None,
+        work_item_id: None,
     };
 
     commands.spawn(ToolExecutionResultMessage {

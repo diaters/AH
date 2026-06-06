@@ -326,6 +326,7 @@ pub fn brain_dispatch_system(
             system_prompt: Some(brain_system_prompt()),
             tools,
             conversation: None,
+            work_item_id: None,
         };
 
         task.mark_waiting_for_agent(brain_agent.id, clock.0);

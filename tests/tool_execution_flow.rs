@@ -151,6 +151,7 @@ fn allowed_tool_executes_directly() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -222,6 +223,7 @@ fn denied_tool_does_not_execute() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -294,6 +296,7 @@ fn confirm_tool_requires_user_confirmation() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -378,6 +381,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -480,6 +484,7 @@ fn user_denies_tool_confirmation() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -573,6 +578,7 @@ fn user_allows_tool_once() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -719,6 +725,7 @@ fn spawn_agent_creates_child_agent() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -810,6 +817,7 @@ fn spawn_agent_confirm_routes_to_user() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -939,6 +947,7 @@ fn child_agent_confirm_routes_to_parent() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1031,6 +1040,7 @@ fn user_confirms_spawn_agent_creates_child() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1172,6 +1182,7 @@ fn confirmation_denied_rejects_tool() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1276,6 +1287,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1349,6 +1361,7 @@ fn user_allows_tool_always() {
         system_prompt: None,
         tools: vec![],
         conversation: None,
+        work_item_id: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
