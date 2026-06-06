@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use tracing::{debug, warn};
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-    Task, TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
+    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind, Task,
+    TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
 };
 
 /// WorkItem 调度系统

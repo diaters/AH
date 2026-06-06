@@ -437,38 +437,42 @@ Control State
 
 ## 16. 实施备注
 
-**实施日期：** 2026-06-06
+__实施日期：__ 2026-06-06
 
-**实施范围：** 第一轮已将 `Evaluation` 与 `Summarization` 的执行载体迁移到 `WorkItem`
+__实施范围：__ 第一轮已将 `Evaluation` 与 `Summarization` 的执行载体迁移到 `WorkItem`
 
-**已完成的迁移：**
+__已完成的迁移：__
 
-1. **Evaluation WorkItem 完整闭环**
+1. __Evaluation WorkItem 完整闭环__
    - 触发：`evaluation_trigger_system` 创建 `Evaluation WorkItem`
    - 调度：`workitem_dispatch_system` 分发给评估器 Agent
    - 执行：Agent 执行并返回结果
    - 应用：`llm_response_system` 解析结果并更新任务状态
 
-2. **Summarization WorkItem 完整闭环**
+2. __Summarization WorkItem 完整闭环__
    - 触发：`summarization_dispatch_system` 创建 `Summarization WorkItem`
    - 调度：`workitem_dispatch_system` 分发给摘要 Agent
    - 执行：Agent 执行并返回结果
    - 应用：`llm_response_system` 更新 ShortTermMemory
 
-**保留的控制流对象：**
+__保留的控制流对象：__
+
 - `SummarizationRequestMessage` 作为触发型控制消息继续存在
 - `WaitingReason`、`ToolCallingState` 等控制状态仍保持原有建模
 
-**未纳入实施范围：**
+__未纳入实施范围：__
+
 - `Execution WorkItem`（普通任务执行）
 - `Planning WorkItem`（Brain 规划）
 - 工具调用循环的重写
 
-**架构简化：**
+__架构简化：__
+
 - 评估结果应用集成在 `llm_response_system` 中，而非独立的 `evaluation_apply_system`
 - 摘要结果应用集成在 `llm_response_system` 中，复用现有内存更新逻辑
 
-**验收状态：**
+__验收状态：__
+
 - ✅ 所有单元测试通过（105 个）
 - ✅ 所有集成测试通过
 - ✅ clippy 静态分析通过

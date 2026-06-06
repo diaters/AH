@@ -73,11 +73,9 @@ fn handle_evaluation_work_item_result(
                     "failed to parse evaluation result"
                 );
                 // 解析失败，恢复任务状态避免死锁
-                if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
-                    && matches!(
-                        task.status,
-                        TaskStatus::Waiting(WaitingReason::Evaluator)
-                    )
+                if let Some((mut task, _)) =
+                    tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+                    && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
                 {
                     let old_status = task.status.clone();
                     task.status = TaskStatus::Ready;
@@ -104,10 +102,7 @@ fn handle_evaluation_work_item_result(
             );
             // 非文本输出，恢复任务状态避免死锁
             if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
-                && matches!(
-                    task.status,
-                    TaskStatus::Waiting(WaitingReason::Evaluator)
-                )
+                && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
             {
                 let old_status = task.status.clone();
                 task.status = TaskStatus::Ready;
@@ -134,10 +129,7 @@ fn handle_evaluation_work_item_result(
             );
             // 执行失败，恢复任务状态避免死锁
             if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
-                && matches!(
-                    task.status,
-                    TaskStatus::Waiting(WaitingReason::Evaluator)
-                )
+                && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
             {
                 let old_status = task.status.clone();
                 task.status = TaskStatus::Ready;

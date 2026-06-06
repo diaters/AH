@@ -385,17 +385,16 @@ flowchart LR
 
 该方案优先服务于 MVP 阶段的架构收敛、可维护性和最小必要复杂度。
 
-
 ---
 
 ## 实施备注
 
-**实施日期：** 2026-06-06
+__实施日期：__ 2026-06-06
 
-**状态：** 已完成第一轮 WorkItem 迁移
+__状态：__ 已完成第一轮 WorkItem 迁移
 
-**实施内容：**
+__实施内容：__
+
 - Evaluation WorkItem 完整闭环已实现
 - Summarization WorkItem 完整闭环已实现
 - 详细实施情况参见 `docs/design/2026-06-06-workitem-boundary-design.md` 第 16 节
-

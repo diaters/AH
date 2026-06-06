@@ -7,7 +7,10 @@ use tracing::debug;
 
 use crate::{
     app::Clock,
-    domain::{SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason, WorkItem},
+    domain::{
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
+        WorkItem,
+    },
 };
 
 /// 摘要调度系统：将摘要请求转为 WorkItem
