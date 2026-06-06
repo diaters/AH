@@ -11,6 +11,19 @@
 
 ---
 
+> __废止说明（2026-06-06）__
+>
+> 本文档为历史阶段性实施计划。其中 `src/contracts/planning.rs`
+> （`PlanPolicy`、`PlanArtifactBuilder`、`WorkItemDeriver` 等抽象）
+> 已在 `Plan / Evaluation` 重评估后从代码中删除，不再作为运行时骨架构保留。
+>
+> `Plan` 的职责已收敛为由 `Brain + create_tasks + DAG 调度`
+> 组合实现的任务分解能力。
+>
+> 后续重设计参见 `docs/design/2026-06-06-plan-evaluation-reassessment-design.md`。
+
+---
+
 ## 1. 概述
 
 ### 1.1 重构目标

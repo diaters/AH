@@ -125,6 +125,9 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
 }
 
 /// Test: WorkItem with no matching agent is marked as Failed
+///
+/// Uses an `Execution` work item, which the current narrow dispatcher
+/// (Evaluation/Summarization only) intentionally ignores.
 #[test]
 fn workitem_without_matching_agent_is_marked_failed() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -135,15 +138,13 @@ fn workitem_without_matching_agent_is_marked_failed() {
     // Initialize
     app.update();
 
-    // Create a Planning work item (no agent has "planning" tag)
+    // Create an Execution work item
+    // (The narrow dispatcher only handles Evaluation/Summarization, so this is not dispatched)
     let task_id = uuid::Uuid::new_v4();
-    let work_item = WorkItem::new(
+    let work_item = WorkItem::execution(
         task_id,
-        harness::WorkItemType::Planning,
-        harness::WorkItemInput::new("Plan this task".to_string()),
-        harness::contracts::TagSet::from_tags(["planning"]),
-        harness::WorkItemOrigin::UserTask,
-        harness::WorkItemWritebackTarget::PlanArtifact,
+        "Execute this task".to_string(),
+        harness::contracts::TagSet::from_tags(["nonexistent-tag"]),
     );
     app.world_mut().spawn(work_item);
 

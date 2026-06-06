@@ -16,7 +16,7 @@
 当前框架在 P3 阶段提出了 `Brain / Plan / Summary` 重构目标，并引入 `WorkItem` 作为统一工作单元。实际演进后，三个模块的落地程度并不一致：
 
 - `Summary` 已经形成相对稳定的记忆治理职责
-- `Plan` 仅完成契约层定义，尚未形成 `Task -> PlanArtifact -> WorkItem` 的执行闭环
+- `Plan` 仅完成契约层定义（已删除），尚未形成 `Task -> PlanArtifact -> WorkItem` 的执行闭环
 - `Evaluation` 已接入主链路的触发与结果写回，但默认关闭，偏航处理策略尚未闭环
 
 与此同时，任务分解、多子任务调度与等待能力已经在现有主链路中形成可运行实现，包括：
@@ -91,14 +91,16 @@
 
 ### 5.1 Plan 现状
 
-`Plan` 目前已定义如下契约：
+`Plan` 曾定义如下契约：
 
 - `PlanPolicy`
 - `PlanArtifactBuilder`
 - `ReplanPolicy`
 - `WorkItemDeriver`
 
-但从执行链路看，以下闭环尚未建立：
+这些抽象已在重评估后从代码中删除，不再作为运行时骨架构保留。
+
+从执行链路看，以下闭环从未建立：
 
 ```text
 Task -> Planning WorkItem -> PlanArtifact -> Worker WorkItem
@@ -114,7 +116,7 @@ Task
   -> wait_tasks / 完成回传恢复父任务
 ```
 
-因此，`Plan` 当前更像“尚未闭环的规划抽象”，而不是不可替代的运行时模块。
+因此，`Plan` 已被确认为“不再需要的规划抽象”，其职责由现有任务分解链路承接。
 
 ### 5.2 Evaluation 现状
 
@@ -216,7 +218,7 @@ flowchart LR
 4. __等待与聚合__：由 `wait_tasks` 与子任务完成回传负责
 5. __重分解__：未来由失败策略或显式工具调用触发，而非独立 replan 模块
 
-`PlanPolicy`、`PlanArtifactBuilder`、`WorkItemDeriver` 等抽象不再继续扩展为运行时中心能力。若后续确有需要，可仅保留极小的策略接口，例如：
+`PlanPolicy`、`PlanArtifactBuilder`、`WorkItemDeriver` 等抽象已从代码中删除。若后续确有需要，可仅保留极小的策略接口，例如：
 
 - 是否建议分解
 - 分解失败后的回退策略
