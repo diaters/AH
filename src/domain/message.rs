@@ -286,15 +286,6 @@ pub struct SummarizationRequestMessage {
     pub trigger: SummarizationTrigger,
 }
 
-/// 摘要结果消息
-#[derive(Debug, Clone, Component)]
-pub struct SummarizationResultMessage {
-    /// 关联的任务 ID
-    pub task_id: TaskId,
-    /// 生成的摘要
-    pub summary: Result<String, super::ExecutionError>,
-}
-
 // ============ 输出类型 ============
 
 /// 输出类型

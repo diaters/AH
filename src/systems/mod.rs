@@ -28,7 +28,7 @@ pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_s
 pub(crate) use maintenance::{agent_factory_system, load_agents_system};
 pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
-pub(crate) use summarization::{summarization_dispatch_system, summarization_result_system};
+pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{
     approval_dispatch_system, approval_result_system, check_waiting_tasks_system,
     on_subtask_completed_check_waiting, register_builtin_tools, tool_confirmation_request_system,

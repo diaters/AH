@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 use crate::systems::{
     HarnessSet, init_agent_memory_system, memory_absorption_system, memory_compression_system,
-    summarization_dispatch_system, summarization_result_system,
+    summarization_dispatch_system,
 };
 
 /// 记忆 Plugin
@@ -29,10 +29,6 @@ impl Plugin for MemoryPlugin {
                 summarization_dispatch_system
                     .in_set(HarnessSet::Maintenance)
                     .after(crate::systems::agent_factory_system),
-                // 摘要结果处理
-                summarization_result_system
-                    .in_set(HarnessSet::Transform)
-                    .after(crate::systems::llm_response_system),
             ),
         );
     }

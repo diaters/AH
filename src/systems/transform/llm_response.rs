@@ -6,11 +6,11 @@ use bevy::prelude::*;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    app::{Clock, HarnessSettings, MemoryConfig},
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
-        EntryRole, FailureReason, OutputContent, ShortTermMemory, SummarizationResultMessage, Task,
+        EntryRole, FailureReason, OutputContent, ShortTermMemory, SystemOutputMessage, Task,
         TaskStatus, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
     },
@@ -175,13 +175,167 @@ fn handle_evaluation_work_item_result(
     commands.entity(result_entity).despawn();
 }
 
+/// 处理 Summarization WorkItem 的执行结果
+#[allow(clippy::too_many_arguments)]
+fn handle_summarization_work_item_result(
+    commands: &mut Commands,
+    tasks: &mut Query<(&mut Task, Option<&mut ShortTermMemory>)>,
+    result_entity: Entity,
+    work_item_entity: Entity,
+    work_item: &WorkItem,
+    result: &crate::domain::AgentExecutionResult,
+    now: chrono::DateTime<chrono::Utc>,
+    config: &MemoryConfig,
+) {
+    let task_id = work_item.task_id;
+
+    match &result.result {
+        Ok(AgentExecutionOutput {
+            content: OutputContent::Text(summary),
+            ..
+        }) => {
+            // 更新摘要前缀（查找任意一个带 ShortTermMemory 的任务）
+            // 注意：这里简化处理，假设全局只有一个 STM（当前架构确实如此）
+            for (_, short_term) in tasks.iter_mut() {
+                if let Some(mut memory) = short_term {
+                    memory.summary_prefix = Some(summary.clone());
+
+                    // 移除已压缩的 entries（保留最近 N 轮）
+                    let preserve_count = (config.preserve_recent_turns * 2) as usize;
+                    let removed = if memory.entries.len() > preserve_count {
+                        let removed = memory.entries.len() - preserve_count;
+                        memory.entries.drain(0..removed);
+                        removed
+                    } else {
+                        0
+                    };
+
+                    // 重新计算 token
+                    memory.recalculate_tokens();
+
+                    debug!(
+                        event = "SummarizationCompleted",
+                        task_id = %task_id,
+                        summary_len = summary.len(),
+                        summary = %summary,
+                        removed_entries = removed,
+                        remaining_entries = memory.entries.len(),
+                        new_tokens = memory.estimated_tokens,
+                        "summarization completed"
+                    );
+                    break;
+                }
+            }
+
+            // 发送系统通知（不进入 STM）
+            commands.spawn(SystemOutputMessage {
+                task_id,
+                content: format!("📝 摘要完成\n\n{}", summary),
+            });
+
+            // 恢复任务状态：从 Waiting(Summarization) 恢复为 Waiting(User)
+            // 这适用于 UserCommand 和 TokenThreshold 触发的摘要
+            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+                && matches!(
+                    task.status,
+                    TaskStatus::Waiting(WaitingReason::Summarization)
+                )
+            {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Waiting(WaitingReason::User);
+                task.updated_at = now;
+                debug!(
+                    event = "TaskStatusRestoredAfterSummarization",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    "task restored to waiting for user after summarization"
+                );
+            }
+        }
+        Ok(_) => {
+            warn!(
+                event = "SummarizationInvalidOutput",
+                task_id = %task_id,
+                work_item_id = %work_item.id,
+                "summarization returned non-text output"
+            );
+
+            // 发送系统通知（不进入 STM）
+            commands.spawn(SystemOutputMessage {
+                task_id,
+                content: "⚠️ 摘要失败：返回了非文本输出".to_string(),
+            });
+
+            // 即使摘要失败，也恢复任务状态，避免任务卡住
+            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+                && matches!(
+                    task.status,
+                    TaskStatus::Waiting(WaitingReason::Summarization)
+                )
+            {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Waiting(WaitingReason::User);
+                task.updated_at = now;
+                debug!(
+                    event = "TaskStatusRestoredAfterSummarizationFailed",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    "task restored to waiting for user after summarization failed"
+                );
+            }
+        }
+        Err(error) => {
+            debug!(
+                event = "SummarizationFailed",
+                task_id = %task_id,
+                work_item_id = %work_item.id,
+                error = %error.message(),
+                error_type = std::any::type_name_of_val(error),
+                "summarization failed"
+            );
+
+            // 发送系统通知（不进入 STM）
+            commands.spawn(SystemOutputMessage {
+                task_id,
+                content: format!("⚠️ 摘要失败：{}", error.message()),
+            });
+
+            // 即使摘要失败，也恢复任务状态，避免任务卡住
+            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+                && matches!(
+                    task.status,
+                    TaskStatus::Waiting(WaitingReason::Summarization)
+                )
+            {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Waiting(WaitingReason::User);
+                task.updated_at = now;
+                debug!(
+                    event = "TaskStatusRestoredAfterSummarizationFailed",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    "task restored to waiting for user after summarization failed"
+                );
+            }
+        }
+    }
+
+    // 清理 WorkItem 和结果消息
+    commands.entity(work_item_entity).despawn();
+    commands.entity(result_entity).despawn();
+}
+
 /// LLM 响应处理 System
 ///
 /// 处理 LLM 的响应，更新任务状态，处理 Tool 调用。
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn llm_response_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
+    config: Res<MemoryConfig>,
     mut commands: Commands,
     mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
@@ -233,39 +387,20 @@ pub fn llm_response_system(
                     continue;
                 }
                 WorkItemType::Summarization => {
-                    // 下一阶段接入
+                    handle_summarization_work_item_result(
+                        &mut commands,
+                        &mut tasks,
+                        entity,
+                        work_item_entity,
+                        work_item,
+                        result,
+                        clock.0,
+                        &config,
+                    );
+                    continue;
                 }
                 _ => {}
             }
-        }
-
-        // 处理 Summarization 请求：直接生成 SummarizationResultMessage
-        if result.request_kind == AgentRequestKind::Summarization {
-            let summary_result = match &result.result {
-                Ok(AgentExecutionOutput {
-                    content: OutputContent::Text(text),
-                    ..
-                }) => Ok(text.clone()),
-                Ok(_) => Err(crate::domain::ExecutionError::Unknown(
-                    "Summarization returned non-text output".to_string(),
-                )),
-                Err(e) => Err(e.clone()),
-            };
-
-            debug!(
-                event = "SummarizationResultCreated",
-                task_id = %result.task_id,
-                success = summary_result.is_ok(),
-                summary_len = summary_result.as_ref().map(|s| s.len()).unwrap_or(0),
-                "created summarization result message"
-            );
-
-            commands.spawn(SummarizationResultMessage {
-                task_id: result.task_id,
-                summary: summary_result,
-            });
-            commands.entity(entity).despawn();
-            continue;
         }
 
         // 非 LlmCompletion 的结果仅放行 BrainDecision+ToolCalls（让 tool calling 循环处理）

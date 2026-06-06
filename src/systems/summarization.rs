@@ -6,11 +6,11 @@ use bevy::prelude::*;
 use tracing::debug;
 
 use crate::{
-    app::{Clock, MemoryConfig},
+    app::Clock,
     contracts::{AgentCapabilitySummary, FirstSummarizerPolicy, SummarizerSelectionPolicy},
     domain::{
-        Agent, AgentKind, ShortTermMemory, SummarizationRequestMessage, SummarizationResultMessage,
-        SummarizationTrigger, SystemOutputMessage, Task, TaskStatus, WaitingReason, WorkItem,
+        Agent, AgentKind, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
+        WaitingReason, WorkItem,
     },
 };
 
@@ -88,114 +88,6 @@ pub(crate) fn summarization_dispatch_system(
             content_len = request.content_to_summarize.len(),
             "summarization work item created and pre-check passed"
         );
-        commands.entity(entity).despawn();
-    }
-}
-
-/// 摘要结果处理系统：更新 ShortTermMemory 并恢复任务状态
-pub(crate) fn summarization_result_system(
-    clock: Res<Clock>,
-    config: Res<MemoryConfig>,
-    mut commands: Commands,
-    results: Query<(Entity, &SummarizationResultMessage)>,
-    mut memories: Query<&mut ShortTermMemory>,
-    mut tasks: Query<&mut Task>,
-) {
-    for (entity, result) in &results {
-        let task_id = result.task_id;
-
-        match &result.summary {
-            Ok(summary) => {
-                // 更新摘要前缀
-                if let Some(mut memory) = memories.iter_mut().next() {
-                    memory.summary_prefix = Some(summary.clone());
-
-                    // 移除已压缩的 entries（保留最近 N 轮）
-                    let preserve_count = (config.preserve_recent_turns * 2) as usize;
-                    let removed = if memory.entries.len() > preserve_count {
-                        let removed = memory.entries.len() - preserve_count;
-                        memory.entries.drain(0..removed);
-                        removed
-                    } else {
-                        0
-                    };
-
-                    // 重新计算 token
-                    memory.recalculate_tokens();
-
-                    debug!(
-                        event = "SummarizationCompleted",
-                        task_id = %task_id,
-                        summary_len = summary.len(),
-                        summary = %summary,
-                        removed_entries = removed,
-                        remaining_entries = memory.entries.len(),
-                        new_tokens = memory.estimated_tokens,
-                        "summarization completed"
-                    );
-                }
-
-                // 发送系统通知（不进入 STM）
-                commands.spawn(SystemOutputMessage {
-                    task_id,
-                    content: format!("📝 摘要完成\n\n{}", summary),
-                });
-
-                // 恢复任务状态：从 Waiting(Summarization) 恢复为 Waiting(User)
-                // 这适用于 UserCommand 和 TokenThreshold 触发的摘要
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id)
-                    && matches!(
-                        task.status,
-                        TaskStatus::Waiting(WaitingReason::Summarization)
-                    )
-                {
-                    let old_status = task.status.clone();
-                    task.status = TaskStatus::Waiting(WaitingReason::User);
-                    task.updated_at = clock.0;
-                    debug!(
-                        event = "TaskStatusRestoredAfterSummarization",
-                        task_id = %task.id,
-                        from_status = ?old_status,
-                        to_status = ?task.status,
-                        "task restored to waiting for user after summarization"
-                    );
-                }
-            }
-            Err(error) => {
-                debug!(
-                    event = "SummarizationFailed",
-                    task_id = %task_id,
-                    error = %error.message(),
-                    error_type = std::any::type_name_of_val(error),
-                    "summarization failed"
-                );
-
-                // 发送系统通知（不进入 STM）
-                commands.spawn(SystemOutputMessage {
-                    task_id,
-                    content: format!("⚠️ 摘要失败：{}", error.message()),
-                });
-
-                // 即使摘要失败，也恢复任务状态，避免任务卡住
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id)
-                    && matches!(
-                        task.status,
-                        TaskStatus::Waiting(WaitingReason::Summarization)
-                    )
-                {
-                    let old_status = task.status.clone();
-                    task.status = TaskStatus::Waiting(WaitingReason::User);
-                    task.updated_at = clock.0;
-                    debug!(
-                        event = "TaskStatusRestoredAfterSummarizationFailed",
-                        task_id = %task.id,
-                        from_status = ?old_status,
-                        to_status = ?task.status,
-                        "task restored to waiting for user after summarization failed"
-                    );
-                }
-            }
-        }
         commands.entity(entity).despawn();
     }
 }
