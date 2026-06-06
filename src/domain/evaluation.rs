@@ -1,7 +1,5 @@
-use bevy::prelude::{Component, Resource};
+use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
-
-use super::{AgentId, TaskId};
 
 /// 评估触发条件
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,21 +7,6 @@ pub enum EvaluationTrigger {
     AgentRequested,
     TurnLimitReached,
     UserRequested,
-}
-
-/// 评估请求消息
-#[derive(Debug, Clone, Component)]
-pub struct EvaluationRequestMessage {
-    pub task_id: TaskId,
-    pub trigger: EvaluationTrigger,
-    pub agent_id: AgentId,
-}
-
-/// 评估结果消息
-#[derive(Debug, Clone, Component)]
-pub struct EvaluationResultMessage {
-    pub task_id: TaskId,
-    pub result: EvaluationResult,
 }
 
 /// 评估结果
@@ -44,7 +27,7 @@ pub enum EvaluationDecision {
 }
 
 /// 任务评估配置
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, Resource, Deserialize)]
 pub struct TaskEvaluationConfig {
     pub enabled: bool,
     pub max_turns: Option<u32>,
@@ -64,11 +47,29 @@ impl Default for TaskEvaluationConfig {
 }
 
 /// 偏离处理策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum OffTrackPolicy {
     AutoCorrect,
     AskUser,
     Fail,
+}
+
+/// 解析评估结果 JSON
+///
+/// 支持直接 JSON 或 markdown 代码块包裹的 JSON。
+pub fn parse_evaluation_result(content: &str) -> Result<EvaluationResult, String> {
+    let json_slice = if content.contains("```json") {
+        content
+            .split("```json")
+            .nth(1)
+            .and_then(|s| s.split("```").next())
+            .map(str::trim)
+            .unwrap_or(content)
+    } else {
+        content.trim()
+    };
+
+    serde_json::from_str(json_slice).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -104,5 +105,51 @@ mod tests {
         let _ = OffTrackPolicy::AutoCorrect;
         let _ = OffTrackPolicy::AskUser;
         let _ = OffTrackPolicy::Fail;
+    }
+
+    #[test]
+    fn parse_evaluation_json_from_text() {
+        let text = r#"{"decision":"Continue","reasoning":"still progressing","suggested_action":null}"#;
+        let parsed = parse_evaluation_result(text).unwrap();
+        assert_eq!(parsed.decision, EvaluationDecision::Continue);
+        assert_eq!(parsed.reasoning, "still progressing");
+        assert!(parsed.suggested_action.is_none());
+    }
+
+    #[test]
+    fn parse_evaluation_json_from_markdown_code_block() {
+        let text = r#"Some text before
+```json
+{"decision":"Complete","reasoning":"task done","suggested_action":"next step"}
+```
+Some text after"#;
+        let parsed = parse_evaluation_result(text).unwrap();
+        assert_eq!(parsed.decision, EvaluationDecision::Complete);
+        assert_eq!(parsed.reasoning, "task done");
+        assert_eq!(parsed.suggested_action, Some("next step".to_string()));
+    }
+
+    #[test]
+    fn parse_evaluation_json_handles_invalid_json() {
+        let text = "not valid json";
+        let result = parse_evaluation_result(text);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_evaluation_json_handles_all_decisions() {
+        for (decision_str, decision) in [
+            ("Continue", EvaluationDecision::Continue),
+            ("Complete", EvaluationDecision::Complete),
+            ("Failed", EvaluationDecision::Failed),
+            ("OffTrack", EvaluationDecision::OffTrack),
+        ] {
+            let text = format!(
+                r#"{{"decision":"{}","reasoning":"test"}}"#,
+                decision_str
+            );
+            let parsed = parse_evaluation_result(&text).unwrap();
+            assert_eq!(parsed.decision, decision);
+        }
     }
 }

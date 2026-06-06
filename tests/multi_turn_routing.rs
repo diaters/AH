@@ -140,52 +140,92 @@ fn evaluation_triggered_on_turn_limit() {
 
     app.update();
 
-    // Create a task with turn_count = 2
-    let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn(Task {
-        id: task_id,
-        content: "test task".to_string(),
-        creator: uuid::Uuid::nil(),
-        delegate: None,
-        status: TaskStatus::Running,
-        input_summary: "test".to_string(),
-        result_summary: String::new(),
-        priority: 0,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: true,
-        parent_task_id: None,
-        batch_id: None,
-        origin_channel: default_channel(),
+    // Add evaluator agent
+    app.world_mut().spawn(harness::Agent {
+        id: uuid::Uuid::new_v4(),
+        profile: harness::AgentProfile {
+            name: "evaluator".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        },
+        capabilities: harness::AgentCapabilities {
+            tags: vec!["evaluation".to_string()],
+            description: "evaluator agent".to_string(),
+        },
+        kind: harness::AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: harness::AgentToolPermissions::default(),
+        experience: harness::AgentExperience::default(),
     });
 
-    // Add short term memory with some entries
-    app.world_mut().spawn(harness::ShortTermMemory {
+    // Create a task with turn_count = 2 (4 entries = 2 turns)
+    let task_id = uuid::Uuid::new_v4();
+    let mut stm = ShortTermMemory {
         entries: vec![],
         estimated_tokens: 100,
         summary_prefix: None,
         last_cached_tokens: None,
-    });
+    };
+    // 第一轮
+    stm.add_entry(
+        harness::EntryRole::User,
+        "user message 1",
+        harness::EntryMetadata::default(),
+    );
+    stm.add_entry(
+        harness::EntryRole::Assistant,
+        "assistant response 1",
+        harness::EntryMetadata::default(),
+    );
+    // 第二轮
+    stm.add_entry(
+        harness::EntryRole::User,
+        "user message 2",
+        harness::EntryMetadata::default(),
+    );
+    stm.add_entry(
+        harness::EntryRole::Assistant,
+        "assistant response 2",
+        harness::EntryMetadata::default(),
+    );
+
+    app.world_mut().spawn((
+        Task {
+            id: task_id,
+            content: "test task".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Running,
+            input_summary: "test".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: default_channel(),
+        },
+        stm,
+    ));
 
     app.update();
 
-    // Check for evaluation request
-    let has_evaluation_request = app
+    // Check for WorkItem instead of EvaluationRequestMessage
+    let has_evaluation_workitem = app
         .world_mut()
-        .query::<&harness::EvaluationRequestMessage>()
+        .query::<&harness::WorkItem>()
         .iter(app.world())
-        .count()
-        > 0;
+        .any(|wi| wi.work_type == harness::WorkItemType::Evaluation);
 
-    // This test verifies the trigger logic exists
-    // Note: May not trigger without evaluator agent configured
+    // This test verifies the trigger logic creates WorkItem
     assert!(
-        !has_evaluation_request,
-        "should not trigger without evaluator agent"
+        has_evaluation_workitem,
+        "should create evaluation workitem when evaluator agent exists"
     );
 }
 

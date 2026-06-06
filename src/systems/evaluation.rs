@@ -2,11 +2,7 @@ use bevy::prelude::*;
 use tracing::debug;
 
 use crate::{
-    app::Clock,
-    domain::{
-        Agent, EvaluationResultMessage, ShortTermMemory, Task, TaskStatus, WaitingReason,
-        WorkItem,
-    },
+    domain::{Agent, ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem},
 };
 
 /// 评估器触发系统：检测评估条件并生成 WorkItem
@@ -62,45 +58,6 @@ pub(crate) fn evaluation_trigger_system(
                 }
             }
         }
-    }
-}
-
-/// 评估结果处理系统
-pub(crate) fn evaluation_result_system(
-    mut commands: Commands,
-    clock: Res<Clock>,
-    results: Query<(Entity, &EvaluationResultMessage)>,
-    mut tasks: Query<&mut Task>,
-) {
-    for (entity, msg) in &results {
-        if let Some(mut task) = tasks.iter_mut().find(|t| t.id == msg.task_id) {
-            use crate::domain::EvaluationDecision;
-
-            match msg.result.decision {
-                EvaluationDecision::Continue => {
-                    debug!(task_id = %task.id, "evaluation result: continue");
-                    task.status = TaskStatus::Ready;
-                    task.updated_at = clock.0;
-                }
-                EvaluationDecision::Complete => {
-                    debug!(task_id = %task.id, "evaluation result: complete");
-                    task.status = TaskStatus::Done;
-                    task.updated_at = clock.0;
-                }
-                EvaluationDecision::Failed => {
-                    debug!(task_id = %task.id, "evaluation result: failed");
-                    task.status = TaskStatus::Failed(crate::domain::FailureReason::AgentError);
-                    task.updated_at = clock.0;
-                }
-                EvaluationDecision::OffTrack => {
-                    debug!(task_id = %task.id, "evaluation result: off-track");
-                    // TODO: 根据配置策略处理偏离
-                    task.status = TaskStatus::Ready;
-                    task.updated_at = clock.0;
-                }
-            }
-        }
-        commands.entity(entity).despawn();
     }
 }
 

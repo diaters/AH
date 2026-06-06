@@ -12,7 +12,7 @@ use crate::{
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
         EntryRole, FailureReason, OutputContent, ShortTermMemory, SummarizationResultMessage, Task,
         TaskStatus, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, UserOutputMessage, WaitingReason,
+        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
     },
 };
 
@@ -44,6 +44,137 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
     }
 }
 
+/// 处理 Evaluation WorkItem 的执行结果
+fn handle_evaluation_work_item_result(
+    commands: &mut Commands,
+    tasks: &mut Query<(&mut Task, Option<&mut ShortTermMemory>)>,
+    result_entity: Entity,
+    work_item_entity: Entity,
+    work_item: &WorkItem,
+    result: &crate::domain::AgentExecutionResult,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    use crate::domain::{EvaluationDecision, EvaluationResult};
+
+    // 解析评估结果
+    let evaluation: EvaluationResult = match &result.result {
+        Ok(AgentExecutionOutput {
+            content: OutputContent::Text(content),
+            ..
+        }) => match crate::domain::parse_evaluation_result(content) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(
+                    event = "EvaluationParseFailed",
+                    task_id = %work_item.task_id,
+                    work_item_id = %work_item.id,
+                    error = %e,
+                    content = %content,
+                    "failed to parse evaluation result"
+                );
+                // 解析失败，任务保持原状态
+                commands.entity(work_item_entity).despawn();
+                commands.entity(result_entity).despawn();
+                return;
+            }
+        },
+        Ok(_) => {
+            warn!(
+                event = "EvaluationInvalidOutput",
+                task_id = %work_item.task_id,
+                work_item_id = %work_item.id,
+                "evaluation returned non-text output"
+            );
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            return;
+        }
+        Err(e) => {
+            warn!(
+                event = "EvaluationExecutionFailed",
+                task_id = %work_item.task_id,
+                work_item_id = %work_item.id,
+                error = %e.message(),
+                "evaluation execution failed"
+            );
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            return;
+        }
+    };
+
+    // 更新任务状态
+    if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id) {
+        let old_status = task.status.clone();
+        match evaluation.decision {
+            EvaluationDecision::Continue => {
+                debug!(
+                    event = "EvaluationResultApplied",
+                    task_id = %task.id,
+                    work_item_id = %work_item.id,
+                    decision = "Continue",
+                    reasoning = %evaluation.reasoning,
+                    "evaluation result: continue"
+                );
+                task.status = TaskStatus::Ready;
+                task.updated_at = now;
+            }
+            EvaluationDecision::Complete => {
+                debug!(
+                    event = "EvaluationResultApplied",
+                    task_id = %task.id,
+                    work_item_id = %work_item.id,
+                    decision = "Complete",
+                    reasoning = %evaluation.reasoning,
+                    "evaluation result: complete"
+                );
+                task.status = TaskStatus::Done;
+                task.updated_at = now;
+            }
+            EvaluationDecision::Failed => {
+                debug!(
+                    event = "EvaluationResultApplied",
+                    task_id = %task.id,
+                    work_item_id = %work_item.id,
+                    decision = "Failed",
+                    reasoning = %evaluation.reasoning,
+                    "evaluation result: failed"
+                );
+                task.status = TaskStatus::Failed(FailureReason::AgentError);
+                task.updated_at = now;
+            }
+            EvaluationDecision::OffTrack => {
+                debug!(
+                    event = "EvaluationResultApplied",
+                    task_id = %task.id,
+                    work_item_id = %work_item.id,
+                    decision = "OffTrack",
+                    reasoning = %evaluation.reasoning,
+                    suggested_action = ?evaluation.suggested_action,
+                    "evaluation result: off-track"
+                );
+                // TODO: 根据 OffTrackPolicy 处理偏离
+                task.status = TaskStatus::Ready;
+                task.updated_at = now;
+            }
+        }
+
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %task.id,
+            from_status = ?old_status,
+            to_status = ?task.status,
+            reason = "evaluation_result",
+            work_item_id = %work_item.id,
+            "task status updated by evaluation"
+        );
+    }
+
+    // 清理 WorkItem 和结果消息
+    commands.entity(work_item_entity).despawn();
+    commands.entity(result_entity).despawn();
+}
+
 /// LLM 响应处理 System
 ///
 /// 处理 LLM 的响应，更新任务状态，处理 Tool 调用。
@@ -55,6 +186,7 @@ pub fn llm_response_system(
     mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
+    work_items: Query<(Entity, &WorkItem)>,
 ) {
     // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
     struct CallingStateInfo {
@@ -81,6 +213,32 @@ pub fn llm_response_system(
 
     for (entity, result_message) in &results {
         let result = &result_message.result;
+
+        // 处理 WorkItem 结果（Evaluation、Summarization 等）
+        if let Some(work_item_id) = result.work_item_id
+            && let Some((work_item_entity, work_item)) = work_items
+                .iter()
+                .find(|(_, wi)| wi.id == work_item_id)
+        {
+            match work_item.work_type {
+                WorkItemType::Evaluation => {
+                    handle_evaluation_work_item_result(
+                        &mut commands,
+                        &mut tasks,
+                        entity,
+                        work_item_entity,
+                        work_item,
+                        result,
+                        clock.0,
+                    );
+                    continue;
+                }
+                WorkItemType::Summarization => {
+                    // 下一阶段接入
+                }
+                _ => {}
+            }
+        }
 
         // 处理 Summarization 请求：直接生成 SummarizationResultMessage
         if result.request_kind == AgentRequestKind::Summarization {
