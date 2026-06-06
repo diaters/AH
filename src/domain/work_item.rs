@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     contracts::TagSet,
-    domain::{AgentId, ConversationMessage, TaskId, ToolDefinition},
+    domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition},
 };
 
 /// 工作项类型
@@ -169,7 +169,12 @@ impl WorkItem {
     }
 
     /// 创建摘要工作项
-    pub fn summarization(task_id: TaskId, content: String, target_tokens: usize) -> Self {
+    pub fn summarization(
+        task_id: TaskId,
+        content: String,
+        target_tokens: usize,
+        _trigger: SummarizationTrigger,
+    ) -> Self {
         let tags = TagSet::from_tags(["summarization"]);
         let input = WorkItemInput::new(format!(
             "请对以下内容进行摘要，目标约 {} tokens:\n\n{}",
@@ -314,12 +319,19 @@ mod tests {
     #[test]
     fn work_item_summarization() {
         let task_id = Uuid::nil();
-        let work_item = WorkItem::summarization(task_id, "content to summarize".to_string(), 500);
+        let work_item = WorkItem::summarization(
+            task_id,
+            "content to summarize".to_string(),
+            500,
+            SummarizationTrigger::TaskComplete,
+        );
         assert_eq!(work_item.work_type, WorkItemType::Summarization);
         assert!(work_item.tags.tags.contains(&"summarization".to_string()));
         // Verify system prompt is injected
         assert!(work_item.input.context.system_prompt.is_some());
         assert!(!work_item.input.context.system_prompt.unwrap().is_empty());
+        // Verify prompt contains target_tokens value
+        assert!(work_item.input.prompt.contains("500"));
     }
 
     #[test]
