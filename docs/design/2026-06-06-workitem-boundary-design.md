@@ -13,12 +13,13 @@
 
 ## 1. 背景
 
-当前项目已经定义了 `WorkItem` 统一工作单元模型，并预留了以下工作类型：
+当前项目已经定义了 `WorkItem` 统一工作单元模型，当前支持以下工作类型：
 
-- `Planning`
 - `Execution`
 - `Summarization`
 - `Evaluation`
+
+`Planning` 类型已在重评估后从代码中删除，不再作为预留项保留。
 
 同时，`WorkItem` 还定义了：
 
@@ -253,20 +254,17 @@ Memory policy / Trigger
 - 先让 `WorkItem` 在治理型内部工作中落地
 - 再评估是否将普通任务执行统一到 `Execution WorkItem`
 
-### 7.4 谨慎处理：Brain / Planning
+### 7.4 Brain / Planning 已不再预留
 
-`Brain` 和 `Planning` 不应在第一轮直接重构为 `Planning WorkItem`。
+`Planning WorkItem` 已从代码中删除，不再作为未来扩展的预留项。
 
 原因如下：
 
-- `Plan` 已经在重评估中被收敛为能力，而非独立模块
-- 当前 Brain 正在向“通过工具驱动编排”演进
-- 如果此时强行引入 `Planning WorkItem`，会重新放大 `Plan` 抽象
+- `Plan` 已在重评估中被收敛为能力，而非独立模块
+- 当前 Brain 通过工具驱动编排（`create_tasks` + DAG 调度），不需要 `Planning WorkItem` 抽象
+- 保留预留类型会产生误导性，暗示该路线仍在推进
 
-因此建议：
-
-- 保留 `Planning` 类型定义，作为未来可能扩展的预留
-- 第一轮不推进 `Planning WorkItem` 运行时闭环
+如未来确有需要，可重新引入规划抽象，但不应复用已删除的 `Planning` 变体。
 
 ### 7.5 不建议迁移：控制流对象
 
@@ -365,7 +363,6 @@ Control State
 
 不建议的顺序：
 
-- 不建议先做 `Planning WorkItem`
 - 不建议先做全链路 `Task -> WorkItem` 重写
 - 不建议先改工具循环和等待状态
 
@@ -386,7 +383,7 @@ Control State
 
 需要明确：
 
-- `Plan` 去模块化并不等于引入新的 `Planning WorkItem` 中心架构
+- `Plan` 去模块化已完成（代码已删除），不存在重新引入 Planner 抽象的风险
 - `Evaluation` 收敛到 `WorkItem` 不应被误解为所有内部动作都应转化为 `WorkItem`
 
 ---
@@ -398,7 +395,7 @@ Control State
 | 双重建模 | `Task` 与 `WorkItem` 语义重叠 | 明确主从关系，禁止把 `WorkItem` 视为用户任务 |
 | 过度统一 | 把等待、工具循环等状态也改为 `WorkItem` | 明确控制状态不属于 `WorkItem` |
 | 改造范围失控 | 从治理型工作扩展到整个主链路 | 先只落地 `Evaluation` 与 `Summarization` |
-| 与 Plan 回潮冲突 | 借 `WorkItem` 名义重新引入 Planner 抽象 | 第一轮不推进 `Planning WorkItem` 闭环 |
+| ~~与 Plan 回潮冲突~~ | ~~借 `WorkItem` 名义重新引入 Planner 抽象~~ | ~~已缓解：`Planning` 变体已从代码中删除~~ |
 
 ---
 
@@ -463,7 +460,6 @@ __保留的控制流对象：__
 __未纳入实施范围：__
 
 - `Execution WorkItem`（普通任务执行）
-- `Planning WorkItem`（Brain 规划）
 - 工具调用循环的重写
 
 __架构简化：__

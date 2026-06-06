@@ -1,6 +1,6 @@
 //! WorkItem 统一工作单元
 //!
-//! 定义统一的工作单元类型，支持规划、执行、摘要等多种工作类型。
+//! 定义统一的工作单元类型，支持执行、摘要、评估等多种工作类型。
 
 use bevy::prelude::*;
 use uuid::Uuid;
@@ -13,8 +13,6 @@ use crate::{
 /// 工作项类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkItemType {
-    /// 规划工作项
-    Planning,
     /// 执行工作项
     Execution,
     /// 摘要工作项
@@ -43,8 +41,6 @@ pub enum WorkItemStatus {
 pub enum WorkItemOrigin {
     /// 用户任务
     UserTask,
-    /// 规划产物
-    PlanArtifact,
     /// 记忆压缩
     MemoryCompaction,
     /// 评估
@@ -56,8 +52,6 @@ pub enum WorkItemOrigin {
 pub enum WorkItemWritebackTarget {
     /// 任务结果
     TaskResult,
-    /// 规划产物
-    PlanArtifact,
     /// 短期上下文
     ShortTermContext,
     /// 长期记忆
@@ -110,7 +104,7 @@ impl WorkItemInput {
 
 /// 统一工作单元
 ///
-/// 代表一个待执行的工作单元，可以来自用户任务、规划产物或记忆压缩。
+/// 代表一个待执行的工作单元，可以来自用户任务或记忆压缩。
 #[derive(Debug, Clone, Component)]
 pub struct WorkItem {
     /// 唯一标识

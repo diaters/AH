@@ -5,7 +5,6 @@
 mod dispatch;
 mod execution;
 mod memory;
-mod planning;
 mod tools;
 
 pub use dispatch::{
@@ -18,10 +17,5 @@ pub use execution::{ExecutionBackend, ExecutionPolicy};
 pub use memory::{
     CompressionTrigger, ContributionPolicy, DefaultCompactionPolicy, DefaultContributionPolicy,
     MemoryCompactionContext, MemoryCompactor, MemoryStore, SummaryResult, WritebackDecision,
-};
-pub use planning::{
-    Complexity, DefaultPlanPolicy, DefaultReplanPolicy, DefaultWorkItemDeriver, PlanArtifact,
-    PlanArtifactBuilder, PlanContext, PlanError, PlanPolicy, PlanStep, PlannedWorkItemSpec,
-    ReplanEvent, ReplanPolicy, SubtaskSpec, WorkItemDeriver,
 };
 pub use tools::{ApprovalRoute, DefaultToolApprovalPolicy, ToolApprovalPolicy, ToolCatalog};

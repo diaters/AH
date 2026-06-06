@@ -456,7 +456,6 @@ pub(crate) fn workitem_to_execution_request_system(
                     WorkItemType::Evaluation => AgentRequestKind::Evaluation,
                     WorkItemType::Summarization => AgentRequestKind::Summarization,
                     WorkItemType::Execution => AgentRequestKind::Normal,
-                    WorkItemType::Planning => AgentRequestKind::Normal,
                 },
                 prompt: work_item.input.prompt.clone(),
                 system_prompt: work_item.input.context.system_prompt.clone(),
@@ -1642,7 +1641,7 @@ git commit -m "docs: update design documents with implementation status"
 
 ## 非目标
 
-- 本计划不涉及 Planning WorkItem 的实现
+- ~~本计划不涉及 Planning WorkItem 的实现~~（`Planning` 变体已从代码中删除）
 - 本计划不修改工具调用循环和等待机制
 - 本计划不实现复杂的自动重规划功能
 - 本计划不修改子任务 DAG 编排逻辑
