@@ -445,3 +445,96 @@ fn shell_wait_returns_completed_when_process_exits() {
     let output_json = wait_result.tool_output.clone().unwrap();
     assert_eq!(output_json["status"], "completed");
 }
+
+#[test]
+fn shell_send_input_returns_backend_backed_status() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell input", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let start_request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_start".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: start_request,
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({
+            "command": "cat"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_start_for_input".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let handle_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results[0].tool_output.clone().unwrap()["handle_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let input_request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_send_input".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: input_request,
+        tool_name: "shell_send_input".to_string(),
+        tool_input: serde_json::json!({
+            "handle_id": handle_id,
+            "input": "hello",
+            "append_newline": true
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_send_input".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    // Check result after first update (tool_result_system despawns results after processing)
+    app.update();
+
+    let results = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        query.iter(world).cloned().collect::<Vec<_>>()
+    };
+
+    let last = results.last().unwrap().tool_output.clone().unwrap();
+    assert!(last["status"].is_string());
+}

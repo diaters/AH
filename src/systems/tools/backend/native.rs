@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     process::{Child, ChildStdin, Command as StdCommand, Stdio},
     sync::{Arc, Mutex},
     thread,
@@ -208,12 +208,42 @@ impl SessionBackend for NativeProcessBackend {
 
     fn send_input(&self, command: SessionCommand) -> Result<SessionHandle, String> {
         match command {
-            SessionCommand::Input { handle_id, .. } => {
+            SessionCommand::Input {
+                handle_id,
+                input,
+                append_newline,
+                ..
+            } => {
+                let stdin = self
+                    .stdins
+                    .lock()
+                    .map_err(|_| "stdin map poisoned".to_string())?
+                    .get(&handle_id)
+                    .cloned()
+                    .ok_or_else(|| format!("stdin for session {} not found", handle_id))?;
+
+                let input_len = input.len();
+                {
+                    let mut stdin = stdin.lock().map_err(|_| "stdin mutex poisoned".to_string())?;
+                    let payload = if append_newline {
+                        format!("{input}\n")
+                    } else {
+                        input
+                    };
+                    stdin
+                        .write_all(payload.as_bytes())
+                        .map_err(|error| error.to_string())?;
+                    stdin.flush().map_err(|error| error.to_string())?;
+                }
+
                 debug!(
                     event = "ShellSendInput",
                     handle_id = %handle_id,
-                    "send_input called (stub)"
+                    input_len = input_len,
+                    append_newline = append_newline,
+                    "send_input wrote to stdin"
                 );
+
                 self.get_status(handle_id)
             }
             SessionCommand::Signal { .. } => {
@@ -227,19 +257,50 @@ impl SessionBackend for NativeProcessBackend {
             SessionCommand::Signal {
                 handle_id, signal, ..
             } => {
+                let process = self
+                    .processes
+                    .lock()
+                    .map_err(|_| "process map poisoned".to_string())?
+                    .get(&handle_id)
+                    .cloned()
+                    .ok_or_else(|| format!("session {} not found", handle_id))?;
+
+                {
+                    let mut child = process.lock().map_err(|_| "process mutex poisoned".to_string())?;
+                    match signal.as_str() {
+                        "interrupt" | "terminate" | "kill" => {
+                            child.kill().map_err(|error| error.to_string())?
+                        }
+                        other => return Err(format!("unsupported signal '{}'", other)),
+                    }
+                }
+
+                let mut handle = self.get_status(handle_id)?;
+                handle.status = SessionStatus::Stopped;
+                handle.finished_at = Some(Utc::now());
+                self.sessions
+                    .lock()
+                    .map_err(|_| "session map poisoned".to_string())?
+                    .insert(handle_id, handle.clone());
+
                 debug!(
                     event = "ShellSendSignal",
                     handle_id = %handle_id,
                     signal = %signal,
-                    "send_signal called (stub)"
+                    "send_signal killed process"
                 );
-                self.get_status(handle_id)
+
+                Ok(handle)
             }
             SessionCommand::Input { .. } => {
                 Err("unexpected input command in send_signal".to_string())
             }
         }
     }
+
+    // Phase 1 limitation:
+    // interrupt / terminate / kill are temporarily mapped to the same kill-like behavior
+    // in the native backend. Follow-up work can refine per-platform signal mapping.
 
     fn wait_session(&self, request: SessionWaitRequest) -> Result<Option<SessionHandle>, String> {
         let process = {
