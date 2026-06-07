@@ -1,12 +1,16 @@
 //! 等待任务 System
 //!
-//! 处理 wait_tasks 工具的等待逻辑。
+//! 处理 wait_tasks 工具和 shell.wait 的等待逻辑。
 
 use bevy::prelude::*;
 
 use crate::{
     app::Clock,
-    domain::{SubTaskCompletedMessage, Task, WaitingForTasksInfo},
+    domain::{
+        AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, OutputContent,
+        SessionStatus, SubTaskCompletedMessage, Task, ToolExecutionResultMessage,
+        WaitingForSessionInfo, WaitingForTasksInfo,
+    },
 };
 
 use super::orchestrator::{collect_task_results, spawn_wait_result_message};
@@ -62,6 +66,52 @@ pub fn check_waiting_tasks_system(
 
             // 移除等待信息组件
             commands.entity(entity).remove::<WaitingForTasksInfo>();
+        }
+    }
+}
+
+/// 轮询检查等待中的 shell 会话（超时或完成时返回结果）
+pub fn check_waiting_sessions_system(
+    clock: Res<Clock>,
+    mut commands: Commands,
+    waiting_tasks: Query<(Entity, &Task, &WaitingForSessionInfo)>,
+) {
+    for (entity, task, info) in &waiting_tasks {
+        let timed_out = clock.0 >= info.timeout_at;
+
+        // For now, we don't have real backend integration, so we just check timeout
+        // In a real implementation, we would check the session status from the backend
+        let terminal = false; // Placeholder - would check session status
+
+        if timed_out || terminal {
+            // Spawn the result message
+            commands.spawn(ToolExecutionResultMessage {
+                result: AgentExecutionResult {
+                    task_id: task.id,
+                    agent_id: info.agent_id,
+                    request_kind: AgentRequestKind::LlmCompletion,
+                    result: Ok(AgentExecutionOutput {
+                        content: OutputContent::Text("shell.wait completed".to_string()),
+                        reasoning_content: None,
+                    }),
+                    prompt: String::new(),
+                    system_prompt: None,
+                    tools: vec![],
+                    reasoning_content: None,
+                    work_item_id: None,
+                },
+                tool_name: "shell.wait".to_string(),
+                tool_output: Ok(serde_json::json!({
+                    "handle_id": info.handle_id.to_string(),
+                    "status": if timed_out { "timeout" } else { "completed" },
+                    "timed_out": timed_out
+                })),
+                tool_call_id: Some(info.tool_call_id.clone()),
+                processed: false,
+            });
+
+            // Remove the waiting info component
+            commands.entity(entity).remove::<WaitingForSessionInfo>();
         }
     }
 }

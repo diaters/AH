@@ -5,10 +5,11 @@
 use bevy::prelude::*;
 
 use crate::{
-    domain::{BuiltinToolExecutors, SpaceToolRegistry},
+    domain::{BuiltinToolExecutors, SpaceSessionRegistry, SpaceToolRegistry},
     systems::{
-        HarnessSet, check_waiting_tasks_system, on_subtask_completed_check_waiting,
-        register_builtin_tools, tool_dispatch_system, tool_result_system,
+        HarnessSet, check_waiting_sessions_system, check_waiting_tasks_system,
+        on_subtask_completed_check_waiting, register_builtin_tools, tool_dispatch_system,
+        tool_result_system, NativeProcessBackend,
     },
 };
 
@@ -25,6 +26,8 @@ impl Plugin for ToolRuntimePlugin {
         register_builtin_tools(&mut tool_registry, &mut tool_executors);
         app.insert_resource(tool_registry);
         app.insert_resource(tool_executors);
+        app.insert_resource(SpaceSessionRegistry::default());
+        app.insert_resource(NativeProcessBackend::default());
 
         // 注册 Tool 相关系统
         app.add_systems(
@@ -41,6 +44,8 @@ impl Plugin for ToolRuntimePlugin {
                 on_subtask_completed_check_waiting
                     .in_set(HarnessSet::Transform)
                     .after(crate::systems::sub_task_completion_system),
+                // 等待 shell 会话检查
+                check_waiting_sessions_system.in_set(HarnessSet::Transform),
             ),
         );
     }

@@ -9,9 +9,10 @@ use uuid::Uuid;
 
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
-    ChannelId, FrontendKind, OutputContent, ShortTermMemory, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
-    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ChannelId, FrontendKind, OutputContent, SessionCommand, SessionHandle, SessionStatus,
+    ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
+    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForSessionInfo,
     WaitingForTasksInfo, WaitingReason,
 };
 
@@ -379,7 +380,7 @@ pub fn handle_tool_action(
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
-    tasks: &Query<(Entity, &mut Task)>,
+    tasks: &mut Query<(Entity, &mut Task)>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -457,6 +458,63 @@ pub fn handle_tool_action(
                 }
             }
         }
+        Ok(ToolAction::ExecSession(session_request)) => {
+            // Use the backend resource to execute the command
+            // For now, spawn the result directly with a placeholder
+            spawn_shell_result(commands, request_entity, request, "shell.exec", serde_json::json!({
+                "status": "completed",
+                "message": "shell.exec placeholder - backend integration needed"
+            }));
+        }
+        Ok(ToolAction::StartSession(session_request)) => {
+            spawn_shell_result(commands, request_entity, request, "shell.start", serde_json::json!({
+                "status": "running",
+                "message": "shell.start placeholder - backend integration needed"
+            }));
+        }
+        Ok(ToolAction::ReadSessionOutput(output_request)) => {
+            spawn_shell_result(commands, request_entity, request, "shell.status", serde_json::json!({
+                "status": "running",
+                "message": "shell.status placeholder - backend integration needed"
+            }));
+        }
+        Ok(ToolAction::SendSessionInput(command)) => {
+            spawn_shell_result(commands, request_entity, request, "shell.send_input", serde_json::json!({
+                "status": "running",
+                "message": "shell.send_input placeholder - backend integration needed"
+            }));
+        }
+        Ok(ToolAction::SendSessionSignal(command)) => {
+            spawn_shell_result(commands, request_entity, request, "shell.send_signal", serde_json::json!({
+                "status": "running",
+                "message": "shell.send_signal placeholder - backend integration needed"
+            }));
+        }
+        Ok(ToolAction::WaitForSession(wait_request)) => {
+            // Set task to waiting state for session
+            if let Some((_, mut task)) = tasks
+                .iter_mut()
+                .find(|(_, t)| t.id == request.request.task_id)
+            {
+                task.status = TaskStatus::Waiting(WaitingReason::Session {
+                    handle_id: wait_request.handle_id,
+                });
+            }
+            commands.entity(task_entity).insert(WaitingForSessionInfo {
+                handle_id: wait_request.handle_id,
+                timeout_at: chrono::Utc::now() + chrono::Duration::seconds(wait_request.timeout_secs as i64),
+                tool_call_id: request.tool_call_id.clone().unwrap_or_default(),
+                agent_id: request.request.agent_id,
+                return_tail_lines: wait_request.tail_lines,
+            });
+            commands.entity(request_entity).despawn();
+        }
+        Ok(ToolAction::StopSession(stop_request)) => {
+            spawn_shell_result(commands, request_entity, request, "shell.stop", serde_json::json!({
+                "status": "stopped",
+                "message": "shell.stop placeholder - backend integration needed"
+            }));
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
@@ -505,6 +563,40 @@ pub fn spawn_tool_error(
         result: execution_result,
         tool_name: request.tool_name.clone(),
         tool_output: Err(error),
+        tool_call_id: request.tool_call_id.clone(),
+        processed: false,
+    });
+
+    commands.entity(request_entity).despawn();
+}
+
+/// 生成 Shell 工具执行结果
+pub fn spawn_shell_result(
+    commands: &mut Commands,
+    request_entity: Entity,
+    request: &ToolExecutionRequestMessage,
+    tool_name: &str,
+    tool_output: serde_json::Value,
+) {
+    let execution_result = AgentExecutionResult {
+        task_id: request.request.task_id,
+        agent_id: request.request.agent_id,
+        request_kind: request.request.request_kind.clone(),
+        result: Ok(AgentExecutionOutput {
+            content: OutputContent::Text(format!("{} completed", tool_name)),
+            reasoning_content: None,
+        }),
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        reasoning_content: None,
+        work_item_id: None,
+    };
+
+    commands.spawn(ToolExecutionResultMessage {
+        result: execution_result,
+        tool_name: tool_name.to_string(),
+        tool_output: Ok(tool_output),
         tool_call_id: request.tool_call_id.clone(),
         processed: false,
     });
