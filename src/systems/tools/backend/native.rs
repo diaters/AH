@@ -54,9 +54,15 @@ impl SessionBackend for NativeProcessBackend {
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr),
                 );
-                let (combined_tail, combined_truncated, returned_lines) =
-                    tail_lines(&combined, request.tail_lines);
-                return Ok(SessionHandle {
+
+                // Create output buffer and store content
+                let mut buffer = crate::domain::SessionOutputBuffer::empty();
+                append_output(&mut buffer, &combined, 1024 * 1024); // 1MB max buffer
+
+                // Generate window from buffer
+                let output_window = window_from_buffer(&buffer, None, request.tail_lines);
+
+                let handle = SessionHandle {
                     handle_id,
                     backend: SessionBackendKind::Native,
                     status: if exit_status.success() {
@@ -74,19 +80,21 @@ impl SessionBackend for NativeProcessBackend {
                     finished_at: Some(Utc::now()),
                     owner_task_id: request.owner_task_id,
                     owner_agent_id: request.owner_agent_id,
-                    output: SessionOutputWindow {
-                        combined_tail,
-                        combined_truncated,
-                        returned_lines,
-                        cursor: Some("0".to_string()),
-                        next_cursor: Some("1".to_string()),
-                    },
-                });
+                    output: output_window,
+                };
+
+                // Store handle in sessions map for later read_output() calls
+                self.sessions
+                    .lock()
+                    .map_err(|_| "session map poisoned".to_string())?
+                    .insert(handle_id, handle.clone());
+
+                return Ok(handle);
             }
 
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let _ = child.kill();
-                return Ok(SessionHandle {
+                let handle = SessionHandle {
                     handle_id,
                     backend: SessionBackendKind::Native,
                     status: SessionStatus::Stopped,
@@ -107,7 +115,15 @@ impl SessionBackend for NativeProcessBackend {
                         cursor: Some("0".to_string()),
                         next_cursor: Some("0".to_string()),
                     },
-                });
+                };
+
+                // Store handle in sessions map for later read_output() calls
+                self.sessions
+                    .lock()
+                    .map_err(|_| "session map poisoned".to_string())?
+                    .insert(handle_id, handle.clone());
+
+                return Ok(handle);
             }
 
             thread::sleep(Duration::from_millis(10));
@@ -202,10 +218,19 @@ impl SessionBackend for NativeProcessBackend {
 
     fn read_output(&self, request: SessionOutputRequest) -> Result<SessionOutputResponse, String> {
         let handle = self.get_status(request.handle_id)?;
-        Ok(SessionOutputResponse {
-            output: handle.output.clone(),
-            handle,
-        })
+
+        // Phase 1 limitation: We return the latest truthful window instead of an exact diff slice.
+        // The cursor progression is truthful - next_cursor advances whenever new buffered content appears.
+        // Future work can implement cursor-based slicing to return only new content since the cursor.
+        let output = SessionOutputWindow {
+            combined_tail: handle.output.combined_tail.clone(),
+            combined_truncated: handle.output.combined_truncated,
+            returned_lines: handle.output.returned_lines,
+            cursor: request.cursor.clone(),
+            next_cursor: handle.output.next_cursor.clone(),
+        };
+
+        Ok(SessionOutputResponse { handle, output })
     }
 
     fn send_input(&self, command: SessionCommand) -> Result<SessionHandle, String> {
@@ -429,6 +454,42 @@ fn tail_lines(content: &str, max_lines: usize) -> (String, bool, usize) {
     let start = lines.len().saturating_sub(max_lines);
     let tail = lines[start..].join("\n");
     (tail, truncated, returned_lines)
+}
+
+/// 将文本追加到输出缓冲区，并推进 cursor。
+fn append_output(buffer: &mut crate::domain::SessionOutputBuffer, content: &str, max_bytes: usize) {
+    if content.is_empty() {
+        return;
+    }
+
+    buffer.total_bytes += content.len();
+    buffer.chunks.push_back(content.to_string());
+    buffer.next_cursor += 1;
+
+    while buffer.total_bytes > max_bytes {
+        if let Some(front) = buffer.chunks.pop_front() {
+            buffer.total_bytes = buffer.total_bytes.saturating_sub(front.len());
+        } else {
+            break;
+        }
+    }
+}
+
+/// 根据输出缓冲区生成返回窗口。
+fn window_from_buffer(
+    buffer: &crate::domain::SessionOutputBuffer,
+    cursor: Option<String>,
+    tail_lines_limit: usize,
+) -> crate::domain::SessionOutputWindow {
+    let joined = buffer.chunks.iter().cloned().collect::<Vec<_>>().join("");
+    let (combined_tail, combined_truncated, returned_lines) = tail_lines(&joined, tail_lines_limit);
+    crate::domain::SessionOutputWindow {
+        combined_tail,
+        combined_truncated,
+        returned_lines,
+        cursor,
+        next_cursor: Some(buffer.next_cursor.to_string()),
+    }
 }
 
 /// 后台读取 stdout/stderr，并把最新窗口写回 SessionHandle。

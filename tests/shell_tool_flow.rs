@@ -7,7 +7,7 @@ use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
     ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task,
-    ToolExecutionRequestMessage, build_harness_app,
+    ToolExecutionRequestMessage, build_harness_app, SessionBackend,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -537,4 +537,31 @@ fn shell_send_input_returns_backend_backed_status() {
 
     let last = results.last().unwrap().tool_output.clone().unwrap();
     assert!(last["status"].is_string());
+}
+
+#[test]
+fn shell_read_output_supports_cursor_progression() {
+    let backend = harness::NativeProcessBackend::default();
+    let handle = backend
+        .exec_blocking(harness::SessionStartRequest {
+            command: "printf 'line1\\nline2\\nline3\\n'".to_string(),
+            session_name: Some("cursor-test".to_string()),
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            timeout_secs: None,
+            tail_lines: 2,
+            owner_task_id: Uuid::new_v4(),
+            owner_agent_id: Uuid::new_v4(),
+        })
+        .expect("exec_blocking should succeed");
+
+    let first = backend
+        .read_output(harness::SessionOutputRequest {
+            handle_id: handle.handle_id,
+            cursor: None,
+            tail_lines: 2,
+        })
+        .expect("read_output should succeed");
+
+    assert!(first.output.next_cursor.is_some());
 }

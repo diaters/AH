@@ -11,3 +11,4 @@ pub use contracts::*;
 pub use domain::*;
 pub use llm::*;
 pub use plugins::*;
+pub use systems::tools::NativeProcessBackend;

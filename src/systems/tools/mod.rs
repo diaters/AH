@@ -3,7 +3,7 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 mod approval;
-mod backend;
+pub mod backend;
 mod builtin;
 mod confirmation;
 mod dispatch;
