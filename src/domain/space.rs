@@ -8,7 +8,11 @@ use bevy::prelude::Resource;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentCapabilities, AgentProfile, MemoryEntry, SubTaskDefinition, TaskId, ToolError};
+use super::{
+    AgentCapabilities, AgentId, AgentProfile, MemoryEntry, SessionCommand, SessionOutputRequest,
+    SessionStartRequest, SessionStopRequest, SessionWaitRequest, SubTaskDefinition, TaskId,
+    ToolError,
+};
 
 /// Space 级别的长期知识（用户相关）
 #[derive(Resource, Default)]
@@ -145,6 +149,20 @@ pub enum ToolAction {
         task_ids: Vec<TaskId>,
         timeout_secs: u64,
     },
+    /// 阻塞执行 shell 命令
+    ExecSession(SessionStartRequest),
+    /// 启动后台 shell 会话
+    StartSession(SessionStartRequest),
+    /// 读取 shell 会话输出
+    ReadSessionOutput(SessionOutputRequest),
+    /// 发送交互输入到 shell 会话
+    SendSessionInput(SessionCommand),
+    /// 发送控制信号到 shell 会话
+    SendSessionSignal(SessionCommand),
+    /// 等待 shell 会话完成
+    WaitForSession(SessionWaitRequest),
+    /// 停止 shell 会话
+    StopSession(SessionStopRequest),
 }
 
 /// 内置 Tool 执行上下文
@@ -152,6 +170,18 @@ pub struct ToolContext<'a> {
     pub knowledge: &'a SpaceKnowledge,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
+    /// shell 工具默认返回的最新输出行数
+    pub shell_default_tail_lines: usize,
+    /// shell 工具允许返回的最大输出行数
+    pub shell_max_tail_lines: usize,
+    /// shell.wait 默认超时时间（秒）
+    pub shell_default_wait_timeout_secs: u64,
+    /// shell.stop(wait_for_exit=true) 默认超时时间（秒）
+    pub shell_default_stop_timeout_secs: u64,
+    /// 当前 task ID
+    pub current_task_id: TaskId,
+    /// 当前 agent ID
+    pub current_agent_id: AgentId,
 }
 
 /// 内置 Tool trait

@@ -13,6 +13,7 @@ use crate::{
         ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, WaitingReason,
     },
+    systems::NativeProcessBackend,
 };
 
 use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_tool_error};
@@ -81,6 +82,7 @@ pub fn approval_result_system(
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
     settings: Res<HarnessSettings>,
+    backend: Res<NativeProcessBackend>,
 ) {
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -183,12 +185,18 @@ pub fn approval_result_system(
                 let ctx = ToolContext {
                     knowledge: &knowledge,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
+                    shell_default_tail_lines: settings.0.shell_default_tail_lines,
+                    shell_max_tail_lines: settings.0.shell_max_tail_lines,
+                    shell_default_wait_timeout_secs: settings.0.shell_default_wait_timeout_secs,
+                    shell_default_stop_timeout_secs: settings.0.shell_default_stop_timeout_secs,
+                    current_task_id: tool_request.request.task_id,
+                    current_agent_id: tool_request.request.agent_id,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
                 // Find the task entity
                 if let Some((task_entity, _)) = tasks
-                    .iter()
+                    .iter_mut()
                     .find(|(_, t)| t.id == tool_request.request.task_id)
                 {
                     handle_tool_action(
@@ -197,7 +205,8 @@ pub fn approval_result_system(
                         task_entity,
                         tool_request,
                         action,
-                        &tasks,
+                        &mut tasks,
+                        &*backend,
                     );
                 }
 

@@ -13,6 +13,7 @@ mod execution;
 mod frontend;
 mod memory;
 mod message;
+mod session;
 mod space;
 mod summarization;
 mod task;
@@ -85,11 +86,19 @@ pub use memory::{
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage, Signal,
+    ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage,
+    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
     SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+};
+
+// session
+pub use session::{
+    SessionBackendKind, SessionCommand, SessionHandle, SessionHandleId, SessionOutputBuffer,
+    SessionOutputRequest, SessionOutputResponse, SessionOutputWindow, SessionStartRequest,
+    SessionStatus, SessionStopRequest, SessionWaitRequest, SpaceSessionRegistry,
 };
 
 // space
@@ -103,7 +112,7 @@ pub use space::{
 pub use summarization::SummarizationTrigger;
 
 // task
-pub use task::{Task, TaskStatus, WaitingForTasksInfo};
+pub use task::{Task, TaskStatus, WaitingForSessionInfo, WaitingForTasksInfo};
 
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
