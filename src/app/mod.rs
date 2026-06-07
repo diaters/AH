@@ -32,6 +32,16 @@ pub struct HarnessConfig {
     pub agents_config_path: String,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
+    /// shell 工具默认返回的最新输出行数
+    pub shell_default_tail_lines: usize,
+    /// shell 工具允许返回的最大输出行数
+    pub shell_max_tail_lines: usize,
+    /// shell.wait 默认超时时间（秒）
+    pub shell_default_wait_timeout_secs: u64,
+    /// shell.stop(wait_for_exit=true) 默认超时时间（秒）
+    pub shell_default_stop_timeout_secs: u64,
+    /// 每个 session stream 的最大缓存字节数
+    pub shell_max_buffer_bytes_per_stream: usize,
 }
 
 impl HarnessConfig {
@@ -66,6 +76,28 @@ impl HarnessConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(300),
+            shell_default_tail_lines: std::env::var("HARNESS_SHELL_DEFAULT_TAIL_LINES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(200),
+            shell_max_tail_lines: std::env::var("HARNESS_SHELL_MAX_TAIL_LINES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500),
+            shell_default_wait_timeout_secs: std::env::var("HARNESS_SHELL_DEFAULT_WAIT_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+            shell_default_stop_timeout_secs: std::env::var("HARNESS_SHELL_DEFAULT_STOP_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            shell_max_buffer_bytes_per_stream: std::env::var(
+                "HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM",
+            )
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64 * 1024),
         })
     }
 }
@@ -84,6 +116,11 @@ impl Default for HarnessConfig {
             brain: None,
             agents_config_path: "agents.toml".to_string(),
             default_wait_tasks_timeout_secs: 300, // 5 minutes default
+            shell_default_tail_lines: 200,
+            shell_max_tail_lines: 500,
+            shell_default_wait_timeout_secs: 300,
+            shell_default_stop_timeout_secs: 10,
+            shell_max_buffer_bytes_per_stream: 64 * 1024,
         }
     }
 }

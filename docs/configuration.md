@@ -105,3 +105,13 @@ export HARNESS_BRAIN_ENABLED=true
 - 不要提交真实 API Key 到仓库
 - 共享示例配置时，仅更新 `.env.example`
 - 若接入新的兼容 provider，优先保持 OpenAI 协议兼容，避免过早为单家厂商定制分支逻辑
+
+## Shell Runtime
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HARNESS_SHELL_DEFAULT_TAIL_LINES` | `200` | shell 返回给 LLM 的默认最新输出行数 |
+| `HARNESS_SHELL_MAX_TAIL_LINES` | `500` | 单次 shell 返回允许的最大输出行数 |
+| `HARNESS_SHELL_DEFAULT_WAIT_TIMEOUT_SECS` | `300` | `shell.wait` 默认超时时间 |
+| `HARNESS_SHELL_DEFAULT_STOP_TIMEOUT_SECS` | `10` | `shell.stop(wait_for_exit=true)` 默认超时时间 |
+| `HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM` | `65536` | 每个 stdout/stderr stream 的最大缓存字节数 |
