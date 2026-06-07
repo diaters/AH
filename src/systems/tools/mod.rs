@@ -3,6 +3,7 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 mod approval;
+mod backend;
 mod builtin;
 mod confirmation;
 mod dispatch;
@@ -11,6 +12,7 @@ mod result;
 mod waiting;
 
 pub use approval::{approval_dispatch_system, approval_result_system};
+pub use backend::NativeProcessBackend;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
 pub use result::tool_result_system;
