@@ -274,6 +274,16 @@ impl SessionBackend for NativeProcessBackend {
                 .map_err(|_| "session map poisoned".to_string())?
                 .insert(request.handle_id, handle.clone());
 
+            // Clean up process and stdin resources
+            self.processes
+                .lock()
+                .map_err(|_| "process map poisoned".to_string())?
+                .remove(&request.handle_id);
+            self.stdins
+                .lock()
+                .map_err(|_| "stdin map poisoned".to_string())?
+                .remove(&request.handle_id);
+
             Ok(Some(handle))
         } else {
             Ok(None)
@@ -302,6 +312,16 @@ impl SessionBackend for NativeProcessBackend {
             .map_err(|_| "session map poisoned".to_string())?
             .insert(request.handle_id, handle.clone());
 
+        // Clean up process and stdin resources
+        self.processes
+            .lock()
+            .map_err(|_| "process map poisoned".to_string())?
+            .remove(&request.handle_id);
+        self.stdins
+            .lock()
+            .map_err(|_| "stdin map poisoned".to_string())?
+            .remove(&request.handle_id);
+
         debug!(
             event = "ShellSessionStopped",
             handle_id = %request.handle_id,
@@ -315,11 +335,16 @@ impl SessionBackend for NativeProcessBackend {
 
 impl Drop for NativeProcessBackend {
     fn drop(&mut self) {
-        if let Ok(processes) = self.processes.lock() {
-            for process in processes.values() {
-                if let Ok(mut child) = process.lock() {
-                    let _ = child.kill();
-                }
+        let processes: Vec<_> = self
+            .processes
+            .lock()
+            .ok()
+            .map(|map| map.values().cloned().collect())
+            .unwrap_or_default();
+
+        for process in processes {
+            if let Ok(mut child) = process.lock() {
+                let _ = child.kill();
             }
         }
     }
