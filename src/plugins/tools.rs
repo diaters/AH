@@ -40,12 +40,16 @@ impl Plugin for ToolRuntimePlugin {
                     .in_set(HarnessSet::Transform)
                     .after(crate::systems::ingest_execution_results_system),
                 // 等待任务检查
-                check_waiting_tasks_system.in_set(HarnessSet::Transform),
+                check_waiting_tasks_system
+                    .in_set(HarnessSet::Transform)
+                    .after(tool_result_system),
                 on_subtask_completed_check_waiting
                     .in_set(HarnessSet::Transform)
                     .after(crate::systems::sub_task_completion_system),
                 // 等待 shell 会话检查
-                check_waiting_sessions_system.in_set(HarnessSet::Transform),
+                check_waiting_sessions_system
+                    .in_set(HarnessSet::Transform)
+                    .after(tool_result_system),
             ),
         );
     }

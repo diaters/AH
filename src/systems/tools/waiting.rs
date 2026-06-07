@@ -6,6 +6,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::Clock,
+    contracts::SessionBackend,
     domain::{
         AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, OutputContent,
         SubTaskCompletedMessage, Task, ToolExecutionResultMessage, WaitingForSessionInfo,
@@ -75,16 +76,20 @@ pub fn check_waiting_sessions_system(
     clock: Res<Clock>,
     mut commands: Commands,
     waiting_tasks: Query<(Entity, &Task, &WaitingForSessionInfo)>,
+    backend: Res<crate::systems::tools::backend::NativeProcessBackend>,
 ) {
     for (entity, task, info) in &waiting_tasks {
         let timed_out = clock.0 >= info.timeout_at;
+        let handle = backend
+            .wait_session(crate::domain::SessionWaitRequest {
+                handle_id: info.handle_id,
+                timeout_secs: 0,
+                tail_lines: info.return_tail_lines,
+            })
+            .ok()
+            .flatten();
 
-        // For now, we don't have real backend integration, so we just check timeout
-        // In a real implementation, we would check the session status from the backend
-        let terminal = false; // Placeholder - would check session status
-
-        if timed_out || terminal {
-            // Spawn the result message
+        if timed_out || handle.is_some() {
             commands.spawn(ToolExecutionResultMessage {
                 result: AgentExecutionResult {
                     task_id: task.id,
@@ -101,16 +106,18 @@ pub fn check_waiting_sessions_system(
                     work_item_id: None,
                 },
                 tool_name: "shell_wait".to_string(),
-                tool_output: Ok(serde_json::json!({
-                    "handle_id": info.handle_id.to_string(),
-                    "status": if timed_out { "timeout" } else { "completed" },
-                    "timed_out": timed_out
-                })),
+                tool_output: Ok(match handle {
+                    Some(handle) => serde_json::json!(handle),
+                    None => serde_json::json!({
+                        "handle_id": info.handle_id.to_string(),
+                        "status": "running",
+                        "timed_out": true
+                    }),
+                }),
                 tool_call_id: Some(info.tool_call_id.clone()),
                 processed: false,
             });
 
-            // Remove the waiting info component
             commands.entity(entity).remove::<WaitingForSessionInfo>();
         }
     }

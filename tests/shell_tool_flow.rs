@@ -344,3 +344,104 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
     let last = results.last().unwrap().tool_output.clone().unwrap();
     assert_eq!(last["status"], "stopped");
 }
+
+#[test]
+fn shell_wait_returns_completed_when_process_exits() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell wait", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let start_request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_start".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: start_request,
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({
+            "command": "sleep 0.1"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_start_for_wait".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let handle_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results[0].tool_output.clone().unwrap()["handle_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let wait_request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_wait".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: wait_request,
+        tool_name: "shell_wait".to_string(),
+        tool_input: serde_json::json!({
+            "handle_id": handle_id,
+            "timeout_secs": 2
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_wait".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    let mut wait_result = None;
+    for _ in 0..20 {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // Check for results immediately after each update (before tool_result_system despawns them)
+        {
+            let app = app.world_mut();
+            let mut result_query = app.query::<&harness::ToolExecutionResultMessage>();
+            let results: Vec<_> = result_query.iter(app).cloned().collect();
+            if let Some(result) = results.iter().find(|r| r.tool_name == "shell_wait") {
+                wait_result = Some(result.clone());
+                break;
+            }
+        }
+    }
+
+    let wait_result = wait_result.expect("shell_wait result should be present");
+    let output_json = wait_result.tool_output.clone().unwrap();
+    assert_eq!(output_json["status"], "completed");
+}

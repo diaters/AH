@@ -508,7 +508,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                         commands,
                         request_entity,
                         request,
-                        "shell_status",
+                        &request.tool_name,
                         serde_json::json!(response),
                     );
                 }
@@ -580,17 +580,44 @@ pub fn handle_tool_action<B: SessionBackend>(
             });
             commands.entity(request_entity).despawn();
         }
-        Ok(ToolAction::StopSession(_stop_request)) => {
-            spawn_shell_result(
-                commands,
-                request_entity,
-                request,
-                "shell_stop",
-                serde_json::json!({
-                    "status": "stopped",
-                    "message": "shell_stop placeholder - backend integration needed"
-                }),
-            );
+        Ok(ToolAction::StopSession(stop_request)) => match backend.stop_session(stop_request.clone()) {
+            Ok(handle) => {
+                if stop_request.wait_for_exit {
+                    if let Some((_, mut task)) = tasks
+                        .iter_mut()
+                        .find(|(_, t)| t.id == request.request.task_id)
+                    {
+                        task.status = TaskStatus::Waiting(WaitingReason::Session {
+                            handle_id: stop_request.handle_id,
+                        });
+                    }
+                    commands.entity(task_entity).insert(WaitingForSessionInfo {
+                        handle_id: stop_request.handle_id,
+                        timeout_at: chrono::Utc::now()
+                            + chrono::Duration::seconds(stop_request.timeout_secs as i64),
+                        tool_call_id: request.tool_call_id.clone().unwrap_or_default(),
+                        agent_id: request.request.agent_id,
+                        return_tail_lines: stop_request.tail_lines,
+                    });
+                    commands.entity(request_entity).despawn();
+                } else {
+                    spawn_shell_result(
+                        commands,
+                        request_entity,
+                        request,
+                        "shell_stop",
+                        serde_json::json!(handle),
+                    );
+                }
+            }
+            Err(error) => {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::ExecutionFailed(error),
+                );
+            }
         }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
