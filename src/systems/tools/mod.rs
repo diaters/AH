@@ -16,7 +16,9 @@ pub use backend::NativeProcessBackend;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
 pub use result::tool_result_system;
-pub use waiting::{check_waiting_sessions_system, check_waiting_tasks_system, on_subtask_completed_check_waiting};
+pub use waiting::{
+    check_waiting_sessions_system, check_waiting_tasks_system, on_subtask_completed_check_waiting,
+};
 
 use crate::domain::{
     BuiltinToolExecutors, SpaceToolRegistry, ToolDefinition, ToolExecutorKind, ToolPermission,
@@ -381,6 +383,12 @@ mod tests {
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
+            shell_default_tail_lines: 50,
+            shell_max_tail_lines: 500,
+            shell_default_wait_timeout_secs: 60,
+            shell_default_stop_timeout_secs: 5,
+            current_task_id: uuid::Uuid::nil(),
+            current_agent_id: uuid::Uuid::nil(),
         };
         let executor = builtin::KnowledgeSearchTool;
 

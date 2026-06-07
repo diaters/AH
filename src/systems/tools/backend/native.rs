@@ -1,12 +1,11 @@
 use std::{
     collections::HashMap,
+    process::Command as StdCommand,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use bevy::prelude::Resource;
 use chrono::Utc;
-use tokio::{process::Command, runtime::Handle, time::timeout};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -27,56 +26,33 @@ pub struct NativeProcessBackend {
 impl SessionBackend for NativeProcessBackend {
     fn exec_blocking(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
         let handle_id = Uuid::new_v4();
-        let command_text_for_async = request.command.clone();
-        let command_text_for_handle = request.command.clone();
+        let command_text = request.command.clone();
         let session_name = request.session_name.clone();
-        let cwd_for_async = request.cwd.clone();
-        let cwd_for_handle = request.cwd.clone();
-        let timeout_secs = request.timeout_secs;
+        let cwd = request.cwd.clone();
         let owner_task_id = request.owner_task_id;
         let owner_agent_id = request.owner_agent_id;
         let max_tail_lines = request.tail_lines;
 
-        let execution = Handle::current().block_on(async move {
-            let mut command = Command::new("sh");
-            command.arg("-c").arg(&command_text_for_async);
-            if let Some(cwd) = cwd_for_async.as_ref() {
-                command.current_dir(cwd);
-            }
+        // Use std::process::Command for blocking execution
+        let mut command = StdCommand::new("sh");
+        command.arg("-c").arg(&command_text);
+        if let Some(ref cwd_path) = cwd {
+            command.current_dir(cwd_path);
+        }
 
-            let child = command.spawn().map_err(|e| e.to_string())?;
-            match timeout_secs {
-                Some(secs) => {
-                    match timeout(Duration::from_secs(secs), child.wait_with_output()).await {
-                        Ok(result) => result.map_err(|e| e.to_string()).map(|output| (output, false)),
-                        Err(_) => Err("shell.exec timed out".to_string()),
-                    }
-                }
-                None => child
-                    .wait_with_output()
-                    .await
-                    .map(|output| (output, false))
-                    .map_err(|e| e.to_string()),
-            }
-        });
+        // Execute the command
+        let execution = command.output().map_err(|e| e.to_string());
 
         let (status, exit_code, timed_out) = match &execution {
-            Ok((output, false)) if output.status.success() => {
+            Ok(output) if output.status.success() => {
                 (SessionStatus::Completed, output.status.code(), false)
             }
-            Ok((output, false)) => {
-                (SessionStatus::ExitedWithError, output.status.code(), false)
-            }
-            Ok((_, true)) => {
-                // This case should never happen since we always return false
-                (SessionStatus::Stopped, None, true)
-            }
-            Err(e) if e == "shell.exec timed out" => (SessionStatus::Stopped, None, true),
-            Err(e) => return Err(e.clone()),
+            Ok(output) => (SessionStatus::ExitedWithError, output.status.code(), false),
+            Err(_) => (SessionStatus::FailedToStart, None, false),
         };
 
         let combined = match &execution {
-            Ok((output, _)) => format!(
+            Ok(output) => format!(
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
@@ -84,15 +60,16 @@ impl SessionBackend for NativeProcessBackend {
             Err(_) => String::new(),
         };
 
-        let (combined_tail, combined_truncated, returned_lines) = tail_lines(&combined, max_tail_lines);
+        let (combined_tail, combined_truncated, returned_lines) =
+            tail_lines(&combined, max_tail_lines);
 
         let handle = SessionHandle {
             handle_id,
             backend: SessionBackendKind::Native,
             status,
-            command: command_text_for_handle,
+            command: command_text,
             session_name,
-            cwd: request.cwd,
+            cwd,
             exit_code,
             timed_out,
             interaction_required: false,
@@ -171,10 +148,7 @@ impl SessionBackend for NativeProcessBackend {
             .ok_or_else(|| format!("session {} not found", handle_id))
     }
 
-    fn read_output(
-        &self,
-        request: SessionOutputRequest,
-    ) -> Result<SessionOutputResponse, String> {
+    fn read_output(&self, request: SessionOutputRequest) -> Result<SessionOutputResponse, String> {
         let handle = self.get_status(request.handle_id)?;
         Ok(SessionOutputResponse {
             output: handle.output.clone(),
@@ -200,7 +174,9 @@ impl SessionBackend for NativeProcessBackend {
 
     fn send_signal(&self, command: SessionCommand) -> Result<SessionHandle, String> {
         match command {
-            SessionCommand::Signal { handle_id, signal, .. } => {
+            SessionCommand::Signal {
+                handle_id, signal, ..
+            } => {
                 debug!(
                     event = "ShellSendSignal",
                     handle_id = %handle_id,

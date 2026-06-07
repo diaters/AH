@@ -25,7 +25,10 @@ impl crate::domain::BuiltinTool for ShellStartTool {
                 .get("session_name")
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string),
-            cwd: input.get("cwd").and_then(|v| v.as_str()).map(ToString::to_string),
+            cwd: input
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
             env: HashMap::new(),
             timeout_secs: None,
             tail_lines: ctx.shell_default_tail_lines,

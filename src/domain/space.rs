@@ -8,7 +8,11 @@ use bevy::prelude::Resource;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentCapabilities, AgentId, AgentProfile, MemoryEntry, SessionCommand, SessionOutputRequest, SessionStartRequest, SessionStopRequest, SessionWaitRequest, SubTaskDefinition, TaskId, ToolError};
+use super::{
+    AgentCapabilities, AgentId, AgentProfile, MemoryEntry, SessionCommand, SessionOutputRequest,
+    SessionStartRequest, SessionStopRequest, SessionWaitRequest, SubTaskDefinition, TaskId,
+    ToolError,
+};
 
 /// Space 级别的长期知识（用户相关）
 #[derive(Resource, Default)]

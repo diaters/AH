@@ -7,9 +7,9 @@ use bevy::prelude::*;
 use crate::{
     domain::{BuiltinToolExecutors, SpaceSessionRegistry, SpaceToolRegistry},
     systems::{
-        HarnessSet, check_waiting_sessions_system, check_waiting_tasks_system,
-        on_subtask_completed_check_waiting, register_builtin_tools, tool_dispatch_system,
-        tool_result_system, NativeProcessBackend,
+        HarnessSet, NativeProcessBackend, check_waiting_sessions_system,
+        check_waiting_tasks_system, on_subtask_completed_check_waiting, register_builtin_tools,
+        tool_dispatch_system, tool_result_system,
     },
 };
 

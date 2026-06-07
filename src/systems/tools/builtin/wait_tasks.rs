@@ -68,6 +68,12 @@ mod tests {
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
+            shell_default_tail_lines: 50,
+            shell_max_tail_lines: 500,
+            shell_default_wait_timeout_secs: 60,
+            shell_default_stop_timeout_secs: 5,
+            current_task_id: uuid::Uuid::nil(),
+            current_agent_id: uuid::Uuid::nil(),
         };
         let executor = WaitTasksTool;
 
@@ -98,6 +104,12 @@ mod tests {
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
+            shell_default_tail_lines: 50,
+            shell_max_tail_lines: 500,
+            shell_default_wait_timeout_secs: 60,
+            shell_default_stop_timeout_secs: 5,
+            current_task_id: uuid::Uuid::nil(),
+            current_agent_id: uuid::Uuid::nil(),
         };
         let executor = WaitTasksTool;
 
@@ -122,6 +134,12 @@ mod tests {
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
+            shell_default_tail_lines: 50,
+            shell_max_tail_lines: 500,
+            shell_default_wait_timeout_secs: 60,
+            shell_default_stop_timeout_secs: 5,
+            current_task_id: uuid::Uuid::nil(),
+            current_agent_id: uuid::Uuid::nil(),
         };
         let executor = WaitTasksTool;
 
@@ -139,6 +157,12 @@ mod tests {
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
+            shell_default_tail_lines: 50,
+            shell_max_tail_lines: 500,
+            shell_default_wait_timeout_secs: 60,
+            shell_default_stop_timeout_secs: 5,
+            current_task_id: uuid::Uuid::nil(),
+            current_agent_id: uuid::Uuid::nil(),
         };
         let executor = WaitTasksTool;
 

@@ -84,14 +84,18 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500),
-            shell_default_wait_timeout_secs: std::env::var("HARNESS_SHELL_DEFAULT_WAIT_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
-            shell_default_stop_timeout_secs: std::env::var("HARNESS_SHELL_DEFAULT_STOP_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
+            shell_default_wait_timeout_secs: std::env::var(
+                "HARNESS_SHELL_DEFAULT_WAIT_TIMEOUT_SECS",
+            )
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300),
+            shell_default_stop_timeout_secs: std::env::var(
+                "HARNESS_SHELL_DEFAULT_STOP_TIMEOUT_SECS",
+            )
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10),
             shell_max_buffer_bytes_per_stream: std::env::var(
                 "HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM",
             )

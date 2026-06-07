@@ -32,7 +32,10 @@ impl crate::domain::BuiltinTool for ShellExecTool {
                 .get("session_name")
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string),
-            cwd: input.get("cwd").and_then(|v| v.as_str()).map(ToString::to_string),
+            cwd: input
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
             env: HashMap::new(),
             timeout_secs: input.get("timeout_secs").and_then(|v| v.as_u64()),
             tail_lines,

@@ -8,8 +8,8 @@ use crate::{
     app::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, OutputContent,
-        SessionStatus, SubTaskCompletedMessage, Task, ToolExecutionResultMessage,
-        WaitingForSessionInfo, WaitingForTasksInfo,
+        SubTaskCompletedMessage, Task, ToolExecutionResultMessage, WaitingForSessionInfo,
+        WaitingForTasksInfo,
     },
 };
 
