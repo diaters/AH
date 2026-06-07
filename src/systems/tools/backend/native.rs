@@ -46,7 +46,9 @@ impl SessionBackend for NativeProcessBackend {
 
         loop {
             if let Some(exit_status) = child.try_wait().map_err(|error| error.to_string())? {
-                let output = child.wait_with_output().map_err(|error| error.to_string())?;
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| error.to_string())?;
                 let combined = format!(
                     "{}{}",
                     String::from_utf8_lossy(&output.stdout),
@@ -224,7 +226,9 @@ impl SessionBackend for NativeProcessBackend {
 
                 let input_len = input.len();
                 {
-                    let mut stdin = stdin.lock().map_err(|_| "stdin mutex poisoned".to_string())?;
+                    let mut stdin = stdin
+                        .lock()
+                        .map_err(|_| "stdin mutex poisoned".to_string())?;
                     let payload = if append_newline {
                         format!("{input}\n")
                     } else {
@@ -266,7 +270,9 @@ impl SessionBackend for NativeProcessBackend {
                     .ok_or_else(|| format!("session {} not found", handle_id))?;
 
                 {
-                    let mut child = process.lock().map_err(|_| "process mutex poisoned".to_string())?;
+                    let mut child = process
+                        .lock()
+                        .map_err(|_| "process mutex poisoned".to_string())?;
                     match signal.as_str() {
                         "interrupt" | "terminate" | "kill" => {
                             child.kill().map_err(|error| error.to_string())?
@@ -316,7 +322,9 @@ impl SessionBackend for NativeProcessBackend {
         };
 
         let status = {
-            let mut child = process.lock().map_err(|_| "process mutex poisoned".to_string())?;
+            let mut child = process
+                .lock()
+                .map_err(|_| "process mutex poisoned".to_string())?;
             child.try_wait().map_err(|error| error.to_string())?
         };
 
@@ -361,7 +369,9 @@ impl SessionBackend for NativeProcessBackend {
             .ok_or_else(|| format!("session {} not found", request.handle_id))?;
 
         {
-            let mut child = process.lock().map_err(|_| "process mutex poisoned".to_string())?;
+            let mut child = process
+                .lock()
+                .map_err(|_| "process mutex poisoned".to_string())?;
             child.kill().map_err(|error| error.to_string())?;
         }
 
