@@ -83,8 +83,16 @@ pub fn check_waiting_sessions_system(
         let handle = backend
             .wait_session(crate::domain::SessionWaitRequest {
                 handle_id: info.handle_id,
-                timeout_secs: 0,
+                timeout_secs: 0, // Backend uses non-blocking try_wait; we rely on our own timeout
                 tail_lines: info.return_tail_lines,
+            })
+            .inspect_err(|e| {
+                tracing::warn!(
+                    event = "SessionWaitBackendError",
+                    handle_id = %info.handle_id,
+                    error = %e,
+                    "backend wait_session failed"
+                );
             })
             .ok()
             .flatten();
