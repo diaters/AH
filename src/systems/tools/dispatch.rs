@@ -14,6 +14,7 @@ use crate::{
         ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolPermission, WaitingReason,
     },
+    systems::NativeProcessBackend,
 };
 
 use super::orchestrator::{handle_tool_action, spawn_tool_error};
@@ -31,6 +32,7 @@ pub fn tool_dispatch_system(
     agents: Query<&Agent>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
     settings: Res<HarnessSettings>,
+    backend: Res<NativeProcessBackend>,
 ) {
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -160,6 +162,7 @@ pub fn tool_dispatch_system(
                         &request,
                         action,
                         &mut tasks,
+                        &*backend,
                     );
                 }
             }

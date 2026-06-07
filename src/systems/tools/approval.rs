@@ -13,6 +13,7 @@ use crate::{
         ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, WaitingReason,
     },
+    systems::NativeProcessBackend,
 };
 
 use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_tool_error};
@@ -81,6 +82,7 @@ pub fn approval_result_system(
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
     settings: Res<HarnessSettings>,
+    backend: Res<NativeProcessBackend>,
 ) {
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -204,6 +206,7 @@ pub fn approval_result_system(
                         tool_request,
                         action,
                         &mut tasks,
+                        &*backend,
                     );
                 }
 

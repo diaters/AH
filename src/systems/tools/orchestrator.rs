@@ -15,6 +15,7 @@ use crate::domain::{
     ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForSessionInfo,
     WaitingForTasksInfo, WaitingReason,
 };
+use crate::contracts::SessionBackend;
 
 /// 等待任务结果
 #[derive(Debug, Clone, Serialize)]
@@ -374,13 +375,14 @@ pub fn spawn_wait_result_message(
 
 /// 统一处理 Tool 执行动作
 #[allow(clippy::too_many_arguments)]
-pub fn handle_tool_action(
+pub fn handle_tool_action<B: SessionBackend>(
     commands: &mut Commands,
     request_entity: Entity,
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
     tasks: &mut Query<(Entity, &mut Task)>,
+    backend: &B,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -459,36 +461,54 @@ pub fn handle_tool_action(
             }
         }
         Ok(ToolAction::ExecSession(session_request)) => {
-            // Use the backend resource to execute the command
-            // For now, spawn the result directly with a placeholder
-            spawn_shell_result(commands, request_entity, request, "shell.exec", serde_json::json!({
-                "status": "completed",
-                "message": "shell.exec placeholder - backend integration needed"
-            }));
+            match backend.exec_blocking(session_request) {
+                Ok(handle) => {
+                    spawn_shell_result(commands, request_entity, request, "shell.exec", serde_json::json!(handle));
+                }
+                Err(error) => {
+                    spawn_tool_error(commands, request_entity, request, ToolError::ExecutionFailed(error));
+                }
+            }
         }
         Ok(ToolAction::StartSession(session_request)) => {
-            spawn_shell_result(commands, request_entity, request, "shell.start", serde_json::json!({
-                "status": "running",
-                "message": "shell.start placeholder - backend integration needed"
-            }));
+            match backend.start_session(session_request) {
+                Ok(handle) => {
+                    spawn_shell_result(commands, request_entity, request, "shell.start", serde_json::json!(handle));
+                }
+                Err(error) => {
+                    spawn_tool_error(commands, request_entity, request, ToolError::ExecutionFailed(error));
+                }
+            }
         }
         Ok(ToolAction::ReadSessionOutput(output_request)) => {
-            spawn_shell_result(commands, request_entity, request, "shell.status", serde_json::json!({
-                "status": "running",
-                "message": "shell.status placeholder - backend integration needed"
-            }));
+            match backend.read_output(output_request) {
+                Ok(response) => {
+                    spawn_shell_result(commands, request_entity, request, "shell.status", serde_json::json!(response));
+                }
+                Err(error) => {
+                    spawn_tool_error(commands, request_entity, request, ToolError::ExecutionFailed(error));
+                }
+            }
         }
         Ok(ToolAction::SendSessionInput(command)) => {
-            spawn_shell_result(commands, request_entity, request, "shell.send_input", serde_json::json!({
-                "status": "running",
-                "message": "shell.send_input placeholder - backend integration needed"
-            }));
+            match backend.send_input(command) {
+                Ok(handle) => {
+                    spawn_shell_result(commands, request_entity, request, "shell.send_input", serde_json::json!(handle));
+                }
+                Err(error) => {
+                    spawn_tool_error(commands, request_entity, request, ToolError::ExecutionFailed(error));
+                }
+            }
         }
         Ok(ToolAction::SendSessionSignal(command)) => {
-            spawn_shell_result(commands, request_entity, request, "shell.send_signal", serde_json::json!({
-                "status": "running",
-                "message": "shell.send_signal placeholder - backend integration needed"
-            }));
+            match backend.send_signal(command) {
+                Ok(handle) => {
+                    spawn_shell_result(commands, request_entity, request, "shell.send_signal", serde_json::json!(handle));
+                }
+                Err(error) => {
+                    spawn_tool_error(commands, request_entity, request, ToolError::ExecutionFailed(error));
+                }
+            }
         }
         Ok(ToolAction::WaitForSession(wait_request)) => {
             // Set task to waiting state for session

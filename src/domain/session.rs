@@ -87,7 +87,7 @@ pub struct SessionOutputRequest {
     pub tail_lines: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionOutputResponse {
     pub handle: SessionHandle,
     pub output: SessionOutputWindow,

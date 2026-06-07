@@ -13,6 +13,7 @@ use crate::{
         ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         ToolPermission,
     },
+    systems::NativeProcessBackend,
 };
 
 use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_tool_error};
@@ -42,6 +43,7 @@ pub fn tool_confirmation_result_system(
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
     settings: Res<HarnessSettings>,
+    backend: Res<NativeProcessBackend>,
 ) {
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -180,6 +182,7 @@ pub fn tool_confirmation_result_system(
                         tool_request,
                         action,
                         &mut tasks,
+                        &*backend,
                     );
                 }
 
