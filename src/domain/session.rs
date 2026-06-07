@@ -63,9 +63,25 @@ pub struct SessionOutputBuffer {
     pub next_cursor: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionInteractionState {
+    Idle,
+    WaitingForInput,
+    Busy,
+}
+
+#[derive(Debug)]
+pub struct SessionRuntimeState {
+    pub stdout: SessionOutputBuffer,
+    pub stderr: SessionOutputBuffer,
+    pub combined: SessionOutputBuffer,
+    pub interaction_state: SessionInteractionState,
+}
+
 #[derive(Resource, Default)]
 pub struct SpaceSessionRegistry {
     pub sessions: HashMap<SessionHandleId, SessionHandle>,
+    pub runtimes: HashMap<SessionHandleId, SessionRuntimeState>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,4 +141,43 @@ pub enum SessionCommand {
         timeout_secs: Option<u64>,
         tail_lines: usize,
     },
+}
+
+impl SessionOutputBuffer {
+    /// 创建空输出缓冲区。
+    pub fn empty() -> Self {
+        Self {
+            chunks: VecDeque::new(),
+            total_bytes: 0,
+            next_cursor: 0,
+        }
+    }
+}
+
+impl SessionRuntimeState {
+    /// 创建空运行时状态。
+    pub fn empty() -> Self {
+        Self {
+            stdout: SessionOutputBuffer::empty(),
+            stderr: SessionOutputBuffer::empty(),
+            combined: SessionOutputBuffer::empty(),
+            interaction_state: SessionInteractionState::Idle,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_runtime_state_starts_empty() {
+        let state = SessionRuntimeState::empty();
+
+        assert_eq!(state.stdout.total_bytes, 0);
+        assert_eq!(state.stderr.total_bytes, 0);
+        assert_eq!(state.combined.total_bytes, 0);
+        assert_eq!(state.stdout.next_cursor, 0);
+        assert_eq!(state.interaction_state, SessionInteractionState::Idle);
+    }
 }
