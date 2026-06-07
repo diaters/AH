@@ -173,7 +173,7 @@ pub fn register_builtin_tools(
 
     // Shell tools
     registry.register(ToolDefinition {
-        name: "shell.exec".to_string(),
+        name: "shell_exec".to_string(),
         description: "Execute a shell command and wait for the result. Suitable for one-time commands like build, test, lint.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -188,13 +188,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell.exec".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellExecTool));
 
     registry.register(ToolDefinition {
-        name: "shell.start".to_string(),
+        name: "shell_start".to_string(),
         description: "Start a background shell session and return a handle. Suitable for long-running commands like servers, watchers.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -208,13 +208,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell.start".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_start".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellStartTool));
 
     registry.register(ToolDefinition {
-        name: "shell.status".to_string(),
+        name: "shell_status".to_string(),
         description: "Query the current status of a shell session.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -227,13 +227,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("shell.status".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_status".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellStatusTool));
 
     registry.register(ToolDefinition {
-        name: "shell.read_output".to_string(),
+        name: "shell_read_output".to_string(),
         description: "Read output from a shell session. Can use cursor for incremental reading.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -247,13 +247,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("shell.read_output".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_read_output".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellReadOutputTool));
 
     registry.register(ToolDefinition {
-        name: "shell.send_input".to_string(),
+        name: "shell_send_input".to_string(),
         description: "Send input text to an interactive shell session.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -270,13 +270,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell.send_input".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_send_input".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellSendInputTool));
 
     registry.register(ToolDefinition {
-        name: "shell.send_signal".to_string(),
+        name: "shell_send_signal".to_string(),
         description: "Send a control signal to a shell session (interrupt, terminate, kill).".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -292,13 +292,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell.send_signal".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_send_signal".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellSendSignalTool));
 
     registry.register(ToolDefinition {
-        name: "shell.wait".to_string(),
+        name: "shell_wait".to_string(),
         description: "Wait for a shell session to complete or enter an interactive state.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -312,13 +312,13 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell.wait".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_wait".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellWaitTool));
 
     registry.register(ToolDefinition {
-        name: "shell.stop".to_string(),
+        name: "shell_stop".to_string(),
         description: "Stop a shell session. Optionally wait for graceful exit.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
@@ -333,7 +333,7 @@ pub fn register_builtin_tools(
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell.stop".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_stop".to_string()),
         required_tag: None,
     });
     executors.register(Box::new(ShellStopTool));

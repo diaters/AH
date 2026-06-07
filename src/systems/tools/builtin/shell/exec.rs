@@ -6,7 +6,7 @@ pub struct ShellExecTool;
 
 impl crate::domain::BuiltinTool for ShellExecTool {
     fn name(&self) -> &str {
-        "shell.exec"
+        "shell_exec"
     }
 
     fn execute(
@@ -67,7 +67,7 @@ mod tests {
         let tool = ShellExecTool;
         let action = tool
             .execute(&serde_json::json!({ "command": "echo ok" }), &ctx)
-            .expect("shell.exec should parse");
+            .expect("shell_exec should parse");
 
         match action {
             ToolAction::ExecSession(request) => assert_eq!(request.tail_lines, 200),

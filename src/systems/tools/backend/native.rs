@@ -93,7 +93,7 @@ impl SessionBackend for NativeProcessBackend {
             exit_code = ?exit_code,
             timed_out = timed_out,
             returned_lines = returned_lines,
-            "shell.exec completed"
+            "shell_exec completed"
         );
 
         Ok(handle)
@@ -133,7 +133,7 @@ impl SessionBackend for NativeProcessBackend {
             event = "ShellSessionStarted",
             handle_id = %handle_id,
             command = %handle.command,
-            "shell.start session created"
+            "shell_start session created"
         );
 
         Ok(handle)
@@ -223,7 +223,7 @@ impl SessionBackend for NativeProcessBackend {
             event = "ShellSessionStopped",
             handle_id = %request.handle_id,
             wait_for_exit = request.wait_for_exit,
-            "shell.stop session stopped"
+            "shell_stop session stopped"
         );
 
         Ok(handle)

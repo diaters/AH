@@ -83,7 +83,7 @@ fn shell_exec_returns_result_message() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "shell.exec".to_string(),
+            tool_name: "shell_exec".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -94,7 +94,7 @@ fn shell_exec_returns_result_message() {
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "shell.exec".to_string(),
+        tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({
             "command": "printf 'a\\nb\\nc\\n'",
             "tail_lines": 2
@@ -114,12 +114,12 @@ fn shell_exec_returns_result_message() {
 
     assert!(
         !results.is_empty(),
-        "shell.exec should produce a ToolExecutionResultMessage"
+        "shell_exec should produce a ToolExecutionResultMessage"
     );
     let output_json = results[0]
         .tool_output
         .clone()
-        .expect("shell.exec should succeed");
+        .expect("shell_exec should succeed");
     assert_eq!(output_json["status"], "completed");
     // Check that we got the tail (last 2 lines: b\nc)
     let combined_tail = output_json["output"]["combined_tail"].as_str().unwrap();
@@ -151,7 +151,7 @@ fn shell_start_returns_running_handle() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "shell.start".to_string(),
+            tool_name: "shell_start".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -162,7 +162,7 @@ fn shell_start_returns_running_handle() {
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "shell.start".to_string(),
+        tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
             "command": "sleep 1"
         }),
@@ -179,11 +179,11 @@ fn shell_start_returns_running_handle() {
         query.iter(world).cloned().collect::<Vec<_>>()
     };
 
-    assert!(!results.is_empty(), "shell.start should return immediately");
+    assert!(!results.is_empty(), "shell_start should return immediately");
     let output_json = results[0]
         .tool_output
         .clone()
-        .expect("shell.start should succeed");
+        .expect("shell_start should succeed");
     assert_eq!(output_json["status"], "running");
     assert!(output_json["handle_id"].is_string());
 }
@@ -211,7 +211,7 @@ fn shell_exec_with_exit_code_error() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "shell.exec".to_string(),
+            tool_name: "shell_exec".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -222,7 +222,7 @@ fn shell_exec_with_exit_code_error() {
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
-        tool_name: "shell.exec".to_string(),
+        tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({
             "command": "exit 1"
         }),
@@ -241,12 +241,12 @@ fn shell_exec_with_exit_code_error() {
 
     assert!(
         !results.is_empty(),
-        "shell.exec should produce a result even on non-zero exit"
+        "shell_exec should produce a result even on non-zero exit"
     );
     let output_json = results[0]
         .tool_output
         .clone()
-        .expect("shell.exec should succeed");
+        .expect("shell_exec should succeed");
     // Non-zero exit code should be "exited_with_error", not a tool error
     assert_eq!(output_json["status"], "exited_with_error");
     assert_eq!(output_json["exit_code"], 1);

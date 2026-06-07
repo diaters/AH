@@ -4,7 +4,7 @@ pub struct ShellReadOutputTool;
 
 impl crate::domain::BuiltinTool for ShellReadOutputTool {
     fn name(&self) -> &str {
-        "shell.read_output"
+        "shell_read_output"
     }
 
     fn execute(

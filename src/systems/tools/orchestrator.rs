@@ -466,7 +466,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                         commands,
                         request_entity,
                         request,
-                        "shell.exec",
+                        "shell_exec",
                         serde_json::json!(handle),
                     );
                 }
@@ -487,7 +487,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                         commands,
                         request_entity,
                         request,
-                        "shell.start",
+                        "shell_start",
                         serde_json::json!(handle),
                     );
                 }
@@ -508,7 +508,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                         commands,
                         request_entity,
                         request,
-                        "shell.status",
+                        "shell_status",
                         serde_json::json!(response),
                     );
                 }
@@ -528,7 +528,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     commands,
                     request_entity,
                     request,
-                    "shell.send_input",
+                    "shell_send_input",
                     serde_json::json!(handle),
                 );
             }
@@ -547,7 +547,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     commands,
                     request_entity,
                     request,
-                    "shell.send_signal",
+                    "shell_send_signal",
                     serde_json::json!(handle),
                 );
             }
@@ -585,10 +585,10 @@ pub fn handle_tool_action<B: SessionBackend>(
                 commands,
                 request_entity,
                 request,
-                "shell.stop",
+                "shell_stop",
                 serde_json::json!({
                     "status": "stopped",
-                    "message": "shell.stop placeholder - backend integration needed"
+                    "message": "shell_stop placeholder - backend integration needed"
                 }),
             );
         }

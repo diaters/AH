@@ -4,7 +4,7 @@ pub struct ShellStopTool;
 
 impl crate::domain::BuiltinTool for ShellStopTool {
     fn name(&self) -> &str {
-        "shell.stop"
+        "shell_stop"
     }
 
     fn execute(

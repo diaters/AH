@@ -4,7 +4,7 @@ pub struct ShellSendInputTool;
 
 impl crate::domain::BuiltinTool for ShellSendInputTool {
     fn name(&self) -> &str {
-        "shell.send_input"
+        "shell_send_input"
     }
 
     fn execute(

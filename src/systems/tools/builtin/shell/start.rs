@@ -6,7 +6,7 @@ pub struct ShellStartTool;
 
 impl crate::domain::BuiltinTool for ShellStartTool {
     fn name(&self) -> &str {
-        "shell.start"
+        "shell_start"
     }
 
     fn execute(

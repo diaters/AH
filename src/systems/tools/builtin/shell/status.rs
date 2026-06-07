@@ -4,7 +4,7 @@ pub struct ShellStatusTool;
 
 impl crate::domain::BuiltinTool for ShellStatusTool {
     fn name(&self) -> &str {
-        "shell.status"
+        "shell_status"
     }
 
     fn execute(

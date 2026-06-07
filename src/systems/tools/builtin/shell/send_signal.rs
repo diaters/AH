@@ -4,7 +4,7 @@ pub struct ShellSendSignalTool;
 
 impl crate::domain::BuiltinTool for ShellSendSignalTool {
     fn name(&self) -> &str {
-        "shell.send_signal"
+        "shell_send_signal"
     }
 
     fn execute(

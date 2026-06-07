@@ -4,7 +4,7 @@ pub struct ShellWaitTool;
 
 impl crate::domain::BuiltinTool for ShellWaitTool {
     fn name(&self) -> &str {
-        "shell.wait"
+        "shell_wait"
     }
 
     fn execute(

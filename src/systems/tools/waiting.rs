@@ -91,7 +91,7 @@ pub fn check_waiting_sessions_system(
                     agent_id: info.agent_id,
                     request_kind: AgentRequestKind::LlmCompletion,
                     result: Ok(AgentExecutionOutput {
-                        content: OutputContent::Text("shell.wait completed".to_string()),
+                        content: OutputContent::Text("shell_wait completed".to_string()),
                         reasoning_content: None,
                     }),
                     prompt: String::new(),
@@ -100,7 +100,7 @@ pub fn check_waiting_sessions_system(
                     reasoning_content: None,
                     work_item_id: None,
                 },
-                tool_name: "shell.wait".to_string(),
+                tool_name: "shell_wait".to_string(),
                 tool_output: Ok(serde_json::json!({
                     "handle_id": info.handle_id.to_string(),
                     "status": if timed_out { "timeout" } else { "completed" },
