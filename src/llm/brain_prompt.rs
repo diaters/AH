@@ -167,6 +167,39 @@ mod tests {
         assert_eq!(output.selected_agent_name, "worker");
     }
 
+    /// 解析 JSON 时应忽略 UTF-8 BOM（U+FEFF）前缀。
+    #[test]
+    fn parse_json_with_bom_prefix() {
+        let json =
+            r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
+        let raw = format!("\u{feff}{json}");
+        let output = parse_brain_decision(&raw).expect("should parse");
+
+        assert_eq!(output.selected_agent_name, "worker");
+    }
+
+    /// 解析 JSON 时应忽略零宽字符（例如 U+200B）前缀。
+    #[test]
+    fn parse_json_with_zero_width_prefix() {
+        let json =
+            r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
+        let raw = format!("\u{200b}{json}");
+        let output = parse_brain_decision(&raw).expect("should parse");
+
+        assert_eq!(output.selected_agent_name, "worker");
+    }
+
+    /// 解析 markdown code block 中的 JSON 时应忽略 BOM（U+FEFF）前缀。
+    #[test]
+    fn parse_json_in_markdown_code_block_with_bom_prefix() {
+        let json =
+            r#"{"selected_agent_name":"worker","delegate_prompt":"do it","reasoning":"test"}"#;
+        let raw = format!("```json\n\u{feff}{json}\n```");
+        let output = parse_brain_decision(&raw).expect("should parse");
+
+        assert_eq!(output.selected_agent_name, "worker");
+    }
+
     #[test]
     fn parse_invalid_json_returns_error() {
         let raw = "not json at all";
