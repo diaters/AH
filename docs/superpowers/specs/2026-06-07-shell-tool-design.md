@@ -148,7 +148,7 @@
     },
     "session_name": {
       "type": "string",
-      "description": "可选的会话名称"
+      "description": "可选的会话名称；用于日志、展示或后续会话管理"
     },
     "tail_lines": {
       "type": "integer",
@@ -243,7 +243,7 @@
     },
     "wait_for_output": {
       "type": "boolean",
-      "description": "发送后是否等待短时间新输出",
+      "description": "发送后是否在本次调用内短暂等待新输出",
       "default": false
     },
     "wait_timeout_secs": {
@@ -394,6 +394,7 @@
 
 - 非零退出码不是 `ToolError`，而是业务结果 `exited_with_error`
 - `shell.wait` 不仅等待退出，也可在进入 `waiting_for_input` 时提前返回
+- `shell.send_input(wait_for_output=true)` 只做本次 tool 调用内的 bounded short wait，不进入 `WaitingForSessionInfo`
 
 ---
 
@@ -405,6 +406,7 @@
 - `backend`
 - `status`
 - `command`
+- `session_name`
 - `cwd`
 - `exit_code`
 - `timed_out`
@@ -413,7 +415,13 @@
 - `finished_at`
 - `output`
 
-### 6.2 输出字段
+### 6.2 内部模型与返回投影
+
+- `SessionHandle` 是 Harness 内部的完整领域对象，可以包含运行时维护字段
+- `tool_output` 是面向 LLM 的序列化投影，不要求暴露 `SessionHandle` 的所有内部字段
+- 例如 `interaction_state`、`last_output_cursor` 可以保留为内部字段，而只在需要时投影为 `status`、`output.cursor`、`output.next_cursor`
+
+### 6.3 输出字段
 
 ```json
 {
@@ -423,7 +431,7 @@
 }
 ```
 
-### 6.3 设计原则
+### 6.4 设计原则
 
 - 所有工具默认只返回最新 N 行
 - 查询型工具优先返回 `combined_tail`
@@ -444,13 +452,13 @@
 - 内部保存 ring buffer 或 chunk buffer
 - 对 LLM 默认只返回“最新 N 行”
 - N 来自配置文件，可按调用参数覆盖，但受系统上限限制
+- Phase 1 不定义单次返回的 bytes 级 tail 截断，只定义 buffer 级容量上限
 - 增量日志通过 `shell.read_output(cursor=...)` 获取
 
 ### 7.3 推荐配置项
 
 - `shell.default_tail_lines`
 - `shell.max_tail_lines`
-- `shell.default_tail_bytes`
 - `shell.max_buffer_bytes_per_session`
 
 ### 7.4 STM 约束
@@ -479,6 +487,13 @@
 - `shell.send_input` 的输入内容默认不完整写入 STM
 - 日志记录“发送了输入”这一事实即可
 - 应支持对输入内容做省略或脱敏
+
+### 8.4 `wait_for_output` 语义
+
+- `wait_for_output = true` 时，`shell.send_input` 在本次调用内等待一小段时间以收集新输出
+- 该等待是 bounded short wait，不进入 task 级等待态
+- 超时后直接返回当前最新输出窗口，不生成 `WaitingForSessionInfo`
+- 若调用方需要真正阻塞直到状态变化，应使用 `shell.wait`
 
 ---
 
@@ -535,6 +550,14 @@ trait SessionBackend {
 - 需要确认 socket/CLI 稳定性是否足够支撑自动化使用
 - 仍需保留 native backend 作为兜底实现
 
+### 10.4 高层信号的跨平台映射
+
+- `interrupt`、`terminate`、`kill` 是高层语义，不保证与所有平台的底层信号一一对应
+- backend 负责做平台映射：
+  - Unix-like 平台优先映射到常见 signal 语义
+  - 非 Unix 平台映射到最接近的进程中断/终止能力
+- tool contract 只承诺“语义尽量一致”，不承诺底层实现完全同构
+
 ---
 
 ## 十一、ECS 接入设计
@@ -561,6 +584,7 @@ shell 工具接入时不新增平行执行链，而是复用现有主链：
 - `handle_id`
 - `backend`
 - `command`
+- `session_name`
 - `cwd`
 - `status`
 - `started_at`
@@ -568,8 +592,8 @@ shell 工具接入时不新增平行执行链，而是复用现有主链：
 - `exit_code`
 - `owner_task_id`
 - `owner_agent_id`
-- `interaction_state`
-- `last_output_cursor`
+- `interaction_state`（Phase 1 可选运行时字段）
+- `last_output_cursor`（Phase 1 可选运行时字段）
 
 #### 11.2.3 `WaitingForSessionInfo`
 
@@ -634,7 +658,7 @@ WaitingReason::Session { handle_id: Uuid }
 
 1. 校验会话存在且允许输入
 2. 发送文本输入
-3. 若 `wait_for_output = true`，短暂等待新输出
+3. 若 `wait_for_output = true`，在本次调用内短暂等待新输出
 4. 返回最新输出窗口
 
 ### 12.6 `shell.send_signal`
@@ -678,6 +702,7 @@ WaitingReason::Session { handle_id: Uuid }
 
 - 查询类工具风险较低，适合自动允许
 - 执行、输入、控制类工具直接影响系统状态，默认需要确认更安全
+- `shell.wait` 虽然偏查询语义，但会主动改变 task 调度状态并可能长时间挂起当前执行流，因此 Phase 1 仍归入 `Confirm`
 
 ---
 
@@ -696,11 +721,13 @@ WaitingReason::Session { handle_id: Uuid }
 - 命令退出码非 0
 - 启动成功但运行失败
 - 会话运行后主动被中断
+- `shell.exec` 超时
 
 这些不应走 `ToolError`，而应走正常 `tool_output` 返回，状态为：
 
 - `exited_with_error`
 - `stopped`
+- 对 `shell.exec(timeout_secs=...)`，超时后返回 `status = stopped` 且 `timed_out = true`
 
 ---
 
