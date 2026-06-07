@@ -32,6 +32,10 @@ pub enum WaitingReason {
     SubTaskBatch {
         batch_id: Uuid,
     },
+    /// 等待 shell 会话完成（shell.wait 工具调用后）
+    Session {
+        handle_id: Uuid,
+    },
 }
 
 /// 信号载荷
@@ -179,6 +183,27 @@ pub struct ToolExecutionResultMessage {
     pub tool_call_id: Option<String>,
     /// 是否已被 tool_result_system 处理过，防止重复记录日志和 STM
     pub processed: bool,
+}
+
+// ============ Session 生命周期 ============
+
+/// Session 启动消息
+#[derive(Debug, Clone, Component)]
+pub struct SessionStartedMessage {
+    pub handle_id: Uuid,
+}
+
+/// Session 退出消息
+#[derive(Debug, Clone, Component)]
+pub struct SessionExitedMessage {
+    pub handle_id: Uuid,
+}
+
+/// Session 输出追加消息
+#[derive(Debug, Clone, Component)]
+pub struct SessionOutputAppendedMessage {
+    pub handle_id: Uuid,
+    pub content: String,
 }
 
 // ============ 审批与确认 ============
