@@ -23,7 +23,11 @@ use crate::domain::{
     ToolSchema,
 };
 
-use self::builtin::{CreateTasksTool, KnowledgeSearchTool, SpawnAgentTool, WaitTasksTool};
+use self::builtin::{
+    CreateTasksTool, KnowledgeSearchTool, ShellExecTool, ShellReadOutputTool, ShellSendInputTool,
+    ShellSendSignalTool, ShellStartTool, ShellStatusTool, ShellStopTool, ShellWaitTool,
+    SpawnAgentTool, WaitTasksTool,
+};
 
 /// 注册内置 Tool
 pub fn register_builtin_tools(
@@ -164,6 +168,173 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(WaitTasksTool));
+
+    // Shell tools
+    registry.register(ToolDefinition {
+        name: "shell.exec".to_string(),
+        description: "Execute a shell command and wait for the result. Suitable for one-time commands like build, test, lint.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "The shell command to execute" },
+                    "cwd": { "type": "string", "description": "Working directory for the command" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["command"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("shell.exec".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellExecTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.start".to_string(),
+        description: "Start a background shell session and return a handle. Suitable for long-running commands like servers, watchers.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "The shell command to execute" },
+                    "cwd": { "type": "string", "description": "Working directory for the command" },
+                    "session_name": { "type": "string", "description": "Optional name for the session" }
+                },
+                "required": ["command"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("shell.start".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellStartTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.status".to_string(),
+        description: "Query the current status of a shell session.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle_id": { "type": "string", "description": "The session handle ID" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["handle_id"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("shell.status".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellStatusTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.read_output".to_string(),
+        description: "Read output from a shell session. Can use cursor for incremental reading.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle_id": { "type": "string", "description": "The session handle ID" },
+                    "cursor": { "type": "string", "description": "Cursor for incremental reading" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["handle_id"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("shell.read_output".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellReadOutputTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.send_input".to_string(),
+        description: "Send input text to an interactive shell session.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle_id": { "type": "string", "description": "The session handle ID" },
+                    "input": { "type": "string", "description": "The input text to send" },
+                    "append_newline": { "type": "boolean", "description": "Whether to append a newline (default: true)" },
+                    "wait_for_output": { "type": "boolean", "description": "Wait briefly for new output" },
+                    "wait_timeout_secs": { "type": "integer", "description": "Timeout for waiting" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["handle_id", "input"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("shell.send_input".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellSendInputTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.send_signal".to_string(),
+        description: "Send a control signal to a shell session (interrupt, terminate, kill).".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle_id": { "type": "string", "description": "The session handle ID" },
+                    "signal": { "type": "string", "enum": ["interrupt", "terminate", "kill"], "description": "The signal to send" },
+                    "wait_for_exit": { "type": "boolean", "description": "Wait for process to exit" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout for waiting" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["handle_id", "signal"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("shell.send_signal".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellSendSignalTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.wait".to_string(),
+        description: "Wait for a shell session to complete or enter an interactive state.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle_id": { "type": "string", "description": "The session handle ID" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["handle_id"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("shell.wait".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellWaitTool));
+
+    registry.register(ToolDefinition {
+        name: "shell.stop".to_string(),
+        description: "Stop a shell session. Optionally wait for graceful exit.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "handle_id": { "type": "string", "description": "The session handle ID" },
+                    "wait_for_exit": { "type": "boolean", "description": "Wait for process to exit" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout for waiting" },
+                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                },
+                "required": ["handle_id"]
+            }),
+        },
+        default_permission: ToolPermission::Confirm,
+        executor: ToolExecutorKind::Builtin("shell.stop".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ShellStopTool));
 }
 
 // Re-export tests module for backward compatibility
