@@ -5,6 +5,7 @@
 mod dispatch;
 mod execution;
 mod memory;
+mod sessions;
 mod tools;
 
 pub use dispatch::{
@@ -18,4 +19,5 @@ pub use memory::{
     CompressionTrigger, ContributionPolicy, DefaultCompactionPolicy, DefaultContributionPolicy,
     MemoryCompactionContext, MemoryCompactor, MemoryStore, SummaryResult, WritebackDecision,
 };
+pub use sessions::SessionBackend;
 pub use tools::{ApprovalRoute, DefaultToolApprovalPolicy, ToolApprovalPolicy, ToolCatalog};

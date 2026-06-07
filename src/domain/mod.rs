@@ -13,6 +13,7 @@ mod execution;
 mod frontend;
 mod memory;
 mod message;
+mod session;
 mod space;
 mod summarization;
 mod task;
@@ -90,6 +91,13 @@ pub use message::{
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+};
+
+// session
+pub use session::{
+    SessionBackendKind, SessionCommand, SessionHandle, SessionHandleId, SessionOutputBuffer,
+    SessionOutputRequest, SessionOutputResponse, SessionOutputWindow, SessionStartRequest,
+    SessionStatus, SessionStopRequest, SessionWaitRequest, SpaceSessionRegistry,
 };
 
 // space
