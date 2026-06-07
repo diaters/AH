@@ -54,8 +54,9 @@ pub fn parse_brain_decision(raw: &str) -> Result<BrainDecisionOutput, BrainDecis
     }
 
     let json_str = extract_json_block(raw);
+    let json_str = sanitize_json_like_input(json_str);
 
-    serde_json::from_str::<BrainDecisionOutput>(json_str)
+    serde_json::from_str::<BrainDecisionOutput>(&json_str)
         .map_err(|e| BrainDecisionError::ParseFailed(e.to_string()))
 }
 
@@ -76,6 +77,32 @@ fn extract_json_block(raw: &str) -> &str {
     }
 
     trimmed
+}
+
+/// 清理 JSON 文本前缀中的不可见字符（如 BOM/零宽字符），降低解析失败率。
+fn sanitize_json_like_input(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+
+    if let Some(stripped) = s.strip_prefix('\u{feff}') {
+        s = stripped.to_string();
+    }
+
+    loop {
+        let next = s
+            .strip_prefix('\u{200b}')
+            .or_else(|| s.strip_prefix('\u{200c}'))
+            .or_else(|| s.strip_prefix('\u{200d}'))
+            .or_else(|| s.strip_prefix('\u{2060}'));
+
+        if let Some(stripped) = next {
+            s = stripped.to_string();
+            continue;
+        }
+
+        break;
+    }
+
+    s
 }
 
 #[cfg(test)]
