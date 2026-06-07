@@ -676,6 +676,18 @@ pub fn spawn_tool_error(
     commands.entity(request_entity).despawn();
 }
 
+/// Normalize shell output to ensure consistent shape across all shell tools
+fn normalize_shell_output(mut value: serde_json::Value) -> serde_json::Value {
+    if value.get("output").is_none() {
+        value["output"] = serde_json::json!({
+            "combined_tail": "",
+            "combined_truncated": false,
+            "returned_lines": 0
+        });
+    }
+    value
+}
+
 /// 生成 Shell 工具执行结果
 pub fn spawn_shell_result(
     commands: &mut Commands,
@@ -702,7 +714,7 @@ pub fn spawn_shell_result(
     commands.spawn(ToolExecutionResultMessage {
         result: execution_result,
         tool_name: tool_name.to_string(),
-        tool_output: Ok(tool_output),
+        tool_output: Ok(normalize_shell_output(tool_output)),
         tool_call_id: request.tool_call_id.clone(),
         processed: false,
     });

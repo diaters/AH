@@ -6,8 +6,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task,
-    ToolExecutionRequestMessage, build_harness_app, SessionBackend,
+    ExecutorFuture, FrontendKind, HarnessConfig, SessionBackend, ShortTermMemory, Task,
+    ToolExecutionRequestMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -564,4 +564,72 @@ fn shell_read_output_supports_cursor_progression() {
         .expect("read_output should succeed");
 
     assert!(first.output.next_cursor.is_some());
+}
+
+#[test]
+fn shell_exec_and_shell_start_share_core_result_fields() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell shape", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let make_request = |tool_name: &str| AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: tool_name.to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: make_request("shell_exec"),
+        tool_name: "shell_exec".to_string(),
+        tool_input: serde_json::json!({ "command": "printf 'ok\\n'" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shape_exec".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: make_request("shell_start"),
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({ "command": "sleep 1" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shape_start".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let outputs = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        query
+            .iter(world)
+            .map(|result| result.tool_output.clone().unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    for output in outputs {
+        assert!(output.get("handle_id").is_some());
+        assert!(output.get("status").is_some());
+        assert!(output.get("output").is_some());
+    }
 }
