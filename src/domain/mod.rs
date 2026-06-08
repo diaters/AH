@@ -96,9 +96,11 @@ pub use message::{
 
 // session
 pub use session::{
-    SessionBackendKind, SessionCommand, SessionHandle, SessionHandleId, SessionOutputBuffer,
-    SessionOutputRequest, SessionOutputResponse, SessionOutputWindow, SessionStartRequest,
-    SessionStatus, SessionStopRequest, SessionWaitRequest, SpaceSessionRegistry,
+    SessionBackendKind, SessionCommand, SessionHandle, SessionHandleId, SessionInputRequest,
+    SessionOutputBuffer, SessionOutputRequest, SessionOutputResponse, SessionOutputSnapshot,
+    SessionOutputWindow, SessionReadRequest, SessionStartRequest, SessionStatus,
+    SessionStopRequest, SessionSummary, SessionWaitRequest, ShellExecResult, ShellSessionResult,
+    SpaceSessionRegistry,
 };
 
 // space

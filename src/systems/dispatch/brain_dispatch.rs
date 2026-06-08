@@ -166,6 +166,17 @@ pub fn brain_dispatch_system(
             continue;
         }
 
+        if task.delegate.is_some() {
+            trace!(
+                event = "BrainDispatchSkipped",
+                task_id = %task.id,
+                task_status = ?task.status,
+                delegate = ?task.delegate,
+                "task already has delegate, skipping brain dispatch"
+            );
+            continue;
+        }
+
         // 子任务处理：检查 DAG 依赖，由 Brain 分发
         if let Some(config) = sub_task_config {
             // 检查 DAG 依赖是否满足
@@ -332,5 +343,85 @@ pub fn brain_dispatch_system(
 
         task.mark_waiting_for_agent(brain_agent.id, clock.0);
         commands.spawn(AgentExecutionRequestMessage { request });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::{BrainConfig, HarnessConfig},
+        domain::{AgentCapabilities, AgentExperience, AgentProfile, ChannelId, FrontendKind},
+    };
+    use uuid::Uuid;
+
+    /// 构建用于测试的 BrainDispatch App（包含必要 Resource 与 System）。
+    fn build_test_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.insert_resource(HarnessSettings(HarnessConfig {
+            brain: Some(BrainConfig { enabled: true }),
+            ..Default::default()
+        }));
+        app.insert_resource(SpaceToolRegistry::default());
+        app.add_systems(Update, brain_dispatch_system);
+        app
+    }
+
+    /// 当 Task 已存在 delegate 时（即便状态为 Ready），BrainDispatch 不应再次派发请求。
+    #[test]
+    fn brain_dispatch_skips_ready_task_with_existing_delegate() {
+        let mut app = build_test_app();
+
+        let brain_agent_id = Uuid::new_v4();
+        app.world_mut().spawn(Agent {
+            id: brain_agent_id,
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "brain agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: Default::default(),
+            experience: AgentExperience::default(),
+        });
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test-user".to_string(),
+        };
+        let mut task = Task::from_user_input_ready("do something", 0, channel);
+        task.delegate = Some(Uuid::new_v4());
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        app.update();
+
+        let request_count = {
+            let world = app.world_mut();
+            let mut query = world.query::<&AgentExecutionRequestMessage>();
+            query.iter(world).count()
+        };
+        assert_eq!(
+            request_count, 0,
+            "ready task with delegate should not spawn AgentExecutionRequestMessage"
+        );
+
+        let task_after = {
+            let world = app.world_mut();
+            let mut query = world.query::<&Task>();
+            query
+                .iter(world)
+                .find(|t| t.id == task_id)
+                .expect("task should still exist")
+                .clone()
+        };
+        assert_eq!(task_after.status, TaskStatus::Ready);
+        assert!(task_after.delegate.is_some());
     }
 }

@@ -50,7 +50,9 @@ pub fn tool_result_system(
                         "tool execution completed"
                     );
 
-                    // 记录 ToolCall 到 ShortTermMemory
+                    // Only persist tool_output here.
+                    // The original tool_input payload is intentionally not written into STM,
+                    // which avoids leaking raw shell_input request text into memory.
                     if let Some(mut stm) = short_term_memory {
                         stm.record_tool_call(
                             result.tool_call_id.clone(),

@@ -6,7 +6,7 @@ pub struct ShellStartTool;
 
 impl crate::domain::BuiltinTool for ShellStartTool {
     fn name(&self) -> &str {
-        "shell.start"
+        "shell_start"
     }
 
     fn execute(
@@ -21,10 +21,7 @@ impl crate::domain::BuiltinTool for ShellStartTool {
 
         Ok(ToolAction::StartSession(SessionStartRequest {
             command: command.to_string(),
-            session_name: input
-                .get("session_name")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string),
+            session_name: None,
             cwd: input
                 .get("cwd")
                 .and_then(|v| v.as_str())

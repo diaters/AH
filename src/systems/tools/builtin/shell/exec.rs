@@ -6,7 +6,7 @@ pub struct ShellExecTool;
 
 impl crate::domain::BuiltinTool for ShellExecTool {
     fn name(&self) -> &str {
-        "shell.exec"
+        "shell_exec"
     }
 
     fn execute(
@@ -28,16 +28,16 @@ impl crate::domain::BuiltinTool for ShellExecTool {
 
         Ok(ToolAction::ExecSession(SessionStartRequest {
             command: command.to_string(),
-            session_name: input
-                .get("session_name")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string),
+            session_name: None,
             cwd: input
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string),
             env: HashMap::new(),
-            timeout_secs: input.get("timeout_secs").and_then(|v| v.as_u64()),
+            timeout_secs: input
+                .get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .or(Some(ctx.shell_default_exec_timeout_secs)),
             tail_lines,
             owner_task_id: ctx.current_task_id,
             owner_agent_id: ctx.current_agent_id,
@@ -58,7 +58,7 @@ mod tests {
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 200,
             shell_max_tail_lines: 500,
-            shell_default_wait_timeout_secs: 300,
+            shell_default_exec_timeout_secs: 300,
             shell_default_stop_timeout_secs: 10,
             current_task_id: uuid::Uuid::new_v4(),
             current_agent_id: uuid::Uuid::new_v4(),
@@ -67,7 +67,7 @@ mod tests {
         let tool = ShellExecTool;
         let action = tool
             .execute(&serde_json::json!({ "command": "echo ok" }), &ctx)
-            .expect("shell.exec should parse");
+            .expect("shell_exec should parse");
 
         match action {
             ToolAction::ExecSession(request) => assert_eq!(request.tail_lines, 200),

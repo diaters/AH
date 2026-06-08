@@ -187,7 +187,7 @@ pub fn approval_result_system(
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
-                    shell_default_wait_timeout_secs: settings.0.shell_default_wait_timeout_secs,
+                    shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
                     shell_default_stop_timeout_secs: settings.0.shell_default_stop_timeout_secs,
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,

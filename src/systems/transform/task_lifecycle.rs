@@ -7,11 +7,13 @@ use tracing::debug;
 
 use crate::{
     app::{Clock, MemoryConfig},
+    contracts::SessionBackend,
     domain::{
         FailureReason, FinishTaskMessage, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
         ToolCallingState,
     },
+    systems::NativeProcessBackend,
 };
 
 type TaskTerminationQuery<'a> = (
@@ -65,6 +67,7 @@ pub fn task_termination_system(
     config: Res<MemoryConfig>,
     tasks: Query<TaskTerminationQuery, Changed<Task>>,
     calling_states: Query<(Entity, &ToolCallingState)>,
+    backend: Res<NativeProcessBackend>,
 ) {
     for (task, memory, sub_task_config) in &tasks {
         if task.status.is_terminal() {
@@ -78,6 +81,29 @@ pub fn task_termination_system(
                         "cleaning up tool calling state on task termination"
                     );
                     commands.entity(cs_entity).despawn();
+                }
+            }
+
+            // Stop all active shell sessions owned by this task
+            match backend.stop_task_sessions(task.id) {
+                Ok(stopped_sessions) => {
+                    if !stopped_sessions.is_empty() {
+                        debug!(
+                            event = "TaskShellSessionsStopped",
+                            task_id = %task.id,
+                            task_status = ?task.status,
+                            stopped_sessions = ?stopped_sessions,
+                            "stopped active shell sessions on task termination"
+                        );
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        event = "TaskShellSessionsStopFailed",
+                        task_id = %task.id,
+                        error = %e,
+                        "failed to stop shell sessions on task termination"
+                    );
                 }
             }
 

@@ -1,5 +1,5 @@
 //! Session backend implementations
 
-mod native;
+pub mod native;
 
 pub use native::NativeProcessBackend;

@@ -10,10 +10,10 @@ use uuid::Uuid;
 use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
-    ChannelId, FrontendKind, OutputContent, ShortTermMemory, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
-    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    WaitingForSessionInfo, WaitingForTasksInfo, WaitingReason,
+    ChannelId, FrontendKind, OutputContent, SessionSummary, ShellExecResult, ShellSessionResult,
+    ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
+    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -466,8 +466,8 @@ pub fn handle_tool_action<B: SessionBackend>(
                         commands,
                         request_entity,
                         request,
-                        "shell.exec",
-                        serde_json::json!(handle),
+                        "shell_exec",
+                        serde_json::json!(ShellExecResult::from_handle(&handle)),
                     );
                 }
                 Err(error) => {
@@ -483,12 +483,13 @@ pub fn handle_tool_action<B: SessionBackend>(
         Ok(ToolAction::StartSession(session_request)) => {
             match backend.start_session(session_request) {
                 Ok(handle) => {
+                    let summary = SessionSummary::from_handle(&handle);
                     spawn_shell_result(
                         commands,
                         request_entity,
                         request,
-                        "shell.start",
-                        serde_json::json!(handle),
+                        "shell_start",
+                        serde_json::json!(ShellSessionResult::from_summary(&summary)),
                     );
                 }
                 Err(error) => {
@@ -501,96 +502,122 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             }
         }
-        Ok(ToolAction::ReadSessionOutput(output_request)) => {
-            match backend.read_output(output_request) {
-                Ok(response) => {
-                    spawn_shell_result(
-                        commands,
-                        request_entity,
-                        request,
-                        "shell.status",
-                        serde_json::json!(response),
-                    );
-                }
-                Err(error) => {
-                    spawn_tool_error(
-                        commands,
-                        request_entity,
-                        request,
-                        ToolError::ExecutionFailed(error),
-                    );
-                }
-            }
-        }
-        Ok(ToolAction::SendSessionInput(command)) => match backend.send_input(command) {
-            Ok(handle) => {
-                spawn_shell_result(
-                    commands,
-                    request_entity,
-                    request,
-                    "shell.send_input",
-                    serde_json::json!(handle),
-                );
-            }
-            Err(error) => {
-                spawn_tool_error(
-                    commands,
-                    request_entity,
-                    request,
-                    ToolError::ExecutionFailed(error),
-                );
-            }
-        },
-        Ok(ToolAction::SendSessionSignal(command)) => match backend.send_signal(command) {
-            Ok(handle) => {
-                spawn_shell_result(
-                    commands,
-                    request_entity,
-                    request,
-                    "shell.send_signal",
-                    serde_json::json!(handle),
-                );
-            }
-            Err(error) => {
-                spawn_tool_error(
-                    commands,
-                    request_entity,
-                    request,
-                    ToolError::ExecutionFailed(error),
-                );
-            }
-        },
-        Ok(ToolAction::WaitForSession(wait_request)) => {
-            // Set task to waiting state for session
-            if let Some((_, mut task)) = tasks
-                .iter_mut()
-                .find(|(_, t)| t.id == request.request.task_id)
+        Ok(ToolAction::ReadSession(read_request)) => {
+            if let Err(e) =
+                backend.assert_task_owns_session(request.request.task_id, read_request.handle_id)
             {
-                task.status = TaskStatus::Waiting(WaitingReason::Session {
-                    handle_id: wait_request.handle_id,
-                });
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::PermissionDenied(e),
+                );
+            } else {
+                match backend.read_session(read_request) {
+                    Ok(summary) => {
+                        spawn_shell_result(
+                            commands,
+                            request_entity,
+                            request,
+                            "shell_read",
+                            serde_json::json!(ShellSessionResult::from_summary(&summary)),
+                        );
+                    }
+                    Err(error) => {
+                        spawn_tool_error(
+                            commands,
+                            request_entity,
+                            request,
+                            ToolError::ExecutionFailed(error),
+                        );
+                    }
+                }
             }
-            commands.entity(task_entity).insert(WaitingForSessionInfo {
-                handle_id: wait_request.handle_id,
-                timeout_at: chrono::Utc::now()
-                    + chrono::Duration::seconds(wait_request.timeout_secs as i64),
-                tool_call_id: request.tool_call_id.clone().unwrap_or_default(),
-                agent_id: request.request.agent_id,
-                return_tail_lines: wait_request.tail_lines,
-            });
-            commands.entity(request_entity).despawn();
         }
-        Ok(ToolAction::StopSession(_stop_request)) => {
-            spawn_shell_result(
-                commands,
-                request_entity,
-                request,
-                "shell.stop",
-                serde_json::json!({
-                    "status": "stopped",
-                    "message": "shell.stop placeholder - backend integration needed"
-                }),
-            );
+        Ok(ToolAction::ListSessions) => match backend.list_task_sessions(request.request.task_id) {
+            Ok(sessions) => {
+                let payload = sessions
+                    .iter()
+                    .map(ShellSessionResult::from_summary)
+                    .collect::<Vec<_>>();
+                spawn_shell_result(
+                    commands,
+                    request_entity,
+                    request,
+                    "shell_list",
+                    serde_json::json!(payload),
+                );
+            }
+            Err(error) => {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::ExecutionFailed(error),
+                );
+            }
+        },
+        Ok(ToolAction::InputSession(input_request)) => {
+            if let Err(e) =
+                backend.assert_task_owns_session(request.request.task_id, input_request.handle_id)
+            {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::PermissionDenied(e),
+                );
+            } else {
+                match backend.input_session(input_request) {
+                    Ok(handle) => {
+                        spawn_shell_result(
+                            commands,
+                            request_entity,
+                            request,
+                            "shell_input",
+                            serde_json::json!(ShellSessionResult::accepted_input(&handle)),
+                        );
+                    }
+                    Err(error) => {
+                        spawn_tool_error(
+                            commands,
+                            request_entity,
+                            request,
+                            ToolError::ExecutionFailed(error),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(ToolAction::StopSession(handle_id)) => {
+            if let Err(e) = backend.assert_task_owns_session(request.request.task_id, handle_id) {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::PermissionDenied(e),
+                );
+            } else {
+                match backend.stop_session(handle_id) {
+                    Ok(handle) => {
+                        spawn_shell_result(
+                            commands,
+                            request_entity,
+                            request,
+                            "shell_stop",
+                            serde_json::json!(ShellSessionResult::stopped(&handle)),
+                        );
+                    }
+                    Err(error) => {
+                        spawn_tool_error(
+                            commands,
+                            request_entity,
+                            request,
+                            ToolError::ExecutionFailed(error),
+                        );
+                    }
+                }
+            }
         }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);

@@ -107,7 +107,22 @@ pub fn task_dispatch_system(
             })
             .collect();
 
-        let Some((agent, long_term)) = select_agent_with_memory(agents.iter(), &task.content)
+        let delegated_agent = task.delegate.and_then(|delegate_id| {
+            agents.iter().find(|(a, _)| {
+                a.id == delegate_id
+                    && a.kind == AgentKind::Persistent
+                    && !a.capabilities.tags.contains(&"brain".to_string())
+            })
+        });
+
+        let selected_by = if delegated_agent.is_some() {
+            "delegate_reuse"
+        } else {
+            "highest_score"
+        };
+
+        let Some((agent, long_term)) =
+            delegated_agent.or_else(|| select_agent_with_memory(agents.iter(), &task.content))
         else {
             debug!(
                 event = "NoAgentAvailable",
@@ -134,7 +149,7 @@ pub fn task_dispatch_system(
             task_status = ?task.status,
             selected_agent = %agent.profile.name,
             selected_agent_id = %agent.id,
-            selection_reason = "highest_score",
+            selection_reason = selected_by,
             candidates = ?candidates_info,
             stm_entries = stm_entries,
             stm_tokens = stm_tokens,
@@ -186,7 +201,40 @@ pub fn task_dispatch_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{EntryMetadata, EntryRole, ShortTermMemory};
+    use crate::domain::{
+        AgentCapabilities, AgentExperience, AgentProfile, AgentToolPermissions, ChannelId,
+        EntryMetadata, EntryRole, FrontendKind, ShortTermMemory,
+    };
+    use uuid::Uuid;
+
+    /// 构建用于测试的 TaskDispatch App（包含必要 Resource 与 System）。
+    fn build_test_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.insert_resource(SpaceToolRegistry::default());
+        app.add_systems(Update, task_dispatch_system);
+        app
+    }
+
+    /// 创建一个 Persistent Agent（用于测试 task dispatch 复用 delegate 行为）。
+    fn make_persistent_agent(id: Uuid, name: &str, tags: Vec<&str>) -> Agent {
+        Agent {
+            id,
+            profile: AgentProfile {
+                name: name.to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: tags.into_iter().map(|t| t.to_string()).collect(),
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            experience: AgentExperience::default(),
+        }
+    }
 
     #[test]
     fn prompt_includes_summary_entries_as_system_notes() {
@@ -238,5 +286,117 @@ mod tests {
             "prompt should NOT include Archive entries, got: {}",
             prompt
         );
+    }
+
+    #[test]
+    fn task_dispatch_prefers_existing_delegate_for_ready_task_when_delegate_is_persistent() {
+        let mut app = build_test_app();
+
+        let delegate_agent_id = Uuid::new_v4();
+        let better_match_agent_id = Uuid::new_v4();
+
+        app.world_mut().spawn(make_persistent_agent(
+            delegate_agent_id,
+            "delegate-agent",
+            vec!["general"],
+        ));
+        app.world_mut().spawn(make_persistent_agent(
+            better_match_agent_id,
+            "better-match-agent",
+            vec!["summarization"],
+        ));
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test-user".to_string(),
+        };
+        let mut task = Task::from_user_input_ready("please do summarization", 0, channel);
+        task.delegate = Some(delegate_agent_id);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        app.update();
+
+        let request_agent_id = {
+            let world = app.world_mut();
+            let mut query = world.query::<&AgentExecutionRequestMessage>();
+            let request = query
+                .iter(world)
+                .next()
+                .expect("should spawn AgentExecutionRequestMessage");
+            request.request.agent_id
+        };
+        assert_eq!(request_agent_id, delegate_agent_id);
+
+        let task_after = {
+            let world = app.world_mut();
+            let mut query = world.query::<&Task>();
+            query
+                .iter(world)
+                .find(|t| t.id == task_id)
+                .expect("task should still exist")
+                .clone()
+        };
+        assert_eq!(
+            task_after.status,
+            TaskStatus::Waiting(crate::domain::WaitingReason::Agent)
+        );
+        assert_eq!(task_after.delegate, Some(delegate_agent_id));
+    }
+
+    #[test]
+    fn task_dispatch_prefers_existing_delegate_for_pending_task_when_delegate_is_persistent() {
+        let mut app = build_test_app();
+
+        let delegate_agent_id = Uuid::new_v4();
+        let better_match_agent_id = Uuid::new_v4();
+
+        app.world_mut().spawn(make_persistent_agent(
+            delegate_agent_id,
+            "delegate-agent",
+            vec!["general"],
+        ));
+        app.world_mut().spawn(make_persistent_agent(
+            better_match_agent_id,
+            "better-match-agent",
+            vec!["summarization"],
+        ));
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test-user".to_string(),
+        };
+        let mut task = Task::from_user_input("please do summarization", 0, channel);
+        task.delegate = Some(delegate_agent_id);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        app.update();
+
+        let request_agent_id = {
+            let world = app.world_mut();
+            let mut query = world.query::<&AgentExecutionRequestMessage>();
+            let request = query
+                .iter(world)
+                .next()
+                .expect("should spawn AgentExecutionRequestMessage");
+            request.request.agent_id
+        };
+        assert_eq!(request_agent_id, delegate_agent_id);
+
+        let task_after = {
+            let world = app.world_mut();
+            let mut query = world.query::<&Task>();
+            query
+                .iter(world)
+                .find(|t| t.id == task_id)
+                .expect("task should still exist")
+                .clone()
+        };
+        assert_eq!(
+            task_after.status,
+            TaskStatus::Waiting(crate::domain::WaitingReason::Agent)
+        );
+        assert_eq!(task_after.delegate, Some(delegate_agent_id));
     }
 }
