@@ -502,26 +502,39 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             }
         }
-        Ok(ToolAction::ReadSession(read_request)) => match backend.read_session(read_request) {
-            Ok(summary) => {
-                spawn_shell_result(
-                    commands,
-                    request_entity,
-                    request,
-                    "shell_read",
-                    serde_json::json!(ShellSessionResult::from_summary(&summary)),
-                );
-            }
-            Err(error) => {
+        Ok(ToolAction::ReadSession(read_request)) => {
+            if let Err(e) =
+                backend.assert_task_owns_session(request.request.task_id, read_request.handle_id)
+            {
                 spawn_tool_error(
                     commands,
                     request_entity,
                     request,
-                    ToolError::ExecutionFailed(error),
+                    ToolError::PermissionDenied(e),
                 );
+            } else {
+                match backend.read_session(read_request) {
+                    Ok(summary) => {
+                        spawn_shell_result(
+                            commands,
+                            request_entity,
+                            request,
+                            "shell_read",
+                            serde_json::json!(ShellSessionResult::from_summary(&summary)),
+                        );
+                    }
+                    Err(error) => {
+                        spawn_tool_error(
+                            commands,
+                            request_entity,
+                            request,
+                            ToolError::ExecutionFailed(error),
+                        );
+                    }
+                }
             }
-        },
-        Ok(ToolAction::ListSessions) => match backend.list_active_sessions() {
+        }
+        Ok(ToolAction::ListSessions) => match backend.list_task_sessions(request.request.task_id) {
             Ok(sessions) => {
                 let payload = sessions
                     .iter()
@@ -544,44 +557,68 @@ pub fn handle_tool_action<B: SessionBackend>(
                 );
             }
         },
-        Ok(ToolAction::InputSession(input_request)) => match backend.input_session(input_request) {
-            Ok(handle) => {
-                spawn_shell_result(
-                    commands,
-                    request_entity,
-                    request,
-                    "shell_input",
-                    serde_json::json!(ShellSessionResult::accepted_input(&handle)),
-                );
-            }
-            Err(error) => {
+        Ok(ToolAction::InputSession(input_request)) => {
+            if let Err(e) =
+                backend.assert_task_owns_session(request.request.task_id, input_request.handle_id)
+            {
                 spawn_tool_error(
                     commands,
                     request_entity,
                     request,
-                    ToolError::ExecutionFailed(error),
+                    ToolError::PermissionDenied(e),
                 );
+            } else {
+                match backend.input_session(input_request) {
+                    Ok(handle) => {
+                        spawn_shell_result(
+                            commands,
+                            request_entity,
+                            request,
+                            "shell_input",
+                            serde_json::json!(ShellSessionResult::accepted_input(&handle)),
+                        );
+                    }
+                    Err(error) => {
+                        spawn_tool_error(
+                            commands,
+                            request_entity,
+                            request,
+                            ToolError::ExecutionFailed(error),
+                        );
+                    }
+                }
             }
-        },
-        Ok(ToolAction::StopSession(handle_id)) => match backend.stop_session(handle_id) {
-            Ok(handle) => {
-                spawn_shell_result(
-                    commands,
-                    request_entity,
-                    request,
-                    "shell_stop",
-                    serde_json::json!(ShellSessionResult::stopped(&handle)),
-                );
-            }
-            Err(error) => {
+        }
+        Ok(ToolAction::StopSession(handle_id)) => {
+            if let Err(e) = backend.assert_task_owns_session(request.request.task_id, handle_id) {
                 spawn_tool_error(
                     commands,
                     request_entity,
                     request,
-                    ToolError::ExecutionFailed(error),
+                    ToolError::PermissionDenied(e),
                 );
+            } else {
+                match backend.stop_session(handle_id) {
+                    Ok(handle) => {
+                        spawn_shell_result(
+                            commands,
+                            request_entity,
+                            request,
+                            "shell_stop",
+                            serde_json::json!(ShellSessionResult::stopped(&handle)),
+                        );
+                    }
+                    Err(error) => {
+                        spawn_tool_error(
+                            commands,
+                            request_entity,
+                            request,
+                            ToolError::ExecutionFailed(error),
+                        );
+                    }
+                }
             }
-        },
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }

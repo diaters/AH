@@ -17,7 +17,7 @@ use crate::{
     domain::{
         SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest,
         SessionOutputSnapshot, SessionOutputWindow, SessionReadRequest, SessionStartRequest,
-        SessionStatus, SessionSummary,
+        SessionStatus, SessionSummary, TaskId,
     },
 };
 
@@ -260,8 +260,16 @@ impl SessionBackend for NativeProcessBackend {
             .lock()
             .map_err(|_| "stdin map poisoned".to_string())?
             .get(&request.handle_id)
-            .cloned()
-            .ok_or_else(|| format!("stdin for session {} not found", request.handle_id))?;
+            .cloned();
+
+        let Some(stdin) = stdin else {
+            self.refresh_session_state(request.handle_id)?;
+            let handle = self.get_status(request.handle_id)?;
+            return Err(format!(
+                "session {} is not accepting input because stdin is unavailable (status: {:?})",
+                request.handle_id, handle.status
+            ));
+        };
 
         {
             let mut stdin = stdin
@@ -296,14 +304,13 @@ impl SessionBackend for NativeProcessBackend {
             .lock()
             .map_err(|_| "process map poisoned".to_string())?
             .get(&handle_id)
-            .cloned()
-            .ok_or_else(|| format!("session {} not found", handle_id))?;
+            .cloned();
 
-        {
+        if let Some(process) = process {
             let mut child = process
                 .lock()
                 .map_err(|_| "process mutex poisoned".to_string())?;
-            child.kill().map_err(|error| error.to_string())?;
+            let _ = child.kill();
         }
 
         let mut handle = self.get_status(handle_id)?;
@@ -332,6 +339,63 @@ impl SessionBackend for NativeProcessBackend {
 
         Ok(handle)
     }
+
+    fn list_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionSummary>, String> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "session map poisoned".to_string())?;
+        Ok(sessions
+            .values()
+            .filter(|handle| {
+                handle.owner_task_id == task_id
+                    && matches!(
+                        handle.status,
+                        SessionStatus::Starting
+                            | SessionStatus::Running
+                            | SessionStatus::WaitingForInput
+                    )
+            })
+            .cloned()
+            .map(|handle| self.session_summary(handle))
+            .collect())
+    }
+
+    fn assert_task_owns_session(
+        &self,
+        task_id: TaskId,
+        handle_id: SessionHandleId,
+    ) -> Result<(), String> {
+        let handle = self.get_status(handle_id)?;
+        if handle.owner_task_id != task_id {
+            return Err(format!(
+                "session {} does not belong to task {}",
+                handle_id, task_id
+            ));
+        }
+        Ok(())
+    }
+
+    fn stop_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionHandleId>, String> {
+        let active_ids = self.active_session_ids_for_task(task_id)?;
+        let mut stopped = Vec::new();
+        for id in active_ids {
+            match self.stop_session(id) {
+                Ok(_) => {
+                    stopped.push(id);
+                }
+                Err(e) => {
+                    debug!(
+                        event = "TaskSessionStopFailed",
+                        handle_id = %id,
+                        error = %e,
+                        "failed to stop session during task cleanup, continuing"
+                    );
+                }
+            }
+        }
+        Ok(stopped)
+    }
 }
 
 impl NativeProcessBackend {
@@ -343,6 +407,27 @@ impl NativeProcessBackend {
             .get(&handle_id)
             .cloned()
             .ok_or_else(|| format!("session {} not found", handle_id))
+    }
+
+    /// 收集指定 Task 的所有活动 session id
+    fn active_session_ids_for_task(&self, task_id: TaskId) -> Result<Vec<SessionHandleId>, String> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "session map poisoned".to_string())?;
+        Ok(sessions
+            .values()
+            .filter(|handle| {
+                handle.owner_task_id == task_id
+                    && matches!(
+                        handle.status,
+                        SessionStatus::Starting
+                            | SessionStatus::Running
+                            | SessionStatus::WaitingForInput
+                    )
+            })
+            .map(|handle| handle.handle_id)
+            .collect())
     }
 
     /// 将内部输出窗口转换为对外稳定的快照 DTO。

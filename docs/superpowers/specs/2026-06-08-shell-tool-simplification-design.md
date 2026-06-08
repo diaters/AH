@@ -265,6 +265,7 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 
 - `shell_read` 必须自带状态字段，避免再拆出单独状态查询工具
 - 若会话已结束，仍允许读取其最后一次快照，直到该会话被清理
+- 仅允许读取当前 Task 自己创建的 session，跨 Task 访问必须拒绝
 
 ### 6.4 `shell_list`
 
@@ -298,7 +299,7 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 
 **约束**
 
-- 只返回活动会话
+- 只返回当前 Task 拥有的活动会话
 - “活动”定义为仍在运行或仍可交互控制的会话
 - 不返回历史结束会话，避免列表污染
 
@@ -346,6 +347,7 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 
 - 返回字段应最小化为 `session_id`、`status`、`accepted`
 - 不返回 `command`、`cwd`、`output`、`started_at` 等与“输入已受理”无关的字段
+- 仅允许写入当前 Task 自己创建的 session，跨 Task 访问必须拒绝
 
 ### 6.6 `shell_stop`
 
@@ -377,6 +379,11 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
   "status": "stopped"
 }
 ```
+
+**约束**
+
+- 仅允许停止当前 Task 自己创建的 session，跨 Task 访问必须拒绝
+- 当 Task 进入终态时，系统应立即 stop 该 Task 关联的所有活动 session
 
 **约束**
 
@@ -466,9 +473,36 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 
 ---
 
-## 十、兼容性与迁移
+## 十、Task 归属与终态清理
 
-### 10.1 工具层迁移
+### 10.1 归属原则
+
+每个 shell session 在创建时绑定 `owner_task_id`，归属关系不可变更：
+
+- `shell_exec` 和 `shell_start` 创建的 session 自动绑定当前 Task
+- `shell_read` / `shell_input` / `shell_stop` 仅允许操作当前 Task 创建的 session，跨 Task 访问返回 `PermissionDenied`
+- `shell_list` 只返回当前 Task 拥有的活动会话，不暴露其他 Task 的 session
+
+### 10.2 终态清理
+
+当 Task 进入终态（`Completed` / `Failed` / `Cancelled`）时，系统必须立即关闭该 Task 关联的所有活动 shell session：
+
+- 清理由 `task_termination_system` 自动执行，调用 `backend.stop_task_sessions(task_id)`
+- 清理失败时记录结构化日志但不阻塞 Task 终态流转
+- 清理范围包括 `Starting` / `Running` / `WaitingForInput` 三种状态的活动 session
+
+### 10.3 实现要点
+
+- `SessionBackend` trait 新增 `list_task_sessions`、`assert_task_owns_session`、`stop_task_sessions` 三个方法
+- `NativeProcessBackend` 实现上述方法，内部通过 `owner_task_id` 过滤和校验
+- `orchestrator` 在分发 `ReadSession` / `InputSession` / `StopSession` 前调用 `assert_task_owns_session` 校验
+- `ListSessions` 分支改用 `list_task_sessions` 替代 `list_active_sessions`
+
+---
+
+## 十一、兼容性与迁移
+
+### 11.1 工具层迁移
 
 旧工具与新工具的映射关系如下：
 
@@ -480,7 +514,7 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 | `shell_send_signal` | 删除，由 `shell_stop` 替代 |
 | `shell_send_input` | 重命名为 `shell_input` |
 
-### 10.2 参数层迁移
+### 11.2 参数层迁移
 
 以下字段应从对外 schema 中移除：
 
@@ -491,7 +525,7 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 - `timeout_secs`（仅 `shell_stop` / `shell_input` 的等待控制场景）
 - `signal`
 
-### 10.3 行为层迁移
+### 11.3 行为层迁移
 
 - 任何“先查状态，再读输出”的调用路径，都应改为直接调用 `shell_read`
 - 任何“想找回会话 ID”的路径，都应改为先调用 `shell_list`
@@ -499,7 +533,7 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 
 ---
 
-## 十一、测试建议
+## 十二、测试建议
 
 本次重构至少需要覆盖以下行为：
 
@@ -507,14 +541,20 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 - `shell_exec` 显式超时覆盖默认值
 - `shell_start` 成功返回活动会话
 - `shell_list` 只返回活动会话
+- `shell_list` 只返回当前 Task 拥有的活动会话
 - `shell_read` 返回最新快照并自带状态
+- `shell_read` 拒绝跨 Task 访问
 - `shell_input` 可用于交互式命令
+- `shell_input` 拒绝跨 Task 访问
 - `shell_stop` 可停止活动会话
+- `shell_stop` 拒绝跨 Task 访问
 - 已删除工具不会继续暴露给 LLM
+- Task 终态时自动关闭关联的活动 session
+- Task Failed 时同样自动关闭关联的活动 session
 
 ---
 
-## 十二、结论
+## 十三、结论
 
 重构后的 `shell` 工具应收敛为一套更小、更诚实、更面向 LLM 意图的接口：
 
@@ -525,10 +565,11 @@ shell_start -> shell_read / shell_list -> shell_input / shell_stop
 - `shell_input`
 - `shell_stop`
 
-其中核心原则只有三条：
+其中核心原则只有四条：
 
 - 阻塞路径默认超时
 - 异步路径只读最新快照
 - 活动会话必须可列举、可找回
+- Session 严格归属创建它的 Task，Task 终态时自动清理
 
 这套设计保留了必要控制能力，同时删除了 `wait`、`status`、增量游标和底层 signal 等高心智负担能力，符合当前阶段的简化目标。
