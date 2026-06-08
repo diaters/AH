@@ -6,12 +6,7 @@ use bevy::prelude::*;
 
 use crate::{
     app::Clock,
-    contracts::SessionBackend,
-    domain::{
-        AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, OutputContent,
-        SubTaskCompletedMessage, Task, ToolExecutionResultMessage, WaitingForSessionInfo,
-        WaitingForTasksInfo,
-    },
+    domain::{SubTaskCompletedMessage, Task, WaitingForTasksInfo},
 };
 
 use super::orchestrator::{collect_task_results, spawn_wait_result_message};
@@ -67,66 +62,6 @@ pub fn check_waiting_tasks_system(
 
             // 移除等待信息组件
             commands.entity(entity).remove::<WaitingForTasksInfo>();
-        }
-    }
-}
-
-/// 轮询检查等待中的 shell 会话（超时或完成时返回结果）
-pub fn check_waiting_sessions_system(
-    clock: Res<Clock>,
-    mut commands: Commands,
-    waiting_tasks: Query<(Entity, &Task, &WaitingForSessionInfo)>,
-    backend: Res<crate::systems::tools::backend::NativeProcessBackend>,
-) {
-    for (entity, task, info) in &waiting_tasks {
-        let timed_out = clock.0 >= info.timeout_at;
-        let handle = backend
-            .wait_session(crate::domain::SessionWaitRequest {
-                handle_id: info.handle_id,
-                timeout_secs: 0, // Backend uses non-blocking try_wait; we rely on our own timeout
-                tail_lines: info.return_tail_lines,
-            })
-            .inspect_err(|e| {
-                tracing::warn!(
-                    event = "SessionWaitBackendError",
-                    handle_id = %info.handle_id,
-                    error = %e,
-                    "backend wait_session failed"
-                );
-            })
-            .ok()
-            .flatten();
-
-        if timed_out || handle.is_some() {
-            commands.spawn(ToolExecutionResultMessage {
-                result: AgentExecutionResult {
-                    task_id: task.id,
-                    agent_id: info.agent_id,
-                    request_kind: AgentRequestKind::LlmCompletion,
-                    result: Ok(AgentExecutionOutput {
-                        content: OutputContent::Text("shell_wait completed".to_string()),
-                        reasoning_content: None,
-                    }),
-                    prompt: String::new(),
-                    system_prompt: None,
-                    tools: vec![],
-                    reasoning_content: None,
-                    work_item_id: None,
-                },
-                tool_name: "shell_wait".to_string(),
-                tool_output: Ok(match handle {
-                    Some(handle) => serde_json::json!(handle),
-                    None => serde_json::json!({
-                        "handle_id": info.handle_id.to_string(),
-                        "status": "running",
-                        "timed_out": true
-                    }),
-                }),
-                tool_call_id: Some(info.tool_call_id.clone()),
-                processed: false,
-            });
-
-            commands.entity(entity).remove::<WaitingForSessionInfo>();
         }
     }
 }

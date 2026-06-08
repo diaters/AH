@@ -71,7 +71,7 @@ fn test_wait_tasks_tool_parsing() {
         default_wait_tasks_timeout_secs: 300,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,
-        shell_default_wait_timeout_secs: 300,
+        shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
         current_task_id: uuid::Uuid::new_v4(),
         current_agent_id: uuid::Uuid::new_v4(),

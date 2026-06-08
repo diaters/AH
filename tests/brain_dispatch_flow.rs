@@ -77,7 +77,7 @@ fn brain_test_config() -> HarnessConfig {
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,
-        shell_default_wait_timeout_secs: 300,
+        shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
     }

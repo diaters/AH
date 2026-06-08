@@ -9,8 +9,7 @@ mod wait_tasks;
 pub use create_tasks::CreateTasksTool;
 pub use knowledge_search::KnowledgeSearchTool;
 pub use shell::{
-    ShellExecTool, ShellReadOutputTool, ShellSendInputTool, ShellSendSignalTool, ShellStartTool,
-    ShellStatusTool, ShellStopTool, ShellWaitTool,
+    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
 };
 pub use spawn_agent::SpawnAgentTool;
 pub use wait_tasks::WaitTasksTool;

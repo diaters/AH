@@ -39,6 +39,13 @@ pub struct SessionOutputWindow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionOutputSnapshot {
+    pub output: String,
+    pub returned_lines: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionHandle {
     pub handle_id: SessionHandleId,
     pub backend: SessionBackendKind,
@@ -94,6 +101,72 @@ pub struct SessionStartRequest {
     pub tail_lines: usize,
     pub owner_task_id: TaskId,
     pub owner_agent_id: AgentId,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionReadRequest {
+    pub handle_id: SessionHandleId,
+    pub tail_lines: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionInputRequest {
+    pub handle_id: SessionHandleId,
+    pub input: String,
+    pub append_newline: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub handle_id: SessionHandleId,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub status: SessionStatus,
+    pub exit_code: Option<i32>,
+    pub interaction_required: bool,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub output: SessionOutputSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellExecResult {
+    pub status: SessionStatus,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub interaction_required: bool,
+    pub output: String,
+    pub returned_lines: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellSessionResult {
+    pub session_id: String,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub status: SessionStatus,
+    pub running: bool,
+    pub exit_code: Option<i32>,
+    pub interaction_required: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub output: Option<String>,
+    pub returned_lines: Option<usize>,
+    pub truncated: Option<bool>,
+    pub accepted: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellInputAcceptedResult {
+    pub session_id: String,
+    pub status: SessionStatus,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellStopResult {
+    pub session_id: String,
+    pub status: SessionStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +235,89 @@ impl SessionRuntimeState {
             stderr: SessionOutputBuffer::empty(),
             combined: SessionOutputBuffer::empty(),
             interaction_state: SessionInteractionState::Idle,
+        }
+    }
+}
+
+impl SessionOutputSnapshot {
+    /// 从现有输出窗口构造对外暴露的快照结构。
+    pub fn from_window(window: &SessionOutputWindow) -> Self {
+        Self {
+            output: window.combined_tail.clone(),
+            returned_lines: window.returned_lines,
+            truncated: window.combined_truncated,
+        }
+    }
+}
+
+impl SessionSummary {
+    /// 从当前内部句柄投影为简化后的会话摘要。
+    pub fn from_handle(handle: &SessionHandle) -> Self {
+        Self {
+            handle_id: handle.handle_id,
+            command: handle.command.clone(),
+            cwd: handle.cwd.clone(),
+            status: handle.status,
+            exit_code: handle.exit_code,
+            interaction_required: handle.interaction_required,
+            started_at: handle.started_at,
+            finished_at: handle.finished_at,
+            output: SessionOutputSnapshot::from_window(&handle.output),
+        }
+    }
+}
+
+impl ShellExecResult {
+    /// 从内部句柄构造阻塞执行的对外结果。
+    pub fn from_handle(handle: &SessionHandle) -> Self {
+        Self {
+            status: handle.status,
+            exit_code: handle.exit_code,
+            timed_out: handle.timed_out,
+            interaction_required: handle.interaction_required,
+            output: handle.output.combined_tail.clone(),
+            returned_lines: handle.output.returned_lines,
+            truncated: handle.output.combined_truncated,
+        }
+    }
+}
+
+impl ShellSessionResult {
+    /// 从简化后的会话摘要构造工具返回值。
+    pub fn from_summary(summary: &SessionSummary) -> Self {
+        Self {
+            session_id: summary.handle_id.to_string(),
+            command: Some(summary.command.clone()),
+            cwd: summary.cwd.clone(),
+            status: summary.status,
+            running: matches!(
+                summary.status,
+                SessionStatus::Starting | SessionStatus::Running | SessionStatus::WaitingForInput
+            ),
+            exit_code: summary.exit_code,
+            interaction_required: summary.interaction_required,
+            started_at: Some(summary.started_at),
+            output: Some(summary.output.output.clone()),
+            returned_lines: Some(summary.output.returned_lines),
+            truncated: Some(summary.output.truncated),
+            accepted: None,
+        }
+    }
+
+    /// 构造输入已接受的轻量返回结构。
+    pub fn accepted_input(handle: &SessionHandle) -> ShellInputAcceptedResult {
+        ShellInputAcceptedResult {
+            session_id: handle.handle_id.to_string(),
+            status: handle.status,
+            accepted: true,
+        }
+    }
+
+    /// 构造停止会话后的最小返回结构。
+    pub fn stopped(handle: &SessionHandle) -> ShellStopResult {
+        ShellStopResult {
+            session_id: handle.handle_id.to_string(),
+            status: handle.status,
         }
     }
 }

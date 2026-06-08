@@ -9,9 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentCapabilities, AgentId, AgentProfile, MemoryEntry, SessionCommand, SessionOutputRequest,
-    SessionStartRequest, SessionStopRequest, SessionWaitRequest, SubTaskDefinition, TaskId,
-    ToolError,
+    AgentCapabilities, AgentId, AgentProfile, MemoryEntry, SessionHandleId, SessionInputRequest,
+    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
 };
 
 /// Space 级别的长期知识（用户相关）
@@ -153,16 +152,14 @@ pub enum ToolAction {
     ExecSession(SessionStartRequest),
     /// 启动后台 shell 会话
     StartSession(SessionStartRequest),
-    /// 读取 shell 会话输出
-    ReadSessionOutput(SessionOutputRequest),
+    /// 读取 shell 会话状态和最新输出快照
+    ReadSession(SessionReadRequest),
+    /// 列出活动 shell 会话
+    ListSessions,
     /// 发送交互输入到 shell 会话
-    SendSessionInput(SessionCommand),
-    /// 发送控制信号到 shell 会话
-    SendSessionSignal(SessionCommand),
-    /// 等待 shell 会话完成
-    WaitForSession(SessionWaitRequest),
+    InputSession(SessionInputRequest),
     /// 停止 shell 会话
-    StopSession(SessionStopRequest),
+    StopSession(SessionHandleId),
 }
 
 /// 内置 Tool 执行上下文
@@ -174,8 +171,8 @@ pub struct ToolContext<'a> {
     pub shell_default_tail_lines: usize,
     /// shell 工具允许返回的最大输出行数
     pub shell_max_tail_lines: usize,
-    /// shell.wait 默认超时时间（秒）
-    pub shell_default_wait_timeout_secs: u64,
+    /// shell.exec 默认超时时间（秒）
+    pub shell_default_exec_timeout_secs: u64,
     /// shell.stop(wait_for_exit=true) 默认超时时间（秒）
     pub shell_default_stop_timeout_secs: u64,
     /// 当前 task ID

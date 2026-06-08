@@ -16,9 +16,7 @@ pub use backend::NativeProcessBackend;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
 pub use result::tool_result_system;
-pub use waiting::{
-    check_waiting_sessions_system, check_waiting_tasks_system, on_subtask_completed_check_waiting,
-};
+pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
 
 use crate::domain::{
     BuiltinToolExecutors, SpaceToolRegistry, ToolDefinition, ToolExecutorKind, ToolPermission,
@@ -26,9 +24,8 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    CreateTasksTool, KnowledgeSearchTool, ShellExecTool, ShellReadOutputTool, ShellSendInputTool,
-    ShellSendSignalTool, ShellStartTool, ShellStatusTool, ShellStopTool, ShellWaitTool,
-    SpawnAgentTool, WaitTasksTool,
+    CreateTasksTool, KnowledgeSearchTool, ShellExecTool, ShellInputTool, ShellListTool,
+    ShellReadTool, ShellStartTool, ShellStopTool, SpawnAgentTool, WaitTasksTool,
 };
 
 /// 注册内置 Tool
@@ -174,15 +171,15 @@ pub fn register_builtin_tools(
     // Shell tools
     registry.register(ToolDefinition {
         name: "shell_exec".to_string(),
-        description: "Execute a shell command and wait for the result. Suitable for one-time commands like build, test, lint.".to_string(),
+        description: "同步执行一次性 shell 命令并等待结果，适合 build、test、lint、文件操作等短任务。长时间运行或需要交互的命令请使用 shell_start。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The shell command to execute" },
-                    "cwd": { "type": "string", "description": "Working directory for the command" },
-                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                    "command": { "type": "string", "description": "要执行的 shell 命令" },
+                    "cwd": { "type": "string", "description": "命令工作目录" },
+                    "timeout_secs": { "type": "integer", "description": "超时时间（秒），默认使用系统配置" },
+                    "tail_lines": { "type": "integer", "description": "返回的最新输出行数" }
                 },
                 "required": ["command"]
             }),
@@ -195,14 +192,13 @@ pub fn register_builtin_tools(
 
     registry.register(ToolDefinition {
         name: "shell_start".to_string(),
-        description: "Start a background shell session and return a handle. Suitable for long-running commands like servers, watchers.".to_string(),
+        description: "异步启动长时间运行或可交互的 shell 会话，适用于 server、watcher、daemon 等持续型任务。返回 session_id 供后续读取、输入或停止。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The shell command to execute" },
-                    "cwd": { "type": "string", "description": "Working directory for the command" },
-                    "session_name": { "type": "string", "description": "Optional name for the session" }
+                    "command": { "type": "string", "description": "要执行的 shell 命令" },
+                    "cwd": { "type": "string", "description": "命令工作目录" }
                 },
                 "required": ["command"]
             }),
@@ -214,122 +210,70 @@ pub fn register_builtin_tools(
     executors.register(Box::new(ShellStartTool));
 
     registry.register(ToolDefinition {
-        name: "shell_status".to_string(),
-        description: "Query the current status of a shell session.".to_string(),
+        name: "shell_read".to_string(),
+        description: "读取指定 shell 会话的最新状态和输出快照。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "handle_id": { "type": "string", "description": "The session handle ID" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                    "session_id": { "type": "string", "description": "shell_start 返回的 session_id" },
+                    "tail_lines": { "type": "integer", "description": "返回的最新输出行数" }
                 },
-                "required": ["handle_id"]
+                "required": ["session_id"]
             }),
         },
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("shell_status".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_read".to_string()),
         required_tag: None,
     });
-    executors.register(Box::new(ShellStatusTool));
+    executors.register(Box::new(ShellReadTool));
 
     registry.register(ToolDefinition {
-        name: "shell_read_output".to_string(),
-        description: "Read output from a shell session. Can use cursor for incremental reading.".to_string(),
+        name: "shell_list".to_string(),
+        description: "列出当前可见的活动 shell 会话。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
-                "properties": {
-                    "handle_id": { "type": "string", "description": "The session handle ID" },
-                    "cursor": { "type": "string", "description": "Cursor for incremental reading" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
-                },
-                "required": ["handle_id"]
+                "properties": {},
+                "required": []
             }),
         },
         default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("shell_read_output".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_list".to_string()),
         required_tag: None,
     });
-    executors.register(Box::new(ShellReadOutputTool));
+    executors.register(Box::new(ShellListTool));
 
     registry.register(ToolDefinition {
-        name: "shell_send_input".to_string(),
-        description: "Send input text to an interactive shell session.".to_string(),
+        name: "shell_input".to_string(),
+        description: "向交互式 shell 会话发送输入。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "handle_id": { "type": "string", "description": "The session handle ID" },
-                    "input": { "type": "string", "description": "The input text to send" },
-                    "append_newline": { "type": "boolean", "description": "Whether to append a newline (default: true)" },
-                    "wait_for_output": { "type": "boolean", "description": "Wait briefly for new output" },
-                    "wait_timeout_secs": { "type": "integer", "description": "Timeout for waiting" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                    "session_id": { "type": "string", "description": "shell_start 返回的 session_id" },
+                    "input": { "type": "string", "description": "要发送的输入内容" },
+                    "append_newline": { "type": "boolean", "description": "是否自动追加换行，默认 true" }
                 },
-                "required": ["handle_id", "input"]
+                "required": ["session_id", "input"]
             }),
         },
         default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell_send_input".to_string()),
+        executor: ToolExecutorKind::Builtin("shell_input".to_string()),
         required_tag: None,
     });
-    executors.register(Box::new(ShellSendInputTool));
-
-    registry.register(ToolDefinition {
-        name: "shell_send_signal".to_string(),
-        description: "Send a control signal to a shell session (interrupt, terminate, kill).".to_string(),
-        parameters: ToolSchema {
-            schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "handle_id": { "type": "string", "description": "The session handle ID" },
-                    "signal": { "type": "string", "enum": ["interrupt", "terminate", "kill"], "description": "The signal to send" },
-                    "wait_for_exit": { "type": "boolean", "description": "Wait for process to exit" },
-                    "timeout_secs": { "type": "integer", "description": "Timeout for waiting" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
-                },
-                "required": ["handle_id", "signal"]
-            }),
-        },
-        default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell_send_signal".to_string()),
-        required_tag: None,
-    });
-    executors.register(Box::new(ShellSendSignalTool));
-
-    registry.register(ToolDefinition {
-        name: "shell_wait".to_string(),
-        description: "Wait for a shell session to complete or enter an interactive state.".to_string(),
-        parameters: ToolSchema {
-            schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "handle_id": { "type": "string", "description": "The session handle ID" },
-                    "timeout_secs": { "type": "integer", "description": "Timeout in seconds" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
-                },
-                "required": ["handle_id"]
-            }),
-        },
-        default_permission: ToolPermission::Confirm,
-        executor: ToolExecutorKind::Builtin("shell_wait".to_string()),
-        required_tag: None,
-    });
-    executors.register(Box::new(ShellWaitTool));
+    executors.register(Box::new(ShellInputTool));
 
     registry.register(ToolDefinition {
         name: "shell_stop".to_string(),
-        description: "Stop a shell session. Optionally wait for graceful exit.".to_string(),
+        description: "停止指定的 shell 会话。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "handle_id": { "type": "string", "description": "The session handle ID" },
-                    "wait_for_exit": { "type": "boolean", "description": "Wait for process to exit" },
-                    "timeout_secs": { "type": "integer", "description": "Timeout for waiting" },
-                    "tail_lines": { "type": "integer", "description": "Number of output lines to return" }
+                    "session_id": { "type": "string", "description": "shell_start 返回的 session_id" }
                 },
-                "required": ["handle_id"]
+                "required": ["session_id"]
             }),
         },
         default_permission: ToolPermission::Confirm,
@@ -385,7 +329,7 @@ mod tests {
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
-            shell_default_wait_timeout_secs: 60,
+            shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),

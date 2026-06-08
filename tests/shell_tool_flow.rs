@@ -60,6 +60,195 @@ fn spawn_agent(world: &mut bevy::prelude::World) -> Uuid {
     id
 }
 
+/// 验证 shell 工具注册表已经收敛为六个简化后的高层工具。
+#[test]
+fn shell_registry_only_exposes_six_simplified_tools() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    let registry = app.world().resource::<harness::SpaceToolRegistry>();
+
+    for name in [
+        "shell_exec",
+        "shell_start",
+        "shell_read",
+        "shell_list",
+        "shell_input",
+        "shell_stop",
+    ] {
+        assert!(registry.get(name).is_some(), "missing {name}");
+    }
+
+    for name in [
+        "shell_status",
+        "shell_read_output",
+        "shell_send_input",
+        "shell_send_signal",
+        "shell_wait",
+    ] {
+        assert!(
+            registry.get(name).is_none(),
+            "legacy tool still exposed: {name}"
+        );
+    }
+}
+
+/// 验证 `shell_read` 返回简化后的状态字段与最新输出快照。
+#[test]
+fn shell_read_returns_status_and_latest_snapshot() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell read", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_start".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({ "command": "printf 'hello\\n'; sleep 1" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_start_read_case".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let session_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results[0].tool_output.clone().unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_read".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_read".to_string(),
+        tool_input: serde_json::json!({ "session_id": session_id, "tail_lines": 20 }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_read_case".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    app.update();
+
+    let world = app.world_mut();
+    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let results = query.iter(world).cloned().collect::<Vec<_>>();
+    let output = results.last().unwrap().tool_output.clone().unwrap();
+
+    assert!(output["status"].is_string());
+    assert!(output["running"].is_boolean());
+    assert!(output["output"].is_string());
+}
+
+/// 验证 `shell_list` 只返回活动会话列表。
+#[test]
+fn shell_list_returns_only_active_sessions() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell list", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_start".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({ "command": "sleep 1" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_start_list_case".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_list".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_list".to_string(),
+        tool_input: serde_json::json!({}),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_list_case".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    app.update();
+
+    let world = app.world_mut();
+    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let results = query.iter(world).cloned().collect::<Vec<_>>();
+    let output = results.last().unwrap().tool_output.clone().unwrap();
+
+    assert!(output.is_array());
+    assert!(!output.as_array().unwrap().is_empty());
+    assert!(output[0]["session_id"].is_string());
+}
+
 #[test]
 fn shell_exec_returns_result_message() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -121,11 +310,10 @@ fn shell_exec_returns_result_message() {
         .clone()
         .expect("shell_exec should succeed");
     assert_eq!(output_json["status"], "completed");
-    // Check that we got the tail (last 2 lines: b\nc)
-    let combined_tail = output_json["output"]["combined_tail"].as_str().unwrap();
-    assert!(combined_tail.contains("b"), "tail should contain 'b'");
-    assert!(combined_tail.contains("c"), "tail should contain 'c'");
-    assert_eq!(output_json["output"]["combined_truncated"], true);
+    let output = output_json["output"].as_str().unwrap();
+    assert!(output.contains("b"), "tail should contain 'b'");
+    assert!(output.contains("c"), "tail should contain 'c'");
+    assert_eq!(output_json["truncated"], true);
 }
 
 #[test]
@@ -185,7 +373,7 @@ fn shell_start_returns_running_handle() {
         .clone()
         .expect("shell_start should succeed");
     assert_eq!(output_json["status"], "running");
-    assert!(output_json["handle_id"].is_string());
+    assert!(output_json["session_id"].is_string());
 }
 
 #[test]
@@ -288,8 +476,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         request: start_request,
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
-            "command": "sleep 5",
-            "session_name": "stop-test"
+            "command": "sleep 5"
         }),
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_start_for_stop".to_string()),
@@ -298,11 +485,11 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
 
     app.update();
 
-    let handle_id = {
+    let session_id = {
         let world = app.world_mut();
         let mut query = world.query::<&harness::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
-        results[0].tool_output.clone().unwrap()["handle_id"]
+        results[0].tool_output.clone().unwrap()["session_id"]
             .as_str()
             .unwrap()
             .to_string()
@@ -325,8 +512,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         request: stop_request,
         tool_name: "shell_stop".to_string(),
         tool_input: serde_json::json!({
-            "handle_id": handle_id,
-            "wait_for_exit": false
+            "session_id": session_id
         }),
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_stop".to_string()),
@@ -346,108 +532,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
 }
 
 #[test]
-fn shell_wait_returns_completed_when_process_exits() {
-    let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
-    let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
-
-    app.update();
-
-    let agent_id = spawn_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell wait", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
-
-    let start_request = AgentExecutionRequest {
-        task_id,
-        agent_id,
-        request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "shell_start".to_string(),
-        },
-        prompt: String::new(),
-        system_prompt: None,
-        tools: vec![],
-        conversation: None,
-        work_item_id: None,
-    };
-
-    app.world_mut().spawn(ToolExecutionRequestMessage {
-        request: start_request,
-        tool_name: "shell_start".to_string(),
-        tool_input: serde_json::json!({
-            "command": "sleep 0.1"
-        }),
-        pending_confirmation_id: None,
-        tool_call_id: Some("call_shell_start_for_wait".to_string()),
-        pending_confirmation_options: None,
-    });
-    app.update();
-
-    let handle_id = {
-        let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-        let results = query.iter(world).cloned().collect::<Vec<_>>();
-        results[0].tool_output.clone().unwrap()["handle_id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    };
-
-    let wait_request = AgentExecutionRequest {
-        task_id,
-        agent_id,
-        request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "shell_wait".to_string(),
-        },
-        prompt: String::new(),
-        system_prompt: None,
-        tools: vec![],
-        conversation: None,
-        work_item_id: None,
-    };
-
-    app.world_mut().spawn(ToolExecutionRequestMessage {
-        request: wait_request,
-        tool_name: "shell_wait".to_string(),
-        tool_input: serde_json::json!({
-            "handle_id": handle_id,
-            "timeout_secs": 2
-        }),
-        pending_confirmation_id: None,
-        tool_call_id: Some("call_shell_wait".to_string()),
-        pending_confirmation_options: None,
-    });
-
-    let mut wait_result = None;
-    for _ in 0..20 {
-        app.update();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-
-        // Check for results immediately after each update (before tool_result_system despawns them)
-        {
-            let app = app.world_mut();
-            let mut result_query = app.query::<&harness::ToolExecutionResultMessage>();
-            let results: Vec<_> = result_query.iter(app).cloned().collect();
-            if let Some(result) = results.iter().find(|r| r.tool_name == "shell_wait") {
-                wait_result = Some(result.clone());
-                break;
-            }
-        }
-    }
-
-    let wait_result = wait_result.expect("shell_wait result should be present");
-    let output_json = wait_result.tool_output.clone().unwrap();
-    assert_eq!(output_json["status"], "completed");
-}
-
-#[test]
-fn shell_send_input_returns_backend_backed_status() {
+fn shell_input_returns_backend_backed_status() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
@@ -490,11 +575,11 @@ fn shell_send_input_returns_backend_backed_status() {
     });
     app.update();
 
-    let handle_id = {
+    let session_id = {
         let world = app.world_mut();
         let mut query = world.query::<&harness::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
-        results[0].tool_output.clone().unwrap()["handle_id"]
+        results[0].tool_output.clone().unwrap()["session_id"]
             .as_str()
             .unwrap()
             .to_string()
@@ -504,7 +589,7 @@ fn shell_send_input_returns_backend_backed_status() {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: "shell_send_input".to_string(),
+            tool_name: "shell_input".to_string(),
         },
         prompt: String::new(),
         system_prompt: None,
@@ -515,14 +600,14 @@ fn shell_send_input_returns_backend_backed_status() {
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: input_request,
-        tool_name: "shell_send_input".to_string(),
+        tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({
-            "handle_id": handle_id,
+            "session_id": session_id,
             "input": "hello",
             "append_newline": true
         }),
         pending_confirmation_id: None,
-        tool_call_id: Some("call_shell_send_input".to_string()),
+        tool_call_id: Some("call_shell_input".to_string()),
         pending_confirmation_options: None,
     });
 
@@ -536,11 +621,12 @@ fn shell_send_input_returns_backend_backed_status() {
     };
 
     let last = results.last().unwrap().tool_output.clone().unwrap();
+    assert_eq!(last["accepted"], true);
     assert!(last["status"].is_string());
 }
 
 #[test]
-fn shell_read_output_supports_cursor_progression() {
+fn shell_read_backend_returns_latest_snapshot() {
     let backend = harness::NativeProcessBackend::default();
     let handle = backend
         .exec_blocking(harness::SessionStartRequest {
@@ -556,14 +642,14 @@ fn shell_read_output_supports_cursor_progression() {
         .expect("exec_blocking should succeed");
 
     let first = backend
-        .read_output(harness::SessionOutputRequest {
+        .read_session(harness::SessionReadRequest {
             handle_id: handle.handle_id,
-            cursor: None,
             tail_lines: 2,
         })
-        .expect("read_output should succeed");
+        .expect("read_session should succeed");
 
-    assert!(first.output.next_cursor.is_some());
+    assert!(first.output.output.contains("line2"));
+    assert!(first.output.output.contains("line3"));
 }
 
 #[test]
@@ -628,9 +714,8 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
     };
 
     for output in outputs {
-        assert!(output.get("handle_id").is_some());
         assert!(output.get("status").is_some());
-        assert!(output.get("output").is_some());
+        assert!(output.get("session_id").is_some() || output.get("timed_out").is_some());
     }
 }
 
@@ -692,7 +777,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
 }
 
 #[test]
-fn shell_read_output_returns_output_window() {
+fn shell_read_returns_output_text() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
@@ -704,13 +789,104 @@ fn shell_read_output_returns_output_window() {
     let task_entity = app
         .world_mut()
         .spawn((
-            Task::from_user_input_ready("shell read output", 3, default_channel()),
+            Task::from_user_input_ready("shell read", 3, default_channel()),
             ShortTermMemory::default(),
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
-    let exec_request = AgentExecutionRequest {
+    let start_request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_start".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: start_request,
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({
+            "command": "printf 'x\\ny\\n'; sleep 1"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_start_for_read".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let session_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results[0].tool_output.clone().unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let read_request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_read".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: read_request,
+        tool_name: "shell_read".to_string(),
+        tool_input: serde_json::json!({
+            "session_id": session_id,
+            "tail_lines": 1
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_read_text".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let outputs = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        query.iter(world).cloned().collect::<Vec<_>>()
+    };
+
+    let output_json = outputs.last().unwrap().tool_output.clone().unwrap();
+    assert!(output_json["output"].is_string());
+}
+
+/// shell_exec 在超时时应返回 stopped + timed_out=true，并尽可能带上已产生的 tail 输出。
+#[test]
+fn shell_exec_times_out_returns_stopped_with_tail_output() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell exec timeout", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let request = AgentExecutionRequest {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
@@ -724,25 +900,233 @@ fn shell_read_output_returns_output_window() {
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
-        request: exec_request,
+        request,
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({
-            "command": "printf 'x\\ny\\n'",
-            "tail_lines": 1
+            "command": "i=0; while true; do echo tick-$i; i=$((i+1)); sleep 0.02; done",
+            "timeout_secs": 1,
+            "tail_lines": 20
         }),
         pending_confirmation_id: None,
-        tool_call_id: Some("call_shell_exec_for_read".to_string()),
+        tool_call_id: Some("call_shell_exec_timeout_with_tail".to_string()),
         pending_confirmation_options: None,
     });
+
     app.update();
 
-    let outputs = {
+    let results = {
         let world = app.world_mut();
         let mut query = world.query::<&harness::ToolExecutionResultMessage>();
         query.iter(world).cloned().collect::<Vec<_>>()
     };
 
-    let output_json = outputs[0].tool_output.clone().unwrap();
-    assert!(output_json["output"].is_object());
-    assert!(output_json["output"]["combined_tail"].is_string());
+    assert!(
+        !results.is_empty(),
+        "shell_exec should produce a ToolExecutionResultMessage"
+    );
+    let output_json = results[0]
+        .tool_output
+        .clone()
+        .expect("shell_exec should succeed");
+
+    assert_eq!(output_json["status"], "stopped");
+    assert_eq!(output_json["timed_out"], true);
+
+    let output = output_json["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("tick-"),
+        "timeout result should carry partial output tail"
+    );
+}
+
+/// 验证省略 `timeout_secs` 时，`shell_exec` 会使用配置中的默认超时。
+#[test]
+fn shell_exec_uses_default_timeout_when_omitted() {
+    let mut config = test_config();
+    config.shell_default_exec_timeout_secs = 1;
+
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(config, runtime, executor, input_rx, vec![]);
+
+    app.update();
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell exec timeout", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_exec".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_exec".to_string(),
+        tool_input: serde_json::json!({ "command": "sleep 2" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_exec_timeout_default".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    app.update();
+
+    let world = app.world_mut();
+    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let results = query.iter(world).cloned().collect::<Vec<_>>();
+    let output = results.last().unwrap().tool_output.clone().unwrap();
+
+    assert_eq!(output["timed_out"], true);
+}
+
+/// 验证 `shell_input` 与 `shell_stop` 返回精简契约，不再暴露旧运行时冗余字段。
+#[test]
+fn shell_input_and_stop_follow_simplified_contract() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell input stop", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_start".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({ "command": "cat" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_start_input_stop_case".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let session_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results[0].tool_output.clone().unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_input".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_input".to_string(),
+        tool_input: serde_json::json!({ "session_id": session_id, "input": "hello" }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_input_case".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let input_output = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results.last().unwrap().tool_output.clone().unwrap()
+    };
+    assert_eq!(input_output["accepted"], true);
+    assert_eq!(
+        input_output["session_id"].as_str(),
+        Some(session_id.as_str())
+    );
+    assert_eq!(input_output["status"], "running");
+    let input_keys = input_output
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_input_keys = ["accepted", "session_id", "status"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(input_keys, expected_input_keys);
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_stop".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_stop".to_string(),
+        tool_input: serde_json::json!({ "session_id": session_id }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_stop_case".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let stop_output = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results.last().unwrap().tool_output.clone().unwrap()
+    };
+    assert_eq!(
+        stop_output["session_id"].as_str(),
+        Some(session_id.as_str())
+    );
+    assert_eq!(stop_output["status"], "stopped");
+    let stop_keys = stop_output
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_stop_keys = ["session_id", "status"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(stop_keys, expected_stop_keys);
 }

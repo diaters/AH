@@ -10,10 +10,10 @@ use uuid::Uuid;
 use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
-    ChannelId, FrontendKind, OutputContent, ShortTermMemory, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
-    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    WaitingForSessionInfo, WaitingForTasksInfo, WaitingReason,
+    ChannelId, FrontendKind, OutputContent, SessionSummary, ShellExecResult, ShellSessionResult,
+    ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
+    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -467,7 +467,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                         request_entity,
                         request,
                         "shell_exec",
-                        serde_json::json!(handle),
+                        serde_json::json!(ShellExecResult::from_handle(&handle)),
                     );
                 }
                 Err(error) => {
@@ -483,12 +483,13 @@ pub fn handle_tool_action<B: SessionBackend>(
         Ok(ToolAction::StartSession(session_request)) => {
             match backend.start_session(session_request) {
                 Ok(handle) => {
+                    let summary = SessionSummary::from_handle(&handle);
                     spawn_shell_result(
                         commands,
                         request_entity,
                         request,
                         "shell_start",
-                        serde_json::json!(handle),
+                        serde_json::json!(ShellSessionResult::from_summary(&summary)),
                     );
                 }
                 Err(error) => {
@@ -501,35 +502,14 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             }
         }
-        Ok(ToolAction::ReadSessionOutput(output_request)) => {
-            match backend.read_output(output_request) {
-                Ok(response) => {
-                    spawn_shell_result(
-                        commands,
-                        request_entity,
-                        request,
-                        &request.tool_name,
-                        serde_json::json!(response),
-                    );
-                }
-                Err(error) => {
-                    spawn_tool_error(
-                        commands,
-                        request_entity,
-                        request,
-                        ToolError::ExecutionFailed(error),
-                    );
-                }
-            }
-        }
-        Ok(ToolAction::SendSessionInput(command)) => match backend.send_input(command) {
-            Ok(handle) => {
+        Ok(ToolAction::ReadSession(read_request)) => match backend.read_session(read_request) {
+            Ok(summary) => {
                 spawn_shell_result(
                     commands,
                     request_entity,
                     request,
-                    "shell_send_input",
-                    serde_json::json!(handle),
+                    "shell_read",
+                    serde_json::json!(ShellSessionResult::from_summary(&summary)),
                 );
             }
             Err(error) => {
@@ -541,14 +521,18 @@ pub fn handle_tool_action<B: SessionBackend>(
                 );
             }
         },
-        Ok(ToolAction::SendSessionSignal(command)) => match backend.send_signal(command) {
-            Ok(handle) => {
+        Ok(ToolAction::ListSessions) => match backend.list_active_sessions() {
+            Ok(sessions) => {
+                let payload = sessions
+                    .iter()
+                    .map(ShellSessionResult::from_summary)
+                    .collect::<Vec<_>>();
                 spawn_shell_result(
                     commands,
                     request_entity,
                     request,
-                    "shell_send_signal",
-                    serde_json::json!(handle),
+                    "shell_list",
+                    serde_json::json!(payload),
                 );
             }
             Err(error) => {
@@ -560,67 +544,44 @@ pub fn handle_tool_action<B: SessionBackend>(
                 );
             }
         },
-        Ok(ToolAction::WaitForSession(wait_request)) => {
-            // Set task to waiting state for session
-            if let Some((_, mut task)) = tasks
-                .iter_mut()
-                .find(|(_, t)| t.id == request.request.task_id)
-            {
-                task.status = TaskStatus::Waiting(WaitingReason::Session {
-                    handle_id: wait_request.handle_id,
-                });
+        Ok(ToolAction::InputSession(input_request)) => match backend.input_session(input_request) {
+            Ok(handle) => {
+                spawn_shell_result(
+                    commands,
+                    request_entity,
+                    request,
+                    "shell_input",
+                    serde_json::json!(ShellSessionResult::accepted_input(&handle)),
+                );
             }
-            commands.entity(task_entity).insert(WaitingForSessionInfo {
-                handle_id: wait_request.handle_id,
-                timeout_at: chrono::Utc::now()
-                    + chrono::Duration::seconds(wait_request.timeout_secs as i64),
-                tool_call_id: request.tool_call_id.clone().unwrap_or_default(),
-                agent_id: request.request.agent_id,
-                return_tail_lines: wait_request.tail_lines,
-            });
-            commands.entity(request_entity).despawn();
-        }
-        Ok(ToolAction::StopSession(stop_request)) => {
-            match backend.stop_session(stop_request.clone()) {
-                Ok(handle) => {
-                    if stop_request.wait_for_exit {
-                        if let Some((_, mut task)) = tasks
-                            .iter_mut()
-                            .find(|(_, t)| t.id == request.request.task_id)
-                        {
-                            task.status = TaskStatus::Waiting(WaitingReason::Session {
-                                handle_id: stop_request.handle_id,
-                            });
-                        }
-                        commands.entity(task_entity).insert(WaitingForSessionInfo {
-                            handle_id: stop_request.handle_id,
-                            timeout_at: chrono::Utc::now()
-                                + chrono::Duration::seconds(stop_request.timeout_secs as i64),
-                            tool_call_id: request.tool_call_id.clone().unwrap_or_default(),
-                            agent_id: request.request.agent_id,
-                            return_tail_lines: stop_request.tail_lines,
-                        });
-                        commands.entity(request_entity).despawn();
-                    } else {
-                        spawn_shell_result(
-                            commands,
-                            request_entity,
-                            request,
-                            "shell_stop",
-                            serde_json::json!(handle),
-                        );
-                    }
-                }
-                Err(error) => {
-                    spawn_tool_error(
-                        commands,
-                        request_entity,
-                        request,
-                        ToolError::ExecutionFailed(error),
-                    );
-                }
+            Err(error) => {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::ExecutionFailed(error),
+                );
             }
-        }
+        },
+        Ok(ToolAction::StopSession(handle_id)) => match backend.stop_session(handle_id) {
+            Ok(handle) => {
+                spawn_shell_result(
+                    commands,
+                    request_entity,
+                    request,
+                    "shell_stop",
+                    serde_json::json!(ShellSessionResult::stopped(&handle)),
+                );
+            }
+            Err(error) => {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::ExecutionFailed(error),
+                );
+            }
+        },
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
@@ -676,18 +637,6 @@ pub fn spawn_tool_error(
     commands.entity(request_entity).despawn();
 }
 
-/// Normalize shell output to ensure consistent shape across all shell tools
-fn normalize_shell_output(mut value: serde_json::Value) -> serde_json::Value {
-    if value.get("output").is_none() {
-        value["output"] = serde_json::json!({
-            "combined_tail": "",
-            "combined_truncated": false,
-            "returned_lines": 0
-        });
-    }
-    value
-}
-
 /// 生成 Shell 工具执行结果
 pub fn spawn_shell_result(
     commands: &mut Commands,
@@ -714,7 +663,7 @@ pub fn spawn_shell_result(
     commands.spawn(ToolExecutionResultMessage {
         result: execution_result,
         tool_name: tool_name.to_string(),
-        tool_output: Ok(normalize_shell_output(tool_output)),
+        tool_output: Ok(tool_output),
         tool_call_id: request.tool_call_id.clone(),
         processed: false,
     });

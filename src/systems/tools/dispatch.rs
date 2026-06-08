@@ -17,6 +17,7 @@ use crate::{
     systems::NativeProcessBackend,
 };
 
+use super::orchestrator::restore_task_after_tool;
 use super::orchestrator::{handle_tool_action, spawn_tool_error};
 
 /// Tool 分发 System
@@ -30,6 +31,7 @@ pub fn tool_dispatch_system(
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SpaceKnowledge>,
     agents: Query<&Agent>,
+    calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
@@ -144,7 +146,7 @@ pub fn tool_dispatch_system(
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
-                    shell_default_wait_timeout_secs: settings.0.shell_default_wait_timeout_secs,
+                    shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
                     shell_default_stop_timeout_secs: settings.0.shell_default_stop_timeout_secs,
                     current_task_id: request.request.task_id,
                     current_agent_id: request.request.agent_id,
@@ -165,6 +167,8 @@ pub fn tool_dispatch_system(
                         &*backend,
                     );
                 }
+
+                restore_task_after_tool(&mut tasks, &calling_states, request.request.task_id);
             }
             ToolPermission::Confirm => {
                 // 检查 Agent 是否有父 Agent，且父 Agent 有该工具的 Allow 权限

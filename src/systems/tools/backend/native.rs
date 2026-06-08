@@ -15,9 +15,9 @@ use uuid::Uuid;
 use crate::{
     contracts::SessionBackend,
     domain::{
-        SessionBackendKind, SessionCommand, SessionHandle, SessionHandleId, SessionOutputRequest,
-        SessionOutputResponse, SessionOutputWindow, SessionStartRequest, SessionStatus,
-        SessionStopRequest, SessionWaitRequest,
+        SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest,
+        SessionOutputSnapshot, SessionOutputWindow, SessionReadRequest, SessionStartRequest,
+        SessionStatus, SessionSummary,
     },
 };
 
@@ -44,23 +44,29 @@ impl SessionBackend for NativeProcessBackend {
             .timeout_secs
             .map(|timeout_secs| Instant::now() + Duration::from_secs(timeout_secs));
 
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let buffer = Arc::new(Mutex::new(crate::domain::SessionOutputBuffer::empty()));
+        let mut stdout_reader =
+            spawn_blocking_output_reader(stdout, Arc::clone(&buffer), "", 1024 * 1024);
+        let mut stderr_reader =
+            spawn_blocking_output_reader(stderr, Arc::clone(&buffer), "[stderr] ", 1024 * 1024);
+
         loop {
             if let Some(exit_status) = child.try_wait().map_err(|error| error.to_string())? {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|error| error.to_string())?;
-                let combined = format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                );
-
-                // Create output buffer and store content
-                let mut buffer = crate::domain::SessionOutputBuffer::empty();
-                append_output(&mut buffer, &combined, 1024 * 1024); // 1MB max buffer
+                if let Some(reader) = stdout_reader.take() {
+                    let _ = reader.join();
+                }
+                if let Some(reader) = stderr_reader.take() {
+                    let _ = reader.join();
+                }
+                let buffer_snapshot = buffer
+                    .lock()
+                    .map_err(|_| "output buffer poisoned".to_string())?
+                    .clone();
 
                 // Generate window from buffer
-                let output_window = window_from_buffer(&buffer, None, request.tail_lines);
+                let output_window = window_from_buffer(&buffer_snapshot, None, request.tail_lines);
 
                 let handle = SessionHandle {
                     handle_id,
@@ -94,6 +100,18 @@ impl SessionBackend for NativeProcessBackend {
 
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let _ = child.kill();
+                let _ = child.wait();
+                if let Some(reader) = stdout_reader.take() {
+                    let _ = reader.join();
+                }
+                if let Some(reader) = stderr_reader.take() {
+                    let _ = reader.join();
+                }
+                let buffer_snapshot = buffer
+                    .lock()
+                    .map_err(|_| "output buffer poisoned".to_string())?
+                    .clone();
+                let output_window = window_from_buffer(&buffer_snapshot, None, request.tail_lines);
                 let handle = SessionHandle {
                     handle_id,
                     backend: SessionBackendKind::Native,
@@ -108,13 +126,7 @@ impl SessionBackend for NativeProcessBackend {
                     finished_at: Some(Utc::now()),
                     owner_task_id: request.owner_task_id,
                     owner_agent_id: request.owner_agent_id,
-                    output: SessionOutputWindow {
-                        combined_tail: String::new(),
-                        combined_truncated: false,
-                        returned_lines: 0,
-                        cursor: Some("0".to_string()),
-                        next_cursor: Some("0".to_string()),
-                    },
+                    output: output_window,
                 };
 
                 // Store handle in sessions map for later read_output() calls
@@ -207,6 +219,123 @@ impl SessionBackend for NativeProcessBackend {
         Ok(handle)
     }
 
+    fn read_session(&self, request: SessionReadRequest) -> Result<SessionSummary, String> {
+        self.refresh_session_state(request.handle_id)?;
+        let mut handle = self.get_status(request.handle_id)?;
+        let (combined_tail, combined_truncated, returned_lines) =
+            tail_lines(&handle.output.combined_tail, request.tail_lines);
+        handle.output = SessionOutputWindow {
+            combined_tail,
+            combined_truncated,
+            returned_lines,
+            cursor: None,
+            next_cursor: handle.output.next_cursor.clone(),
+        };
+        Ok(self.session_summary(handle))
+    }
+
+    fn list_active_sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "session map poisoned".to_string())?;
+        Ok(sessions
+            .values()
+            .filter(|handle| {
+                matches!(
+                    handle.status,
+                    SessionStatus::Starting
+                        | SessionStatus::Running
+                        | SessionStatus::WaitingForInput
+                )
+            })
+            .cloned()
+            .map(|handle| self.session_summary(handle))
+            .collect())
+    }
+
+    fn input_session(&self, request: SessionInputRequest) -> Result<SessionHandle, String> {
+        let stdin = self
+            .stdins
+            .lock()
+            .map_err(|_| "stdin map poisoned".to_string())?
+            .get(&request.handle_id)
+            .cloned()
+            .ok_or_else(|| format!("stdin for session {} not found", request.handle_id))?;
+
+        {
+            let mut stdin = stdin
+                .lock()
+                .map_err(|_| "stdin mutex poisoned".to_string())?;
+            let payload = if request.append_newline {
+                format!("{}\n", request.input)
+            } else {
+                request.input.clone()
+            };
+            stdin
+                .write_all(payload.as_bytes())
+                .map_err(|error| error.to_string())?;
+            stdin.flush().map_err(|error| error.to_string())?;
+        }
+
+        debug!(
+            event = "ShellInputAccepted",
+            handle_id = %request.handle_id,
+            input_len = request.input.len(),
+            append_newline = request.append_newline,
+            "shell_input wrote to stdin"
+        );
+
+        self.refresh_session_state(request.handle_id)?;
+        self.get_status(request.handle_id)
+    }
+
+    fn stop_session(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
+        let process = self
+            .processes
+            .lock()
+            .map_err(|_| "process map poisoned".to_string())?
+            .get(&handle_id)
+            .cloned()
+            .ok_or_else(|| format!("session {} not found", handle_id))?;
+
+        {
+            let mut child = process
+                .lock()
+                .map_err(|_| "process mutex poisoned".to_string())?;
+            child.kill().map_err(|error| error.to_string())?;
+        }
+
+        let mut handle = self.get_status(handle_id)?;
+        handle.status = SessionStatus::Stopped;
+        handle.finished_at = Some(Utc::now());
+        self.sessions
+            .lock()
+            .map_err(|_| "session map poisoned".to_string())?
+            .insert(handle_id, handle.clone());
+
+        // Clean up process and stdin resources
+        self.processes
+            .lock()
+            .map_err(|_| "process map poisoned".to_string())?
+            .remove(&handle_id);
+        self.stdins
+            .lock()
+            .map_err(|_| "stdin map poisoned".to_string())?
+            .remove(&handle_id);
+
+        debug!(
+            event = "ShellSessionStopped",
+            handle_id = %handle_id,
+            "shell_stop session stopped (real process killed)"
+        );
+
+        Ok(handle)
+    }
+}
+
+impl NativeProcessBackend {
+    /// 读取最新会话句柄，若进程已结束则先同步状态。
     fn get_status(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
         self.sessions
             .lock()
@@ -216,145 +345,53 @@ impl SessionBackend for NativeProcessBackend {
             .ok_or_else(|| format!("session {} not found", handle_id))
     }
 
-    fn read_output(&self, request: SessionOutputRequest) -> Result<SessionOutputResponse, String> {
-        let handle = self.get_status(request.handle_id)?;
-
-        // Phase 1 limitation: We return the latest truthful window instead of an exact diff slice.
-        // The cursor progression is truthful - next_cursor advances whenever new buffered content appears.
-        // Future work can implement cursor-based slicing to return only new content since the cursor.
-        let output = SessionOutputWindow {
-            combined_tail: handle.output.combined_tail.clone(),
-            combined_truncated: handle.output.combined_truncated,
+    /// 将内部输出窗口转换为对外稳定的快照 DTO。
+    fn to_snapshot(&self, handle: &SessionHandle) -> SessionOutputSnapshot {
+        SessionOutputSnapshot {
+            output: handle.output.combined_tail.clone(),
             returned_lines: handle.output.returned_lines,
-            cursor: request.cursor.clone(),
-            next_cursor: handle.output.next_cursor.clone(),
-        };
-
-        Ok(SessionOutputResponse { handle, output })
-    }
-
-    fn send_input(&self, command: SessionCommand) -> Result<SessionHandle, String> {
-        match command {
-            SessionCommand::Input {
-                handle_id,
-                input,
-                append_newline,
-                ..
-            } => {
-                let stdin = self
-                    .stdins
-                    .lock()
-                    .map_err(|_| "stdin map poisoned".to_string())?
-                    .get(&handle_id)
-                    .cloned()
-                    .ok_or_else(|| format!("stdin for session {} not found", handle_id))?;
-
-                let input_len = input.len();
-                {
-                    let mut stdin = stdin
-                        .lock()
-                        .map_err(|_| "stdin mutex poisoned".to_string())?;
-                    let payload = if append_newline {
-                        format!("{input}\n")
-                    } else {
-                        input
-                    };
-                    stdin
-                        .write_all(payload.as_bytes())
-                        .map_err(|error| error.to_string())?;
-                    stdin.flush().map_err(|error| error.to_string())?;
-                }
-
-                debug!(
-                    event = "ShellSendInput",
-                    handle_id = %handle_id,
-                    input_len = input_len,
-                    append_newline = append_newline,
-                    "send_input wrote to stdin"
-                );
-
-                self.get_status(handle_id)
-            }
-            SessionCommand::Signal { .. } => {
-                Err("unexpected signal command in send_input".to_string())
-            }
+            truncated: handle.output.combined_truncated,
         }
     }
 
-    fn send_signal(&self, command: SessionCommand) -> Result<SessionHandle, String> {
-        match command {
-            SessionCommand::Signal {
-                handle_id, signal, ..
-            } => {
-                let process = self
-                    .processes
-                    .lock()
-                    .map_err(|_| "process map poisoned".to_string())?
-                    .get(&handle_id)
-                    .cloned()
-                    .ok_or_else(|| format!("session {} not found", handle_id))?;
-
-                {
-                    let mut child = process
-                        .lock()
-                        .map_err(|_| "process mutex poisoned".to_string())?;
-                    match signal.as_str() {
-                        "interrupt" | "terminate" | "kill" => {
-                            child.kill().map_err(|error| error.to_string())?
-                        }
-                        other => return Err(format!("unsupported signal '{}'", other)),
-                    }
-                }
-
-                let mut handle = self.get_status(handle_id)?;
-                handle.status = SessionStatus::Stopped;
-                handle.finished_at = Some(Utc::now());
-                self.sessions
-                    .lock()
-                    .map_err(|_| "session map poisoned".to_string())?
-                    .insert(handle_id, handle.clone());
-
-                debug!(
-                    event = "ShellSendSignal",
-                    handle_id = %handle_id,
-                    signal = %signal,
-                    "send_signal killed process"
-                );
-
-                Ok(handle)
-            }
-            SessionCommand::Input { .. } => {
-                Err("unexpected input command in send_signal".to_string())
-            }
+    /// 将内部句柄投影为 runtime 对外返回的摘要结构。
+    fn session_summary(&self, handle: SessionHandle) -> SessionSummary {
+        SessionSummary {
+            handle_id: handle.handle_id,
+            command: handle.command.clone(),
+            cwd: handle.cwd.clone(),
+            status: handle.status,
+            exit_code: handle.exit_code,
+            interaction_required: handle.interaction_required,
+            started_at: handle.started_at,
+            finished_at: handle.finished_at,
+            output: self.to_snapshot(&handle),
         }
     }
 
-    // Phase 1 limitation:
-    // interrupt / terminate / kill are temporarily mapped to the same kill-like behavior
-    // in the native backend. Follow-up work can refine per-platform signal mapping.
-
-    fn wait_session(&self, request: SessionWaitRequest) -> Result<Option<SessionHandle>, String> {
+    /// 同步后台进程状态到会话句柄，避免 shell_read/list 读到过期状态。
+    fn refresh_session_state(&self, handle_id: SessionHandleId) -> Result<(), String> {
         let process = {
             self.processes
                 .lock()
                 .map_err(|_| "process map poisoned".to_string())?
-                .get(&request.handle_id)
+                .get(&handle_id)
                 .cloned()
         };
 
         let Some(process) = process else {
-            return self.get_status(request.handle_id).map(Some);
+            return Ok(());
         };
 
-        let status = {
+        let exit_status = {
             let mut child = process
                 .lock()
                 .map_err(|_| "process mutex poisoned".to_string())?;
             child.try_wait().map_err(|error| error.to_string())?
         };
 
-        if let Some(exit_status) = status {
-            let mut handle = self.get_status(request.handle_id)?;
+        if let Some(exit_status) = exit_status {
+            let mut handle = self.get_status(handle_id)?;
             handle.status = if exit_status.success() {
                 SessionStatus::Completed
             } else {
@@ -366,66 +403,18 @@ impl SessionBackend for NativeProcessBackend {
             self.sessions
                 .lock()
                 .map_err(|_| "session map poisoned".to_string())?
-                .insert(request.handle_id, handle.clone());
-
-            // Clean up process and stdin resources
+                .insert(handle_id, handle);
             self.processes
                 .lock()
                 .map_err(|_| "process map poisoned".to_string())?
-                .remove(&request.handle_id);
+                .remove(&handle_id);
             self.stdins
                 .lock()
                 .map_err(|_| "stdin map poisoned".to_string())?
-                .remove(&request.handle_id);
-
-            Ok(Some(handle))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn stop_session(&self, request: SessionStopRequest) -> Result<SessionHandle, String> {
-        let process = self
-            .processes
-            .lock()
-            .map_err(|_| "process map poisoned".to_string())?
-            .get(&request.handle_id)
-            .cloned()
-            .ok_or_else(|| format!("session {} not found", request.handle_id))?;
-
-        {
-            let mut child = process
-                .lock()
-                .map_err(|_| "process mutex poisoned".to_string())?;
-            child.kill().map_err(|error| error.to_string())?;
+                .remove(&handle_id);
         }
 
-        let mut handle = self.get_status(request.handle_id)?;
-        handle.status = SessionStatus::Stopped;
-        handle.finished_at = Some(Utc::now());
-        self.sessions
-            .lock()
-            .map_err(|_| "session map poisoned".to_string())?
-            .insert(request.handle_id, handle.clone());
-
-        // Clean up process and stdin resources
-        self.processes
-            .lock()
-            .map_err(|_| "process map poisoned".to_string())?
-            .remove(&request.handle_id);
-        self.stdins
-            .lock()
-            .map_err(|_| "stdin map poisoned".to_string())?
-            .remove(&request.handle_id);
-
-        debug!(
-            event = "ShellSessionStopped",
-            handle_id = %request.handle_id,
-            wait_for_exit = request.wait_for_exit,
-            "shell_stop session stopped (real process killed)"
-        );
-
-        Ok(handle)
+        Ok(())
     }
 }
 
@@ -473,6 +462,28 @@ fn append_output(buffer: &mut crate::domain::SessionOutputBuffer, content: &str,
             break;
         }
     }
+}
+
+/// 为阻塞执行读取 stdout/stderr，并将内容追加到共享的输出缓冲区中。
+fn spawn_blocking_output_reader(
+    stream: Option<impl std::io::Read + Send + 'static>,
+    buffer: Arc<Mutex<crate::domain::SessionOutputBuffer>>,
+    prefix: &'static str,
+    max_bytes: usize,
+) -> Option<thread::JoinHandle<()>> {
+    let stream = stream?;
+
+    Some(thread::spawn(move || {
+        let reader = BufReader::new(stream);
+        for line in reader.lines() {
+            let Ok(line) = line else {
+                break;
+            };
+
+            let mut buffer = buffer.lock().expect("output buffer poisoned");
+            append_output(&mut buffer, &format!("{prefix}{line}\n"), max_bytes);
+        }
+    }))
 }
 
 /// 根据输出缓冲区生成返回窗口。

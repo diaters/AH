@@ -36,8 +36,8 @@ pub struct HarnessConfig {
     pub shell_default_tail_lines: usize,
     /// shell 工具允许返回的最大输出行数
     pub shell_max_tail_lines: usize,
-    /// shell.wait 默认超时时间（秒）
-    pub shell_default_wait_timeout_secs: u64,
+    /// shell.exec 默认超时时间（秒）
+    pub shell_default_exec_timeout_secs: u64,
     /// shell.stop(wait_for_exit=true) 默认超时时间（秒）
     pub shell_default_stop_timeout_secs: u64,
     /// 每个 session stream 的最大缓存字节数
@@ -84,8 +84,8 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500),
-            shell_default_wait_timeout_secs: std::env::var(
-                "HARNESS_SHELL_DEFAULT_WAIT_TIMEOUT_SECS",
+            shell_default_exec_timeout_secs: std::env::var(
+                "HARNESS_SHELL_DEFAULT_EXEC_TIMEOUT_SECS",
             )
             .ok()
             .and_then(|v| v.parse().ok())
@@ -122,7 +122,7 @@ impl Default for HarnessConfig {
             default_wait_tasks_timeout_secs: 300, // 5 minutes default
             shell_default_tail_lines: 200,
             shell_max_tail_lines: 500,
-            shell_default_wait_timeout_secs: 300,
+            shell_default_exec_timeout_secs: 300,
             shell_default_stop_timeout_secs: 10,
             shell_max_buffer_bytes_per_stream: 64 * 1024,
         }

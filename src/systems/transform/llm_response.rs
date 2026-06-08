@@ -882,11 +882,18 @@ pub fn tool_calling_orchestrator_system(
             continue;
         }
 
-        // 仅在任务处于 Waiting(ToolExecution) 状态时继续，否则跳过
+        // 仅在任务处于“由 tool calling loop 驱动的等待态”时继续，否则跳过
         // （如 tool 需要用户确认时，任务状态会变为 Waiting(User)）
         let task_is_waiting = tasks.iter().any(|t| {
             t.id == state.task_id
-                && matches!(t.status, TaskStatus::Waiting(WaitingReason::ToolExecution))
+                && matches!(
+                    t.status,
+                    TaskStatus::Waiting(
+                        WaitingReason::ToolExecution
+                            | WaitingReason::Session { .. }
+                            | WaitingReason::SubTaskBatch { .. }
+                    )
+                )
         });
         if !task_is_waiting {
             continue;
@@ -995,7 +1002,11 @@ pub fn tool_calling_orchestrator_system(
         if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
             && matches!(
                 task.status,
-                TaskStatus::Waiting(WaitingReason::ToolExecution)
+                TaskStatus::Waiting(
+                    WaitingReason::ToolExecution
+                        | WaitingReason::Session { .. }
+                        | WaitingReason::SubTaskBatch { .. }
+                )
             )
         {
             let old_status = task.status.clone();
