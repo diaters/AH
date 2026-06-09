@@ -1,5 +1,10 @@
 # 用 genai 替换 async-openai 设计文档
 
+> __状态说明（2026-06-09）__
+> 分类：当前有效（决策背景）。
+> 作用：说明为什么当前 LLM 接入使用 `genai`，以及 provider 能力如何收敛。
+> 说明：本文主要是迁移决策记录；具体运行配置以 `docs/configuration.md` 为准。
+
 ## 背景
 
 当前项目使用 `async-openai` crate 作为 LLM 客户端，存在以下问题：

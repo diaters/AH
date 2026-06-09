@@ -1,5 +1,11 @@
 # Phase 4.1 多轮对话与记忆管理设计 v2
 
+> __状态说明（2026-06-09）__
+> 分类：历史背景。
+> 作用：用于理解多轮对话、主题隔离与记忆压缩设计的演进。
+> 说明：当前记忆链路已结合 summarization、WorkItem 与后续重设计继续演进。
+> 当前优先参考：`docs/current-state.md`、
+> `docs/design/2026-06-06-workitem-boundary-design.md`。
 > 本文档基于讨论修订，解决 v1 设计中的问题。
 
 ---

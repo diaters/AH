@@ -4,7 +4,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 草稿 |
+| 状态 | 已废止 |
 | 创建日期 | 2026-05-30 |
 | 分支 | `refactor/modular-architecture` |
 | 基于文档 | `docs/wiki/07-modular-refactor-plan.md` |

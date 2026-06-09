@@ -1,5 +1,11 @@
 # Phase 3: 多 Agent 支持设计
 
+> __状态说明（2026-06-09）__
+> 分类：历史背景。
+> 作用：用于理解多 Agent、Agent 演化与权限继承设计的演进过程。
+> 说明：本文部分前提已由 ADR 和后续实现修订，不直接代表当前实现。
+> 当前优先参考：`docs/current-state.md`、`docs/adr/ADR-002-agent-controlled-evolution.md`。
+
 本文档描述 Phase 3 多 Agent 支持的详细设计，包括 Agent 分类、配置加载、动态创建/销毁、权限继承和核心数据流。
 
 > 注：本文档关于 Agent 定位的前提已被 [ADR-002](/Users/diater/workspace/Harness/docs/adr/ADR-002-agent-controlled-evolution.md) 修订。
