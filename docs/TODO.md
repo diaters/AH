@@ -1,131 +1,78 @@
 # 待办事项
 
-本文档记录项目当前状态和待完成任务。
+本文档记录项目当前仍需推进的任务、已知限制与近期关注方向。
 
----
+## 当前结论
 
-## 已完成
+- 项目已从“阶段编号驱动”转为“能力状态驱动”表述
+- `Task` 是用户目标主实体，`WorkItem` 是内部执行单元
+- `Plan` 已收敛为任务分解能力，不再作为独立模块存在
+- `Evaluation` 与 `Summarization` 已并入 `WorkItem` 执行闭环
+- shell 工具已收敛为六个意图化工具
 
-- [x] 项目规范讨论与确定
-- [x] 创建项目规范文档（CLAUDE.md）
-- [x] 创建 ADR 模板
-- [x] 创建 PR 和 Issue 模板
-- [x] 配置 CI 工作流
-- [x] 初始化 Git 仓库
-- [x] 首次提交
+## 已完成的关键能力
 
-### 架构设计
+- [x] TUI 运行时与事件主循环
+- [x] Task 主链路与多轮对话基本状态管理
+- [x] Brain 调度与多 Agent 配置加载
+- [x] 任务分解能力：`create_tasks` + DAG 调度 + `wait_tasks`
+- [x] Tool 执行链路、权限控制与审批 UI
+- [x] Short-term memory 与 summarization 能力
+- [x] Evaluation 语义层与 `WorkItem` 执行收敛
+- [x] shell 工具精简重构与回归测试
+- [x] CI、格式检查、clippy、自动化测试
 
-- [x] 核心实体定义（Task / Message / Signal / Agent）
-- [x] 核心 System 划分
-- [x] 入口机制设计（外部线程 + channel）
-- [x] 异步 LLM 集成方案（Tokio Runtime）
-- [x] 错误处理策略（分层重试）
-- [x] Agent 架构设计（Brain Agent + Factory 模式）
-- [x] 实体字段细化（ID 类型、状态枚举）
+## 当前待办
 
-### MVP 实现
+### 高优先级
 
-- [x] 初始化 Rust 项目结构
-- [x] 实现 SignalIngestSystem
-- [x] 实现 UserMessageToTaskSystem
-- [x] 实现 TaskDispatchSystem（产出 AgentExecutionRequest）
-- [x] 实现 AgentExecutionSystem（异步 LLM 执行）
-- [x] 实现 LlmResponseSystem
-- [x] 实现 UserOutputSystem
-- [x] 集成测试：单轮对话闭环
-- [x] 设计文档评审与同步
-- [x] 真实 LLM 联调验证（DeepSeek API）
+- [ ] 将 `approval_dispatch_system` 的 MVP 自动通过逻辑替换为真实父 Agent LLM 审查
+- [ ] 为审批链路补齐更明确的策略语义：
+  `Approved`、`Rejected`、`GrantMode::Once`、`GrantMode::Permanent`
+- [ ] 持续清理仍引用旧 shell 语义的历史注释、文档和过程文稿
 
-### Phase 2: Brain Agent 调度
+### 中优先级
 
-- [x] 新增 brain_dispatch_system
-- [x] 新增 brain_decision_system
-- [x] 定义 Brain prompt 模板与决策结果解析
-- [x] Brain 配置（环境变量启用/关闭）
-- [x] 集成测试：Brain 调度闭环
-- [x] 真实 LLM 联调验证（Brain + DeepSeek API）
+- [ ] 梳理并补充当前架构索引，明确哪些设计文档仍是有效真相源
+- [ ] 增加更多真实 provider 场景验证，明确 `openai`、`anthropic`、
+  `deepseek` 与 `openai-compatible` 的运行约束
+- [ ] 继续强化复杂任务场景下的调度、评估与恢复策略验证
 
----
+### 低优先级
 
-## 进行中
+- [ ] 评估配置热加载是否值得引入
+- [ ] 评估分布式或多实例支持是否进入近期路线
 
-（无）
+## 已知限制
 
----
+### 审批链路
 
-## 待办
+- 当前审批请求会进入统一审批流程和 TUI 展示
+- 但父 Agent 决策仍是 MVP 自动通过，不代表最终架构目标
 
-### GitHub 仓库配置
+### 文档状态
 
-- [x] 创建 GitHub 远程仓库
-- [x] 推送代码到远程
-- [x] 配置分支保护规则：
-  - 禁止直接推送
-  - 禁止强制推送
-  - 禁止删除
-  - 必须通过 PR 审核
+- `docs/design/` 下仍有一部分历史阶段文档保留旧语境
+- 这些文档可作为设计演进背景，不应直接视为当前实现说明
 
-### Phase 3: 多 Agent 支持
+### Provider 说明
 
-- [x] Agent 无状态化（移除 AgentStatus）
-- [x] 新增 AgentKind（Persistent / TaskScoped）
-- [x] TOML 配置文件加载持久性 Agent
-- [x] 重写 AgentFactorySystem（配置加载 + 动态创建 + 销毁）
-- [x] 任务型 Agent 动态创建（AgentSpawnRequestMessage）
-- [x] 任务型 Task 终态自动销毁（TaskTerminatedMessage）
-- [x] Agent tags 匹配逻辑
-- [x] tags 子集权限继承校验
-- [x] 集成测试
+- 标准 provider 已接入统一执行器
+- 但跨 provider 的真实行为差异仍需要更多运行验证和文档沉淀
 
-### Phase 4: 高级功能
+## 近期建议顺序
 
-- [x] Memory 实体设计（ShortTermMemory / LongTermMemory）
-- [x] 多轮对话上下文管理
-- [x] 记忆传承机制（子 Agent 向父 Agent 贡献）
-- [x] 评估器 Agent 设计
-- [x] 基于 token 的记忆压缩
-- [x] 用户指令解析（/btw, /finish, /summarize）
-- [x] Pending 状态支持多轮对话
-- [x] Tool / ToolCall 实现（Phase 4.2 MVP 完成）
-- [x] Phase 4.3 LLM 记忆摘要
+1. 先完成真实审批链路替换
+2. 再补齐 provider 兼容性验证与文档说明
+3. 最后评估是否推进更远期能力，如热加载或多实例支持
 
-> 注：Session 概念已被 Phase 4.2 Space 设计取代，不再单独设计。
-> 注：Planner 功能已被 Brain Agent + TaskScoped Agent 覆盖，不再单独设计。
+## 参考文档
 
-### 已知限制（待处理）
-
-- [ ] __父 Agent 真实审批__: approval_dispatch_system 当前硬编码自动通过，需替换为真正的父 Agent LLM 审查，
-      支持 Approved / Rejected 决策和 GrantMode（Once / Permanent）选择
-
-#### Phase 4.2 Tool & Space 实现明细
-
-- [x] Space Resource 骨架（SpaceKnowledge, SpacePreferences, SpaceToolRegistry, SpaceAgentRegistry, SpaceRuntimeContext）
-- [x] ToolDefinition 与 ToolPermission
-- [x] AgentRequestKind::ToolExecution
-- [x] WaitingReason::Approval
-- [x] Agent.tool_permissions 与 AgentExperience
-- [x] agents.toml 扩展（tools 配置节）
-- [x] Tool 执行消息（ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolError）
-- [x] Builtin Tool 执行器（tool_dispatch_system, tool_execution_system, tool_result_system）
-- [x] ToolCall 记录到 ShortTermMemory
-- [x] 审批消息（ApprovalRequestMessage, ApprovalResultMessage, ConfirmMode）
-- [x] 审批流 System（approval_dispatch_system, approval_result_system）
-  > ⚠️ approval_dispatch_system 当前为 MVP 硬编码自动通过，待替换为真实父 Agent LLM 审查
-- [x] Agent 演化 System（agent_evolution_system）
-- [x] 用户确认 UI（选项式交互、永久权限、CLI channel）
-- [x] 集成测试（Tool 执行流程、权限场景、确认流程）
-- [x] LongTermMemory 注入 Agent prompt
-- [x] knowledge_search Tool 实现（从 SpaceKnowledge 检索）
-- [x] /remember 指令（添加知识到 SpaceKnowledge）
-
----
-
-## 备注
-
-- 当前阶段：Phase 4.3 LLM 记忆摘要已完成，详见「已知限制（待处理）」
-- 所有重大变更需要通过 PR 审核流程
-- 架构设计文档：`docs/design/2026-05-10-core-flow-design.md`
-- Phase 3 设计文档：`docs/design/2026-05-16-multi-agent-design.md`
-- Phase 4.1 设计文档：`docs/design/2026-05-17-multi-turn-memory-design.md`
-- Phase 4.2 设计文档：`docs/design/2026-05-17-tool-space-design.md`
+- 当前状态：`docs/current-state.md`
+- 项目规范：`AGENTS.md`
+- WorkItem 边界：
+  `docs/design/2026-06-06-workitem-boundary-design.md`
+- Plan / Evaluation 重评估：
+  `docs/design/2026-06-06-plan-evaluation-reassessment-design.md`
+- shell 工具精简设计：
+  `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`

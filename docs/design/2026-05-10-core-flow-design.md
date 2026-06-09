@@ -1,5 +1,11 @@
 # Harness Core 流程深化设计
 
+> __状态说明（2026-06-09）__
+> 分类：历史背景。
+> 作用：用于理解主链路的早期设计出发点，不直接代表当前实现。
+> 当前优先参考：`docs/current-state.md`、
+> `docs/design/2026-06-06-workitem-boundary-design.md`。
+
 本文档是对当前 Harness Core 设计草案的补充和细化，重点解决以下关键缺口：
 
 - 明确 `Signal` 只承担事件触发语义

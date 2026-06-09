@@ -1,9 +1,14 @@
 # Phase 4.2 Tool 与 Space 设计
 
+> __状态说明（2026-06-09）__
+> 分类：历史背景。
+> 作用：用于理解 Tool、Space、权限与审批能力的设计来源。
+> 说明：当前 shell 工具面、审批限制与部分实现细节已在后续文档中更新。
+> 当前优先参考：`docs/current-state.md`、`docs/TODO.md`、
+> `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`。
 > 本文档描述 Tool 系统、Space 概念及相关权限控制设计。
 >
 > 本文档在 Phase 3/4.1 基础上继续扩展，并修正一个核心前提：
-> Agent 仍然是"执行配置"的主要承载体，但该配置不是绝对不可变的，
 > 可以在运行期间通过受控机制被修正、继承和演化。
 
 ---

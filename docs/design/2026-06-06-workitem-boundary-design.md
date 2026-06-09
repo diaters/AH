@@ -4,7 +4,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 草稿 |
+| 状态 | 当前有效 |
 | 创建日期 | 2026-06-06 |
 | 适用阶段 | MVP 主链路收敛 |
 | 相关文档 | `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` |
