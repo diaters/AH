@@ -7,9 +7,9 @@ use uuid::Uuid;
 use crate::{
     app::{Clock, HarnessSettings},
     domain::{
-        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage,
-        AgentExperience, AgentKind, AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions,
-        FailureReason, SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
+        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
+        AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions, FailureReason,
+        SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
     },
 };
 
@@ -138,7 +138,6 @@ fn load_persistent_agents(
             parent_id: None,
             bound_task_id: None,
             tool_permissions,
-            experience: AgentExperience::default(),
         });
     }
 }
@@ -241,7 +240,6 @@ fn handle_spawn_request(
         parent_id: Some(request.parent_agent_id),
         bound_task_id: Some(request.task_id),
         tool_permissions,
-        experience: AgentExperience::default(),
     });
 
     // 更新 Task 的 delegate 为实际执行的 task-scoped agent

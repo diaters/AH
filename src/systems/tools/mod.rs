@@ -288,8 +288,8 @@ pub fn register_builtin_tools(
 mod tests {
     use super::*;
     use crate::domain::{
-        AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
-        BuiltinTool, EntryRole, MemoryEntry, SpaceKnowledge, ToolContext,
+        AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, BuiltinTool, EntryRole,
+        MemoryEntry, SpaceKnowledge, ToolContext,
     };
 
     #[allow(dead_code)]
@@ -308,7 +308,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         }
     }
 

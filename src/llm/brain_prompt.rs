@@ -123,7 +123,7 @@ mod tests {
     }
 
     fn test_agent(name: &str) -> Agent {
-        use crate::domain::{AgentExperience, AgentToolPermissions};
+        use crate::domain::AgentToolPermissions;
         Agent {
             id: Uuid::new_v4(),
             profile: AgentProfile {
@@ -138,7 +138,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         }
     }
 

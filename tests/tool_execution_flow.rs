@@ -5,13 +5,12 @@ use std::{collections::HashMap, sync::Arc};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, EntryRole, ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend,
-    ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
-    ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
-    build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EntryRole,
+    ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend, ShortTermMemory,
+    SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
+    ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind,
+    ToolPermission, ToolSchema, WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -56,7 +55,6 @@ fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) 
         parent_id: None,
         bound_task_id: None,
         tool_permissions,
-        experience: AgentExperience::default(),
     });
     id
 }
@@ -693,7 +691,6 @@ fn spawn_agent_creates_child_agent() {
                 default_permission: ToolPermission::Allow,
                 overrides: HashMap::new(),
             },
-            experience: AgentExperience::default(),
         });
         id
     };
@@ -936,7 +933,6 @@ fn child_agent_confirm_routes_to_parent() {
                 m
             },
         },
-        experience: AgentExperience::default(),
     });
 
     // 注册 echo 工具
@@ -1171,7 +1167,6 @@ fn confirmation_denied_rejects_tool() {
                 m
             },
         },
-        experience: AgentExperience::default(),
     });
 
     // 注册 echo 工具
@@ -1276,7 +1271,6 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
                 m
             },
         },
-        experience: AgentExperience::default(),
     });
 
     // 注册 echo 工具

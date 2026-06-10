@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole,
-    ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskStatus,
-    WaitingReason, build_harness_app,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole, ExecutorFuture,
+    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskStatus, WaitingReason,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -213,7 +213,6 @@ fn agent_has_long_term_memory() {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
-        experience: AgentExperience::default(),
     });
 
     // Run another frame to trigger init_agent_memory_system for the new agent
@@ -259,7 +258,6 @@ fn memory_contribution_on_agent_termination() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         },
         LongTermMemory::default(),
     ));
@@ -283,7 +281,6 @@ fn memory_contribution_on_agent_termination() {
                 parent_id: Some(parent_id),
                 bound_task_id: Some(task_id),
                 tool_permissions: AgentToolPermissions::default(),
-                experience: AgentExperience::default(),
             },
             LongTermMemory::default(),
         ));

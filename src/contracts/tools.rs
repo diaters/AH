@@ -71,9 +71,7 @@ impl ToolApprovalPolicy for DefaultToolApprovalPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
-    };
+    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
 
     fn test_agent_with_permission(permission: ToolPermission) -> Agent {
         Agent {
@@ -93,7 +91,6 @@ mod tests {
                 default_permission: permission,
                 ..Default::default()
             },
-            experience: AgentExperience::default(),
         }
     }
 

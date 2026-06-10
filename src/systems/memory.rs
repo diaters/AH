@@ -151,7 +151,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: crate::domain::AgentToolPermissions::default(),
-            experience: crate::domain::AgentExperience::default(),
         };
 
         let entity = world.spawn((agent, LongTermMemory::default())).id();

@@ -2,9 +2,9 @@
 
 use bevy::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentId, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, SpaceKnowledge, ToolContext, WaitingForTasksInfo,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
+    HarnessConfig, SpaceKnowledge, ToolContext, WaitingForTasksInfo,
 };
 use uuid::Uuid;
 
@@ -53,7 +53,6 @@ fn create_test_agent(world: &mut World) -> AgentId {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
-        experience: AgentExperience::default(),
     });
     id
 }

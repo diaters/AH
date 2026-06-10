@@ -36,9 +36,7 @@ pub type ExecutorFuture =
 // ============ 从子模块导出 ============
 
 // agent
-pub use agent::{
-    Agent, AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
-};
+pub use agent::{Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
 
 // brain
 pub use brain::{BrainDecisionError, BrainDecisionOutput};
@@ -185,7 +183,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: perms,
-            experience: AgentExperience::default(),
         };
 
         assert!(agent.has_permission("test_tool"));
@@ -208,7 +205,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         };
 
         assert!(!agent.has_permission("new_tool"));

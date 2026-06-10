@@ -7,11 +7,11 @@ use std::{collections::HashMap, sync::Arc};
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, FrontendKind, HarnessConfig, LlmToolCall, ShortTermMemory, SpaceToolRegistry, Task,
-    TaskStatus, ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
-    WaitingReason, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, FrontendKind,
+    HarnessConfig, LlmToolCall, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus,
+    ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -101,7 +101,6 @@ fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) 
         parent_id: None,
         bound_task_id: None,
         tool_permissions,
-        experience: AgentExperience::default(),
     });
     id
 }

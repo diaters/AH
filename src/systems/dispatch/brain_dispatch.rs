@@ -350,7 +350,7 @@ mod tests {
     use super::*;
     use crate::{
         app::{BrainConfig, HarnessConfig},
-        domain::{AgentCapabilities, AgentExperience, AgentProfile, ChannelId, FrontendKind},
+        domain::{AgentCapabilities, AgentProfile, ChannelId, FrontendKind},
     };
     use uuid::Uuid;
 
@@ -387,7 +387,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: Default::default(),
-            experience: AgentExperience::default(),
         });
 
         let channel = ChannelId {

@@ -201,8 +201,8 @@ pub fn task_dispatch_system(
 mod tests {
     use super::*;
     use crate::domain::{
-        AgentCapabilities, AgentExperience, AgentProfile, AgentToolPermissions, ChannelId,
-        EntryMetadata, EntryRole, FrontendKind, ShortTermMemory,
+        AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, EntryMetadata, EntryRole,
+        FrontendKind, ShortTermMemory,
     };
     use uuid::Uuid;
 
@@ -231,7 +231,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         }
     }
 
