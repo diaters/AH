@@ -21,8 +21,7 @@ fn build_tools_for_agent(
 ) -> Vec<ToolDefinition> {
     use crate::domain::ToolPermission;
     registry
-        .tools
-        .values()
+        .iter()
         .filter(|td| {
             !matches!(
                 agent.tool_permissions.get_permission(&td.name),

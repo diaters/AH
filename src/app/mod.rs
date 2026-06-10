@@ -9,9 +9,8 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, Signal, SpaceAgentRegistry,
-        SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, Task, TaskTerminatedMessage,
-        ToolCallingState, UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, Signal, SpaceKnowledge, Task,
+        TaskTerminatedMessage, ToolCallingState, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     plugins::DefaultRuntimePluginGroup,
@@ -212,9 +211,6 @@ pub fn build_harness_app(
 
     // Space Resources
     app.insert_resource(SpaceKnowledge::default());
-    app.insert_resource(SpacePreferences::default());
-    app.insert_resource(SpaceAgentRegistry::default());
-    app.insert_resource(SpaceRuntimeContext::default());
 
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::domain::{SessionStartRequest, ToolAction, ToolContext, ToolError};
 
 pub struct ShellExecTool;
@@ -33,7 +31,7 @@ impl crate::domain::BuiltinTool for ShellExecTool {
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string),
-            env: HashMap::new(),
+            env: super::parse_env_map(input)?,
             timeout_secs: input
                 .get("timeout_secs")
                 .and_then(|v| v.as_u64())

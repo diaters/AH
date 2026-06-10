@@ -4,8 +4,11 @@
 > 分类：历史背景。
 > 作用：用于理解 Tool、Space、权限与审批能力的设计来源。
 > 说明：当前 shell 工具面、审批限制与部分实现细节已在后续文档中更新。
+> 说明补充：本文中的 `SpacePreferences`、`SpaceAgentRegistry`、
+> `SpaceRuntimeContext` 属于当时的设计目标，已不再代表当前实现。
 > 当前优先参考：`docs/current-state.md`、`docs/TODO.md`、
-> `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`。
+> `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`、
+> `docs/superpowers/specs/2026-06-09-space-module-convergence-design.md`。
 > 本文档描述 Tool 系统、Space 概念及相关权限控制设计。
 >
 > 本文档在 Phase 3/4.1 基础上继续扩展，并修正一个核心前提：
@@ -61,6 +64,9 @@
 ### 3.1 概念定义
 
 Space 是全局共享的运行时语义容器，用来承载以下信息：
+
+> 当前实现补充：`Space` 已收敛为最小共享资源边界，只保留
+> `SpaceKnowledge` 和 `SpaceToolRegistry`。本节表格描述的是当时拟承载的完整范围。
 
 | 内容 | 说明 |
 |------|------|
@@ -645,7 +651,7 @@ pub struct ToolCall {
 | `Agent` | 新增 `tool_permissions`、`experience` |
 | `AgentEntry` | 新增可选 `tools` 配置节 |
 | Message | 新增 Tool 执行与审批相关消息 |
-| Resource | 新增 `SpaceToolRegistry`、`SpaceAgentRegistry` 等 |
+| Resource | 新增 `SpaceToolRegistry`、`SpaceAgentRegistry` 等（当前实现已收敛为仅保留 `SpaceKnowledge` 与 `SpaceToolRegistry`） |
 
 ### 11.3 本阶段不声称已实现
 

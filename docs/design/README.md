@@ -28,7 +28,7 @@
 | `2026-05-14-brain-agent-design.md` | 历史背景 | Brain 调度早期设计 | 当前能力仍有效，但表述使用旧阶段语境 |
 | `2026-05-16-multi-agent-design.md` | 历史背景 | 多 Agent 与 Agent 演化设计 | 部分前提已由 ADR 和后续实现修订 |
 | `2026-05-17-multi-turn-memory-design.md` | 历史背景 | 多轮对话与记忆管理设计 | 当前记忆链路已结合 summarization 与 WorkItem 演进 |
-| `2026-05-17-tool-space-design.md` | 历史背景 | Tool、Space、审批与权限设计 | 当前 shell 工具面和部分实现细节已更新 |
+| `2026-05-17-tool-space-design.md` | 历史背景 | Tool、Space、审批与权限设计 | 当前 shell 工具面已更新，`Space` 已收敛为最小资源边界 |
 | `2026-05-20-llm-summarization-design.md` | 历史背景 | 摘要能力早期设计 | 当前执行链路已收敛到 `WorkItem` |
 | `modular-refactor-implementation.md` | 过渡计划 | 历史模块化重构实施计划 | 已含废止说明，不作为当前实施依据 |
 
