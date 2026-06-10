@@ -5,8 +5,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole, ExecutorFuture,
-    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    FrontendKind, HarnessConfig, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind,
+    ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -371,6 +371,34 @@ fn memory_contribution_on_agent_termination() {
         child_exists,
         parent_memory
     );
+}
+
+#[test]
+fn parent_agent_absorbs_filtered_long_term_memory_only() {
+    let mut child_memory = LongTermMemory::default();
+    child_memory.entries.push(LongTermMemoryEntry::new(
+        LongTermMemoryKind::Strategy,
+        "Prefer two-phase application for borrow-heavy mutations",
+    ));
+    child_memory.entries.push(LongTermMemoryEntry::new(
+        LongTermMemoryKind::Fact,
+        "temporary scratch pad",
+    ));
+
+    let summary = harness::TaskSummary {
+        task_id: uuid::Uuid::nil(),
+        goal: "refactor memory logic".to_string(),
+        outcome: "done".to_string(),
+    };
+
+    let (accepted, _) = harness::systems::contribution::extract_memory_writebacks(
+        "child",
+        &summary,
+        &child_memory.entries,
+    );
+
+    assert_eq!(accepted.len(), 1);
+    assert!(accepted[0].content.contains("two-phase application"));
 }
 
 #[test]

@@ -50,7 +50,7 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 // contribution
 pub use contribution::{
     AbsorbedMemory, ContributionEvaluation, DiscardedMemory, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, TaskSummary,
+    MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
 };
 
 // error

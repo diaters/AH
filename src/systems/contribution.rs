@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
-    Agent, AgentKind, LongTermMemory, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    Agent, AgentKind, LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage,
+    MemoryContributionRequestMessage, MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry,
     Task, TaskSummary, TaskTerminatedMessage,
 };
 
@@ -72,32 +73,70 @@ pub(crate) fn agent_termination_system(
 /// 记忆贡献处理系统：执行 LLM 评估并吸收记忆
 pub(crate) fn memory_contribution_system(
     mut commands: Commands,
+    mut knowledge: ResMut<SharedKnowledgeBase>,
     requests: Query<(Entity, &MemoryContributionRequestMessage)>,
 ) {
     for (entity, request) in &requests {
         let parent_id = request.parent_id;
-        let memories = request.memories.clone();
+        let (accepted, candidates) = extract_memory_writebacks(
+            &request.contributor_name,
+            &request.task_summary,
+            &request.memories,
+        );
 
         debug!(
             event = "MemoryContributionProcessing",
             contributor_id = %request.contributor_id,
             contributor_name = %request.contributor_name,
             parent_id = %parent_id,
-            memories_count = memories.len(),
-            memories = ?memories.iter().map(|m| &m.content).collect::<Vec<_>>(),
+            memories_count = request.memories.len(),
+            accepted_count = accepted.len(),
+            candidate_count = candidates.len(),
+            memories = ?request.memories.iter().map(|m| &m.content).collect::<Vec<_>>(),
             task_summary = ?request.task_summary,
             "processing memory contribution request"
         );
 
-        // Phase 4.1: 简单策略 - 直接吸收所有记忆
-        // Phase 4.2: 引入 LLM 评估
         commands.spawn(MemoryAbsorptionMessage {
             parent_id,
-            absorbed: memories,
+            absorbed: accepted,
         });
 
+        knowledge.entries.extend(candidates);
         commands.entity(entity).despawn();
     }
+}
+
+/// 根据子 Agent 贡献提炼长期记忆写回结果。
+pub fn extract_memory_writebacks(
+    contributor_name: &str,
+    task_summary: &TaskSummary,
+    memories: &[LongTermMemoryEntry],
+) -> (Vec<LongTermMemoryEntry>, Vec<SharedKnowledgeEntry>) {
+    let mut accepted = Vec::new();
+    let mut candidates = Vec::new();
+
+    for memory in memories {
+        if memory.content.trim().is_empty() || memory.decay_score <= 0.2 {
+            continue;
+        }
+        if memory.content.to_lowercase().contains("temporary") {
+            continue;
+        }
+
+        let mut accepted_entry = memory.clone();
+        accepted_entry.source = format!("task:{}:{}", task_summary.task_id, contributor_name);
+        accepted.push(accepted_entry.clone());
+
+        if accepted_entry.importance >= MemoryImportance::High && accepted_entry.confidence >= 0.9 {
+            candidates.push(SharedKnowledgeEntry::candidate(
+                accepted_entry.content.clone(),
+                accepted_entry.kind,
+            ));
+        }
+    }
+
+    (accepted, candidates)
 }
 
 /// 记忆吸收系统：将评估后的记忆写入父 Agent
@@ -129,5 +168,31 @@ pub(crate) fn memory_absorption_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{LongTermMemoryEntry, LongTermMemoryKind};
+
+    #[test]
+    fn memory_contribution_skips_low_value_entries_and_creates_candidates() {
+        let summary = TaskSummary {
+            task_id: uuid::Uuid::nil(),
+            goal: "stabilize shell behavior".to_string(),
+            outcome: "done".to_string(),
+        };
+
+        let entries = vec![
+            LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "shell stop uses timeout"),
+            LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "temporary debugging note"),
+        ];
+
+        let (accepted, candidates) = extract_memory_writebacks("worker", &summary, &entries);
+
+        assert_eq!(accepted.len(), 1);
+        assert!(accepted[0].content.contains("shell stop"));
+        assert!(candidates.is_empty());
     }
 }

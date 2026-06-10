@@ -1,7 +1,14 @@
 use bevy::prelude::Component;
 use serde::{Deserialize, Serialize};
 
-use super::{AgentId, LongTermMemoryEntry, TaskId};
+use super::{AgentId, LongTermMemoryEntry, SharedKnowledgeEntry, TaskId};
+
+/// 记忆写回结果。
+#[derive(Debug, Clone, Default)]
+pub struct MemoryWritebackBatch {
+    pub accepted_long_term_memories: Vec<LongTermMemoryEntry>,
+    pub shared_knowledge_candidates: Vec<SharedKnowledgeEntry>,
+}
 
 /// 记忆贡献请求消息
 #[derive(Debug, Clone, Component)]

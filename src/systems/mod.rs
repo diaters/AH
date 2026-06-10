@@ -1,5 +1,5 @@
 mod command;
-mod contribution;
+pub mod contribution;
 mod dispatch;
 mod evaluation;
 mod execution;
