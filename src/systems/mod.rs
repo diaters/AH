@@ -26,7 +26,9 @@ pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
 pub(crate) use maintenance::{agent_factory_system, load_agents_system};
-pub(crate) use memory::{init_agent_memory_system, memory_compression_system};
+pub(crate) use memory::{
+    init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
+};
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
 pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{

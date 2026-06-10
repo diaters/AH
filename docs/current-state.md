@@ -40,6 +40,14 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - shell 输出语义已收敛为“最新快照”，不再对 LLM 暴露伪增量游标协议
 
+#### 记忆治理
+
+- 记忆系统已收敛为 `ShortTermMemory`、`LongTermMemory`、`SharedKnowledgeBase`
+- `AgentExperience` 已删除，不再作为独立运行时概念保留
+- `LongTermMemory` 采用 `Core + Relevant` 的受控注入策略，避免全量拼接 prompt
+- 共享知识写入默认仅允许用户显式命令或主控审核链路，不允许普通 Agent 直写
+- 长期记忆已具备基础衰退治理能力，会结合访问时间、重要度与复用次数更新分数
+
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查
