@@ -76,8 +76,8 @@ pub use frontend::{
 
 // memory
 pub use memory::{
-    EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
-    estimate_tokens,
+    EntryMetadata, EntryRole, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryEntry,
+    MemoryImportance, ShortTermMemory, ToolCall, estimate_tokens,
 };
 
 // message
@@ -101,8 +101,10 @@ pub use session::{
 
 // space
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, SpaceKnowledge, SpaceToolRegistry,
-    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, KnowledgeSource,
+    KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceKnowledge,
+    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
+    ToolSchema,
 };
 
 // summarization

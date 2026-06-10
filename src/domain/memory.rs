@@ -42,6 +42,19 @@ mod tests {
         let memory = LongTermMemory::default();
         assert!(memory.entries.is_empty());
     }
+
+    #[test]
+    fn long_term_memory_entry_defaults_to_decay_ready_state() {
+        let entry = LongTermMemoryEntry::new(
+            LongTermMemoryKind::Strategy,
+            "Always prefer truthful shell semantics",
+        );
+
+        assert_eq!(entry.reuse_count, 0);
+        assert!(!entry.pin);
+        assert_eq!(entry.importance, MemoryImportance::Medium);
+        assert!(entry.decay_score > 0.0);
+    }
 }
 
 /// 估算文本的 token 数
@@ -51,7 +64,10 @@ pub fn estimate_tokens(text: &str) -> u32 {
         .unwrap_or_else(|_| (text.len() / 4) as u32) // fallback: 4 chars ≈ 1 token
 }
 
-/// 记忆条目
+/// 短期记忆条目。
+///
+/// `MemoryEntry` 仅用于 `ShortTermMemory` 的对话与摘要条目，
+/// 不再作为长期记忆或共享知识的底层模型。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryEntry {
     pub role: EntryRole,
@@ -212,14 +228,73 @@ impl ShortTermMemory {
     }
 }
 
-/// 长期记忆（绑定 Agent）
-#[derive(Component, Default)]
+/// 长期记忆条目类型。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LongTermMemoryKind {
+    Constraint,
+    Preference,
+    Strategy,
+    Fact,
+    AntiPattern,
+}
+
+/// 长期记忆重要度。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemoryImportance {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Agent 长期记忆条目。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LongTermMemoryEntry {
+    pub content: String,
+    pub kind: LongTermMemoryKind,
+    pub scope_tags: Vec<String>,
+    pub importance: MemoryImportance,
+    pub pin: bool,
+    pub created_at: DateTime<Utc>,
+    pub last_accessed_at: Option<DateTime<Utc>>,
+    pub reuse_count: u32,
+    pub decay_score: f32,
+    pub source: String,
+    pub confidence: f32,
+}
+
+impl LongTermMemoryEntry {
+    /// 创建默认可衰退的长期记忆条目。
+    pub fn new(kind: LongTermMemoryKind, content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            kind,
+            scope_tags: Vec::new(),
+            importance: MemoryImportance::Medium,
+            pin: false,
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            reuse_count: 0,
+            decay_score: 1.0,
+            source: "manual".to_string(),
+            confidence: 0.8,
+        }
+    }
+}
+
+/// 长期记忆（绑定 Agent）。
+#[derive(Component, Default, Clone)]
 pub struct LongTermMemory {
-    pub entries: Vec<MemoryEntry>,
+    pub entries: Vec<LongTermMemoryEntry>,
 }
 
 impl LongTermMemory {
-    /// 添加归档条目
+    /// 添加长期记忆条目。
+    pub fn add_entry(&mut self, entry: LongTermMemoryEntry) {
+        self.entries.push(entry);
+    }
+
+    /// 添加兼容旧调用点的归档条目。
     pub fn add_archive(&mut self, content: impl Into<String>) {
         let content = content.into();
         debug!(
@@ -229,12 +304,12 @@ impl LongTermMemory {
             total_entries = self.entries.len(),
             "long term memory archive added"
         );
-        let entry = MemoryEntry::new(EntryRole::Archive, content);
-        self.entries.push(entry);
+        self.entries
+            .push(LongTermMemoryEntry::new(LongTermMemoryKind::Fact, content));
     }
 
-    /// 吸收来自子 Agent 的记忆
-    pub fn absorb(&mut self, entries: Vec<MemoryEntry>) {
+    /// 吸收来自子 Agent 的长期记忆条目。
+    pub fn absorb(&mut self, entries: Vec<LongTermMemoryEntry>) {
         let absorbing_count = entries.len();
         let total_before = self.entries.len();
         debug!(
@@ -242,7 +317,7 @@ impl LongTermMemory {
             absorbing_count = absorbing_count,
             total_entries_before = total_before,
             total_entries_after = total_before + absorbing_count,
-            absorbing_entries = ?entries.iter().map(|e| (&e.role, &e.content)).collect::<Vec<_>>(),
+            absorbing_entries = ?entries.iter().map(|entry| (&entry.kind, &entry.content)).collect::<Vec<_>>(),
             "long term memory absorbed entries"
         );
         self.entries.extend(entries);

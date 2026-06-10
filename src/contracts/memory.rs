@@ -2,22 +2,18 @@
 //!
 //! 定义记忆存储和治理相关的 trait 接口。
 
-use uuid::Uuid;
-
-use crate::domain::{AgentId, MemoryEntry, TaskId};
+use crate::domain::{AgentId, LongTermMemoryEntry, SharedKnowledgeEntry, TaskId};
 
 /// 记忆存储
 ///
-/// 定义长期记忆的存储接口。
+/// 当前仓库内尚无 `MemoryStore` 的具体实现者；
+/// 此处签名调整的目标是保持契约与新领域模型一致。
 pub trait MemoryStore: Send + Sync + 'static {
     /// 获取 Agent 的所有记忆条目
-    fn get_entries(&self, agent_id: AgentId) -> Vec<MemoryEntry>;
+    fn get_entries(&self, agent_id: AgentId) -> Vec<LongTermMemoryEntry>;
 
     /// 添加一条记忆条目
-    fn add_entry(&mut self, agent_id: AgentId, entry: MemoryEntry);
-
-    /// 删除一条记忆条目
-    fn remove_entry(&mut self, agent_id: AgentId, entry_id: Uuid);
+    fn add_entry(&mut self, agent_id: AgentId, entry: LongTermMemoryEntry);
 
     /// 清空 Agent 的所有记忆
     fn clear(&mut self, agent_id: AgentId);
@@ -81,9 +77,9 @@ pub enum WritebackDecision {
     /// 更新短期上下文
     UpdateShortTermContext,
     /// 添加到长期记忆
-    AddLongTermMemory(MemoryEntry),
-    /// 添加到共享知识库
-    AddSharedKnowledge(MemoryEntry),
+    AddLongTermMemory(LongTermMemoryEntry),
+    /// 添加到共享知识候选
+    AddSharedKnowledgeCandidate(SharedKnowledgeEntry),
     /// 丢弃
     Drop,
 }
