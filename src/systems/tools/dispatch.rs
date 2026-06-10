@@ -10,7 +10,7 @@ use crate::{
     app::HarnessSettings,
     domain::{
         Agent, ApprovalRequestMessage, BuiltinToolExecutors, ConfirmationOption,
-        ConfirmationSource, SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
+        ConfirmationSource, SharedKnowledgeBase, SpaceToolRegistry, Task, TaskStatus,
         ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolPermission, WaitingReason,
     },
@@ -29,7 +29,7 @@ pub fn tool_dispatch_system(
     mut tasks: Query<(Entity, &mut Task)>,
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
-    knowledge: Res<SpaceKnowledge>,
+    knowledge: Res<SharedKnowledgeBase>,
     agents: Query<&Agent>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,

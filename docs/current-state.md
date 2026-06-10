@@ -34,11 +34,19 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 #### 工具与会话
 
 - 工具权限、审批流程、结果回写与用户确认 UI 已可用
-- `Space` 已收敛为最小共享资源边界，当前只保留 `SpaceKnowledge` 和
+- `Space` 已收敛为最小共享资源边界，当前只保留 `SharedKnowledgeBase` 和
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - shell 输出语义已收敛为“最新快照”，不再对 LLM 暴露伪增量游标协议
+
+#### 记忆治理
+
+- 记忆系统已收敛为 `ShortTermMemory`、`LongTermMemory`、`SharedKnowledgeBase`
+- `AgentExperience` 已删除，不再作为独立运行时概念保留
+- `LongTermMemory` 采用 `Core + Relevant` 的受控注入策略，避免全量拼接 prompt
+- 共享知识写入默认仅允许用户显式命令或主控审核链路，不允许普通 Agent 直写
+- 长期记忆已具备基础衰退治理能力，会结合访问时间、重要度与复用次数更新分数
 
 ### 待完善
 
@@ -76,7 +84,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ### Space 边界的收敛结论
 
-- `SpaceKnowledge` 负责承载用户显式写入的共享知识，当前仍为进程内存态
+- `SharedKnowledgeBase` 负责承载用户显式写入及审核后共享的知识，当前仍为进程内存态
 - `SpaceToolRegistry` 负责承载全局工具定义
 - shell session 真源位于 `NativeProcessBackend`，不再作为 `Space` 资源建模
 
@@ -89,8 +97,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ### 文档限制
 
-- `README.md`、`AGENTS.md`、`docs/current-state.md` 是当前面向使用者的主要入口
-- `docs/design/` 中部分旧文档仍可用于理解历史演进，但不一定代表当前实现
+- 文档索引入口为 `docs/README.md`，当前状态以本文档为准
+- 历史设计文档已归档到 `docs/archive/design/`，仅供查阅演进脉络
 
 ### Provider 限制
 
@@ -99,12 +107,12 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ## 推荐阅读顺序
 
-1. `AGENTS.md`
-2. `README.md`
-3. `docs/configuration.md`
-4. `docs/TODO.md`
-5. `docs/design/2026-06-06-workitem-boundary-design.md`
-6. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md`
-7. `docs/design/README.md`
-8. `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`
-9. `docs/superpowers/specs/2026-06-09-space-module-convergence-design.md`
+1. `docs/README.md` — 文档索引入口
+2. `AGENTS.md` — 项目规范
+3. `README.md` — 项目简介
+4. `docs/configuration.md` — 配置说明
+5. `docs/TODO.md` — 待办事项
+6. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
+7. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
+8. `docs/design/README.md` — 设计文档索引
+9. `docs/superpowers/README.md` — 当前活跃计划与规格

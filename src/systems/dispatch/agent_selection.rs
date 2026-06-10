@@ -118,8 +118,7 @@ pub fn select_agent_for_sub_task<'a>(
 #[cfg(test)]
 mod tests {
     use crate::domain::{
-        Agent, AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
-        LongTermMemory,
+        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, LongTermMemory,
     };
     use uuid::Uuid;
 
@@ -140,7 +139,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         }
     }
 

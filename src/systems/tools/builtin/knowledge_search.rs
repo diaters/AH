@@ -1,6 +1,6 @@
 //! knowledge_search Tool 实现
 
-use crate::domain::{ToolAction, ToolContext, ToolError};
+use crate::domain::{KnowledgeValidationStatus, ToolAction, ToolContext, ToolError};
 
 pub struct KnowledgeSearchTool;
 
@@ -25,6 +25,7 @@ impl crate::domain::BuiltinTool for KnowledgeSearchTool {
             .knowledge
             .entries
             .iter()
+            .filter(|entry| entry.validation_status == KnowledgeValidationStatus::Approved)
             .filter(|entry| entry.content.to_lowercase().contains(&query.to_lowercase()))
             .take(limit)
             .map(|entry| entry.content.as_str())
@@ -41,18 +42,22 @@ impl crate::domain::BuiltinTool for KnowledgeSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, EntryRole, MemoryEntry, SpaceKnowledge};
+    use crate::domain::{
+        BuiltinTool, LongTermMemoryKind, SharedKnowledgeBase, SharedKnowledgeEntry,
+    };
 
-    fn test_knowledge() -> SpaceKnowledge {
-        let mut knowledge = SpaceKnowledge::default();
-        knowledge.entries.push(MemoryEntry::new(
-            EntryRole::User,
-            "The project uses Rust and Bevy framework",
-        ));
-        knowledge.entries.push(MemoryEntry::new(
-            EntryRole::User,
-            "The system follows ECS architecture",
-        ));
+    fn test_knowledge() -> SharedKnowledgeBase {
+        let mut knowledge = SharedKnowledgeBase::default();
+        knowledge
+            .entries
+            .push(SharedKnowledgeEntry::approved_from_user_input(
+                "The project uses Rust and Bevy framework",
+            ));
+        knowledge
+            .entries
+            .push(SharedKnowledgeEntry::approved_from_user_input(
+                "The system follows ECS architecture",
+            ));
         knowledge
     }
 
@@ -101,7 +106,7 @@ mod tests {
 
     #[test]
     fn executor_knowledge_search_missing_query() {
-        let knowledge = SpaceKnowledge::default();
+        let knowledge = SharedKnowledgeBase::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
@@ -117,5 +122,33 @@ mod tests {
         let result = executor.execute(&input, &ctx);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ToolError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn knowledge_search_ignores_non_approved_entries() {
+        let mut knowledge = SharedKnowledgeBase::default();
+        knowledge.entries.push(SharedKnowledgeEntry::candidate(
+            "Unreviewed shell note",
+            LongTermMemoryKind::Fact,
+        ));
+
+        let ctx = ToolContext {
+            knowledge: &knowledge,
+            default_wait_tasks_timeout_secs: 300,
+            shell_default_tail_lines: 50,
+            shell_max_tail_lines: 500,
+            shell_default_exec_timeout_secs: 60,
+            shell_default_stop_timeout_secs: 5,
+            current_task_id: uuid::Uuid::nil(),
+            current_agent_id: uuid::Uuid::nil(),
+        };
+        let executor = KnowledgeSearchTool;
+        let result = executor
+            .execute(&serde_json::json!({"query": "shell"}), &ctx)
+            .unwrap();
+        match result {
+            ToolAction::Direct(value) => assert_eq!(value["count"], 0),
+            other => panic!("expected Direct action, got {:?}", other),
+        }
     }
 }

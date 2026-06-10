@@ -1,3 +1,6 @@
+> **状态：已归档（2026-06-10）** — 本规格描述的功能已实现。
+> 相关能力已记录在 [docs/current-state.md](../../current-state.md)。
+
 # wait_tasks Tool 设计
 
 ## 概述

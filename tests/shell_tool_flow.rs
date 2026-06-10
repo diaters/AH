@@ -5,8 +5,8 @@ use std::{sync::Arc, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, SessionBackend, ShortTermMemory, Task,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, ExecutorFuture,
+    FrontendKind, HarnessConfig, SessionBackend, ShortTermMemory, Task,
     ToolExecutionRequestMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;
@@ -55,7 +55,6 @@ fn spawn_agent(world: &mut bevy::prelude::World) -> Uuid {
             default_permission: harness::ToolPermission::Allow,
             overrides: Default::default(),
         },
-        experience: AgentExperience::default(),
     });
     id
 }

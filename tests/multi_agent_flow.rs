@@ -4,9 +4,8 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus, TaskTerminatedMessage,
-    build_harness_app,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExternalInput,
+    FrontendKind, HarnessConfig, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -157,7 +156,6 @@ fn task_scoped_agent_lifecycle() {
             parent_id: Some(parent_agent_id),
             bound_task_id: Some(task_id),
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         });
     }
 

@@ -11,7 +11,7 @@ pub enum UserCommand {
     FinishCurrentTask,
     /// /summarize - 触发总结
     Summarize,
-    /// /remember - 添加知识到 SpaceKnowledge
+    /// /remember - 添加知识到 SharedKnowledgeBase
     Remember { content: String },
     /// 普通输入（非指令）
     PlainText(String),

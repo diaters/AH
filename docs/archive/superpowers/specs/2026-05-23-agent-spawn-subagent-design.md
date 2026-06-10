@@ -1,3 +1,6 @@
+> **状态：已归档（2026-06-10）** — 本规格描述的功能已实现。
+> 相关能力已记录在 [docs/current-state.md](../../current-state.md)。
+
 # Agent 自主创建子 Agent 功能设计
 
 > 本文档描述 Agent 通过 Tool 主动创建子 Agent 的功能设计。

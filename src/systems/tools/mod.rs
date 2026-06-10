@@ -288,8 +288,8 @@ pub fn register_builtin_tools(
 mod tests {
     use super::*;
     use crate::domain::{
-        AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
-        BuiltinTool, EntryRole, MemoryEntry, SpaceKnowledge, ToolContext,
+        AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, BuiltinTool,
+        SharedKnowledgeBase, SharedKnowledgeEntry, ToolContext,
     };
 
     #[allow(dead_code)]
@@ -308,21 +308,22 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         }
     }
 
     #[test]
     fn executor_knowledge_search() {
-        let mut knowledge = SpaceKnowledge::default();
-        knowledge.entries.push(MemoryEntry::new(
-            EntryRole::User,
-            "The project uses Rust and Bevy framework",
-        ));
-        knowledge.entries.push(MemoryEntry::new(
-            EntryRole::User,
-            "The system follows ECS architecture",
-        ));
+        let mut knowledge = SharedKnowledgeBase::default();
+        knowledge
+            .entries
+            .push(SharedKnowledgeEntry::approved_from_user_input(
+                "The project uses Rust and Bevy framework",
+            ));
+        knowledge
+            .entries
+            .push(SharedKnowledgeEntry::approved_from_user_input(
+                "The system follows ECS architecture",
+            ));
 
         let ctx = ToolContext {
             knowledge: &knowledge,

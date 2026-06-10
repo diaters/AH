@@ -1,8 +1,13 @@
 # Phase 4.2 Tool 与 Space 设计
 
-> __状态说明（2026-06-09）__
-> 分类：历史背景。
-> 作用：用于理解 Tool、Space、权限与审批能力的设计来源。
+> **状态：已归档（2026-06-10）**
+>
+> 本文档描述的方案已被后续设计取代，与当前实现存在以下矛盾：
+>
+> - `AgentExperience` 已从代码中删除，不再作为独立运行时概念保留
+> - Space 资源已从三资源收敛为 `SharedKnowledgeBase` 和 `SpaceToolRegistry` 两个
+>
+> 当前状态请参考 [docs/current-state.md](../../current-state.md)。
 > 说明：当前 shell 工具面、审批限制与部分实现细节已在后续文档中更新。
 > 说明补充：本文中的 `SpacePreferences`、`SpaceAgentRegistry`、
 > `SpaceRuntimeContext` 属于当时的设计目标，已不再代表当前实现。

@@ -4,6 +4,7 @@
 
 mod agent_selection;
 mod brain_dispatch;
+mod memory_selection;
 mod task_dispatch;
 mod workitem_dispatch;
 

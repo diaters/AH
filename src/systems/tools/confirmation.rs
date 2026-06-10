@@ -8,10 +8,10 @@ use tracing::{debug, warn};
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, GrantMode, SpaceKnowledge,
-        Task, ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolPermission,
+        Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, GrantMode,
+        SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
+        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, ToolPermission,
     },
     systems::NativeProcessBackend,
 };
@@ -38,7 +38,7 @@ pub fn tool_confirmation_result_system(
     mut agents: Query<&mut Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
-    knowledge: Res<SpaceKnowledge>,
+    knowledge: Res<SharedKnowledgeBase>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,

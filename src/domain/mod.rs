@@ -36,9 +36,7 @@ pub type ExecutorFuture =
 // ============ 从子模块导出 ============
 
 // agent
-pub use agent::{
-    Agent, AgentCapabilities, AgentExperience, AgentKind, AgentProfile, AgentToolPermissions,
-};
+pub use agent::{Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
 
 // brain
 pub use brain::{BrainDecisionError, BrainDecisionOutput};
@@ -52,7 +50,7 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 // contribution
 pub use contribution::{
     AbsorbedMemory, ContributionEvaluation, DiscardedMemory, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, TaskSummary,
+    MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
 };
 
 // error
@@ -78,8 +76,8 @@ pub use frontend::{
 
 // memory
 pub use memory::{
-    EntryMetadata, EntryRole, LongTermMemory, MemoryEntry, ShortTermMemory, ToolCall,
-    estimate_tokens,
+    EntryMetadata, EntryRole, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryEntry,
+    MemoryImportance, ShortTermMemory, ToolCall, estimate_tokens,
 };
 
 // message
@@ -103,7 +101,8 @@ pub use session::{
 
 // space
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, SpaceKnowledge, SpaceToolRegistry,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, KnowledgeSource,
+    KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
     ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
@@ -185,7 +184,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: perms,
-            experience: AgentExperience::default(),
         };
 
         assert!(agent.has_permission("test_tool"));
@@ -208,7 +206,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         };
 
         assert!(!agent.has_permission("new_tool"));

@@ -156,7 +156,6 @@ fn evaluation_triggered_on_turn_limit() {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: harness::AgentToolPermissions::default(),
-        experience: harness::AgentExperience::default(),
     });
 
     // Create a task with turn_count = 2 (4 entries = 2 turns)

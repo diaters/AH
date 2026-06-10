@@ -1,5 +1,12 @@
 # 模块化重构实施计划
 
+> **状态：已归档（2026-06-10）**
+>
+> 本文档为历史阶段性实施计划，已从 `docs/design/` 移入归档。
+> `PlanPolicy`、`PlanArtifactBuilder`、`WorkItemDeriver` 等抽象已从代码中删除。
+>
+> 当前状态请参考 [docs/current-state.md](../../current-state.md)。
+
 ## 文档信息
 
 | 属性 | 值 |
@@ -8,19 +15,6 @@
 | 创建日期 | 2026-05-30 |
 | 分支 | `refactor/modular-architecture` |
 | 基于文档 | `docs/wiki/07-modular-refactor-plan.md` |
-
----
-
-> __废止说明（2026-06-06）__
->
-> 本文档为历史阶段性实施计划。其中 `src/contracts/planning.rs`
-> （`PlanPolicy`、`PlanArtifactBuilder`、`WorkItemDeriver` 等抽象）
-> 已在 `Plan / Evaluation` 重评估后从代码中删除，不再作为运行时骨架构保留。
->
-> `Plan` 的职责已收敛为由 `Brain + create_tasks + DAG 调度`
-> 组合实现的任务分解能力。
->
-> 后续重设计参见 `docs/design/2026-06-06-plan-evaluation-reassessment-design.md`。
 
 ---
 

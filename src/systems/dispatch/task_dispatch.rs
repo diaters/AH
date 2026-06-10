@@ -13,7 +13,10 @@ use crate::{
     },
 };
 
-use super::agent_selection::{match_score, select_agent_with_memory};
+use super::{
+    agent_selection::{match_score, select_agent_with_memory},
+    memory_selection::{MemorySelectionBudget, select_long_term_memories},
+};
 
 /// 构建带历史对话和长期记忆的 prompt
 fn build_prompt_with_context(
@@ -27,14 +30,18 @@ fn build_prompt_with_context(
     if let Some(ltm) = long_term
         && !ltm.entries.is_empty()
     {
-        let memory_text: String = ltm
-            .entries
-            .iter()
-            .map(|e| &e.content)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n");
-        parts.push(format!("[Agent memory]\n{}", memory_text));
+        let selected = select_long_term_memories(
+            task_content,
+            ltm,
+            MemorySelectionBudget {
+                max_core_entries: 5,
+                max_relevant_entries: 5,
+                max_relevant_tokens: 800,
+            },
+        );
+
+        append_memory_section(&mut parts, "[Core agent memory]", &selected.core);
+        append_memory_section(&mut parts, "[Relevant agent memory]", &selected.relevant);
     }
 
     // 2. 短期记忆（对话历史）
@@ -70,6 +77,24 @@ fn build_prompt_with_context(
         parts.push(format!("[Current request]\n{}", task_content));
         parts.join("\n\n")
     }
+}
+
+/// 将选中的长期记忆格式化为 prompt 分段并追加到结果中。
+fn append_memory_section(
+    parts: &mut Vec<String>,
+    title: &str,
+    entries: &[crate::domain::LongTermMemoryEntry],
+) {
+    if entries.is_empty() {
+        return;
+    }
+
+    let content = entries
+        .iter()
+        .map(|entry| format!("- {}", entry.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    parts.push(format!("{title}\n{content}"));
 }
 
 /// 任务分发 System
@@ -201,8 +226,9 @@ pub fn task_dispatch_system(
 mod tests {
     use super::*;
     use crate::domain::{
-        AgentCapabilities, AgentExperience, AgentProfile, AgentToolPermissions, ChannelId,
-        EntryMetadata, EntryRole, FrontendKind, ShortTermMemory,
+        AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, EntryMetadata, EntryRole,
+        FrontendKind, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryImportance,
+        ShortTermMemory,
     };
     use uuid::Uuid;
 
@@ -231,7 +257,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
-            experience: AgentExperience::default(),
         }
     }
 
@@ -285,6 +310,65 @@ mod tests {
             "prompt should NOT include Archive entries, got: {}",
             prompt
         );
+    }
+
+    #[test]
+    fn prompt_includes_only_core_and_relevant_long_term_memory() {
+        let long_term = LongTermMemory {
+            entries: vec![
+                LongTermMemoryEntry {
+                    content: "Always keep shell tools truthful".to_string(),
+                    kind: LongTermMemoryKind::Constraint,
+                    scope_tags: vec!["shell".to_string()],
+                    importance: MemoryImportance::Critical,
+                    pin: true,
+                    created_at: chrono::Utc::now(),
+                    last_accessed_at: None,
+                    reuse_count: 0,
+                    decay_score: 1.0,
+                    source: "migration".to_string(),
+                    confidence: 1.0,
+                },
+                LongTermMemoryEntry {
+                    content: "Use bounded timeout handling for shell commands".to_string(),
+                    kind: LongTermMemoryKind::Strategy,
+                    scope_tags: vec!["shell".to_string()],
+                    importance: MemoryImportance::High,
+                    pin: false,
+                    created_at: chrono::Utc::now(),
+                    last_accessed_at: None,
+                    reuse_count: 0,
+                    decay_score: 1.0,
+                    source: "migration".to_string(),
+                    confidence: 0.9,
+                },
+                LongTermMemoryEntry {
+                    content: "Unrelated frontend palette note".to_string(),
+                    kind: LongTermMemoryKind::Preference,
+                    scope_tags: vec!["ui".to_string()],
+                    importance: MemoryImportance::Low,
+                    pin: false,
+                    created_at: chrono::Utc::now(),
+                    last_accessed_at: None,
+                    reuse_count: 0,
+                    decay_score: 0.1,
+                    source: "migration".to_string(),
+                    confidence: 0.6,
+                },
+            ],
+        };
+
+        let prompt = build_prompt_with_context(
+            "please improve shell timeout behavior",
+            None,
+            Some(&long_term),
+        );
+
+        assert!(prompt.contains("[Core agent memory]"));
+        assert!(prompt.contains("Always keep shell tools truthful"));
+        assert!(prompt.contains("[Relevant agent memory]"));
+        assert!(prompt.contains("Use bounded timeout handling for shell commands"));
+        assert!(!prompt.contains("Unrelated frontend palette note"));
     }
 
     #[test]

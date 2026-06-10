@@ -1,8 +1,12 @@
 # Phase 3: 多 Agent 支持设计
 
-> __状态说明（2026-06-09）__
-> 分类：历史背景。
-> 作用：用于理解多 Agent、Agent 演化与权限继承设计的演进过程。
+> **状态：已归档（2026-06-10）**
+>
+> 本文档描述的方案已被后续设计取代，与当前实现存在以下矛盾：
+>
+> - 权限继承已从 tags 子集校验改为 tools 权限过滤
+>
+> 当前状态请参考 [docs/current-state.md](../../current-state.md)。
 > 说明：本文部分前提已由 ADR 和后续实现修订，不直接代表当前实现。
 > 当前优先参考：`docs/current-state.md`、`docs/adr/ADR-002-agent-controlled-evolution.md`。
 

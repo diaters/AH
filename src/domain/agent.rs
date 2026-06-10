@@ -66,12 +66,6 @@ impl From<super::AgentToolsConfig> for AgentToolPermissions {
     }
 }
 
-/// Agent 长期经验
-#[derive(Debug, Clone, Component, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentExperience {
-    pub entries: Vec<super::MemoryEntry>,
-}
-
 /// Agent 实体
 #[derive(Debug, Clone, Component)]
 pub struct Agent {
@@ -83,8 +77,6 @@ pub struct Agent {
     pub bound_task_id: Option<TaskId>,
     /// Tool 权限配置：启动加载、父 Agent 授权或后续修正
     pub tool_permissions: AgentToolPermissions,
-    /// Agent 长期经验
-    pub experience: AgentExperience,
 }
 
 impl Agent {
@@ -98,5 +90,38 @@ impl Agent {
         self.tool_permissions
             .overrides
             .insert(tool_name, ToolPermission::Allow);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 验证移除 experience 字段后，Agent 仍可基于权限覆盖正常授权。
+    #[test]
+    fn agent_without_experience_still_grants_permissions() {
+        let mut overrides = HashMap::new();
+        overrides.insert("knowledge_search".to_string(), ToolPermission::Allow);
+
+        let agent = Agent {
+            id: uuid::Uuid::nil(),
+            profile: AgentProfile {
+                name: "memory-agent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["memory".to_string()],
+                description: "memory agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Confirm,
+                overrides,
+            },
+        };
+
+        assert!(agent.has_permission("knowledge_search"));
     }
 }

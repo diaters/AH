@@ -59,12 +59,12 @@ fn parse_wait_tasks_timeout(input: &serde_json::Value, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, SpaceKnowledge};
+    use crate::domain::{BuiltinTool, SharedKnowledgeBase};
     use uuid::Uuid;
 
     #[test]
     fn test_wait_tasks_tool_parsing() {
-        let knowledge = SpaceKnowledge::default();
+        let knowledge = SharedKnowledgeBase::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn test_wait_tasks_default_timeout() {
-        let knowledge = SpaceKnowledge::default();
+        let knowledge = SharedKnowledgeBase::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_wait_tasks_missing_task_ids() {
-        let knowledge = SpaceKnowledge::default();
+        let knowledge = SharedKnowledgeBase::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_wait_tasks_empty_task_ids() {
-        let knowledge = SpaceKnowledge::default();
+        let knowledge = SharedKnowledgeBase::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,

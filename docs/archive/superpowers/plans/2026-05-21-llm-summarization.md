@@ -1,3 +1,6 @@
+> **状态：已归档（2026-06-10）** — 本计划已执行完毕。
+> 相关能力已记录在 [docs/current-state.md](../../current-state.md)。
+
 # LLM 记忆摘要实现计划
 
 > __For agentic workers:__ REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development

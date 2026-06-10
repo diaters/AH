@@ -4,8 +4,8 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, LongTermMemory, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger,
-        Task, TaskStatus, WaitingReason,
+        Agent, LongTermMemory, LongTermMemoryEntry, MemoryImportance, ShortTermMemory,
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
     },
 };
 
@@ -90,10 +90,46 @@ pub(crate) fn init_agent_memory_system(
     }
 }
 
+/// 根据最近访问时间、重要度和复用次数更新长期记忆衰退分数。
+pub(crate) fn apply_memory_decay(
+    entries: &mut [LongTermMemoryEntry],
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    for entry in entries {
+        let age_days = now
+            .signed_duration_since(entry.last_accessed_at.unwrap_or(entry.created_at))
+            .num_days()
+            .unsigned_abs() as f32;
+
+        let base_penalty = (age_days / 30.0).min(0.5);
+        let importance_bonus = match entry.importance {
+            MemoryImportance::Low => 0.0,
+            MemoryImportance::Medium => 0.05,
+            MemoryImportance::High => 0.1,
+            MemoryImportance::Critical => 0.2,
+        };
+        let reuse_bonus = (entry.reuse_count as f32 * 0.02).min(0.2);
+
+        entry.decay_score =
+            (entry.decay_score - base_penalty + importance_bonus + reuse_bonus).clamp(0.0, 1.0);
+    }
+}
+
+/// 周期性执行长期记忆衰退治理，压低长期未访问且低价值条目的分数。
+pub(crate) fn long_term_memory_decay_system(mut agents: Query<(&Agent, &mut LongTermMemory)>) {
+    let now = chrono::Utc::now();
+    for (_agent, mut memory) in &mut agents {
+        apply_memory_decay(&mut memory.entries, now);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ChannelId, EntryRole, FrontendKind, Task};
+    use crate::domain::{
+        ChannelId, EntryRole, FrontendKind, LongTermMemoryEntry, LongTermMemoryKind,
+        MemoryImportance, Task,
+    };
 
     #[test]
     fn memory_compression_by_tokens() {
@@ -151,7 +187,6 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: crate::domain::AgentToolPermissions::default(),
-            experience: crate::domain::AgentExperience::default(),
         };
 
         let entity = world.spawn((agent, LongTermMemory::default())).id();
@@ -174,5 +209,29 @@ mod tests {
 
         assert_eq!(stm.entries.len(), 5);
         assert!(stm.estimated_tokens > 0);
+    }
+
+    #[test]
+    fn decay_system_marks_stale_long_term_entries_inactive() {
+        let now = chrono::Utc::now();
+        let mut memory = LongTermMemory {
+            entries: vec![LongTermMemoryEntry {
+                content: "stale note".to_string(),
+                kind: LongTermMemoryKind::Fact,
+                scope_tags: vec![],
+                importance: MemoryImportance::Low,
+                pin: false,
+                created_at: now - chrono::Duration::days(30),
+                last_accessed_at: Some(now - chrono::Duration::days(30)),
+                reuse_count: 0,
+                decay_score: 0.25,
+                source: "test".to_string(),
+                confidence: 0.7,
+            }],
+        };
+
+        apply_memory_decay(&mut memory.entries, now);
+
+        assert!(memory.entries[0].decay_score < 0.25);
     }
 }

@@ -1,7 +1,14 @@
 use bevy::prelude::Component;
 use serde::{Deserialize, Serialize};
 
-use super::{AgentId, MemoryEntry, TaskId};
+use super::{AgentId, LongTermMemoryEntry, SharedKnowledgeEntry, TaskId};
+
+/// 记忆写回结果。
+#[derive(Debug, Clone, Default)]
+pub struct MemoryWritebackBatch {
+    pub accepted_long_term_memories: Vec<LongTermMemoryEntry>,
+    pub shared_knowledge_candidates: Vec<SharedKnowledgeEntry>,
+}
 
 /// 记忆贡献请求消息
 #[derive(Debug, Clone, Component)]
@@ -9,7 +16,7 @@ pub struct MemoryContributionRequestMessage {
     pub contributor_id: AgentId,
     pub contributor_name: String,
     pub parent_id: AgentId,
-    pub memories: Vec<MemoryEntry>,
+    pub memories: Vec<LongTermMemoryEntry>,
     pub task_summary: TaskSummary,
 }
 
@@ -46,5 +53,5 @@ pub struct DiscardedMemory {
 #[derive(Debug, Clone, Component)]
 pub struct MemoryAbsorptionMessage {
     pub parent_id: AgentId,
-    pub absorbed: Vec<MemoryEntry>,
+    pub absorbed: Vec<LongTermMemoryEntry>,
 }

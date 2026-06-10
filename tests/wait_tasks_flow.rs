@@ -2,9 +2,9 @@
 
 use bevy::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExperience, AgentId, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, SpaceKnowledge, ToolContext, WaitingForTasksInfo,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
+    HarnessConfig, SharedKnowledgeBase, ToolContext, WaitingForTasksInfo,
 };
 use uuid::Uuid;
 
@@ -53,7 +53,6 @@ fn create_test_agent(world: &mut World) -> AgentId {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
-        experience: AgentExperience::default(),
     });
     id
 }
@@ -67,7 +66,7 @@ fn test_wait_tasks_tool_parsing() {
     });
 
     let _ctx = ToolContext {
-        knowledge: &SpaceKnowledge::default(),
+        knowledge: &SharedKnowledgeBase::default(),
         default_wait_tasks_timeout_secs: 300,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,

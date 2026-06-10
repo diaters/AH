@@ -5,17 +5,87 @@
 use std::collections::HashMap;
 
 use bevy::prelude::Resource;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, MemoryEntry, SessionHandleId, SessionInputRequest, SessionReadRequest,
-    SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
+    AgentId, LongTermMemoryKind, MemoryImportance, SessionHandleId, SessionInputRequest,
+    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
 };
 
-/// Space 级别的长期知识（用户相关）
+/// 共享知识审核状态。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KnowledgeValidationStatus {
+    Candidate,
+    Approved,
+    Rejected,
+    Deprecated,
+}
+
+/// 共享知识来源。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KnowledgeSource {
+    UserCommand,
+    BrainReview,
+    Migration,
+}
+
+/// 共享知识条目。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SharedKnowledgeEntry {
+    pub content: String,
+    pub kind: LongTermMemoryKind,
+    pub scope_tags: Vec<String>,
+    pub importance: MemoryImportance,
+    pub created_at: DateTime<Utc>,
+    pub last_accessed_at: Option<DateTime<Utc>>,
+    pub reuse_count: u32,
+    pub confidence: f32,
+    pub validation_status: KnowledgeValidationStatus,
+    pub approved_by: Option<String>,
+    pub source: KnowledgeSource,
+}
+
+impl SharedKnowledgeEntry {
+    /// 创建用户显式确认的共享知识条目。
+    pub fn approved_from_user_input(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            kind: LongTermMemoryKind::Fact,
+            scope_tags: Vec::new(),
+            importance: MemoryImportance::High,
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            reuse_count: 0,
+            confidence: 1.0,
+            validation_status: KnowledgeValidationStatus::Approved,
+            approved_by: Some("user:/remember".to_string()),
+            source: KnowledgeSource::UserCommand,
+        }
+    }
+
+    /// 创建待审核的共享知识候选条目。
+    pub fn candidate(content: impl Into<String>, kind: LongTermMemoryKind) -> Self {
+        Self {
+            content: content.into(),
+            kind,
+            scope_tags: Vec::new(),
+            importance: MemoryImportance::Medium,
+            created_at: Utc::now(),
+            last_accessed_at: None,
+            reuse_count: 0,
+            confidence: 0.6,
+            validation_status: KnowledgeValidationStatus::Candidate,
+            approved_by: None,
+            source: KnowledgeSource::BrainReview,
+        }
+    }
+}
+
+/// 全局共享知识库。
 #[derive(Resource, Default)]
-pub struct SpaceKnowledge {
-    pub entries: Vec<MemoryEntry>,
+pub struct SharedKnowledgeBase {
+    pub entries: Vec<SharedKnowledgeEntry>,
 }
 
 /// 全局工具注册表
@@ -135,7 +205,7 @@ pub enum ToolAction {
 
 /// 内置 Tool 执行上下文
 pub struct ToolContext<'a> {
-    pub knowledge: &'a SpaceKnowledge,
+    pub knowledge: &'a SharedKnowledgeBase,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
     /// shell 工具默认返回的最新输出行数
@@ -188,4 +258,18 @@ pub struct AgentToolsConfig {
     /// 针对特定 Tool 的覆盖项
     #[serde(flatten)]
     pub overrides: HashMap<String, ToolPermission>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_knowledge_entry_from_user_is_approved() {
+        let entry =
+            SharedKnowledgeEntry::approved_from_user_input("Project docs are written in Chinese");
+
+        assert_eq!(entry.validation_status, KnowledgeValidationStatus::Approved);
+        assert_eq!(entry.source, KnowledgeSource::UserCommand);
+    }
 }

@@ -131,7 +131,6 @@ fn turn_limit_creates_evaluation_workitem() {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: harness::AgentToolPermissions::default(),
-        experience: harness::AgentExperience::default(),
     });
 
     // 配置评估：启用，最大 2 轮
@@ -223,7 +222,6 @@ fn setup_eval_test_app(
         parent_id: None,
         bound_task_id: None,
         tool_permissions: harness::AgentToolPermissions::default(),
-        experience: harness::AgentExperience::default(),
     });
 
     app.world_mut()
