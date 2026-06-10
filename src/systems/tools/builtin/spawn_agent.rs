@@ -61,11 +61,11 @@ pub fn parse_spawn_agent_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, SpaceKnowledge};
+    use crate::domain::{BuiltinTool, SharedKnowledgeBase};
 
     #[test]
     fn executor_spawn_agent() {
-        let knowledge = SpaceKnowledge::default();
+        let knowledge = SharedKnowledgeBase::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
             default_wait_tasks_timeout_secs: 300,

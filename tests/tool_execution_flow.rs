@@ -7,8 +7,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EntryRole,
-    ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend, ShortTermMemory,
-    SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
+    ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend, SharedKnowledgeBase,
+    ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
     ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind,
     ToolPermission, ToolSchema, WaitingReason, build_harness_app,
 };
@@ -187,7 +187,7 @@ fn app_only_inserts_minimal_space_resources() {
     let app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
     let world = app.world();
 
-    assert!(world.contains_resource::<SpaceKnowledge>());
+    assert!(world.contains_resource::<SharedKnowledgeBase>());
     assert!(world.contains_resource::<SpaceToolRegistry>());
     assert!(world.contains_resource::<NativeProcessBackend>());
 }

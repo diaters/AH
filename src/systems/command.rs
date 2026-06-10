@@ -3,15 +3,15 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    ChannelId, CreateTaskMessage, EntryRole, FinishTaskMessage, FrontendKind, MemoryEntry,
-    ShortTermMemory, SpaceKnowledge, SummarizationRequestMessage, SummarizationTrigger, Task,
+    ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, SharedKnowledgeBase,
+    SharedKnowledgeEntry, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
     TaskStatus, TaskTerminatedMessage, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
 pub(crate) fn command_parse_system(
     mut commands: Commands,
-    mut knowledge: ResMut<SpaceKnowledge>,
+    mut knowledge: ResMut<SharedKnowledgeBase>,
     config: Res<MemoryConfig>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
@@ -135,7 +135,7 @@ pub(crate) fn command_parse_system(
                 commands.entity(entity).despawn();
             }
             UserCommand::Remember { content } => {
-                // /remember - 添加知识到 SpaceKnowledge
+                // /remember - 以用户显式批准的共享知识条目写入共享知识库
                 if content.is_empty() {
                     debug!(
                         event = "RememberCommandEmpty",
@@ -151,7 +151,9 @@ pub(crate) fn command_parse_system(
                     );
                     knowledge
                         .entries
-                        .push(MemoryEntry::new(EntryRole::User, content.clone()));
+                        .push(SharedKnowledgeEntry::approved_from_user_input(
+                            content.clone(),
+                        ));
                 }
                 commands.entity(entity).despawn();
             }
@@ -165,7 +167,16 @@ pub(crate) fn command_parse_system(
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::UserCommand;
+    use bevy::prelude::*;
+
+    use super::command_parse_system;
+    use crate::{
+        app::MemoryConfig,
+        domain::{
+            KnowledgeValidationStatus, SharedKnowledgeBase, UserCommand, UserCommand::Remember,
+            UserInputMessage,
+        },
+    };
 
     #[test]
     fn parse_btw_with_topic() {
@@ -237,5 +248,35 @@ mod tests {
             UserCommand::PlainText("Hello, how are you?".to_string())
         );
         assert!(!cmd.is_command());
+    }
+
+    #[test]
+    fn remember_command_creates_approved_shared_knowledge_entry() {
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.add_systems(Update, command_parse_system);
+        app.world_mut().spawn(UserInputMessage {
+            content: "/remember Docs should stay in Chinese".to_string(),
+        });
+
+        app.update();
+
+        let knowledge = app.world().resource::<SharedKnowledgeBase>();
+        assert_eq!(knowledge.entries.len(), 1);
+        assert_eq!(
+            knowledge.entries[0].validation_status,
+            KnowledgeValidationStatus::Approved
+        );
+        assert_eq!(
+            knowledge.entries[0].approved_by.as_deref(),
+            Some("user:/remember")
+        );
+        assert_eq!(
+            UserCommand::parse("/remember Docs should stay in Chinese"),
+            Remember {
+                content: "Docs should stay in Chinese".to_string()
+            }
+        );
     }
 }

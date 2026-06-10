@@ -212,7 +212,7 @@ pub enum ToolAction {
 
 /// 内置 Tool 执行上下文
 pub struct ToolContext<'a> {
-    pub knowledge: &'a SpaceKnowledge,
+    pub knowledge: &'a SharedKnowledgeBase,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
     /// shell 工具默认返回的最新输出行数

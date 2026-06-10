@@ -9,7 +9,7 @@ use crate::{
     app::HarnessSettings,
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-        BuiltinToolExecutors, ExecutionError, GrantMode, SpaceKnowledge, Task, TaskStatus,
+        BuiltinToolExecutors, ExecutionError, GrantMode, SharedKnowledgeBase, Task, TaskStatus,
         ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, WaitingReason,
     },
@@ -77,7 +77,7 @@ pub fn approval_result_system(
     mut agents: Query<&mut Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
-    knowledge: Res<SpaceKnowledge>,
+    knowledge: Res<SharedKnowledgeBase>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,

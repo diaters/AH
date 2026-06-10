@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
-    HarnessConfig, SpaceKnowledge, ToolContext, WaitingForTasksInfo,
+    HarnessConfig, SharedKnowledgeBase, ToolContext, WaitingForTasksInfo,
 };
 use uuid::Uuid;
 
@@ -66,7 +66,7 @@ fn test_wait_tasks_tool_parsing() {
     });
 
     let _ctx = ToolContext {
-        knowledge: &SpaceKnowledge::default(),
+        knowledge: &SharedKnowledgeBase::default(),
         default_wait_tasks_timeout_secs: 300,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,
