@@ -319,8 +319,7 @@ pub fn brain_dispatch_system(
 
         // 构建 Brain Agent 可用的工具列表（非 Deny）
         let tools: Vec<_> = registry
-            .tools
-            .values()
+            .iter()
             .filter(|tool_def| {
                 !matches!(
                     brain_agent.tool_permissions.get_permission(&tool_def.name),

@@ -124,7 +124,7 @@ fn create_test_tool_registry(world: &mut World) {
 fn get_all_tools(world: &World) -> Vec<ToolDefinition> {
     world
         .get_resource::<SpaceToolRegistry>()
-        .map(|r| r.tools.values().cloned().collect())
+        .map(|registry| registry.iter().cloned().collect())
         .unwrap_or_default()
 }
 

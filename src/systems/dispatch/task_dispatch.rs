@@ -171,8 +171,7 @@ pub fn task_dispatch_system(
 
         // 构建 tools 列表：从 registry 中筛选 Agent 有权限的工具（非 Deny）
         let tools: Vec<_> = registry
-            .tools
-            .values()
+            .iter()
             .filter(|tool_def| {
                 !matches!(
                     agent.tool_permissions.get_permission(&tool_def.name),

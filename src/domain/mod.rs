@@ -96,17 +96,14 @@ pub use message::{
 
 // session
 pub use session::{
-    SessionBackendKind, SessionCommand, SessionHandle, SessionHandleId, SessionInputRequest,
-    SessionOutputBuffer, SessionOutputRequest, SessionOutputResponse, SessionOutputSnapshot,
-    SessionOutputWindow, SessionReadRequest, SessionStartRequest, SessionStatus,
-    SessionStopRequest, SessionSummary, SessionWaitRequest, ShellExecResult, ShellSessionResult,
-    SpaceSessionRegistry,
+    SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest, SessionOutputSnapshot,
+    SessionReadRequest, SessionStartRequest, SessionStatus, SessionSummary, ShellExecResult,
+    ShellSessionResult,
 };
 
 // space
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, PersistentAgentConfig, SpaceAgentRegistry,
-    SpaceKnowledge, SpacePreferences, SpaceRuntimeContext, SpaceToolRegistry, SystemStatus,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, SpaceKnowledge, SpaceToolRegistry,
     ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 

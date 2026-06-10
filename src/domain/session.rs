@@ -1,10 +1,8 @@
 //! Shell session domain types
 
-use std::collections::{HashMap, VecDeque};
-
-use bevy::prelude::Resource;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::{AgentId, TaskId};
@@ -30,15 +28,6 @@ pub enum SessionStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionOutputWindow {
-    pub combined_tail: String,
-    pub combined_truncated: bool,
-    pub returned_lines: usize,
-    pub cursor: Option<String>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionOutputSnapshot {
     pub output: String,
     pub returned_lines: usize,
@@ -60,35 +49,7 @@ pub struct SessionHandle {
     pub finished_at: Option<DateTime<Utc>>,
     pub owner_task_id: TaskId,
     pub owner_agent_id: AgentId,
-    pub output: SessionOutputWindow,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionOutputBuffer {
-    pub chunks: VecDeque<String>,
-    pub total_bytes: usize,
-    pub next_cursor: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionInteractionState {
-    Idle,
-    WaitingForInput,
-    Busy,
-}
-
-#[derive(Debug)]
-pub struct SessionRuntimeState {
-    pub stdout: SessionOutputBuffer,
-    pub stderr: SessionOutputBuffer,
-    pub combined: SessionOutputBuffer,
-    pub interaction_state: SessionInteractionState,
-}
-
-#[derive(Resource, Default)]
-pub struct SpaceSessionRegistry {
-    pub sessions: HashMap<SessionHandleId, SessionHandle>,
-    pub runtimes: HashMap<SessionHandleId, SessionRuntimeState>,
+    pub output: SessionOutputSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -169,87 +130,6 @@ pub struct ShellStopResult {
     pub status: SessionStatus,
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionOutputRequest {
-    pub handle_id: SessionHandleId,
-    pub cursor: Option<String>,
-    pub tail_lines: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionOutputResponse {
-    pub handle: SessionHandle,
-    pub output: SessionOutputWindow,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionWaitRequest {
-    pub handle_id: SessionHandleId,
-    pub timeout_secs: u64,
-    pub tail_lines: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionStopRequest {
-    pub handle_id: SessionHandleId,
-    pub wait_for_exit: bool,
-    pub timeout_secs: u64,
-    pub tail_lines: usize,
-}
-
-#[derive(Debug, Clone)]
-pub enum SessionCommand {
-    Input {
-        handle_id: SessionHandleId,
-        input: String,
-        append_newline: bool,
-        wait_for_output: bool,
-        wait_timeout_secs: Option<u64>,
-        tail_lines: usize,
-    },
-    Signal {
-        handle_id: SessionHandleId,
-        signal: String,
-        wait_for_exit: bool,
-        timeout_secs: Option<u64>,
-        tail_lines: usize,
-    },
-}
-
-impl SessionOutputBuffer {
-    /// 创建空输出缓冲区。
-    pub fn empty() -> Self {
-        Self {
-            chunks: VecDeque::new(),
-            total_bytes: 0,
-            next_cursor: 0,
-        }
-    }
-}
-
-impl SessionRuntimeState {
-    /// 创建空运行时状态。
-    pub fn empty() -> Self {
-        Self {
-            stdout: SessionOutputBuffer::empty(),
-            stderr: SessionOutputBuffer::empty(),
-            combined: SessionOutputBuffer::empty(),
-            interaction_state: SessionInteractionState::Idle,
-        }
-    }
-}
-
-impl SessionOutputSnapshot {
-    /// 从现有输出窗口构造对外暴露的快照结构。
-    pub fn from_window(window: &SessionOutputWindow) -> Self {
-        Self {
-            output: window.combined_tail.clone(),
-            returned_lines: window.returned_lines,
-            truncated: window.combined_truncated,
-        }
-    }
-}
-
 impl SessionSummary {
     /// 从当前内部句柄投影为简化后的会话摘要。
     pub fn from_handle(handle: &SessionHandle) -> Self {
@@ -262,7 +142,7 @@ impl SessionSummary {
             interaction_required: handle.interaction_required,
             started_at: handle.started_at,
             finished_at: handle.finished_at,
-            output: SessionOutputSnapshot::from_window(&handle.output),
+            output: handle.output.clone(),
         }
     }
 }
@@ -275,9 +155,9 @@ impl ShellExecResult {
             exit_code: handle.exit_code,
             timed_out: handle.timed_out,
             interaction_required: handle.interaction_required,
-            output: handle.output.combined_tail.clone(),
+            output: handle.output.output.clone(),
             returned_lines: handle.output.returned_lines,
-            truncated: handle.output.combined_truncated,
+            truncated: handle.output.truncated,
         }
     }
 }
@@ -327,13 +207,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_runtime_state_starts_empty() {
-        let state = SessionRuntimeState::empty();
+    fn shell_exec_result_uses_snapshot_output() {
+        let handle = SessionHandle {
+            handle_id: Uuid::new_v4(),
+            backend: SessionBackendKind::Native,
+            status: SessionStatus::Completed,
+            command: "printf 'ok'".to_string(),
+            session_name: None,
+            cwd: None,
+            exit_code: Some(0),
+            timed_out: false,
+            interaction_required: false,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            owner_task_id: Uuid::new_v4(),
+            owner_agent_id: Uuid::new_v4(),
+            output: SessionOutputSnapshot {
+                output: "ok".to_string(),
+                returned_lines: 1,
+                truncated: false,
+            },
+        };
 
-        assert_eq!(state.stdout.total_bytes, 0);
-        assert_eq!(state.stderr.total_bytes, 0);
-        assert_eq!(state.combined.total_bytes, 0);
-        assert_eq!(state.stdout.next_cursor, 0);
-        assert_eq!(state.interaction_state, SessionInteractionState::Idle);
+        let result = ShellExecResult::from_handle(&handle);
+
+        assert_eq!(result.output, "ok");
+        assert_eq!(result.returned_lines, 1);
+        assert!(!result.truncated);
     }
 }

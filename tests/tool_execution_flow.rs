@@ -7,10 +7,11 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentExperience, AgentId, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, EntryRole, ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory,
-    SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage, ToolDefinition,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind, ToolPermission,
-    ToolSchema, WaitingReason, build_harness_app,
+    ChannelId, EntryRole, ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend,
+    ShortTermMemory, SpaceKnowledge, SpaceToolRegistry, Task, TaskStatus,
+    ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -177,6 +178,20 @@ fn allowed_tool_executes_directly() {
         pending_requests.is_empty(),
         "Tool request should be cleaned up after execution"
     );
+}
+
+/// 测试：app 只注入精简后的 Space 资源。
+#[test]
+fn app_only_inserts_minimal_space_resources() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let world = app.world();
+
+    assert!(world.contains_resource::<SpaceKnowledge>());
+    assert!(world.contains_resource::<SpaceToolRegistry>());
+    assert!(world.contains_resource::<NativeProcessBackend>());
 }
 
 /// 测试：拒绝的工具不会执行

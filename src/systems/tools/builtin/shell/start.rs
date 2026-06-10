@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::domain::{SessionStartRequest, ToolAction, ToolContext, ToolError};
 
 pub struct ShellStartTool;
@@ -26,7 +24,7 @@ impl crate::domain::BuiltinTool for ShellStartTool {
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string),
-            env: HashMap::new(),
+            env: super::parse_env_map(input)?,
             timeout_secs: None,
             tail_lines: ctx.shell_default_tail_lines,
             owner_task_id: ctx.current_task_id,

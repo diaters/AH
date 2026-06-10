@@ -251,8 +251,7 @@ fn handle_spawn_request(
 
     // 从 registry 构建子 Agent 的工具列表
     let child_tools: Vec<crate::domain::ToolDefinition> = registry
-        .tools
-        .values()
+        .iter()
         .filter(|td| allowed_tools.contains(&td.name))
         .cloned()
         .collect();

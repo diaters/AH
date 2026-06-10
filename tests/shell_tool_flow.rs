@@ -1,6 +1,6 @@
 //! shell 工具集成测试
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
@@ -319,6 +319,66 @@ fn shell_exec_returns_result_message() {
     assert_eq!(output_json["truncated"], true);
 }
 
+/// 验证 `shell_exec` 会把 `env` 参数透传给子进程。
+#[test]
+fn shell_exec_passes_env_to_child_process() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell exec env", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_exec".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_exec".to_string(),
+        tool_input: serde_json::json!({
+            "command": "printf '%s' \"$HARNESS_TEST_ENV\"",
+            "env": {
+                "HARNESS_TEST_ENV": "visible-from-exec"
+            }
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_exec_env".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    app.update();
+
+    let results = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        query.iter(world).cloned().collect::<Vec<_>>()
+    };
+
+    let output_json = results[0]
+        .tool_output
+        .clone()
+        .expect("shell_exec should succeed");
+    assert_eq!(output_json["output"], "visible-from-exec");
+}
+
 #[test]
 fn shell_start_returns_running_handle() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -377,6 +437,109 @@ fn shell_start_returns_running_handle() {
         .expect("shell_start should succeed");
     assert_eq!(output_json["status"], "running");
     assert!(output_json["session_id"].is_string());
+}
+
+/// 验证 `shell_start` 会把 `env` 参数透传给子进程。
+#[test]
+fn shell_start_passes_env_to_child_process() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("shell start env", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_start".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({
+            "command": "printf '%s\\n' \"$HARNESS_TEST_ENV\"",
+            "env": {
+                "HARNESS_TEST_ENV": "visible-from-start"
+            }
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_start_env".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let session_id = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let results = query.iter(world).cloned().collect::<Vec<_>>();
+        results
+            .iter()
+            .find(|result| result.tool_call_id.as_deref() == Some("call_shell_start_env"))
+            .unwrap()
+            .tool_output
+            .clone()
+            .unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "shell_read".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "shell_read".to_string(),
+        tool_input: serde_json::json!({
+            "session_id": session_id,
+            "tail_lines": 20
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_read_env".to_string()),
+        pending_confirmation_options: None,
+    });
+    app.update();
+
+    let results = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        query
+            .iter(world)
+            .filter(|result| result.tool_call_id.as_deref() == Some("call_shell_read_env"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let output_json = results[0]
+        .tool_output
+        .clone()
+        .expect("shell_read should succeed");
+    assert_eq!(output_json["output"], "visible-from-start");
 }
 
 #[test]
@@ -1205,6 +1368,128 @@ fn shell_list_only_returns_sessions_for_current_task() {
     assert!(
         list_output.as_array().unwrap().is_empty(),
         "shell_list should not expose sessions from other tasks"
+    );
+}
+
+/// 验证活动 session 只包含仍在运行的会话，且任务终态后活动列表会被清空。
+#[test]
+fn shell_list_only_returns_active_sessions_after_task_cleanup() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let agent_id = spawn_agent(app.world_mut());
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("active session cleanup", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    for (tool_call_id, command) in [
+        ("call_short_lived_session", "sleep 0.1"),
+        ("call_long_lived_session", "sleep 30"),
+    ] {
+        app.world_mut().spawn(ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "shell_start".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+            },
+            tool_name: "shell_start".to_string(),
+            tool_input: serde_json::json!({ "command": command }),
+            pending_confirmation_id: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+            pending_confirmation_options: None,
+        });
+        app.update();
+    }
+
+    std::thread::sleep(Duration::from_millis(300));
+
+    let active_before_cleanup = {
+        let backend = app.world().resource::<harness::NativeProcessBackend>();
+        backend.list_task_sessions(task_id).unwrap()
+    };
+    assert_eq!(
+        active_before_cleanup.len(),
+        1,
+        "only the still-running session should remain active after the short session exits"
+    );
+
+    {
+        let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
+        task.status = harness::TaskStatus::Done;
+    }
+    app.update();
+
+    let active_after_cleanup = {
+        let backend = app.world().resource::<harness::NativeProcessBackend>();
+        backend.list_task_sessions(task_id).unwrap()
+    };
+    assert!(
+        active_after_cleanup.is_empty(),
+        "terminated task should not keep active sessions"
+    );
+}
+
+/// 验证 backend 暴露的 session handle 输出结构已经收敛为最新快照语义。
+#[test]
+fn backend_session_handle_uses_snapshot_output_shape() {
+    let backend = harness::NativeProcessBackend::default();
+    let handle = backend
+        .exec_blocking(harness::SessionStartRequest {
+            command: "printf 'line1\\nline2\\nline3\\n'".to_string(),
+            session_name: Some("snapshot-shape".to_string()),
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            timeout_secs: None,
+            tail_lines: 2,
+            owner_task_id: Uuid::new_v4(),
+            owner_agent_id: Uuid::new_v4(),
+        })
+        .expect("exec_blocking should succeed");
+
+    let handle_json = serde_json::to_value(&handle).expect("session handle should serialize");
+    let output = handle_json
+        .get("output")
+        .expect("session handle should expose output");
+
+    assert!(
+        output.get("output").is_some(),
+        "session handle output should expose snapshot text"
+    );
+    assert!(
+        output.get("returned_lines").is_some(),
+        "session handle output should expose returned_lines"
+    );
+    assert!(
+        output.get("truncated").is_some(),
+        "session handle output should expose truncated"
+    );
+    assert!(
+        output.get("combined_tail").is_none(),
+        "legacy combined_tail field should be removed"
+    );
+    assert!(
+        output.get("cursor").is_none(),
+        "legacy cursor field should be removed"
+    );
+    assert!(
+        output.get("next_cursor").is_none(),
+        "legacy next_cursor field should be removed"
     );
 }
 

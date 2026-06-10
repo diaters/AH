@@ -34,6 +34,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 #### 工具与会话
 
 - 工具权限、审批流程、结果回写与用户确认 UI 已可用
+- `Space` 已收敛为最小共享资源边界，当前只保留 `SpaceKnowledge` 和
+  `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - shell 输出语义已收敛为“最新快照”，不再对 LLM 暴露伪增量游标协议
@@ -72,6 +74,12 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 输出读取统一为最新窗口快照
 - 会话只允许由创建它的 `Task` 访问
 
+### Space 边界的收敛结论
+
+- `SpaceKnowledge` 负责承载用户显式写入的共享知识，当前仍为进程内存态
+- `SpaceToolRegistry` 负责承载全局工具定义
+- shell session 真源位于 `NativeProcessBackend`，不再作为 `Space` 资源建模
+
 ## 已知限制
 
 ### 审批链路限制
@@ -99,3 +107,4 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 6. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md`
 7. `docs/design/README.md`
 8. `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`
+9. `docs/superpowers/specs/2026-06-09-space-module-convergence-design.md`
