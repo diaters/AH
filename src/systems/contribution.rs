@@ -108,7 +108,7 @@ pub(crate) fn memory_contribution_system(
 }
 
 /// 根据子 Agent 贡献提炼长期记忆写回结果。
-pub fn extract_memory_writebacks(
+pub(crate) fn extract_memory_writebacks(
     contributor_name: &str,
     task_summary: &TaskSummary,
     memories: &[LongTermMemoryEntry],

@@ -391,11 +391,8 @@ fn parent_agent_absorbs_filtered_long_term_memory_only() {
         outcome: "done".to_string(),
     };
 
-    let (accepted, _) = harness::systems::contribution::extract_memory_writebacks(
-        "child",
-        &summary,
-        &child_memory.entries,
-    );
+    let (accepted, _) =
+        harness::extract_memory_writebacks("child", &summary, &child_memory.entries);
 
     assert_eq!(accepted.len(), 1);
     assert!(accepted[0].content.contains("two-phase application"));

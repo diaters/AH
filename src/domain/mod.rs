@@ -102,9 +102,8 @@ pub use session::{
 // space
 pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, KnowledgeSource,
-    KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceKnowledge,
-    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
-    ToolSchema,
+    KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
+    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 // summarization

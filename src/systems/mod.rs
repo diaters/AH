@@ -1,5 +1,5 @@
 mod command;
-pub mod contribution;
+mod contribution;
 mod dispatch;
 mod evaluation;
 mod execution;
@@ -43,6 +43,18 @@ pub(crate) use transform::{
     sub_task_completion_system, task_termination_system, tool_calling_orchestrator_system,
     user_message_to_task_system,
 };
+
+/// 提供贡献提炼逻辑的稳定公开入口，避免暴露内部系统模块结构。
+pub fn extract_memory_writebacks(
+    contributor_name: &str,
+    task_summary: &crate::domain::TaskSummary,
+    memories: &[crate::domain::LongTermMemoryEntry],
+) -> (
+    Vec<crate::domain::LongTermMemoryEntry>,
+    Vec<crate::domain::SharedKnowledgeEntry>,
+) {
+    contribution::extract_memory_writebacks(contributor_name, task_summary, memories)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum HarnessSet {

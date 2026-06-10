@@ -9,16 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, LongTermMemoryKind, MemoryEntry, MemoryImportance, SessionHandleId,
-    SessionInputRequest, SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId,
-    ToolError,
+    AgentId, LongTermMemoryKind, MemoryImportance, SessionHandleId, SessionInputRequest,
+    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
 };
-
-/// Space 级别的长期知识（用户相关）
-#[derive(Resource, Default)]
-pub struct SpaceKnowledge {
-    pub entries: Vec<MemoryEntry>,
-}
 
 /// 共享知识审核状态。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
