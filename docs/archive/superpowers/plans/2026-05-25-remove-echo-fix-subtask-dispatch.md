@@ -1,3 +1,6 @@
+> **状态：已归档（2026-06-10）** — 本计划已执行完毕。
+> 相关能力已记录在 [docs/current-state.md](../../current-state.md)。
+
 # 删除 Echo 工具 + 修复子任务 Agent 匹配逻辑 实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

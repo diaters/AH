@@ -1,8 +1,12 @@
 # LLM 记忆摘要设计
 
-> __状态说明（2026-06-09）__
-> 分类：历史背景。
-> 作用：用于理解摘要能力的初始设计目标与触发策略来源。
+> **状态：已归档（2026-06-10）**
+>
+> 本文档描述的方案已被后续设计取代，与当前实现存在以下矛盾：
+>
+> - 独立的 summarization 管道已删除，`Summarization` 和 `Evaluation` 已迁移到 `WorkItem` 执行闭环
+>
+> 当前状态请参考 [docs/current-state.md](../../current-state.md)。
 > 说明：当前摘要执行链路已收敛到 `WorkItem`，不再完全按本文原始链路实现。
 > 当前优先参考：`docs/current-state.md`、
 > `docs/design/2026-06-06-workitem-boundary-design.md`。

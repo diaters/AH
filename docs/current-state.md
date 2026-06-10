@@ -97,8 +97,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ### 文档限制
 
-- `README.md`、`AGENTS.md`、`docs/current-state.md` 是当前面向使用者的主要入口
-- `docs/design/` 中部分旧文档仍可用于理解历史演进，但不一定代表当前实现
+- 文档索引入口为 `docs/README.md`，当前状态以本文档为准
+- 历史设计文档已归档到 `docs/archive/design/`，仅供查阅演进脉络
 
 ### Provider 限制
 
@@ -107,12 +107,12 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ## 推荐阅读顺序
 
-1. `AGENTS.md`
-2. `README.md`
-3. `docs/configuration.md`
-4. `docs/TODO.md`
-5. `docs/design/2026-06-06-workitem-boundary-design.md`
-6. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md`
-7. `docs/design/README.md`
-8. `docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`
-9. `docs/superpowers/specs/2026-06-09-space-module-convergence-design.md`
+1. `docs/README.md` — 文档索引入口
+2. `AGENTS.md` — 项目规范
+3. `README.md` — 项目简介
+4. `docs/configuration.md` — 配置说明
+5. `docs/TODO.md` — 待办事项
+6. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
+7. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
+8. `docs/design/README.md` — 设计文档索引
+9. `docs/superpowers/README.md` — 当前活跃计划与规格

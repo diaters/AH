@@ -1,3 +1,6 @@
+> **状态：已归档（2026-06-10）** — 本规格描述的功能已实现。
+> 相关能力已记录在 [docs/current-state.md](../../current-state.md)。
+
 # shell Tool 设计
 
 > 本文档描述 Harness 中通用 `shell` 工具域的设计方案，覆盖阻塞与非阻塞执行、多会话管理、大输出截断、受控交互输入，以及可替换 backend（含 herdr）的集成边界。

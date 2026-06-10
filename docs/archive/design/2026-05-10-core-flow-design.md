@@ -1,8 +1,13 @@
 # Harness Core 流程深化设计
 
-> __状态说明（2026-06-09）__
-> 分类：历史背景。
-> 作用：用于理解主链路的早期设计出发点，不直接代表当前实现。
+> **状态：已归档（2026-06-10）**
+>
+> 本文档描述的方案已被后续设计取代，与当前实现存在以下矛盾：
+>
+> - LLM 客户端已从 `async-openai` 迁移到 `genai`
+> - `OpenAiExecutor` 已删除，改为基于 `genai` 的统一执行器
+>
+> 当前状态请参考 [docs/current-state.md](../../current-state.md)。
 > 当前优先参考：`docs/current-state.md`、
 > `docs/design/2026-06-06-workitem-boundary-design.md`。
 
