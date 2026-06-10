@@ -34,7 +34,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 #### 工具与会话
 
 - 工具权限、审批流程、结果回写与用户确认 UI 已可用
-- `Space` 已收敛为最小共享资源边界，当前只保留 `SpaceKnowledge` 和
+- `Space` 已收敛为最小共享资源边界，当前只保留 `SharedKnowledgeBase` 和
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
@@ -84,7 +84,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ### Space 边界的收敛结论
 
-- `SpaceKnowledge` 负责承载用户显式写入的共享知识，当前仍为进程内存态
+- `SharedKnowledgeBase` 负责承载用户显式写入及审核后共享的知识，当前仍为进程内存态
 - `SpaceToolRegistry` 负责承载全局工具定义
 - shell session 真源位于 `NativeProcessBackend`，不再作为 `Space` 资源建模
 
