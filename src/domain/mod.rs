@@ -49,8 +49,11 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 
 // contribution
 pub use contribution::{
-    AbsorbedMemory, ContributionEvaluation, DiscardedMemory, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
+    AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
+    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
+    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceKindHint, ExperienceStore,
+    IncubationProposal, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    MemoryWritebackBatch, TaskSummary,
 };
 
 // error
@@ -76,8 +79,9 @@ pub use frontend::{
 
 // memory
 pub use memory::{
-    EntryMetadata, EntryRole, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryEntry,
-    MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall, estimate_tokens,
+    EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
+    LongTermMemoryKind, MemoryEntry, MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall,
+    estimate_tokens,
 };
 
 // message
