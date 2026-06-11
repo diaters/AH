@@ -51,9 +51,9 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 pub use contribution::{
     AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
-    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceKindHint, ExperienceStore,
-    IncubationProposal, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
-    MemoryWritebackBatch, TaskSummary,
+    ExperienceCollectionTracker, ExperienceGovernanceRequestMessage, ExperienceInbox,
+    ExperienceKindHint, ExperienceStore, IncubationProposal, MemoryAbsorptionMessage,
+    MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
 };
 
 // error
@@ -105,9 +105,10 @@ pub use session::{
 
 // space
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, KnowledgeSource,
-    KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
-    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
+    KnowledgeSource, KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry,
+    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
+    ToolSchema,
 };
 
 // summarization

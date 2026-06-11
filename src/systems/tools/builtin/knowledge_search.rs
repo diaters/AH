@@ -43,7 +43,8 @@ impl crate::domain::BuiltinTool for KnowledgeSearchTool {
 mod tests {
     use super::*;
     use crate::domain::{
-        BuiltinTool, LongTermMemoryKind, SharedKnowledgeBase, SharedKnowledgeEntry,
+        BuiltinTool, ExperienceStore, LongTermMemoryKind, SharedKnowledgeBase,
+        SharedKnowledgeEntry,
     };
 
     fn test_knowledge() -> SharedKnowledgeBase {
@@ -64,8 +65,10 @@ mod tests {
     #[test]
     fn executor_knowledge_search() {
         let knowledge = test_knowledge();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -107,8 +110,10 @@ mod tests {
     #[test]
     fn executor_knowledge_search_missing_query() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -132,8 +137,10 @@ mod tests {
             LongTermMemoryKind::Fact,
         ));
 
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,

@@ -61,13 +61,15 @@ pub fn parse_spawn_agent_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, SharedKnowledgeBase};
+    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
 
     #[test]
     fn executor_spawn_agent() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,

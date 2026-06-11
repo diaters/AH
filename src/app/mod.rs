@@ -14,7 +14,7 @@ use crate::{
     },
     llm::LlmProviderConfig,
     plugins::DefaultRuntimePluginGroup,
-    systems::{HarnessSet, agent_factory_system, agent_termination_system, load_agents_system},
+    systems::{HarnessSet, agent_factory_system, load_agents_system},
 };
 
 #[derive(Debug, Clone)]
@@ -233,13 +233,12 @@ pub fn build_harness_app(
     // 注册 PluginGroup
     app.add_plugins(DefaultRuntimePluginGroup);
 
-    // Maintenance 系统（需要在 Plugin 外部注册以控制顺序）
+    // agent_factory_system 在 HarnessSet::Maintenance 中运行，
+    // agent_termination_system 和 experience_collection_cleanup_system
+    // 由 ExecutionPlugin 在 HarnessSet::Execution 和 HarnessSet::Maintenance 中注册。
     app.add_systems(
         Update,
         (
-            agent_termination_system
-                .in_set(HarnessSet::Maintenance)
-                .before(agent_factory_system),
             agent_factory_system.in_set(HarnessSet::Maintenance),
         ),
     );

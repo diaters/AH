@@ -9,8 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, LongTermMemoryKind, MemoryImportance, SessionHandleId, SessionInputRequest,
-    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
+    AgentId, ExperienceKindHint, ExperienceStore, LongTermMemoryKind, MemoryImportance,
+    SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest,
+    SubTaskDefinition, TaskId, ToolError,
 };
 
 /// 共享知识审核状态。
@@ -201,11 +202,65 @@ pub enum ToolAction {
     InputSession(SessionInputRequest),
     /// 停止 shell 会话
     StopSession(SessionHandleId),
+    /// 提交经验候选
+    SubmitExperienceCandidate(ExperienceCandidateSubmission),
+}
+
+/// 经验候选提交数据
+#[derive(Debug, Clone)]
+pub struct ExperienceCandidateSubmission {
+    pub title: String,
+    pub kind_hint: ExperienceKindHint,
+    pub payload: serde_json::Value,
+    pub dependency_refs: Vec<String>,
+}
+
+impl ExperienceCandidateSubmission {
+    /// 从 JSON 工具输入构造候选提交数据。
+    pub fn from_json(
+        _task_id: TaskId,
+        _agent_id: AgentId,
+        title: &str,
+        input: &serde_json::Value,
+    ) -> Result<Self, ToolError> {
+        let kind_str = input
+            .get("kind_hint")
+            .and_then(|v| v.as_str())
+            .unwrap_or("knowledge");
+        let kind_hint = match kind_str {
+            "executable" => ExperienceKindHint::Executable,
+            "shared_knowledge" => ExperienceKindHint::SharedKnowledge,
+            "discard" => ExperienceKindHint::Discard,
+            _ => ExperienceKindHint::Knowledge,
+        };
+        let payload = input
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let dependency_refs = input
+            .get("dependency_refs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Self {
+            title: title.to_string(),
+            kind_hint,
+            payload,
+            dependency_refs,
+        })
+    }
 }
 
 /// 内置 Tool 执行上下文
 pub struct ToolContext<'a> {
     pub knowledge: &'a SharedKnowledgeBase,
+    /// 经验候选仓库
+    pub experience_store: &'a ExperienceStore,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
     /// shell 工具默认返回的最新输出行数

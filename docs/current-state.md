@@ -50,6 +50,18 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
 
+#### 经验候选治理
+
+- 任务结束后不再直接写回长期记忆，改用「候选生成 → 入箱 → 顶层治理 → 选择性持久化/孵化」流程
+- `ExperienceCandidate` 区分 Knowledge、Executable 两种载荷类型
+- Knowledge 候选可转换为 `LongTermMemoryEntry`，Executable 候选需要用户确认
+- `ExperienceStore` 作为全局运行时资源管理候选与收件箱
+- `experience_governance_system` 根据候选类型和 Agent 属性路由：
+  - 非 default 持久型 Agent 的 Knowledge 候选 → 自动持久化到长期记忆
+  - default Agent 的 Knowledge 候选 → 生成 `IncubationProposal`
+  - Executable 候选 → 用户确认（`ToolConfirmationRequestMessage`）
+- `experience_approval_result_system` 处理用户确认响应，更新候选状态
+
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查

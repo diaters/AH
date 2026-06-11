@@ -10,10 +10,13 @@ use uuid::Uuid;
 use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
-    ChannelId, FrontendKind, OutputContent, SessionSummary, ShellExecResult, ShellSessionResult,
-    ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
-    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
+    ChannelId, ExperienceCandidate, ExperienceCandidatePayload,
+    ExperienceCandidateSubmission, ExperienceCollectionRequestMessage, ExperienceKindHint,
+    FrontendKind, LongTermMemoryKind, OutputContent, SessionSummary, ShellExecResult,
+    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForTasksInfo,
+    WaitingReason,
 };
 
 /// 等待任务结果
@@ -619,10 +622,160 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             }
         }
+        Ok(ToolAction::SubmitExperienceCandidate(submission)) => {
+            let candidate = submission_to_candidate(&submission, request.request.agent_id, request.request.task_id);
+            // 发出经验收集请求，由 experience_collection 系统处理入队
+            commands.spawn(ExperienceCollectionRequestMessage {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                parent_task_id: None,
+                parent_agent_id: None,
+            });
+            spawn_experience_candidate_result(
+                commands,
+                request_entity,
+                request,
+                &candidate,
+            );
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
     }
+}
+
+/// 将 ExperienceCandidateSubmission 转换为 ExperienceCandidate。
+///
+/// 将工具层的提交数据转换为领域模型，载荷根据 kind_hint 进行解析。
+fn submission_to_candidate(
+    submission: &ExperienceCandidateSubmission,
+    agent_id: AgentId,
+    task_id: TaskId,
+) -> ExperienceCandidate {
+    let payload = match &submission.kind_hint {
+        ExperienceKindHint::Knowledge => {
+            let content = submission
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let memory_kind_str = submission
+                .payload
+                .get("memory_kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Fact");
+            let memory_kind = match memory_kind_str {
+                "Constraint" => LongTermMemoryKind::Constraint,
+                "Preference" => LongTermMemoryKind::Preference,
+                "Strategy" => LongTermMemoryKind::Strategy,
+                "AntiPattern" => LongTermMemoryKind::AntiPattern,
+                _ => LongTermMemoryKind::Fact,
+            };
+            ExperienceCandidatePayload::Knowledge {
+                content,
+                memory_kind,
+            }
+        }
+        ExperienceKindHint::Executable => {
+            let intent = submission
+                .payload
+                .get("intent")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let when_to_use = submission
+                .payload
+                .get("when_to_use")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let asset_refs = submission
+                .payload
+                .get("asset_refs")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            ExperienceCandidatePayload::Executable {
+                intent,
+                when_to_use,
+                asset_refs,
+            }
+        }
+        ExperienceKindHint::SharedKnowledge => {
+            let content = submission
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            ExperienceCandidatePayload::Knowledge {
+                content,
+                memory_kind: LongTermMemoryKind::Fact,
+            }
+        }
+        ExperienceKindHint::Discard => ExperienceCandidatePayload::Knowledge {
+            content: String::new(),
+            memory_kind: LongTermMemoryKind::Fact,
+        },
+    };
+
+    ExperienceCandidate {
+        candidate_id: uuid::Uuid::new_v4(),
+        producer_task_id: task_id,
+        producer_agent_id: agent_id,
+        title: submission.title.clone(),
+        kind_hint: submission.kind_hint.clone(),
+        payload,
+        dependency_refs: submission.dependency_refs.clone(),
+        status: crate::domain::ExperienceCandidateStatus::Submitted,
+    }
+}
+
+/// 生成经验候选提交结果。
+///
+/// 返回成功确认，候选实际存入 ExperienceStore 由 experience_collection 系统处理。
+fn spawn_experience_candidate_result(
+    commands: &mut Commands,
+    request_entity: Entity,
+    request: &ToolExecutionRequestMessage,
+    candidate: &ExperienceCandidate,
+) {
+    let output = serde_json::json!({
+        "status": "submitted",
+        "candidate_id": candidate.candidate_id.to_string(),
+        "title": candidate.title,
+        "kind_hint": format!("{:?}", candidate.kind_hint),
+    });
+
+    let execution_result = AgentExecutionResult {
+        task_id: request.request.task_id,
+        agent_id: request.request.agent_id,
+        request_kind: request.request.request_kind.clone(),
+        result: Ok(AgentExecutionOutput {
+            content: OutputContent::Text("experience candidate submitted".to_string()),
+            reasoning_content: None,
+        }),
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        reasoning_content: None,
+        work_item_id: None,
+    };
+
+    commands.spawn(ToolExecutionResultMessage {
+        result: execution_result,
+        tool_name: "submit_experience_candidate".to_string(),
+        tool_output: Ok(output),
+        tool_call_id: request.tool_call_id.clone(),
+        processed: false,
+    });
+
+    commands.entity(request_entity).despawn();
 }
 
 /// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
