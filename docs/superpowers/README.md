@@ -22,6 +22,7 @@
 | `specs/2026-06-09-space-module-convergence-design.md` | Space 模块收敛设计 | 活跃 |
 | `specs/2026-06-10-memory-convergence-design.md` | 记忆系统收敛设计 | 活跃 |
 | `specs/2026-06-11-memory-persistence-design.md` | 长期记忆持久化与跨会话加载设计 | 活跃 |
+| `specs/2026-06-11-experience-candidate-governance-design.md` | 经验候选治理与可执行记忆极简设计 | 活跃 |
 
 ## 生命周期规则
 
