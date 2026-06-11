@@ -44,6 +44,12 @@ struct TuiGuard;
 
 impl Drop for TuiGuard {
     fn drop(&mut self) {
+        // 禁用启动时启用的终端特性，再恢复 raw mode / alternate screen
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste,
+        );
         ratatui::restore();
     }
 }
@@ -59,6 +65,12 @@ fn main() -> Result<()> {
             event = "PanicCaught",
             panic_info = %info,
             "panic occurred in main thread"
+        );
+        // 兜底：确保 panic 时终端也能被正确恢复
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste,
         );
         ratatui::restore();
         default_hook(info);
@@ -250,6 +262,8 @@ fn main() -> Result<()> {
         total_ticks = tick,
         "AI Harness TUI exiting"
     );
+
+    // TuiGuard drop 时会自动禁用 mouse capture / bracketed paste 并恢复终端
 
     Ok(())
 }

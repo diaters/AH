@@ -6,6 +6,7 @@ use crate::domain::{
     MemoryContributionRequestMessage, MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry,
     Task, TaskSummary, TaskTerminatedMessage,
 };
+use crate::infrastructure::memory::LongTermMemoryService;
 
 /// Agent 终止系统：检测任务型 Agent 销毁，生成贡献请求
 pub(crate) fn agent_termination_system(
@@ -139,12 +140,13 @@ pub(crate) fn extract_memory_writebacks(
     (accepted, candidates)
 }
 
-/// 记忆吸收系统：将评估后的记忆写入父 Agent
+/// 记忆吸收系统：将评估后的记忆写入父 Agent，并立即落盘
 pub(crate) fn memory_absorption_system(
     mut commands: Commands,
     absorptions: Query<(Entity, &MemoryAbsorptionMessage)>,
     agents: Query<(Entity, &Agent)>,
     mut long_memories: Query<&mut LongTermMemory>,
+    mut service: ResMut<LongTermMemoryService>,
 ) {
     for (entity, absorption) in &absorptions {
         // 查找父 Agent
@@ -155,6 +157,18 @@ pub(crate) fn memory_absorption_system(
             if let Ok(mut memory) = long_memories.get_mut(parent_entity) {
                 let before_count = memory.entries.len();
                 memory.absorb(absorption.absorbed.clone());
+
+                // 立即落盘
+                if let Err(e) = service.flush(&memory) {
+                    debug!(
+                        event = "LongTermMemoryPersistFailed",
+                        parent_agent_id = %absorption.parent_id,
+                        parent_agent_name = %parent.profile.name,
+                        error = %e,
+                        "failed to persist absorbed memories"
+                    );
+                }
+
                 debug!(
                     event = "MemoryAbsorbed",
                     parent_agent_id = %absorption.parent_id,

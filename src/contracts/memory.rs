@@ -2,21 +2,24 @@
 //!
 //! 定义记忆存储和治理相关的 trait 接口。
 
-use crate::domain::{AgentId, LongTermMemoryEntry, SharedKnowledgeEntry, TaskId};
+use crate::domain::{AgentId, LongTermMemoryEntry, MemorySnapshot, SharedKnowledgeEntry, TaskId};
 
 /// 记忆存储
 ///
-/// 当前仓库内尚无 `MemoryStore` 的具体实现者；
-/// 此处签名调整的目标是保持契约与新领域模型一致。
+/// 底层存储契约，只负责读写持久介质。
+/// 使用 `agent_name` 作为跨会话稳定键，不依赖运行时 `AgentId`。
 pub trait MemoryStore: Send + Sync + 'static {
     /// 获取 Agent 的所有记忆条目
-    fn get_entries(&self, agent_id: AgentId) -> Vec<LongTermMemoryEntry>;
+    fn get_entries(&self, agent_name: &str) -> Vec<LongTermMemoryEntry>;
 
-    /// 添加一条记忆条目
-    fn add_entry(&mut self, agent_id: AgentId, entry: LongTermMemoryEntry);
+    /// 获取 Agent 的完整快照
+    fn get_snapshot(&self, agent_name: &str) -> Option<MemorySnapshot>;
+
+    /// 保存 Agent 的完整快照（原子写入）
+    fn save_snapshot(&mut self, snapshot: &MemorySnapshot) -> anyhow::Result<()>;
 
     /// 清空 Agent 的所有记忆
-    fn clear(&mut self, agent_id: AgentId);
+    fn clear(&mut self, agent_name: &str) -> anyhow::Result<()>;
 }
 
 /// 记忆压缩上下文

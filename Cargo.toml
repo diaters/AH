@@ -23,3 +23,6 @@ uuid = { version = "1.23.1", features = ["serde", "v4"] }
 ratatui = "0.29"
 crossterm = "0.28"
 termimad = "0.31"
+
+[dev-dependencies]
+tempfile = "3.27.0"

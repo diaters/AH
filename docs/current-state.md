@@ -47,6 +47,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `LongTermMemory` 采用 `Core + Relevant` 的受控注入策略，避免全量拼接 prompt
 - 共享知识写入默认仅允许用户显式命令或主控审核链路，不允许普通 Agent 直写
 - 长期记忆已具备基础衰退治理能力，会结合访问时间、重要度与复用次数更新分数
+- 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
+- Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
 
 ### 待完善
 

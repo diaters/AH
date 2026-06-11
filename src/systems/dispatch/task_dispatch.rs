@@ -315,6 +315,7 @@ mod tests {
     #[test]
     fn prompt_includes_only_core_and_relevant_long_term_memory() {
         let long_term = LongTermMemory {
+            agent_name: None,
             entries: vec![
                 LongTermMemoryEntry {
                     content: "Always keep shell tools truthful".to_string(),

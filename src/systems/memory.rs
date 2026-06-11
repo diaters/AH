@@ -7,6 +7,7 @@ use crate::{
         Agent, LongTermMemory, LongTermMemoryEntry, MemoryImportance, ShortTermMemory,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
     },
+    infrastructure::memory::LongTermMemoryService,
 };
 
 /// 记忆压缩系统：检测 token 阈值并触发摘要请求
@@ -76,17 +77,36 @@ pub(crate) fn memory_compression_system(
 pub(crate) fn init_agent_memory_system(
     mut commands: Commands,
     agents: Query<(Entity, &Agent), Added<Agent>>,
+    service: Res<LongTermMemoryService>,
 ) {
     for (entity, agent) in &agents {
-        debug!(
-            event = "AgentMemoryInitialized",
-            entity = ?entity,
-            agent_id = %agent.id,
-            agent_name = %agent.profile.name,
-            "initializing long term memory for agent"
-        );
-        // 所有 Agent 都添加长期记忆
-        commands.entity(entity).insert(LongTermMemory::default());
+        let agent_name = &agent.profile.name;
+        let mut memory = LongTermMemory::with_name(agent_name);
+
+        // 从持久层加载已有长期记忆
+        match service.load_entries(agent_name) {
+            entries if !entries.is_empty() => {
+                debug!(
+                    event = "LongTermMemoryLoaded",
+                    agent_id = %agent.id,
+                    agent_name = %agent_name,
+                    entries_count = entries.len(),
+                    "restored persisted long-term memory"
+                );
+                memory.entries = entries;
+            }
+            _ => {
+                debug!(
+                    event = "LongTermMemoryLoaded",
+                    agent_id = %agent.id,
+                    agent_name = %agent_name,
+                    entries_count = 0,
+                    "no persisted memory found, starting with empty memory"
+                );
+            }
+        }
+
+        commands.entity(entity).insert(memory);
     }
 }
 
@@ -170,28 +190,22 @@ mod tests {
 
     #[test]
     fn init_agent_memory_system_logic() {
-        let mut world = World::new();
-        world.init_resource::<MemoryConfig>();
+        use crate::infrastructure::memory::{JsonFileMemoryStore, MemoryRepository};
 
-        let agent = Agent {
-            id: crate::domain::AgentId::nil(),
-            profile: crate::domain::AgentProfile {
-                name: "test".to_string(),
-                model: "test-model".to_string(),
-            },
-            capabilities: crate::domain::AgentCapabilities {
-                tags: vec![],
-                description: "test agent".to_string(),
-            },
-            kind: crate::domain::AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: crate::domain::AgentToolPermissions::default(),
-        };
+        // 测试：LongTermMemoryService 可以从持久层加载记忆
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = JsonFileMemoryStore::new(dir.path().join("agents"));
+        let repo = MemoryRepository::new(Box::new(store));
+        let service = LongTermMemoryService::new(repo);
 
-        let entity = world.spawn((agent, LongTermMemory::default())).id();
+        // 无持久数据时返回空
+        let entries = service.load_entries("nonexistent-agent");
+        assert!(entries.is_empty());
 
-        assert!(world.get::<LongTermMemory>(entity).is_some());
+        // LongTermMemory::with_name 正确设置 agent_name
+        let memory = LongTermMemory::with_name("test-agent");
+        assert_eq!(memory.agent_name.as_deref(), Some("test-agent"));
+        assert!(memory.entries.is_empty());
     }
 
     #[test]
@@ -215,6 +229,7 @@ mod tests {
     fn decay_system_marks_stale_long_term_entries_inactive() {
         let now = chrono::Utc::now();
         let mut memory = LongTermMemory {
+            agent_name: None,
             entries: vec![LongTermMemoryEntry {
                 content: "stale note".to_string(),
                 kind: LongTermMemoryKind::Fact,

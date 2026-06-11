@@ -77,7 +77,7 @@ pub use frontend::{
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryEntry,
-    MemoryImportance, ShortTermMemory, ToolCall, estimate_tokens,
+    MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall, estimate_tokens,
 };
 
 // message
