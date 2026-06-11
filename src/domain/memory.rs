@@ -61,7 +61,10 @@ mod tests {
         let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "test content");
         let snapshot = MemorySnapshot::new("test-agent", vec![entry]);
 
-        assert_eq!(snapshot.schema_version, MemorySnapshot::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            snapshot.schema_version,
+            MemorySnapshot::CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(snapshot.agent_name, "test-agent");
         assert_eq!(snapshot.entries.len(), 1);
     }

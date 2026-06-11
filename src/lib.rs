@@ -1,6 +1,7 @@
 pub mod app;
 pub mod contracts;
 pub mod domain;
+pub mod infrastructure;
 pub mod llm;
 pub mod plugins;
 pub mod systems;

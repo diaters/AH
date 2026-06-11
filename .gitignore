@@ -42,3 +42,4 @@ docs/wiki/
 
 # Logs (not tracked)
 logs/
+.harness/
