@@ -55,6 +55,29 @@ mod tests {
         assert_eq!(entry.importance, MemoryImportance::Medium);
         assert!(entry.decay_score > 0.0);
     }
+
+    #[test]
+    fn memory_snapshot_new_sets_current_schema_version() {
+        let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "test content");
+        let snapshot = MemorySnapshot::new("test-agent", vec![entry]);
+
+        assert_eq!(snapshot.schema_version, MemorySnapshot::CURRENT_SCHEMA_VERSION);
+        assert_eq!(snapshot.agent_name, "test-agent");
+        assert_eq!(snapshot.entries.len(), 1);
+    }
+
+    #[test]
+    fn memory_snapshot_round_trip_serialization() {
+        let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "important fact");
+        let snapshot = MemorySnapshot::new("summarizer", vec![entry]);
+
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let deserialized: MemorySnapshot = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.agent_name, "summarizer");
+        assert_eq!(deserialized.entries.len(), 1);
+        assert_eq!(deserialized.entries[0].content, "important fact");
+    }
 }
 
 /// 估算文本的 token 数
@@ -228,6 +251,37 @@ impl ShortTermMemory {
     }
 }
 
+/// 长期记忆持久化快照。
+///
+/// JSON 文件不直接裸写 `Vec<LongTermMemoryEntry>`，而是使用带元信息的快照结构，
+/// 便于后续兼容迁移和可调试性。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemorySnapshot {
+    /// Agent 原始名称
+    pub agent_name: String,
+    /// 快照版本，用于后续兼容迁移
+    pub schema_version: u32,
+    /// 最后一次成功写盘时间
+    pub updated_at: DateTime<Utc>,
+    /// 当前 Agent 的全部长期记忆条目
+    pub entries: Vec<LongTermMemoryEntry>,
+}
+
+impl MemorySnapshot {
+    /// 当前快照版本
+    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+    /// 创建新的快照。
+    pub fn new(agent_name: impl Into<String>, entries: Vec<LongTermMemoryEntry>) -> Self {
+        Self {
+            agent_name: agent_name.into(),
+            schema_version: Self::CURRENT_SCHEMA_VERSION,
+            updated_at: Utc::now(),
+            entries,
+        }
+    }
+}
+
 /// 长期记忆条目类型。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LongTermMemoryKind {
@@ -285,10 +339,21 @@ impl LongTermMemoryEntry {
 /// 长期记忆（绑定 Agent）。
 #[derive(Component, Default, Clone)]
 pub struct LongTermMemory {
+    /// 关联 Agent 的稳定名称，用于持久化身份锚点。
+    pub agent_name: Option<String>,
+    /// 长期记忆条目。
     pub entries: Vec<LongTermMemoryEntry>,
 }
 
 impl LongTermMemory {
+    /// 创建带 Agent 名称的长期记忆。
+    pub fn with_name(agent_name: impl Into<String>) -> Self {
+        Self {
+            agent_name: Some(agent_name.into()),
+            entries: Vec::new(),
+        }
+    }
+
     /// 添加长期记忆条目。
     pub fn add_entry(&mut self, entry: LongTermMemoryEntry) {
         self.entries.push(entry);

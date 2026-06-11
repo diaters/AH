@@ -215,6 +215,7 @@ mod tests {
     fn decay_system_marks_stale_long_term_entries_inactive() {
         let now = chrono::Utc::now();
         let mut memory = LongTermMemory {
+            agent_name: None,
             entries: vec![LongTermMemoryEntry {
                 content: "stale note".to_string(),
                 kind: LongTermMemoryKind::Fact,
