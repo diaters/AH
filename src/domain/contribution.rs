@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bevy::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 
