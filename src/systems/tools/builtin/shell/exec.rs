@@ -46,13 +46,15 @@ impl crate::domain::BuiltinTool for ShellExecTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, SharedKnowledgeBase};
+    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
 
     #[test]
     fn shell_exec_uses_default_tail_limit() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 200,
             shell_max_tail_lines: 500,

@@ -24,8 +24,9 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    CreateTasksTool, KnowledgeSearchTool, ShellExecTool, ShellInputTool, ShellListTool,
-    ShellReadTool, ShellStartTool, ShellStopTool, SpawnAgentTool, WaitTasksTool,
+    CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool, ShellExecTool,
+    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, SpawnAgentTool,
+    SubmitExperienceCandidateTool, WaitTasksTool,
 };
 
 /// 注册内置 Tool
@@ -281,6 +282,58 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ShellStopTool));
+
+    // Experience candidate tools
+    registry.register(ToolDefinition {
+        name: "submit_experience_candidate".to_string(),
+        description: "Submit an experience candidate for governance review. Use this when you discover reusable knowledge, patterns, or behaviors during task execution that should be preserved for future use.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Short descriptive title for the experience candidate"
+                    },
+                    "kind_hint": {
+                        "type": "string",
+                        "enum": ["knowledge", "executable", "shared_knowledge", "discard"],
+                        "description": "Type hint: knowledge, executable, shared_knowledge, or discard"
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "The experience payload content"
+                    },
+                    "dependency_refs": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "References to dependencies (e.g., asset file paths)"
+                    }
+                },
+                "required": ["title"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(SubmitExperienceCandidateTool));
+
+    registry.register(ToolDefinition {
+        name: "list_experience_candidates".to_string(),
+        description: "List experience candidates in the current task's inbox. Use this to review pending experience candidates submitted by child agents.".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("list_experience_candidates".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ListExperienceCandidatesTool));
 }
 
 // Re-export tests module for backward compatibility
@@ -289,7 +342,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, BuiltinTool,
-        SharedKnowledgeBase, SharedKnowledgeEntry, ToolContext,
+        ExperienceStore, SharedKnowledgeBase, SharedKnowledgeEntry, ToolContext,
     };
 
     #[allow(dead_code)]
@@ -324,9 +377,11 @@ mod tests {
             .push(SharedKnowledgeEntry::approved_from_user_input(
                 "The system follows ECS architecture",
             ));
+        let experience_store = ExperienceStore::default();
 
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,

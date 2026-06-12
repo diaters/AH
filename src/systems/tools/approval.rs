@@ -9,8 +9,8 @@ use crate::{
     app::HarnessSettings,
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-        BuiltinToolExecutors, ExecutionError, GrantMode, SharedKnowledgeBase, Task, TaskStatus,
-        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
+        BuiltinToolExecutors, ExecutionError, ExperienceStore, GrantMode, SharedKnowledgeBase,
+        Task, TaskStatus, ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, WaitingReason,
     },
     systems::NativeProcessBackend,
@@ -78,6 +78,7 @@ pub fn approval_result_system(
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
+    experience_store: Res<ExperienceStore>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -184,6 +185,7 @@ pub fn approval_result_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    experience_store: &experience_store,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,

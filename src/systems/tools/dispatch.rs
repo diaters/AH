@@ -10,9 +10,9 @@ use crate::{
     app::HarnessSettings,
     domain::{
         Agent, ApprovalRequestMessage, BuiltinToolExecutors, ConfirmationOption,
-        ConfirmationSource, SharedKnowledgeBase, SpaceToolRegistry, Task, TaskStatus,
-        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolPermission, WaitingReason,
+        ConfirmationSource, ExperienceStore, SharedKnowledgeBase, SpaceToolRegistry, Task,
+        TaskStatus, ToolConfirmationRequestMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolPermission, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -30,6 +30,7 @@ pub fn tool_dispatch_system(
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
+    experience_store: Res<ExperienceStore>,
     agents: Query<&Agent>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
@@ -143,6 +144,7 @@ pub fn tool_dispatch_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    experience_store: &experience_store,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,

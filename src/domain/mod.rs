@@ -49,7 +49,10 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 
 // contribution
 pub use contribution::{
-    AbsorbedMemory, ContributionEvaluation, DiscardedMemory, MemoryAbsorptionMessage,
+    AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
+    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
+    ExperienceCollectionTracker, ExperienceGovernanceRequestMessage, ExperienceInbox,
+    ExperienceKindHint, ExperienceStore, IncubationProposal, MemoryAbsorptionMessage,
     MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
 };
 
@@ -76,8 +79,9 @@ pub use frontend::{
 
 // memory
 pub use memory::{
-    EntryMetadata, EntryRole, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryEntry,
-    MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall, estimate_tokens,
+    EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
+    LongTermMemoryKind, MemoryEntry, MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall,
+    estimate_tokens,
 };
 
 // message
@@ -101,9 +105,10 @@ pub use session::{
 
 // space
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, KnowledgeSource,
-    KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
-    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
+    KnowledgeSource, KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry,
+    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
+    ToolSchema,
 };
 
 // summarization

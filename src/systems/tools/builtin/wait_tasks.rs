@@ -59,14 +59,16 @@ fn parse_wait_tasks_timeout(input: &serde_json::Value, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, SharedKnowledgeBase};
+    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
     use uuid::Uuid;
 
     #[test]
     fn test_wait_tasks_tool_parsing() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -101,8 +103,10 @@ mod tests {
     #[test]
     fn test_wait_tasks_default_timeout() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -131,8 +135,10 @@ mod tests {
     #[test]
     fn test_wait_tasks_missing_task_ids() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -154,8 +160,10 @@ mod tests {
     #[test]
     fn test_wait_tasks_empty_task_ids() {
         let knowledge = SharedKnowledgeBase::default();
+        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
             knowledge: &knowledge,
+            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,

@@ -8,8 +8,8 @@ use tracing::{debug, warn};
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, GrantMode,
-        SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
+        Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
+        GrantMode, SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
         ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, ToolPermission,
     },
@@ -39,6 +39,7 @@ pub fn tool_confirmation_result_system(
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
+    experience_store: Res<ExperienceStore>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -160,6 +161,7 @@ pub fn tool_confirmation_result_system(
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
+                    experience_store: &experience_store,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
