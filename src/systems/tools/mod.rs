@@ -25,8 +25,8 @@ use crate::domain::{
 
 use self::builtin::{
     CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool, ShellExecTool,
-    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SpawnAgentTool, SubmitExperienceCandidateTool, WaitTasksTool,
+    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, SpawnAgentTool,
+    SubmitExperienceCandidateTool, WaitTasksTool,
 };
 
 /// 注册内置 Tool

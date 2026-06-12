@@ -10,13 +10,12 @@ use uuid::Uuid;
 use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
-    ChannelId, ExperienceCandidate, ExperienceCandidatePayload,
-    ExperienceCandidateSubmission, ExperienceCollectionRequestMessage, ExperienceKindHint,
-    FrontendKind, LongTermMemoryKind, OutputContent, SessionSummary, ShellExecResult,
-    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
-    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, WaitingForTasksInfo,
-    WaitingReason,
+    ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
+    ExperienceCollectionRequestMessage, ExperienceKindHint, FrontendKind, LongTermMemoryKind,
+    OutputContent, SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
+    TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -623,7 +622,11 @@ pub fn handle_tool_action<B: SessionBackend>(
             }
         }
         Ok(ToolAction::SubmitExperienceCandidate(submission)) => {
-            let candidate = submission_to_candidate(&submission, request.request.agent_id, request.request.task_id);
+            let candidate = submission_to_candidate(
+                &submission,
+                request.request.agent_id,
+                request.request.task_id,
+            );
             // 发出经验收集请求，由 experience_collection 系统处理入队
             commands.spawn(ExperienceCollectionRequestMessage {
                 task_id: request.request.task_id,
@@ -631,12 +634,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 parent_task_id: None,
                 parent_agent_id: None,
             });
-            spawn_experience_candidate_result(
-                commands,
-                request_entity,
-                request,
-                &candidate,
-            );
+            spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);

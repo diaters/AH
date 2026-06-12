@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, BuiltinToolExecutors, ConfirmationOption, ExperienceStore, ExecutionError,
+        Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
         GrantMode, SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
         ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, ToolPermission,

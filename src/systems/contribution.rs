@@ -3,11 +3,12 @@ use tracing::debug;
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-    ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
-    ExperienceCollectionTracker, ExperienceGovernanceRequestMessage, IncubationProposal,
-    LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
-    MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
-    SpaceToolRegistry, Task, TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
+    ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
+    ExperienceCollectionRequestMessage, ExperienceCollectionTracker,
+    ExperienceGovernanceRequestMessage, IncubationProposal, LongTermMemory, LongTermMemoryEntry,
+    MemoryAbsorptionMessage, MemoryContributionRequestMessage, MemoryImportance,
+    SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory, SpaceToolRegistry, Task,
+    TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
     ToolConfirmationResponseMessage,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
@@ -33,9 +34,7 @@ pub(crate) fn agent_termination_system(
                 .find(|task| task.id == terminated_msg.task_id)
                 .and_then(|task| task.parent_task_id);
 
-            tracker
-                .pending_task_ids
-                .insert(terminated_msg.task_id);
+            tracker.pending_task_ids.insert(terminated_msg.task_id);
 
             debug!(
                 event = "AgentTerminationDetected",
@@ -158,7 +157,9 @@ pub(crate) fn experience_collection_dispatch_system(
 }
 
 /// 从短期记忆构建经验收集对话历史。
-fn build_experience_collection_conversation(stm: &ShortTermMemory) -> Vec<crate::domain::ConversationMessage> {
+fn build_experience_collection_conversation(
+    stm: &ShortTermMemory,
+) -> Vec<crate::domain::ConversationMessage> {
     use crate::domain::EntryRole;
 
     stm.entries
@@ -389,9 +390,10 @@ pub(crate) fn experience_governance_system(
                 // Non-default persistent agents: auto-approve knowledge candidates
                 // Convert to LongTermMemoryEntry and persist
                 if let Some(entry) = candidate.as_long_term_memory_entry() {
-                    if let Some(mut memory) = long_memories.iter_mut().find(|lm| {
-                        lm.agent_name.as_deref() == Some(&agent.profile.name)
-                    }) {
+                    if let Some(mut memory) = long_memories
+                        .iter_mut()
+                        .find(|lm| lm.agent_name.as_deref() == Some(&agent.profile.name))
+                    {
                         let _ = service.add_entry(&mut memory, entry);
                     }
 
@@ -445,9 +447,9 @@ pub(crate) fn experience_approval_result_system(
             for candidate in &candidates {
                 if let Some(entry) = candidate.as_long_term_memory_entry()
                     && let Some(agent) = agents.iter().find(|a| a.id == candidate.producer_agent_id)
-                    && let Some(mut memory) = long_memories.iter_mut().find(|lm| {
-                        lm.agent_name.as_deref() == Some(&agent.profile.name)
-                    })
+                    && let Some(mut memory) = long_memories
+                        .iter_mut()
+                        .find(|lm| lm.agent_name.as_deref() == Some(&agent.profile.name))
                 {
                     let _ = service.add_entry(&mut memory, entry);
                 }
@@ -548,7 +550,8 @@ mod tests {
             tool_permissions: crate::domain::AgentToolPermissions::default(),
         };
 
-        let request = build_experience_collection_request(&agent, task_id, Some(uuid::Uuid::new_v4()));
+        let request =
+            build_experience_collection_request(&agent, task_id, Some(uuid::Uuid::new_v4()));
         assert_eq!(request.task_id, task_id);
         assert_eq!(request.agent_id, agent.id);
         assert_eq!(request.parent_agent_id, Some(parent_id));

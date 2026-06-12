@@ -107,7 +107,9 @@ pub(crate) fn init_agent_memory_system(
         }
 
         commands.entity(entity).queue_handled(
-            |mut entity: EntityWorldMut| { entity.insert(memory); },
+            |mut entity: EntityWorldMut| {
+                entity.insert(memory);
+            },
             |_, _| {},
         );
     }

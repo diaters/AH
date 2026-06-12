@@ -238,9 +238,7 @@ pub fn build_harness_app(
     // 由 ExecutionPlugin 在 HarnessSet::Execution 和 HarnessSet::Maintenance 中注册。
     app.add_systems(
         Update,
-        (
-            agent_factory_system.in_set(HarnessSet::Maintenance),
-        ),
+        (agent_factory_system.in_set(HarnessSet::Maintenance),),
     );
 
     app

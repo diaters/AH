@@ -70,10 +70,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(matches!(
-            action,
-            ToolAction::SubmitExperienceCandidate(_)
-        ));
+        assert!(matches!(action, ToolAction::SubmitExperienceCandidate(_)));
     }
 
     #[test]

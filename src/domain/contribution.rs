@@ -146,7 +146,10 @@ impl ExperienceCandidate {
             ExperienceCandidatePayload::Knowledge {
                 content,
                 memory_kind,
-            } => Some(super::LongTermMemoryEntry::new(*memory_kind, content.clone())),
+            } => Some(super::LongTermMemoryEntry::new(
+                *memory_kind,
+                content.clone(),
+            )),
             ExperienceCandidatePayload::Executable { .. } => None,
         }
     }
@@ -203,7 +206,10 @@ impl ExperienceStore {
 
     /// 获取指定任务的顶层候选列表。
     pub fn root_candidates_for_task(&self, task_id: TaskId) -> Vec<uuid::Uuid> {
-        self.root_candidates.get(&task_id).cloned().unwrap_or_default()
+        self.root_candidates
+            .get(&task_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// 获取指定任务的收件箱中的候选摘要。
@@ -221,11 +227,7 @@ impl ExperienceStore {
     }
 
     /// 根据确认请求 ID 应用确认结果。
-    pub fn apply_confirmation_response(
-        &mut self,
-        request_id: uuid::Uuid,
-        selected_option: &str,
-    ) {
+    pub fn apply_confirmation_response(&mut self, request_id: uuid::Uuid, selected_option: &str) {
         // 找到对应的 NeedsUserApproval 候选并更新状态
         let approved = selected_option == "approve";
         for candidate in self.candidates.values_mut() {
@@ -299,7 +301,11 @@ mod tests {
         assert_eq!(inbox.owner_agent_id, owner_agent_id);
         assert_eq!(inbox.candidate_ids, vec![candidate.candidate_id]);
         assert_eq!(
-            store.candidates.get(&candidate.candidate_id).unwrap().status,
+            store
+                .candidates
+                .get(&candidate.candidate_id)
+                .unwrap()
+                .status,
             ExperienceCandidateStatus::Submitted,
         );
     }

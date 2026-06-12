@@ -43,8 +43,7 @@ impl crate::domain::BuiltinTool for KnowledgeSearchTool {
 mod tests {
     use super::*;
     use crate::domain::{
-        BuiltinTool, ExperienceStore, LongTermMemoryKind, SharedKnowledgeBase,
-        SharedKnowledgeEntry,
+        BuiltinTool, ExperienceStore, LongTermMemoryKind, SharedKnowledgeBase, SharedKnowledgeEntry,
     };
 
     fn test_knowledge() -> SharedKnowledgeBase {
