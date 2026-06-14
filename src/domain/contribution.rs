@@ -501,7 +501,10 @@ mod tests {
         store.stage_root_candidate(candidate);
 
         store.bind_approval_request(request_id, candidate_id);
-        assert_eq!(store.candidate_id_for_request(request_id), Some(candidate_id));
+        assert_eq!(
+            store.candidate_id_for_request(request_id),
+            Some(candidate_id)
+        );
     }
 
     #[test]

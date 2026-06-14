@@ -596,10 +596,9 @@ pub(crate) fn experience_approval_result_system(
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
 ) {
     for (entity, response) in &responses {
-        let candidate_id = match store.apply_confirmation_response_precise(
-            response.request_id,
-            &response.selected_option,
-        ) {
+        let candidate_id = match store
+            .apply_confirmation_response_precise(response.request_id, &response.selected_option)
+        {
             Some(id) => id,
             None => {
                 debug!(
@@ -633,9 +632,10 @@ pub(crate) fn experience_approval_result_system(
             match candidate.kind_hint {
                 ExperienceKindHint::Knowledge => {
                     if is_default {
-                        if let Some(mut proposal) = proposals.iter_mut().find(|p| {
-                            p.knowledge_candidate_ids.contains(&candidate.candidate_id)
-                        }) {
+                        if let Some(mut proposal) = proposals
+                            .iter_mut()
+                            .find(|p| p.knowledge_candidate_ids.contains(&candidate.candidate_id))
+                        {
                             proposal.status = IncubationProposalStatus::Approved;
                         }
                         if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
@@ -650,9 +650,9 @@ pub(crate) fn experience_approval_result_system(
                         let producer_agent =
                             agents.iter().find(|a| a.id == candidate.producer_agent_id);
                         if let Some(agent) = producer_agent
-                            && let Some(mut memory) = long_memories.iter_mut().find(|lm| {
-                                lm.agent_name.as_deref() == Some(&agent.profile.name)
-                            })
+                            && let Some(mut memory) = long_memories
+                                .iter_mut()
+                                .find(|lm| lm.agent_name.as_deref() == Some(&agent.profile.name))
                         {
                             match service.add_entry(&mut memory, entry) {
                                 Ok(_) => persisted = true,
@@ -676,9 +676,10 @@ pub(crate) fn experience_approval_result_system(
                 }
                 ExperienceKindHint::Executable => {
                     if is_default {
-                        if let Some(mut proposal) = proposals.iter_mut().find(|p| {
-                            p.executable_candidate_ids.contains(&candidate.candidate_id)
-                        }) {
+                        if let Some(mut proposal) = proposals
+                            .iter_mut()
+                            .find(|p| p.executable_candidate_ids.contains(&candidate.candidate_id))
+                        {
                             proposal.status = IncubationProposalStatus::Approved;
                         }
                         if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
@@ -706,9 +707,7 @@ pub(crate) fn experience_approval_result_system(
                         };
                         match asset_service.persist_skill_package(&agent.profile.name, &draft) {
                             Ok(_) => {
-                                if let Some(c) =
-                                    store.candidates.get_mut(&candidate.candidate_id)
-                                {
+                                if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
                                     c.status = ExperienceCandidateStatus::Persisted;
                                 }
                             }

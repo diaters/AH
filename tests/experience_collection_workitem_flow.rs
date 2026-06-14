@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem,
-    WorkItemStatus, WorkItemType, build_harness_app,
+    FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus, WorkItemType,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -64,7 +64,9 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
         .collect();
 
     assert!(
-        work_items.iter().any(|wi| wi.task_id == task_id && wi.governing_agent_id == Some(governing_agent_id)),
+        work_items
+            .iter()
+            .any(|wi| wi.task_id == task_id && wi.governing_agent_id == Some(governing_agent_id)),
         "should create ExperienceCollection WorkItem with task delegate as governing agent"
     );
 }
@@ -90,8 +92,14 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
         required_tag: None,
     };
-    let mut work_item =
-        WorkItem::experience_collection(task_id, "collect".to_string(), None, vec![], vec![tool], uuid::Uuid::new_v4());
+    let mut work_item = WorkItem::experience_collection(
+        task_id,
+        "collect".to_string(),
+        None,
+        vec![],
+        vec![tool],
+        uuid::Uuid::new_v4(),
+    );
     let work_item_id = work_item.id;
     work_item.status = WorkItemStatus::Running;
     work_item.assigned_agent = Some(uuid::Uuid::new_v4());
@@ -208,12 +216,13 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
         .resource_mut::<harness::ExperienceStore>()
         .stage_root_candidate(candidate);
 
-    app.world_mut().spawn(harness::ExperienceCollectionCompletedMessage {
-        task_id,
-        parent_task_id: None,
-        agent_id: collector_id,
-        governing_agent_id,
-    });
+    app.world_mut()
+        .spawn(harness::ExperienceCollectionCompletedMessage {
+            task_id,
+            parent_task_id: None,
+            agent_id: collector_id,
+            governing_agent_id,
+        });
 
     app.update();
 
