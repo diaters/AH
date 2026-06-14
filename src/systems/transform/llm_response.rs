@@ -10,7 +10,7 @@ use crate::{
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
-        EntryRole, FailureReason, OffTrackPolicy, OutputContent, ShortTermMemory,
+        EntryRole, ExperienceStore, FailureReason, OffTrackPolicy, OutputContent, ShortTermMemory,
         SystemOutputMessage, Task, TaskStatus, ToolCallingState, ToolDefinition,
         ToolExecutionRequestMessage, ToolExecutionResultMessage, UserOutputMessage, WaitingReason,
         WorkItem, WorkItemType,
@@ -43,6 +43,17 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
         TaskStatus::Failed(reason) => Some(reason.clone()),
         _ => None,
     }
+}
+
+fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::TaskId) -> bool {
+    store
+        .root_candidates_for_task(task_id)
+        .iter()
+        .any(|id| store.candidates.get(id).is_some_and(|c| c.producer_task_id == task_id))
+        || store
+            .inboxes
+            .get(&task_id)
+            .is_some_and(|inbox| !inbox.candidate_ids.is_empty())
 }
 
 /// 处理 Evaluation WorkItem 的执行结果
@@ -489,9 +500,9 @@ pub fn llm_response_system(
     mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
-    work_items: Query<(Entity, &WorkItem)>,
-) {
-    // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
+    mut work_items: Query<(Entity, &mut WorkItem)>,
+    experience_store: Res<ExperienceStore>,
+) {    // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
     struct CallingStateInfo {
         entity: Entity,
         task_id: crate::domain::TaskId,
@@ -500,6 +511,7 @@ pub fn llm_response_system(
         conversation: Vec<ConversationMessage>,
         tools: Vec<ToolDefinition>,
         request_kind: AgentRequestKind,
+        work_item_id: Option<uuid::Uuid>,
     }
     let state_info: Vec<CallingStateInfo> = calling_states
         .iter()
@@ -511,6 +523,7 @@ pub fn llm_response_system(
             conversation: s.conversation.clone(),
             tools: s.tools.clone(),
             request_kind: s.request_kind.clone(),
+            work_item_id: s.work_item_id,
         })
         .collect();
 
@@ -548,6 +561,43 @@ pub fn llm_response_system(
                         &config,
                     );
                     continue;
+                }
+                WorkItemType::ExperienceCollection => {
+                    match &result.result {
+                        Ok(AgentExecutionOutput {
+                            content: OutputContent::ToolCalls(_),
+                            ..
+                        }) => {
+                            // 不 continue，让下面的 tool calling loop 处理 tool calls
+                        }
+                        Ok(_) => {
+                            // LLM 返回普通文本：检查是否有候选提交
+                            let had_submission = has_experience_submission(
+                                &experience_store,
+                                work_item.task_id,
+                            );
+
+                            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                if had_submission {
+                                    wi.1.complete();
+                                } else {
+                                    wi.1.fail();
+                                }
+                            }
+
+                            commands.entity(work_item_entity).despawn();
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        Err(_) => {
+                            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                wi.1.fail();
+                            }
+                            commands.entity(work_item_entity).despawn();
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -710,6 +760,7 @@ pub fn llm_response_system(
                             conversation: new_conversation,
                             tools: info.tools.clone(),
                             request_kind: info.request_kind.clone(),
+                            work_item_id: info.work_item_id,
                         });
                     } else {
                         // First iteration: create new ToolCallingState
@@ -751,6 +802,7 @@ pub fn llm_response_system(
                             conversation,
                             tools: result.tools.clone(),
                             request_kind: result.request_kind.clone(),
+                            work_item_id: result.work_item_id,
                         });
                     }
 
@@ -779,19 +831,22 @@ pub fn llm_response_system(
                         });
                     }
 
-                    // Set task to Waiting(ToolExecution)
-                    let old_status = task.status.clone();
-                    task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
-                    task.updated_at = clock.0;
-                    debug!(
-                        event = "TaskStatusTransition",
-                        task_id = %task.id,
-                        from_status = ?old_status,
-                        to_status = ?task.status,
-                        reason = "tool_calls_received",
-                        tool_count = calls.len(),
-                        "task waiting for tool execution"
-                    );
+                    // Set task to Waiting(ToolExecution) — but not for ExperienceCollection WorkItems
+                    // since their original task is already in terminal state
+                    if result.work_item_id.is_none() {
+                        let old_status = task.status.clone();
+                        task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                        task.updated_at = clock.0;
+                        debug!(
+                            event = "TaskStatusTransition",
+                            task_id = %task.id,
+                            from_status = ?old_status,
+                            to_status = ?task.status,
+                            reason = "tool_calls_received",
+                            tool_count = calls.len(),
+                            "task waiting for tool execution"
+                        );
+                    }
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
                     // Clean up ToolCallingState before retry
@@ -882,8 +937,9 @@ pub fn tool_calling_orchestrator_system(
             continue;
         }
 
-        // 仅在任务处于“由 tool calling loop 驱动的等待态”时继续，否则跳过
-        // （如 tool 需要用户确认时，任务状态会变为 Waiting(User)）
+        // 仅在任务处于”由 tool calling loop 驱动的等待态”时继续，否则跳过
+        // ExperienceCollection WorkItem 的原任务可能已是终态，但仍需继续 tool calling
+        let is_work_item = state.work_item_id.is_some();
         let task_is_waiting = tasks.iter().any(|t| {
             t.id == state.task_id
                 && matches!(
@@ -895,8 +951,18 @@ pub fn tool_calling_orchestrator_system(
                     )
                 )
         });
-        if !task_is_waiting {
+        if !task_is_waiting && !is_work_item {
             continue;
+        }
+        // For WorkItem tool calls, skip if there are no tool results yet even if task isn't waiting
+        if is_work_item && !task_is_waiting {
+            // Check if there are any collected results for this state
+            let has_results = tool_results.iter().any(|r| {
+                r.1.tool_call_id.as_ref().is_some_and(|id| state.pending_tool_call_ids.contains(id))
+            });
+            if !has_results {
+                continue;
+            }
         }
 
         // Collect matching tool results
@@ -962,13 +1028,16 @@ pub fn tool_calling_orchestrator_system(
                 max_iterations = state.max_iterations,
                 "tool calling reached max iterations"
             );
-            if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id) {
-                task.last_error = Some(format!(
-                    "tool calling reached max iterations ({})",
-                    state.max_iterations
-                ));
-                task.status = TaskStatus::Failed(FailureReason::AgentError);
-                task.updated_at = clock.0;
+            // ExperienceCollection WorkItem 失败不应修改原任务状态
+            if state.work_item_id.is_none() {
+                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id) {
+                    task.last_error = Some(format!(
+                        "tool calling reached max iterations ({})",
+                        state.max_iterations
+                    ));
+                    task.status = TaskStatus::Failed(FailureReason::AgentError);
+                    task.updated_at = clock.0;
+                }
             }
             commands.entity(state_entity).despawn();
             continue;
@@ -983,7 +1052,7 @@ pub fn tool_calling_orchestrator_system(
             system_prompt: None,
             tools: state.tools.clone(),
             conversation: Some(state.conversation.clone()),
-            work_item_id: None,
+            work_item_id: state.work_item_id,
         };
 
         debug!(
@@ -998,28 +1067,30 @@ pub fn tool_calling_orchestrator_system(
 
         commands.spawn(AgentExecutionRequestMessage { request });
 
-        // Set task back to Waiting(Agent)
-        if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
-            && matches!(
-                task.status,
-                TaskStatus::Waiting(
-                    WaitingReason::ToolExecution
-                        | WaitingReason::Session { .. }
-                        | WaitingReason::SubTaskBatch { .. }
+        // Set task back to Waiting(Agent) — 但不修改 ExperienceCollection 关联的原任务状态
+        if state.work_item_id.is_none() {
+            if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
+                && matches!(
+                    task.status,
+                    TaskStatus::Waiting(
+                        WaitingReason::ToolExecution
+                            | WaitingReason::Session { .. }
+                            | WaitingReason::SubTaskBatch { .. }
+                    )
                 )
-            )
-        {
-            let old_status = task.status.clone();
-            task.status = TaskStatus::Waiting(WaitingReason::Agent);
-            task.updated_at = clock.0;
-            debug!(
-                event = "TaskStatusTransition",
-                task_id = %task.id,
-                from_status = ?old_status,
-                to_status = ?task.status,
-                reason = "tool_results_collected",
-                "task waiting for follow-up LLM response"
-            );
+            {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Waiting(WaitingReason::Agent);
+                task.updated_at = clock.0;
+                debug!(
+                    event = "TaskStatusTransition",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    reason = "tool_results_collected",
+                    "task waiting for follow-up LLM response"
+                );
+            }
         }
     }
 }
