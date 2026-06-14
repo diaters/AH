@@ -596,130 +596,119 @@ pub(crate) fn experience_approval_result_system(
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
 ) {
     for (entity, response) in &responses {
+        let candidate_id = match store.apply_confirmation_response_precise(
+            response.request_id,
+            &response.selected_option,
+        ) {
+            Some(id) => id,
+            None => {
+                debug!(
+                    event = "ExperienceApprovalBindingNotFound",
+                    request_id = %response.request_id,
+                    selected_option = %response.selected_option,
+                    "no candidate bound to approval request, skipping"
+                );
+                commands.entity(entity).despawn();
+                continue;
+            }
+        };
+
         let approved = response.selected_option != "deny";
-        store.apply_confirmation_response(response.request_id, &response.selected_option);
 
         if approved {
-            let to_writeback: Vec<_> = store
-                .candidates
-                .values()
-                .filter(|c| c.status == ExperienceCandidateStatus::Approved)
-                .cloned()
-                .collect();
+            let candidate = match store.candidates.get(&candidate_id).cloned() {
+                Some(c) => c,
+                None => {
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+            };
 
-            for candidate in to_writeback {
-                let is_default = candidate
-                    .governing_agent_id
-                    .and_then(|id| agents.iter().find(|a| a.id == id))
-                    .map(is_default_agent)
-                    .unwrap_or(false);
+            let is_default = candidate
+                .governing_agent_id
+                .and_then(|id| agents.iter().find(|a| a.id == id))
+                .map(is_default_agent)
+                .unwrap_or(false);
 
-                match candidate.kind_hint {
-                    ExperienceKindHint::Knowledge => {
-                        if is_default {
-                            if let Some(mut proposal) = proposals.iter_mut().find(|p| {
-                                p.knowledge_candidate_ids.contains(&candidate.candidate_id)
-                            }) {
-                                proposal.status = IncubationProposalStatus::Approved;
-                            }
-                            if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
-                                c.status = ExperienceCandidateStatus::Persisted;
-                            }
-                        } else if let Some(mut entry) = candidate.as_long_term_memory_entry() {
-                            entry.source_candidate_id = Some(candidate.candidate_id);
-                            entry.source_task_id = Some(candidate.producer_task_id);
-                            entry.agent_id = Some(candidate.producer_agent_id);
-
-                            let mut persisted = false;
-                            let producer_agent =
-                                agents.iter().find(|a| a.id == candidate.producer_agent_id);
-                            if let Some(agent) = producer_agent
-                                && let Some(mut memory) = long_memories.iter_mut().find(|lm| {
-                                    lm.agent_name.as_deref() == Some(&agent.profile.name)
-                                })
-                            {
-                                match service.add_entry(&mut memory, entry) {
-                                    Ok(_) => persisted = true,
-                                    Err(e) => {
-                                        warn!(
-                                            event = "ExperienceWritebackFailed",
-                                            candidate_id = %candidate.candidate_id,
-                                            target = "LongTermMemory",
-                                            error = %e,
-                                            "failed to persist knowledge candidate"
-                                        );
-                                    }
-                                }
-                            }
-                            if persisted
-                                && let Some(c) = store.candidates.get_mut(&candidate.candidate_id)
-                            {
-                                c.status = ExperienceCandidateStatus::Persisted;
-                            }
+            match candidate.kind_hint {
+                ExperienceKindHint::Knowledge => {
+                    if is_default {
+                        if let Some(mut proposal) = proposals.iter_mut().find(|p| {
+                            p.knowledge_candidate_ids.contains(&candidate.candidate_id)
+                        }) {
+                            proposal.status = IncubationProposalStatus::Approved;
                         }
-                    }
-                    ExperienceKindHint::Executable => {
-                        if is_default {
-                            if let Some(mut proposal) = proposals.iter_mut().find(|p| {
-                                p.executable_candidate_ids.contains(&candidate.candidate_id)
-                            }) {
-                                proposal.status = IncubationProposalStatus::Approved;
-                            }
-                            if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
-                                c.status = ExperienceCandidateStatus::Persisted;
-                            }
-                        } else if let Some(agent) =
-                            agents.iter().find(|a| a.id == candidate.producer_agent_id)
-                            && let crate::domain::ExperienceCandidatePayload::Executable {
-                                intent,
-                                when_to_use,
-                                asset_refs,
-                            } = &candidate.payload
+                        if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
+                            c.status = ExperienceCandidateStatus::Persisted;
+                        }
+                    } else if let Some(mut entry) = candidate.as_long_term_memory_entry() {
+                        entry.source_candidate_id = Some(candidate.candidate_id);
+                        entry.source_task_id = Some(candidate.producer_task_id);
+                        entry.agent_id = Some(candidate.producer_agent_id);
+
+                        let mut persisted = false;
+                        let producer_agent =
+                            agents.iter().find(|a| a.id == candidate.producer_agent_id);
+                        if let Some(agent) = producer_agent
+                            && let Some(mut memory) = long_memories.iter_mut().find(|lm| {
+                                lm.agent_name.as_deref() == Some(&agent.profile.name)
+                            })
                         {
-                            let draft = crate::infrastructure::assets::SkillPackageDraft {
-                                skill_id: format!("{}", candidate.candidate_id),
-                                title: candidate.title.clone(),
-                                problem: intent.clone(),
-                                when_to_use: when_to_use.clone(),
-                                steps: "参见 skill.md 与 scripts/ 目录".to_string(),
-                                asset_refs: asset_refs.clone(),
-                                dependency_refs: candidate.dependency_refs.clone(),
-                                risks: "首版实现，需人工复核".to_string(),
-                                source_task_id: Some(candidate.producer_task_id),
-                                source_candidate_id: Some(candidate.candidate_id),
-                            };
-                            match asset_service.persist_skill_package(&agent.profile.name, &draft) {
-                                Ok(_) => {
-                                    if let Some(c) =
-                                        store.candidates.get_mut(&candidate.candidate_id)
-                                    {
-                                        c.status = ExperienceCandidateStatus::Persisted;
-                                    }
-                                }
+                            match service.add_entry(&mut memory, entry) {
+                                Ok(_) => persisted = true,
                                 Err(e) => {
                                     warn!(
                                         event = "ExperienceWritebackFailed",
                                         candidate_id = %candidate.candidate_id,
-                                        target = "SkillPackage",
+                                        target = "LongTermMemory",
                                         error = %e,
-                                        "failed to persist skill package"
+                                        "failed to persist knowledge candidate"
                                     );
                                 }
                             }
                         }
-                    }
-                    ExperienceKindHint::SharedKnowledge => {
-                        if let Some(existing) = upgrade_queue
-                            .candidates
-                            .iter_mut()
-                            .find(|u| u.source_candidate_id == candidate.candidate_id)
+                        if persisted
+                            && let Some(c) = store.candidates.get_mut(&candidate.candidate_id)
                         {
-                            existing.validation_status =
-                                crate::domain::KnowledgeValidationStatus::Approved;
+                            c.status = ExperienceCandidateStatus::Persisted;
                         }
-                        match upgrade_service.persist(&upgrade_queue) {
+                    }
+                }
+                ExperienceKindHint::Executable => {
+                    if is_default {
+                        if let Some(mut proposal) = proposals.iter_mut().find(|p| {
+                            p.executable_candidate_ids.contains(&candidate.candidate_id)
+                        }) {
+                            proposal.status = IncubationProposalStatus::Approved;
+                        }
+                        if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
+                            c.status = ExperienceCandidateStatus::Persisted;
+                        }
+                    } else if let Some(agent) =
+                        agents.iter().find(|a| a.id == candidate.producer_agent_id)
+                        && let crate::domain::ExperienceCandidatePayload::Executable {
+                            intent,
+                            when_to_use,
+                            asset_refs,
+                        } = &candidate.payload
+                    {
+                        let draft = crate::infrastructure::assets::SkillPackageDraft {
+                            skill_id: format!("{}", candidate.candidate_id),
+                            title: candidate.title.clone(),
+                            problem: intent.clone(),
+                            when_to_use: when_to_use.clone(),
+                            steps: "参见 skill.md 与 scripts/ 目录".to_string(),
+                            asset_refs: asset_refs.clone(),
+                            dependency_refs: candidate.dependency_refs.clone(),
+                            risks: "首版实现，需人工复核".to_string(),
+                            source_task_id: Some(candidate.producer_task_id),
+                            source_candidate_id: Some(candidate.candidate_id),
+                        };
+                        match asset_service.persist_skill_package(&agent.profile.name, &draft) {
                             Ok(_) => {
-                                if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
+                                if let Some(c) =
+                                    store.candidates.get_mut(&candidate.candidate_id)
+                                {
                                     c.status = ExperienceCandidateStatus::Persisted;
                                 }
                             }
@@ -727,28 +716,55 @@ pub(crate) fn experience_approval_result_system(
                                 warn!(
                                     event = "ExperienceWritebackFailed",
                                     candidate_id = %candidate.candidate_id,
-                                    target = "SharedKnowledgeUpgradeQueue",
+                                    target = "SkillPackage",
                                     error = %e,
-                                    "failed to persist shared knowledge approval"
+                                    "failed to persist skill package"
                                 );
                             }
                         }
                     }
-                    ExperienceKindHint::Discard => {}
                 }
-
-                debug!(
-                    event = "ExperienceCandidateFinalWriteback",
-                    candidate_id = %candidate.candidate_id,
-                    kind = ?candidate.kind_hint,
-                    is_default = is_default,
-                    "finalized experience candidate after user approval"
-                );
+                ExperienceKindHint::SharedKnowledge => {
+                    if let Some(existing) = upgrade_queue
+                        .candidates
+                        .iter_mut()
+                        .find(|u| u.source_candidate_id == candidate.candidate_id)
+                    {
+                        existing.validation_status =
+                            crate::domain::KnowledgeValidationStatus::Approved;
+                    }
+                    match upgrade_service.persist(&upgrade_queue) {
+                        Ok(_) => {
+                            if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
+                                c.status = ExperienceCandidateStatus::Persisted;
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                event = "ExperienceWritebackFailed",
+                                candidate_id = %candidate.candidate_id,
+                                target = "SharedKnowledgeUpgradeQueue",
+                                error = %e,
+                                "failed to persist shared knowledge approval"
+                            );
+                        }
+                    }
+                }
+                ExperienceKindHint::Discard => {}
             }
+
+            debug!(
+                event = "ExperienceCandidateFinalWriteback",
+                candidate_id = %candidate.candidate_id,
+                kind = ?candidate.kind_hint,
+                is_default = is_default,
+                "finalized experience candidate after user approval"
+            );
         } else {
             debug!(
                 event = "ExperienceCandidateRejected",
                 request_id = %response.request_id,
+                candidate_id = %candidate_id,
                 "user rejected experience candidate"
             );
         }
