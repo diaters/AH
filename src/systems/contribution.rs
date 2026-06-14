@@ -299,11 +299,12 @@ pub(crate) fn experience_collection_completion_system(
             if !ids.is_empty() {
                 commands.spawn(ExperienceGovernanceRequestMessage {
                     task_id: msg.task_id,
-                    agent_id: msg.agent_id,
+                    agent_id: msg.governing_agent_id,
                 });
                 debug!(
                     event = "TopLevelExperienceGovernanceRequested",
                     task_id = %msg.task_id,
+                    governing_agent_id = %msg.governing_agent_id,
                     candidate_count = ids.len(),
                     "spawned top-level experience governance request"
                 );
