@@ -328,3 +328,9 @@ mod tests {
         assert_eq!(entry.source, KnowledgeSource::UserCommand);
     }
 }
+
+/// 共享知识升级入口队列：已被顶层治理判定具备公共价值的候选缓冲。
+#[derive(Resource, Default, Serialize, Deserialize)]
+pub struct SharedKnowledgeUpgradeQueue {
+    pub candidates: Vec<super::SharedKnowledgeUpgradeCandidate>,
+}

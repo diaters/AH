@@ -186,6 +186,7 @@ pub fn tool_confirmation_result_system(
                         &mut tasks,
                         &*backend,
                         &mut experience_store,
+                        None,
                     );
                 }
 

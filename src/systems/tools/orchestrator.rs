@@ -385,6 +385,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     tasks: &mut Query<(Entity, &mut Task)>,
     backend: &B,
     experience_store: &mut ExperienceStore,
+    parent_agent_id: Option<AgentId>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -628,7 +629,23 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request.request.agent_id,
                 request.request.task_id,
             );
-            experience_store.stage_root_candidate(candidate.clone());
+
+            // 判断当前任务是否有父任务：有则写入父层 inbox，无则作为顶层 root 候选。
+            let parent_task_id = tasks
+                .iter()
+                .find(|(_, t)| t.id == request.request.task_id)
+                .and_then(|(_, t)| t.parent_task_id);
+
+            match parent_task_id {
+                Some(pid) => {
+                    let owner_agent_id = parent_agent_id.unwrap_or(request.request.agent_id);
+                    experience_store.queue_for_parent(pid, owner_agent_id, candidate.clone());
+                }
+                None => {
+                    experience_store.stage_root_candidate(candidate.clone());
+                }
+            }
+
             spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }
         Err(e) => {
@@ -726,6 +743,7 @@ fn submission_to_candidate(
         payload,
         dependency_refs: submission.dependency_refs.clone(),
         status: crate::domain::ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
     }
 }
 

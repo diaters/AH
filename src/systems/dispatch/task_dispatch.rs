@@ -329,6 +329,9 @@ mod tests {
                     decay_score: 1.0,
                     source: "migration".to_string(),
                     confidence: 1.0,
+                    source_candidate_id: None,
+                    source_task_id: None,
+                    agent_id: None,
                 },
                 LongTermMemoryEntry {
                     content: "Use bounded timeout handling for shell commands".to_string(),
@@ -342,6 +345,9 @@ mod tests {
                     decay_score: 1.0,
                     source: "migration".to_string(),
                     confidence: 0.9,
+                    source_candidate_id: None,
+                    source_task_id: None,
+                    agent_id: None,
                 },
                 LongTermMemoryEntry {
                     content: "Unrelated frontend palette note".to_string(),
@@ -355,6 +361,9 @@ mod tests {
                     decay_score: 0.1,
                     source: "migration".to_string(),
                     confidence: 0.6,
+                    source_candidate_id: None,
+                    source_task_id: None,
+                    agent_id: None,
                 },
             ],
         };

@@ -10,6 +10,7 @@ pub mod tui;
 pub use app::*;
 pub use contracts::*;
 pub use domain::*;
+pub use infrastructure::assets::{AgentAssetService, ExperienceAssetDraft, SkillPackageDraft};
 pub use llm::*;
 pub use plugins::*;
 pub use systems::extract_memory_writebacks;

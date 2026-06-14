@@ -247,6 +247,9 @@ mod tests {
                 decay_score: 0.25,
                 source: "test".to_string(),
                 confidence: 0.7,
+                source_candidate_id: None,
+                source_task_id: None,
+                agent_id: None,
             }],
         };
 

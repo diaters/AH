@@ -51,6 +51,7 @@ fn executable_candidate_requires_user_approval() {
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
     };
 
     assert!(candidate.requires_user_confirmation());
@@ -129,6 +130,7 @@ fn candidate_conversion_to_long_term_memory() {
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
     };
     assert!(executable_candidate.as_long_term_memory_entry().is_none());
 }

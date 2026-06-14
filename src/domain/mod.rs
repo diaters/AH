@@ -51,9 +51,10 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 pub use contribution::{
     AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
-    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceKindHint, ExperienceStore,
-    IncubationProposal, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
-    MemoryWritebackBatch, TaskSummary,
+    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint,
+    ExperienceStore, IncubationProposal, IncubationProposalStatus, MemoryAbsorptionMessage,
+    MemoryContributionRequestMessage, MemoryWritebackBatch, SharedKnowledgeUpgradeCandidate,
+    TaskSummary,
 };
 
 // error
@@ -88,12 +89,13 @@ pub use memory::{
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
-    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, OutputKind,
+    OutputMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
+    SessionStartedMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
+    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
+    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
+    WaitingReason,
 };
 
 // session
@@ -107,8 +109,8 @@ pub use session::{
 pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
     KnowledgeSource, KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry,
-    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
-    ToolSchema,
+    SharedKnowledgeUpgradeQueue, SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition,
+    ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 // summarization

@@ -359,3 +359,11 @@ impl OutputMessage {
         }
     }
 }
+
+/// 经验收集完成消息：WorkItem 完成后触发汇聚与治理。
+#[derive(Debug, Clone, Component)]
+pub struct ExperienceCollectionCompletedMessage {
+    pub task_id: TaskId,
+    pub parent_task_id: Option<TaskId>,
+    pub agent_id: AgentId,
+}

@@ -6,9 +6,10 @@ use bevy::prelude::*;
 
 use crate::systems::{
     HarnessSet, agent_execution_system, agent_termination_system,
-    experience_approval_result_system, experience_collection_workitem_system,
-    experience_governance_system, ingest_execution_results_system, llm_response_system,
-    memory_contribution_system, tool_calling_orchestrator_system,
+    experience_approval_result_system, experience_collection_completion_system,
+    experience_collection_workitem_system, experience_governance_system,
+    ingest_execution_results_system, llm_response_system, memory_contribution_system,
+    tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -39,10 +40,15 @@ impl Plugin for ExecutionPlugin {
                 experience_collection_workitem_system
                     .in_set(HarnessSet::Execution)
                     .after(agent_termination_system),
+                // 经验收集完成后汇聚与治理触发
+                experience_collection_completion_system
+                    .in_set(HarnessSet::Execution)
+                    .after(crate::systems::llm_response_system)
+                    .before(experience_governance_system),
                 // 经验治理：决定候选的持久化路径
                 experience_governance_system
                     .in_set(HarnessSet::Execution)
-                    .after(experience_collection_workitem_system),
+                    .after(experience_collection_completion_system),
                 // 经验确认结果：处理用户对经验候选的确认
                 experience_approval_result_system.in_set(HarnessSet::Maintenance),
                 // 记忆贡献

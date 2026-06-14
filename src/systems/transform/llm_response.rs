@@ -10,10 +10,10 @@ use crate::{
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
-        EntryRole, ExperienceStore, FailureReason, OffTrackPolicy, OutputContent, ShortTermMemory,
-        SystemOutputMessage, Task, TaskStatus, ToolCallingState, ToolDefinition,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, UserOutputMessage, WaitingReason,
-        WorkItem, WorkItemType,
+        EntryRole, ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
+        OffTrackPolicy, OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
+        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
     },
 };
 
@@ -577,6 +577,11 @@ pub fn llm_response_system(
                             let had_submission =
                                 has_experience_submission(&experience_store, work_item.task_id);
 
+                            let completed_task_id = work_item.task_id;
+                            let completed_parent_task_id = work_item.parent_task_id;
+                            let completed_agent_id =
+                                work_item.assigned_agent.unwrap_or(uuid::Uuid::nil());
+
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 if had_submission {
                                     wi.1.complete();
@@ -584,6 +589,12 @@ pub fn llm_response_system(
                                     wi.1.fail();
                                 }
                             }
+
+                            commands.spawn(ExperienceCollectionCompletedMessage {
+                                task_id: completed_task_id,
+                                parent_task_id: completed_parent_task_id,
+                                agent_id: completed_agent_id,
+                            });
 
                             commands.entity(work_item_entity).despawn();
                             commands.entity(entity).despawn();

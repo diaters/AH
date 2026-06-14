@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 
+use crate::infrastructure::assets::AgentAssetService;
 use crate::infrastructure::memory::LongTermMemoryService;
 use crate::systems::{
     HarnessSet, init_agent_memory_system, long_term_memory_decay_system, memory_absorption_system,
@@ -19,6 +20,7 @@ impl Plugin for MemoryPlugin {
     fn build(&self, app: &mut App) {
         // 注册长期记忆服务 Resource
         app.insert_resource(LongTermMemoryService::default_json());
+        app.insert_resource(AgentAssetService::default_path());
 
         app.add_systems(
             Update,

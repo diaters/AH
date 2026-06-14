@@ -96,6 +96,18 @@ mod tests {
         assert_eq!(entry.asset_refs.len(), 1);
         assert!(entry.asset_refs[0].contains("shell-smoke"));
     }
+
+    #[test]
+    fn long_term_memory_entry_carries_source_traceability() {
+        let mut entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "traceable fact");
+        entry.source_candidate_id = Some(uuid::Uuid::new_v4());
+        entry.source_task_id = Some(uuid::Uuid::new_v4());
+        entry.agent_id = Some(uuid::Uuid::new_v4());
+
+        assert!(entry.source_candidate_id.is_some());
+        assert!(entry.source_task_id.is_some());
+        assert!(entry.agent_id.is_some());
+    }
 }
 
 /// 估算文本的 token 数
@@ -333,6 +345,12 @@ pub struct LongTermMemoryEntry {
     pub decay_score: f32,
     pub source: String,
     pub confidence: f32,
+    #[serde(default)]
+    pub source_candidate_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub source_task_id: Option<super::TaskId>,
+    #[serde(default)]
+    pub agent_id: Option<super::AgentId>,
 }
 
 impl LongTermMemoryEntry {
@@ -350,6 +368,9 @@ impl LongTermMemoryEntry {
             decay_score: 1.0,
             source: "manual".to_string(),
             confidence: 0.8,
+            source_candidate_id: None,
+            source_task_id: None,
+            agent_id: None,
         }
     }
 }
