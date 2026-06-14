@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus, WorkItemType,
-    build_harness_app,
+    FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem,
+    WorkItemStatus, WorkItemType, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -33,7 +33,7 @@ impl AgentExecutor for NoOpExecutor {
 }
 
 #[test]
-fn task_termination_creates_experience_collection_workitem() {
+fn persistent_task_termination_creates_experience_collection_workitem() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
@@ -43,34 +43,19 @@ fn task_termination_creates_experience_collection_workitem() {
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
     task.status = TaskStatus::Done;
     let task_id = task.id;
+    let governing_agent_id = uuid::Uuid::new_v4();
+    task.delegate = Some(governing_agent_id);
     app.world_mut()
         .spawn((task, harness::ShortTermMemory::default()));
 
-    // Spawn a TaskScoped agent bound to this task (required by agent_termination_system)
-    let agent_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn(harness::Agent {
-        id: agent_id,
-        profile: harness::AgentProfile {
-            name: "worker".to_string(),
-            model: "test".to_string(),
-        },
-        capabilities: harness::AgentCapabilities {
-            tags: vec![],
-            description: "worker".to_string(),
-        },
-        kind: harness::AgentKind::TaskScoped,
-        parent_id: Some(uuid::Uuid::new_v4()),
-        bound_task_id: Some(task_id),
-        tool_permissions: harness::AgentToolPermissions::default(),
-    });
-
+    // 不绑定 TaskScoped agent：验证顶层持久型任务不依赖 agent 终止也能触发
     app.world_mut()
         .spawn(harness::TaskTerminatedMessage { task_id });
 
-    // Only one update cycle — agent_termination_system and experience_collection_workitem_system
-    // both run in HarnessSet::Execution in the same Update, so one update is enough
     app.update();
 
+    // 经验收集请求可能在同一 update 中被转换为 WorkItem（被 workitem_system 消费），
+    // 因此验证 WorkItem 而非 RequestMessage。
     let work_items: Vec<_> = app
         .world_mut()
         .query::<&WorkItem>()
@@ -78,10 +63,9 @@ fn task_termination_creates_experience_collection_workitem() {
         .filter(|wi| wi.work_type == WorkItemType::ExperienceCollection)
         .collect();
 
-    // At least one ExperienceCollection WorkItem must exist
     assert!(
-        work_items.iter().any(|wi| wi.task_id == task_id),
-        "should create at least one ExperienceCollection WorkItem for the terminated task"
+        work_items.iter().any(|wi| wi.task_id == task_id && wi.governing_agent_id == Some(governing_agent_id)),
+        "should create ExperienceCollection WorkItem with task delegate as governing agent"
     );
 }
 
