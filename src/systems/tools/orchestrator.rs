@@ -11,7 +11,7 @@ use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
     ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceCollectionRequestMessage, ExperienceKindHint, FrontendKind, LongTermMemoryKind,
+    ExperienceKindHint, ExperienceStore, FrontendKind, LongTermMemoryKind,
     OutputContent, SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
     TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
@@ -384,6 +384,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     action: Result<ToolAction, ToolError>,
     tasks: &mut Query<(Entity, &mut Task)>,
     backend: &B,
+    experience_store: &mut ExperienceStore,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -627,12 +628,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request.request.agent_id,
                 request.request.task_id,
             );
-            // 发出经验收集请求，由 experience_collection 系统处理入队
-            commands.spawn(ExperienceCollectionRequestMessage {
-                task_id: request.request.task_id,
-                parent_task_id: None,
-                parent_agent_id: None,
-            });
+            experience_store.stage_root_candidate(candidate.clone());
             spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }
         Err(e) => {

@@ -39,7 +39,7 @@ pub fn tool_confirmation_result_system(
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
-    experience_store: Res<ExperienceStore>,
+    mut experience_store: ResMut<ExperienceStore>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -185,6 +185,7 @@ pub fn tool_confirmation_result_system(
                         action,
                         &mut tasks,
                         &*backend,
+                        &mut experience_store,
                     );
                 }
 

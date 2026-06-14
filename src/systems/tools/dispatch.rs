@@ -30,7 +30,7 @@ pub fn tool_dispatch_system(
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
-    experience_store: Res<ExperienceStore>,
+    mut experience_store: ResMut<ExperienceStore>,
     agents: Query<&Agent>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
@@ -167,6 +167,7 @@ pub fn tool_dispatch_system(
                         action,
                         &mut tasks,
                         &*backend,
+                        &mut experience_store,
                     );
                 }
 
