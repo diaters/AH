@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use tracing::{debug, warn};
 
 use crate::domain::{
-    Agent, AgentKind, ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
+    Agent, ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
     ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
     ExperienceGovernanceRequestMessage, ExperienceKindHint, IncubationProposal,
     IncubationProposalStatus, LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage,
@@ -12,43 +12,46 @@ use crate::domain::{
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 
-/// Agent 终止系统：检测任务型 Agent 销毁，生成经验收集请求。
-pub(crate) fn agent_termination_system(
+/// 任务终态经验收集触发系统：任务进入终态后统一生成经验收集请求。
+pub(crate) fn task_terminated_experience_trigger_system(
     mut commands: Commands,
     terminated: Query<(Entity, &TaskTerminatedMessage)>,
-    agents: Query<&Agent>,
     tasks: Query<&Task>,
 ) {
     for (_entity, terminated_msg) in &terminated {
-        for agent in &agents {
-            if agent.kind != AgentKind::TaskScoped
-                || agent.bound_task_id != Some(terminated_msg.task_id)
-            {
-                continue;
-            }
-
-            let parent_task_id = tasks
-                .iter()
-                .find(|task| task.id == terminated_msg.task_id)
-                .and_then(|task| task.parent_task_id);
-
+        let Some(task) = tasks.iter().find(|task| task.id == terminated_msg.task_id) else {
             debug!(
-                event = "AgentTerminationDetected",
-                agent_id = %agent.id,
-                agent_name = %agent.profile.name,
+                event = "ExperienceCollectionTaskNotFound",
                 task_id = %terminated_msg.task_id,
-                parent_agent_id = ?agent.parent_id,
-                has_parent_task = parent_task_id.is_some(),
-                "spawning experience collection request"
+                "task not found for experience collection, skipping"
             );
+            continue;
+        };
 
-            commands.spawn(ExperienceCollectionRequestMessage {
-                task_id: terminated_msg.task_id,
-                parent_task_id,
-                parent_agent_id: agent.parent_id,
-                governing_agent_id: agent.id,
-            });
-        }
+        let Some(governing_agent_id) = task.delegate else {
+            debug!(
+                event = "ExperienceCollectionSkipped",
+                task_id = %task.id,
+                reason = "missing_delegate",
+                "task has no delegate, skipping experience collection"
+            );
+            continue;
+        };
+
+        debug!(
+            event = "ExperienceCollectionRequested",
+            task_id = %task.id,
+            governing_agent_id = %governing_agent_id,
+            parent_task_id = ?task.parent_task_id,
+            "spawning experience collection request from task termination"
+        );
+
+        commands.spawn(ExperienceCollectionRequestMessage {
+            task_id: task.id,
+            parent_task_id: task.parent_task_id,
+            parent_agent_id: None,
+            governing_agent_id,
+        });
     }
 }
 

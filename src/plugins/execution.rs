@@ -5,11 +5,11 @@
 use bevy::prelude::*;
 
 use crate::systems::{
-    HarnessSet, agent_execution_system, agent_termination_system,
+    HarnessSet, agent_execution_system,
     experience_approval_result_system, experience_collection_completion_system,
     experience_collection_workitem_system, experience_governance_system,
     ingest_execution_results_system, llm_response_system, memory_contribution_system,
-    tool_calling_orchestrator_system,
+    task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -34,12 +34,12 @@ impl Plugin for ExecutionPlugin {
                     .after(crate::systems::sub_task_batch_block_system),
                 // Agent 执行
                 agent_execution_system.in_set(HarnessSet::Execution),
-                // 经验收集：Agent 终止触发收集请求
-                agent_termination_system.in_set(HarnessSet::Execution),
+                // 经验收集：任务终态触发收集请求
+                task_terminated_experience_trigger_system.in_set(HarnessSet::Execution),
                 // 经验收集：将请求转换为 WorkItem
                 experience_collection_workitem_system
                     .in_set(HarnessSet::Execution)
-                    .after(agent_termination_system),
+                    .after(task_terminated_experience_trigger_system),
                 // 经验收集完成后汇聚与治理触发
                 experience_collection_completion_system
                     .in_set(HarnessSet::Execution)
