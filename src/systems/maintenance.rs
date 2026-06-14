@@ -29,8 +29,7 @@ pub(crate) fn agent_factory_system(
     clock: Res<Clock>,
     registry: Res<SpaceToolRegistry>,
     agents: Query<(Entity, &Agent)>,
-    tasks: Query<&Task>,
-    mut tasks_mut: Query<&mut Task>,
+    mut tasks: Query<&mut Task>,
     spawn_requests: Query<(Entity, &AgentSpawnRequestMessage)>,
     terminated_messages: Query<(Entity, &TaskTerminatedMessage)>,
 ) {
@@ -38,7 +37,7 @@ pub(crate) fn agent_factory_system(
         handle_spawn_request(
             &mut commands,
             &agents,
-            &mut tasks_mut,
+            &mut tasks,
             &clock,
             &registry,
             request,
@@ -47,7 +46,7 @@ pub(crate) fn agent_factory_system(
     }
 
     for (entity, terminated) in &terminated_messages {
-        handle_termination(&mut commands, &agents, terminated.task_id, &tasks);
+        handle_termination(&mut commands, &agents, &mut tasks, terminated.task_id);
         commands.entity(entity).despawn();
     }
 }
@@ -278,8 +277,8 @@ fn handle_spawn_request(
 fn handle_termination(
     commands: &mut Commands,
     agents: &Query<(Entity, &Agent)>,
+    tasks: &mut Query<&mut Task>,
     _task_id: TaskId,
-    tasks: &Query<&Task>,
 ) {
     for (entity, agent) in agents {
         if agent.kind != AgentKind::TaskScoped {
@@ -288,10 +287,11 @@ fn handle_termination(
         let Some(bound_task_id) = agent.bound_task_id else {
             continue;
         };
-        let Some(task) = tasks.iter().find(|t| t.id == bound_task_id) else {
-            continue;
-        };
-        if task.status.is_terminal() {
+        let is_terminal = tasks
+            .iter()
+            .find(|t| t.id == bound_task_id)
+            .is_some_and(|task| task.status.is_terminal());
+        if is_terminal {
             debug!(
                 event = "TaskScopedAgentDespawned",
                 agent_id = %agent.id,
