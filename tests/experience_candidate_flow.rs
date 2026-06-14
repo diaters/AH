@@ -57,7 +57,7 @@ fn executable_candidate_requires_user_approval() {
     assert!(candidate.requires_user_confirmation());
 }
 
-/// 验证 ExperienceStore.apply_confirmation_response 可以审批和拒绝候选。
+/// 验证 ExperienceStore.apply_confirmation_response 精确审批目标候选。
 #[test]
 fn confirmation_response_approves_and_rejects_candidates() {
     let mut store = ExperienceStore::default();
@@ -77,8 +77,9 @@ fn confirmation_response_approves_and_rejects_candidates() {
     let candidate_id = candidate.candidate_id;
     store.stage_root_candidate(candidate);
 
-    // Approve
-    store.apply_confirmation_response(uuid::Uuid::new_v4(), "approve");
+    let approve_request_id = uuid::Uuid::new_v4();
+    store.bind_approval_request(approve_request_id, candidate_id);
+    store.apply_confirmation_response(approve_request_id, "approve");
     assert_eq!(
         store.candidates.get(&candidate_id).unwrap().status,
         ExperienceCandidateStatus::Approved
@@ -97,7 +98,9 @@ fn confirmation_response_approves_and_rejects_candidates() {
     let candidate2_id = candidate2.candidate_id;
     store.stage_root_candidate(candidate2);
 
-    store.apply_confirmation_response(uuid::Uuid::new_v4(), "deny");
+    let reject_request_id = uuid::Uuid::new_v4();
+    store.bind_approval_request(reject_request_id, candidate2_id);
+    store.apply_confirmation_response(reject_request_id, "deny");
     assert_eq!(
         store.candidates.get(&candidate2_id).unwrap().status,
         ExperienceCandidateStatus::Rejected

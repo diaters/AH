@@ -891,6 +891,7 @@ mod tests {
         };
 
         let mut store = crate::domain::ExperienceStore::default();
+        let request_id = uuid::Uuid::new_v4();
         let candidate = ExperienceCandidate {
             candidate_id: uuid::Uuid::new_v4(),
             producer_task_id: uuid::Uuid::new_v4(),
@@ -906,14 +907,14 @@ mod tests {
             status: ExperienceCandidateStatus::NeedsUserApproval,
             governing_agent_id: None,
         };
+        let candidate_id = candidate.candidate_id;
         store.stage_root_candidate(candidate);
-        store.apply_confirmation_response(uuid::Uuid::new_v4(), "approve");
+        store.bind_approval_request(request_id, candidate_id);
+        store.apply_confirmation_response(request_id, "approve");
 
-        assert!(
-            store
-                .candidates
-                .values()
-                .any(|c| c.status == ExperienceCandidateStatus::Approved),
+        assert_eq!(
+            store.candidates.get(&candidate_id).unwrap().status,
+            ExperienceCandidateStatus::Approved,
             "approved executable should be marked Approved"
         );
     }
