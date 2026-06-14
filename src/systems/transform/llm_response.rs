@@ -581,6 +581,9 @@ pub fn llm_response_system(
                             let completed_parent_task_id = work_item.parent_task_id;
                             let completed_agent_id =
                                 work_item.assigned_agent.unwrap_or(uuid::Uuid::nil());
+                            let governing_agent_id = work_item
+                                .governing_agent_id
+                                .unwrap_or(completed_agent_id);
 
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 if had_submission {
@@ -594,6 +597,7 @@ pub fn llm_response_system(
                                 task_id: completed_task_id,
                                 parent_task_id: completed_parent_task_id,
                                 agent_id: completed_agent_id,
+                                governing_agent_id,
                             });
 
                             commands.entity(work_item_entity).despawn();

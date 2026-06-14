@@ -324,6 +324,8 @@ pub struct ExperienceCollectionRequestMessage {
     pub task_id: TaskId,
     pub parent_task_id: Option<TaskId>,
     pub parent_agent_id: Option<AgentId>,
+    /// 原任务治理者，负责后续顶层经验治理与落盘。
+    pub governing_agent_id: AgentId,
 }
 
 /// 经验治理请求消息。

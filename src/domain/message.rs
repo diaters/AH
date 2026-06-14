@@ -366,4 +366,6 @@ pub struct ExperienceCollectionCompletedMessage {
     pub task_id: TaskId,
     pub parent_task_id: Option<TaskId>,
     pub agent_id: AgentId,
+    /// 原任务治理者，由请求链路显式传递。
+    pub governing_agent_id: AgentId,
 }

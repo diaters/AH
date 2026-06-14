@@ -107,7 +107,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         required_tag: None,
     };
     let mut work_item =
-        WorkItem::experience_collection(task_id, "collect".to_string(), None, vec![], vec![tool]);
+        WorkItem::experience_collection(task_id, "collect".to_string(), None, vec![], vec![tool], uuid::Uuid::new_v4());
     let work_item_id = work_item.id;
     work_item.status = WorkItemStatus::Running;
     work_item.assigned_agent = Some(uuid::Uuid::new_v4());

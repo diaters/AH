@@ -46,6 +46,7 @@ pub(crate) fn agent_termination_system(
                 task_id: terminated_msg.task_id,
                 parent_task_id,
                 parent_agent_id: agent.parent_id,
+                governing_agent_id: agent.id,
             });
         }
     }
@@ -95,6 +96,7 @@ pub(crate) fn experience_collection_workitem_system(
             request.parent_task_id,
             conversation,
             tools,
+            request.governing_agent_id,
         );
 
         debug!(
@@ -788,17 +790,20 @@ mod tests {
     }
 
     #[test]
-    fn task_scoped_agent_termination_builds_request_without_agent_id() {
+    fn task_scoped_agent_termination_builds_request_with_governing_agent() {
         let task_id = uuid::Uuid::new_v4();
         let parent_id = uuid::Uuid::new_v4();
+        let governing_agent_id = uuid::Uuid::new_v4();
         let request = ExperienceCollectionRequestMessage {
             task_id,
             parent_task_id: Some(uuid::Uuid::new_v4()),
             parent_agent_id: Some(parent_id),
+            governing_agent_id,
         };
 
         assert_eq!(request.task_id, task_id);
         assert_eq!(request.parent_agent_id, Some(parent_id));
+        assert_eq!(request.governing_agent_id, governing_agent_id);
     }
 
     #[test]

@@ -206,6 +206,7 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         None,
         vec![],
         vec![tool],
+        uuid::Uuid::new_v4(),
     );
     let work_item_id = work_item.id;
     app.world_mut().spawn(work_item);
@@ -250,6 +251,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
         None,
         vec![],
         vec![tool],
+        uuid::Uuid::new_v4(),
     );
     app.world_mut().spawn(work_item);
 

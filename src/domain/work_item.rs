@@ -129,6 +129,8 @@ pub struct WorkItem {
     pub status: WorkItemStatus,
     /// 分配的 Agent
     pub assigned_agent: Option<AgentId>,
+    /// 原任务治理者（仅经验收集等场景使用）
+    pub governing_agent_id: Option<AgentId>,
     /// 来源
     pub origin: WorkItemOrigin,
     /// 写回目标
@@ -154,6 +156,7 @@ impl WorkItem {
             tags,
             status: WorkItemStatus::Pending,
             assigned_agent: None,
+            governing_agent_id: None,
             origin,
             writeback_target,
         }
@@ -225,6 +228,7 @@ impl WorkItem {
         parent_task_id: Option<TaskId>,
         conversation: Vec<ConversationMessage>,
         tools: Vec<ToolDefinition>,
+        governing_agent_id: AgentId,
     ) -> Self {
         let tags = TagSet::from_tags(["collect"]);
         let system_prompt = "你是一名经验收敛专家。任务已经结束，请只从提供的材料中提炼可复用经验，并调用 submit_experience_candidate 提交经验候选。".to_string();
@@ -243,6 +247,7 @@ impl WorkItem {
             WorkItemWritebackTarget::ExperienceInbox,
         );
         wi.parent_task_id = parent_task_id;
+        wi.governing_agent_id = Some(governing_agent_id);
         wi
     }
 
@@ -427,6 +432,7 @@ mod tests {
                 content: "user goal".to_string(),
             }],
             vec![tool],
+            uuid::Uuid::new_v4(),
         );
 
         assert_eq!(work_item.work_type, WorkItemType::ExperienceCollection);
