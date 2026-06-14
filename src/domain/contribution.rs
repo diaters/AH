@@ -195,6 +195,8 @@ pub struct ExperienceStore {
     pub inboxes: std::collections::HashMap<TaskId, ExperienceInbox>,
     /// 顶层候选（无父任务的 Agent 自身产生的候选）
     pub root_candidates: std::collections::HashMap<TaskId, Vec<uuid::Uuid>>,
+    /// 审批请求 ID 到候选 ID 的精确绑定。
+    approval_bindings: std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
 }
 
 impl ExperienceStore {
@@ -300,21 +302,39 @@ impl ExperienceStore {
             .collect()
     }
 
-    /// 根据确认请求 ID 应用确认结果。
-    pub fn apply_confirmation_response(&mut self, request_id: uuid::Uuid, selected_option: &str) {
-        // 找到对应的 NeedsUserApproval 候选并更新状态
+    /// 为审批请求绑定目标候选。
+    pub fn bind_approval_request(&mut self, request_id: uuid::Uuid, candidate_id: uuid::Uuid) {
+        self.approval_bindings.insert(request_id, candidate_id);
+    }
+
+    /// 根据审批请求 ID 查找候选 ID。
+    pub fn candidate_id_for_request(&self, request_id: uuid::Uuid) -> Option<uuid::Uuid> {
+        self.approval_bindings.get(&request_id).copied()
+    }
+
+    /// 根据确认请求 ID 精确应用确认结果，返回实际更新的候选 ID。
+    pub fn apply_confirmation_response_precise(
+        &mut self,
+        request_id: uuid::Uuid,
+        selected_option: &str,
+    ) -> Option<uuid::Uuid> {
+        let candidate_id = self.candidate_id_for_request(request_id)?;
         let approved = selected_option == "approve";
-        for candidate in self.candidates.values_mut() {
-            if candidate.status == ExperienceCandidateStatus::NeedsUserApproval {
-                // 首版简单匹配：所有 NeedsUserApproval 候选根据用户选择更新
-                candidate.status = if approved {
-                    ExperienceCandidateStatus::Approved
-                } else {
-                    ExperienceCandidateStatus::Rejected
-                };
-            }
+        if let Some(candidate) = self.candidates.get_mut(&candidate_id) {
+            candidate.status = if approved {
+                ExperienceCandidateStatus::Approved
+            } else {
+                ExperienceCandidateStatus::Rejected
+            };
+            Some(candidate_id)
+        } else {
+            None
         }
-        let _ = request_id; // 首版不精确匹配 request_id
+    }
+
+    /// 根据确认请求 ID 应用确认结果（精确匹配）。
+    pub fn apply_confirmation_response(&mut self, request_id: uuid::Uuid, selected_option: &str) {
+        self.apply_confirmation_response_precise(request_id, selected_option);
     }
 }
 
@@ -462,6 +482,92 @@ mod tests {
         assert_eq!(
             store.inboxes.get(&owner_task_id).unwrap().status,
             ExperienceInboxStatus::Consumed
+        );
+    }
+
+    #[test]
+    fn approval_binding_links_request_to_single_candidate() {
+        let mut store = ExperienceStore::default();
+        let request_id = uuid::Uuid::new_v4();
+        let candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            "bound fact".to_string(),
+            "content".to_string(),
+            super::super::LongTermMemoryKind::Fact,
+        );
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+
+        store.bind_approval_request(request_id, candidate_id);
+        assert_eq!(store.candidate_id_for_request(request_id), Some(candidate_id));
+    }
+
+    #[test]
+    fn precise_confirmation_only_updates_bound_candidate() {
+        let mut store = ExperienceStore::default();
+        let request_id = uuid::Uuid::new_v4();
+
+        let mut c1 = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            "first".to_string(),
+            "content".to_string(),
+            super::super::LongTermMemoryKind::Fact,
+        );
+        c1.status = ExperienceCandidateStatus::NeedsUserApproval;
+        let c1_id = c1.candidate_id;
+        store.stage_root_candidate(c1);
+
+        let mut c2 = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            "second".to_string(),
+            "content".to_string(),
+            super::super::LongTermMemoryKind::Fact,
+        );
+        c2.status = ExperienceCandidateStatus::NeedsUserApproval;
+        let c2_id = c2.candidate_id;
+        store.stage_root_candidate(c2);
+
+        store.bind_approval_request(request_id, c1_id);
+        let updated = store.apply_confirmation_response_precise(request_id, "approve");
+
+        assert_eq!(updated, Some(c1_id));
+        assert_eq!(
+            store.candidates.get(&c1_id).unwrap().status,
+            ExperienceCandidateStatus::Approved
+        );
+        assert_eq!(
+            store.candidates.get(&c2_id).unwrap().status,
+            ExperienceCandidateStatus::NeedsUserApproval
+        );
+    }
+
+    #[test]
+    fn unbound_confirmation_does_not_affect_any_candidate() {
+        let mut store = ExperienceStore::default();
+        let mut candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            "orphan".to_string(),
+            "content".to_string(),
+            super::super::LongTermMemoryKind::Fact,
+        );
+        candidate.status = ExperienceCandidateStatus::NeedsUserApproval;
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+
+        let updated = store.apply_confirmation_response_precise(uuid::Uuid::new_v4(), "approve");
+
+        assert_eq!(updated, None);
+        assert_eq!(
+            store.candidates.get(&candidate_id).unwrap().status,
+            ExperienceCandidateStatus::NeedsUserApproval
         );
     }
 }
