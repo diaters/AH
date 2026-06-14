@@ -434,6 +434,7 @@ pub(crate) fn experience_governance_system(
                         }
                         spawn_experience_confirmation(
                             &mut commands,
+                            &mut store,
                             request,
                             candidate_id,
                             &candidate,
@@ -511,11 +512,20 @@ fn is_default_agent(agent: &Agent) -> bool {
 
 fn spawn_experience_confirmation(
     commands: &mut Commands,
+    store: &mut crate::domain::ExperienceStore,
     request: &ExperienceGovernanceRequestMessage,
     candidate_id: &uuid::Uuid,
     candidate: &crate::domain::ExperienceCandidate,
 ) {
     let request_id = uuid::Uuid::new_v4();
+    store.bind_approval_request(request_id, *candidate_id);
+    debug!(
+        event = "ExperienceApprovalBound",
+        request_id = %request_id,
+        candidate_id = %candidate_id,
+        "bound approval request to candidate"
+    );
+
     commands.spawn(ToolConfirmationRequestMessage {
         request_id,
         task_id: request.task_id,
@@ -567,7 +577,7 @@ fn spawn_incubation_confirmation(
             created_at: chrono::Utc::now(),
         });
 
-        spawn_experience_confirmation(commands, request, candidate_id, &candidate);
+        spawn_experience_confirmation(commands, store, request, candidate_id, &candidate);
     }
 }
 
