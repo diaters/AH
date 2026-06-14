@@ -248,7 +248,6 @@ impl ExperienceStore {
 #[derive(Debug, Clone, Component)]
 pub struct ExperienceCollectionRequestMessage {
     pub task_id: TaskId,
-    pub agent_id: AgentId,
     pub parent_task_id: Option<TaskId>,
     pub parent_agent_id: Option<AgentId>,
 }
@@ -266,15 +265,6 @@ pub struct IncubationProposal {
     pub task_id: TaskId,
     pub agent_id: AgentId,
     pub candidate_ids: Vec<uuid::Uuid>,
-}
-
-/// 经验收集追踪器：记录正在等待经验收集的任务 ID。
-///
-/// 当 TaskScoped agent 的任务结束时，先标记其 task_id，
-/// 在经验候选提交完成后再移除，期间阻止 agent 被 despawn。
-#[derive(Resource, Debug, Clone, Default)]
-pub struct ExperienceCollectionTracker {
-    pub pending_task_ids: std::collections::HashSet<TaskId>,
 }
 
 #[cfg(test)]

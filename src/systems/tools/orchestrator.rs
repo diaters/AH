@@ -630,7 +630,6 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 发出经验收集请求，由 experience_collection 系统处理入队
             commands.spawn(ExperienceCollectionRequestMessage {
                 task_id: request.request.task_id,
-                agent_id: request.request.agent_id,
                 parent_task_id: None,
                 parent_agent_id: None,
             });

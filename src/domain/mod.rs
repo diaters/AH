@@ -51,9 +51,9 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 pub use contribution::{
     AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
-    ExperienceCollectionTracker, ExperienceGovernanceRequestMessage, ExperienceInbox,
-    ExperienceKindHint, ExperienceStore, IncubationProposal, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
+    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceKindHint, ExperienceStore,
+    IncubationProposal, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    MemoryWritebackBatch, TaskSummary,
 };
 
 // error

@@ -2,21 +2,19 @@ use bevy::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-    ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
-    ExperienceCollectionRequestMessage, ExperienceCollectionTracker,
-    ExperienceGovernanceRequestMessage, IncubationProposal, LongTermMemory, LongTermMemoryEntry,
-    MemoryAbsorptionMessage, MemoryContributionRequestMessage, MemoryImportance,
-    SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory, SpaceToolRegistry, Task,
-    TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage,
+    Agent, AgentKind, ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
+    ExperienceCollectionRequestMessage, ExperienceGovernanceRequestMessage,
+    IncubationProposal, LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage,
+    MemoryContributionRequestMessage, MemoryImportance, SharedKnowledgeBase,
+    SharedKnowledgeEntry, ShortTermMemory, SpaceToolRegistry, Task, TaskSummary,
+    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 
-/// Agent 终止系统：检测任务型 Agent 销毁，生成经验收集请求
+/// Agent 终止系统：检测任务型 Agent 销毁，生成经验收集请求。
 pub(crate) fn agent_termination_system(
     mut commands: Commands,
-    mut tracker: ResMut<ExperienceCollectionTracker>,
     terminated: Query<(Entity, &TaskTerminatedMessage)>,
     agents: Query<&Agent>,
     tasks: Query<&Task>,
@@ -34,8 +32,6 @@ pub(crate) fn agent_termination_system(
                 .find(|task| task.id == terminated_msg.task_id)
                 .and_then(|task| task.parent_task_id);
 
-            tracker.pending_task_ids.insert(terminated_msg.task_id);
-
             debug!(
                 event = "AgentTerminationDetected",
                 agent_id = %agent.id,
@@ -46,63 +42,45 @@ pub(crate) fn agent_termination_system(
                 "spawning experience collection request"
             );
 
-            commands.spawn(build_experience_collection_request(
-                agent,
-                terminated_msg.task_id,
+            commands.spawn(ExperienceCollectionRequestMessage {
+                task_id: terminated_msg.task_id,
                 parent_task_id,
-            ));
+                parent_agent_id: agent.parent_id,
+            });
         }
-        // Note: TaskTerminatedMessage is despawned by agent_factory_system
-        // This system must run BEFORE agent_factory_system
     }
 }
 
-/// 构建经验收集请求消息。
-pub(crate) fn build_experience_collection_request(
-    agent: &Agent,
-    task_id: uuid::Uuid,
-    parent_task_id: Option<uuid::Uuid>,
-) -> ExperienceCollectionRequestMessage {
-    ExperienceCollectionRequestMessage {
-        task_id,
-        agent_id: agent.id,
-        parent_task_id,
-        parent_agent_id: agent.parent_id,
-    }
-}
-
-/// 经验收集派发系统：基于收集请求生成后续执行请求，
-/// 只暴露 `submit_experience_candidate` 工具，引导 Agent 提交经验候选。
-pub(crate) fn experience_collection_dispatch_system(
+/// 经验收集 WorkItem 创建系统：将收集请求转换为独立 WorkItem。
+pub(crate) fn experience_collection_workitem_system(
     mut commands: Commands,
-    mut tracker: ResMut<ExperienceCollectionTracker>,
     requests: Query<(Entity, &ExperienceCollectionRequestMessage)>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
-    agents: Query<&Agent>,
     registry: Res<SpaceToolRegistry>,
 ) {
     for (entity, request) in &requests {
-        let Some(agent) = agents.iter().find(|a| a.id == request.agent_id) else {
-            debug!(
-                event = "ExperienceCollectionAgentNotFound",
-                agent_id = %request.agent_id,
-                task_id = %request.task_id,
-                "agent not found for experience collection, skipping"
-            );
-            tracker.pending_task_ids.remove(&request.task_id);
-            commands.entity(entity).despawn();
-            continue;
-        };
-
         let Some((task, stm)) = tasks.iter().find(|(t, _)| t.id == request.task_id) else {
             debug!(
                 event = "ExperienceCollectionTaskNotFound",
                 task_id = %request.task_id,
                 "task not found for experience collection, skipping"
             );
-            tracker.pending_task_ids.remove(&request.task_id);
             commands.entity(entity).despawn();
             continue;
+        };
+
+        let conversation = build_experience_collection_conversation(task, stm);
+
+        let prompt = if task.result_summary.is_empty() {
+            format!(
+                "用户目标：{}\n\n请只调用 submit_experience_candidate 提交可复用经验候选。",
+                task.content
+            )
+        } else {
+            format!(
+                "用户目标：{}\n\n任务结果摘要：{}\n\n请只调用 submit_experience_candidate 提交可复用经验候选。",
+                task.content, task.result_summary
+            )
         };
 
         let tools: Vec<crate::domain::ToolDefinition> = registry
@@ -111,75 +89,72 @@ pub(crate) fn experience_collection_dispatch_system(
             .cloned()
             .collect();
 
-        let conversation = stm.map(build_experience_collection_conversation);
-
-        let prompt = if task.result_summary.is_empty() {
-            "当前任务已结束。请只调用 submit_experience_candidate 提交可复用经验候选。".to_string()
-        } else {
-            format!(
-                "当前任务已结束。请只调用 submit_experience_candidate 提交可复用经验候选。任务结果摘要：{}",
-                task.result_summary
-            )
-        };
-
-        debug!(
-            event = "ExperienceCollectionDispatch",
-            task_id = %request.task_id,
-            agent_id = %request.agent_id,
-            has_conversation = conversation.is_some(),
-            tools_count = tools.len(),
-            "spawning experience collection execution request"
+        let work_item = WorkItem::experience_collection(
+            task.id,
+            prompt,
+            request.parent_task_id,
+            conversation,
+            tools,
         );
 
-        // Remove from tracker: agent stays alive during the follow-up LLM call
-        // because nothing is trying to despawn it. When the follow-up execution
-        // completes, the termination flow will eventually clean up the agent
-        // via experience_collection_cleanup_system.
-        tracker.pending_task_ids.remove(&request.task_id);
+        debug!(
+            event = "ExperienceCollectionWorkItemCreated",
+            task_id = %request.task_id,
+            work_item_id = %work_item.id,
+            has_conversation = work_item.input.context.conversation.is_some(),
+            tools_count = work_item.input.context.tools.len(),
+            "spawning experience collection work item"
+        );
 
-        commands.spawn(AgentExecutionRequestMessage {
-            request: AgentExecutionRequest {
-                task_id: task.id,
-                agent_id: agent.id,
-                request_kind: AgentRequestKind::LlmCompletion,
-                prompt,
-                system_prompt: Some(
-                    "你正在进行任务后经验收敛。不要继续解题，不要输出普通文本，只提交结构化经验候选。".to_string(),
-                ),
-                tools,
-                conversation,
-                work_item_id: None,
-            },
-        });
-
+        commands.spawn(work_item);
         commands.entity(entity).despawn();
     }
 }
 
-/// 从短期记忆构建经验收集对话历史。
+/// 构建经验收集的净化对话材料。
 fn build_experience_collection_conversation(
-    stm: &ShortTermMemory,
+    task: &Task,
+    stm: Option<&ShortTermMemory>,
 ) -> Vec<crate::domain::ConversationMessage> {
-    use crate::domain::EntryRole;
+    use crate::domain::{ConversationMessage, EntryRole};
 
-    stm.entries
-        .iter()
-        .filter(|entry| !matches!(entry.role, EntryRole::Archive))
-        .map(|entry| match entry.role {
-            EntryRole::User => crate::domain::ConversationMessage::User {
-                content: entry.content.clone(),
-            },
-            EntryRole::Assistant => crate::domain::ConversationMessage::Assistant {
-                content: Some(entry.content.clone()),
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            },
-            EntryRole::Summary => crate::domain::ConversationMessage::System {
-                content: entry.content.clone(),
-            },
-            EntryRole::Archive => unreachable!(),
-        })
-        .collect()
+    let mut messages = Vec::new();
+
+    messages.push(ConversationMessage::User {
+        content: format!("用户目标：{}", task.content),
+    });
+
+    if !task.result_summary.is_empty() {
+        messages.push(ConversationMessage::User {
+            content: format!("任务结果摘要：{}", task.result_summary),
+        });
+    }
+
+    if let Some(stm) = stm {
+        for entry in stm
+            .entries
+            .iter()
+            .filter(|e| !matches!(e.role, EntryRole::Archive))
+        {
+            let msg = match entry.role {
+                EntryRole::User => ConversationMessage::User {
+                    content: entry.content.clone(),
+                },
+                EntryRole::Assistant => ConversationMessage::Assistant {
+                    content: Some(entry.content.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                },
+                EntryRole::Summary => ConversationMessage::System {
+                    content: entry.content.clone(),
+                },
+                EntryRole::Archive => continue,
+            };
+            messages.push(msg);
+        }
+    }
+
+    messages
 }
 
 /// 记忆贡献处理系统：执行 LLM 评估并吸收记忆
@@ -472,39 +447,6 @@ pub(crate) fn experience_approval_result_system(
     }
 }
 
-/// 经验收集后清理系统：despawn 绑定终态任务且不在经验收集追踪中的 task-scoped agent。
-pub(crate) fn experience_collection_cleanup_system(
-    mut commands: Commands,
-    tracker: Res<ExperienceCollectionTracker>,
-    agents: Query<(Entity, &Agent)>,
-    tasks: Query<&Task>,
-) {
-    for (entity, agent) in &agents {
-        if agent.kind != AgentKind::TaskScoped {
-            continue;
-        }
-        let Some(bound_task_id) = agent.bound_task_id else {
-            continue;
-        };
-        if tracker.pending_task_ids.contains(&bound_task_id) {
-            continue;
-        }
-        let Some(task) = tasks.iter().find(|t| t.id == bound_task_id) else {
-            continue;
-        };
-        if task.status.is_terminal() {
-            debug!(
-                event = "ExperienceCollectionCleanup",
-                agent_id = %agent.id,
-                agent_name = %agent.profile.name,
-                task_id = %bound_task_id,
-                "despawning task-scoped agent after experience collection"
-            );
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,29 +473,16 @@ mod tests {
     }
 
     #[test]
-    fn task_scoped_agent_termination_spawns_experience_collection_request() {
+    fn task_scoped_agent_termination_builds_request_without_agent_id() {
         let task_id = uuid::Uuid::new_v4();
         let parent_id = uuid::Uuid::new_v4();
-        let agent = crate::domain::Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: crate::domain::AgentProfile {
-                name: "worker".to_string(),
-                model: "test".to_string(),
-            },
-            capabilities: crate::domain::AgentCapabilities {
-                tags: vec![],
-                description: "worker".to_string(),
-            },
-            kind: crate::domain::AgentKind::TaskScoped,
-            parent_id: Some(parent_id),
-            bound_task_id: Some(task_id),
-            tool_permissions: crate::domain::AgentToolPermissions::default(),
+        let request = ExperienceCollectionRequestMessage {
+            task_id,
+            parent_task_id: Some(uuid::Uuid::new_v4()),
+            parent_agent_id: Some(parent_id),
         };
 
-        let request =
-            build_experience_collection_request(&agent, task_id, Some(uuid::Uuid::new_v4()));
         assert_eq!(request.task_id, task_id);
-        assert_eq!(request.agent_id, agent.id);
         assert_eq!(request.parent_agent_id, Some(parent_id));
     }
 }
