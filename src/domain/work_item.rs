@@ -19,6 +19,8 @@ pub enum WorkItemType {
     Summarization,
     /// 评估工作项
     Evaluation,
+    /// 经验收集工作项
+    ExperienceCollection,
 }
 
 /// 工作项状态
@@ -45,6 +47,8 @@ pub enum WorkItemOrigin {
     MemoryCompaction,
     /// 评估
     Evaluation,
+    /// 经验收集
+    ExperienceCollection,
 }
 
 /// 工作项写回目标
@@ -56,6 +60,8 @@ pub enum WorkItemWritebackTarget {
     ShortTermContext,
     /// 长期记忆
     LongTermMemory,
+    /// 经验收件箱
+    ExperienceInbox,
 }
 
 /// 工作项上下文
@@ -111,6 +117,8 @@ pub struct WorkItem {
     pub id: Uuid,
     /// 关联的任务 ID
     pub task_id: TaskId,
+    /// 父任务 ID（经验收集用于溯源）
+    pub parent_task_id: Option<TaskId>,
     /// 工作类型
     pub work_type: WorkItemType,
     /// 输入
@@ -140,6 +148,7 @@ impl WorkItem {
         Self {
             id: Uuid::new_v4(),
             task_id,
+            parent_task_id: None,
             work_type,
             input,
             tags,
@@ -207,6 +216,34 @@ impl WorkItem {
             WorkItemOrigin::Evaluation,
             WorkItemWritebackTarget::TaskResult,
         )
+    }
+
+    /// 创建经验收集工作项
+    pub fn experience_collection(
+        task_id: TaskId,
+        prompt: String,
+        parent_task_id: Option<TaskId>,
+        conversation: Vec<ConversationMessage>,
+        tools: Vec<ToolDefinition>,
+    ) -> Self {
+        let tags = TagSet::from_tags(["collect"]);
+        let system_prompt = "你是一名经验收敛专家。任务已经结束，请只从提供的材料中提炼可复用经验，并调用 submit_experience_candidate 提交经验候选。".to_string();
+        let context = WorkItemContext {
+            conversation: Some(conversation),
+            tools,
+            system_prompt: Some(system_prompt),
+        };
+        let input = WorkItemInput { prompt, context };
+        let mut wi = Self::new(
+            task_id,
+            WorkItemType::ExperienceCollection,
+            input,
+            tags,
+            WorkItemOrigin::ExperienceCollection,
+            WorkItemWritebackTarget::ExperienceInbox,
+        );
+        wi.parent_task_id = parent_task_id;
+        wi
     }
 
     /// 标记为已分配
@@ -366,5 +403,46 @@ mod tests {
         assert!(work_item.input.context.system_prompt.is_some());
         let system_prompt = work_item.input.context.system_prompt.unwrap();
         assert!(system_prompt.contains("你是一个任务评估专家"));
+    }
+
+    #[test]
+    fn work_item_experience_collection_creation() {
+        use crate::domain::{ToolExecutorKind, ToolPermission, ToolSchema};
+
+        let task_id = uuid::Uuid::nil();
+        let parent_task_id = uuid::Uuid::new_v4();
+        let tool = ToolDefinition {
+            name: "submit_experience_candidate".to_string(),
+            description: "submit experience candidate".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: ToolPermission::Allow,
+            executor: ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+            required_tag: None,
+        };
+        let work_item = WorkItem::experience_collection(
+            task_id,
+            "summarize what we learned".to_string(),
+            Some(parent_task_id),
+            vec![ConversationMessage::User {
+                content: "user goal".to_string(),
+            }],
+            vec![tool],
+        );
+
+        assert_eq!(work_item.work_type, WorkItemType::ExperienceCollection);
+        assert_eq!(work_item.origin, WorkItemOrigin::ExperienceCollection);
+        assert_eq!(
+            work_item.writeback_target,
+            WorkItemWritebackTarget::ExperienceInbox
+        );
+        assert!(work_item.tags.tags.contains(&"collect".to_string()));
+        assert!(work_item.input.context.system_prompt.is_some());
+        assert_eq!(work_item.input.context.tools.len(), 1);
+        assert_eq!(
+            work_item.input.context.tools[0].name,
+            "submit_experience_candidate"
+        );
+        assert!(work_item.input.context.conversation.is_some());
+        assert_eq!(work_item.parent_task_id, Some(parent_task_id));
     }
 }
