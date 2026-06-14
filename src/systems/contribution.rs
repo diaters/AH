@@ -3,12 +3,11 @@ use tracing::debug;
 
 use crate::domain::{
     Agent, AgentKind, ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
-    ExperienceCollectionRequestMessage, ExperienceGovernanceRequestMessage,
-    IncubationProposal, LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, MemoryImportance, SharedKnowledgeBase,
-    SharedKnowledgeEntry, ShortTermMemory, SpaceToolRegistry, Task, TaskSummary,
-    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    WorkItem,
+    ExperienceCollectionRequestMessage, ExperienceGovernanceRequestMessage, IncubationProposal,
+    LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
+    SpaceToolRegistry, Task, TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 

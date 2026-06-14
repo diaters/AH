@@ -126,7 +126,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 3. `README.md` — 项目简介
 4. `docs/configuration.md` — 配置说明
 5. `docs/TODO.md` — 待办事项
-6. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
-7. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
-8. `docs/design/README.md` — 设计文档索引
-9. `docs/superpowers/README.md` — 当前活跃计划与规格
+6. `docs/wiki/system-pipeline.md` — 系统管线流程与 System 注解
+7. `docs/wiki/llm-context-assembly.md` — LLM 上下文组装机制与例子
+8. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
+9. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
+10. `docs/design/README.md` — 设计文档索引
+11. `docs/superpowers/README.md` — 当前活跃计划与规格

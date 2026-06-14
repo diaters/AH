@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutor, AgentExecutionRequest, AgentExecutionOutput, ChannelId, ExecutorFuture,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus, WorkItemType,
     build_harness_app,
 };
@@ -43,7 +43,8 @@ fn task_termination_creates_experience_collection_workitem() {
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
     task.status = TaskStatus::Done;
     let task_id = task.id;
-    app.world_mut().spawn((task, harness::ShortTermMemory::default()));
+    app.world_mut()
+        .spawn((task, harness::ShortTermMemory::default()));
 
     // Spawn a TaskScoped agent bound to this task (required by agent_termination_system)
     let agent_id = uuid::Uuid::new_v4();
@@ -94,7 +95,8 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
 
     let task = Task::from_user_input_ready("test task", 3, default_channel());
     let task_id = task.id;
-    app.world_mut().spawn((task, harness::ShortTermMemory::default()));
+    app.world_mut()
+        .spawn((task, harness::ShortTermMemory::default()));
 
     let tool = harness::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
@@ -104,13 +106,8 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
         required_tag: None,
     };
-    let mut work_item = WorkItem::experience_collection(
-        task_id,
-        "collect".to_string(),
-        None,
-        vec![],
-        vec![tool],
-    );
+    let mut work_item =
+        WorkItem::experience_collection(task_id, "collect".to_string(), None, vec![], vec![tool]);
     let work_item_id = work_item.id;
     work_item.status = WorkItemStatus::Running;
     work_item.assigned_agent = Some(uuid::Uuid::new_v4());
@@ -160,7 +157,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
 
     let store = app.world().resource::<harness::ExperienceStore>();
     assert!(
-        store.root_candidates_for_task(task_id).len() >= 1,
+        !store.root_candidates_for_task(task_id).is_empty(),
         "candidate should remain in ExperienceStore"
     );
 }
@@ -180,7 +177,7 @@ fn experience_collection_context_excludes_original_system_prompt() {
 
     // build_experience_collection_conversation 不应依赖外部 system_prompt，
     // 只应返回净化后的任务相关消息。此处直接断言 conversation 长度。
-    let conversation = vec![harness::ConversationMessage::User {
+    let conversation = [harness::ConversationMessage::User {
         content: task.content.clone(),
     }];
     assert_eq!(conversation.len(), 1);

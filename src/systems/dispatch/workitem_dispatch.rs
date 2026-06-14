@@ -63,37 +63,37 @@ pub(crate) fn workitem_dispatch_system(
 
             // 恢复关联任务的状态，避免任务死锁
             // 经验收集 WorkItem 失败不应回滚原任务状态
-            if work_item.work_type != WorkItemType::ExperienceCollection {
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == work_item.task_id) {
-                    match task.status {
-                        TaskStatus::Waiting(WaitingReason::Evaluator) => {
-                            let old_status = task.status.clone();
-                            task.status = TaskStatus::Ready;
-                            task.updated_at = clock.0;
-                            debug!(
-                                event = "TaskStatusRestoredAfterWorkItemFailed",
-                                task_id = %task.id,
-                                from_status = ?old_status,
-                                to_status = ?task.status,
-                                work_type = ?work_item.work_type,
-                                "task restored to Ready after work item failed"
-                            );
-                        }
-                        TaskStatus::Waiting(WaitingReason::Summarization) => {
-                            let old_status = task.status.clone();
-                            task.status = TaskStatus::Waiting(WaitingReason::User);
-                            task.updated_at = clock.0;
-                            debug!(
-                                event = "TaskStatusRestoredAfterWorkItemFailed",
-                                task_id = %task.id,
-                                from_status = ?old_status,
-                                to_status = ?task.status,
-                                work_type = ?work_item.work_type,
-                                "task restored to Waiting(User) after work item failed"
-                            );
-                        }
-                        _ => {}
+            if work_item.work_type != WorkItemType::ExperienceCollection
+                && let Some(mut task) = tasks.iter_mut().find(|t| t.id == work_item.task_id)
+            {
+                match task.status {
+                    TaskStatus::Waiting(WaitingReason::Evaluator) => {
+                        let old_status = task.status.clone();
+                        task.status = TaskStatus::Ready;
+                        task.updated_at = clock.0;
+                        debug!(
+                            event = "TaskStatusRestoredAfterWorkItemFailed",
+                            task_id = %task.id,
+                            from_status = ?old_status,
+                            to_status = ?task.status,
+                            work_type = ?work_item.work_type,
+                            "task restored to Ready after work item failed"
+                        );
                     }
+                    TaskStatus::Waiting(WaitingReason::Summarization) => {
+                        let old_status = task.status.clone();
+                        task.status = TaskStatus::Waiting(WaitingReason::User);
+                        task.updated_at = clock.0;
+                        debug!(
+                            event = "TaskStatusRestoredAfterWorkItemFailed",
+                            task_id = %task.id,
+                            from_status = ?old_status,
+                            to_status = ?task.status,
+                            work_type = ?work_item.work_type,
+                            "task restored to Waiting(User) after work item failed"
+                        );
+                    }
+                    _ => {}
                 }
             }
 

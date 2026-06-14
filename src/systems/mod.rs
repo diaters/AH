@@ -18,8 +18,8 @@ use bevy::ecs::schedule::SystemSet;
 pub(crate) use command::command_parse_system;
 pub(crate) use contribution::{
     agent_termination_system, experience_approval_result_system,
-    experience_collection_workitem_system, experience_governance_system,
-    memory_absorption_system, memory_contribution_system,
+    experience_collection_workitem_system, experience_governance_system, memory_absorption_system,
+    memory_contribution_system,
 };
 pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system, workitem_dispatch_system};
 pub(crate) use evaluation::evaluation_trigger_system;

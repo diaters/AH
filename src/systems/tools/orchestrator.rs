@@ -11,8 +11,8 @@ use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
     ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceKindHint, ExperienceStore, FrontendKind, LongTermMemoryKind,
-    OutputContent, SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
+    ExperienceKindHint, ExperienceStore, FrontendKind, LongTermMemoryKind, OutputContent,
+    SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
     TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,

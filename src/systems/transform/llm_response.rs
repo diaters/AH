@@ -46,14 +46,15 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
 }
 
 fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::TaskId) -> bool {
-    store
-        .root_candidates_for_task(task_id)
-        .iter()
-        .any(|id| store.candidates.get(id).is_some_and(|c| c.producer_task_id == task_id))
-        || store
-            .inboxes
-            .get(&task_id)
-            .is_some_and(|inbox| !inbox.candidate_ids.is_empty())
+    store.root_candidates_for_task(task_id).iter().any(|id| {
+        store
+            .candidates
+            .get(id)
+            .is_some_and(|c| c.producer_task_id == task_id)
+    }) || store
+        .inboxes
+        .get(&task_id)
+        .is_some_and(|inbox| !inbox.candidate_ids.is_empty())
 }
 
 /// 处理 Evaluation WorkItem 的执行结果
@@ -502,7 +503,8 @@ pub fn llm_response_system(
     calling_states: Query<(Entity, &ToolCallingState)>,
     mut work_items: Query<(Entity, &mut WorkItem)>,
     experience_store: Res<ExperienceStore>,
-) {    // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
+) {
+    // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
     struct CallingStateInfo {
         entity: Entity,
         task_id: crate::domain::TaskId,
@@ -572,10 +574,8 @@ pub fn llm_response_system(
                         }
                         Ok(_) => {
                             // LLM 返回普通文本：检查是否有候选提交
-                            let had_submission = has_experience_submission(
-                                &experience_store,
-                                work_item.task_id,
-                            );
+                            let had_submission =
+                                has_experience_submission(&experience_store, work_item.task_id);
 
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 if had_submission {
@@ -958,7 +958,9 @@ pub fn tool_calling_orchestrator_system(
         if is_work_item && !task_is_waiting {
             // Check if there are any collected results for this state
             let has_results = tool_results.iter().any(|r| {
-                r.1.tool_call_id.as_ref().is_some_and(|id| state.pending_tool_call_ids.contains(id))
+                r.1.tool_call_id
+                    .as_ref()
+                    .is_some_and(|id| state.pending_tool_call_ids.contains(id))
             });
             if !has_results {
                 continue;
@@ -1029,15 +1031,15 @@ pub fn tool_calling_orchestrator_system(
                 "tool calling reached max iterations"
             );
             // ExperienceCollection WorkItem 失败不应修改原任务状态
-            if state.work_item_id.is_none() {
-                if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id) {
-                    task.last_error = Some(format!(
-                        "tool calling reached max iterations ({})",
-                        state.max_iterations
-                    ));
-                    task.status = TaskStatus::Failed(FailureReason::AgentError);
-                    task.updated_at = clock.0;
-                }
+            if state.work_item_id.is_none()
+                && let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
+            {
+                task.last_error = Some(format!(
+                    "tool calling reached max iterations ({})",
+                    state.max_iterations
+                ));
+                task.status = TaskStatus::Failed(FailureReason::AgentError);
+                task.updated_at = clock.0;
             }
             commands.entity(state_entity).despawn();
             continue;
@@ -1068,29 +1070,28 @@ pub fn tool_calling_orchestrator_system(
         commands.spawn(AgentExecutionRequestMessage { request });
 
         // Set task back to Waiting(Agent) — 但不修改 ExperienceCollection 关联的原任务状态
-        if state.work_item_id.is_none() {
-            if let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
-                && matches!(
-                    task.status,
-                    TaskStatus::Waiting(
-                        WaitingReason::ToolExecution
-                            | WaitingReason::Session { .. }
-                            | WaitingReason::SubTaskBatch { .. }
-                    )
+        if state.work_item_id.is_none()
+            && let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
+            && matches!(
+                task.status,
+                TaskStatus::Waiting(
+                    WaitingReason::ToolExecution
+                        | WaitingReason::Session { .. }
+                        | WaitingReason::SubTaskBatch { .. }
                 )
-            {
-                let old_status = task.status.clone();
-                task.status = TaskStatus::Waiting(WaitingReason::Agent);
-                task.updated_at = clock.0;
-                debug!(
-                    event = "TaskStatusTransition",
-                    task_id = %task.id,
-                    from_status = ?old_status,
-                    to_status = ?task.status,
-                    reason = "tool_results_collected",
-                    "task waiting for follow-up LLM response"
-                );
-            }
+            )
+        {
+            let old_status = task.status.clone();
+            task.status = TaskStatus::Waiting(WaitingReason::Agent);
+            task.updated_at = clock.0;
+            debug!(
+                event = "TaskStatusTransition",
+                task_id = %task.id,
+                from_status = ?old_status,
+                to_status = ?task.status,
+                reason = "tool_results_collected",
+                "task waiting for follow-up LLM response"
+            );
         }
     }
 }
