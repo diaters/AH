@@ -40,3 +40,13 @@ description = "任务评估专家，负责评估任务执行状态"
 
 [agent.tools]
 default_permission = "Deny"
+
+[[agent]]
+name = "collector"
+model = "gpt-4.1-mini"
+tags = ["collect", "experience"]
+description = "经验收敛专家，负责从任务终态材料中提炼经验候选"
+
+[agent.tools]
+default_permission = "Deny"
+submit_experience_candidate = "Allow"
