@@ -61,6 +61,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   - default Agent 的 Knowledge 候选 → 生成 `IncubationProposal`
   - Executable 候选 → 用户确认（`ToolConfirmationRequestMessage`）
 - `experience_approval_result_system` 处理用户确认响应，更新候选状态
+- 经验收集已 WorkItem 化，由持久 `collector` Agent 执行，复用统一派发与结果回收机制
+- `submit_experience_candidate` 工具直接将候选写入 `ExperienceStore`
+- 经验收集与原 TaskScoped Agent 生命周期彻底解耦
 
 ### 待完善
 
@@ -74,6 +77,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Planning WorkItem` 已删除，不再作为未来预留项保留
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
+- `ExperienceCollectionTracker` 与 task-scoped agent 保活逻辑已移除，经验收集改为独立 WorkItem
 
 ## 当前架构结论
 
