@@ -166,3 +166,91 @@ fn experience_collection_context_excludes_original_system_prompt() {
     }];
     assert_eq!(conversation.len(), 1);
 }
+
+#[test]
+fn experience_collection_completion_uses_governing_agent_not_collector() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let governing_agent_id = uuid::Uuid::new_v4();
+    let collector_id = uuid::Uuid::new_v4();
+
+    app.world_mut().spawn(harness::Agent {
+        id: governing_agent_id,
+        profile: harness::AgentProfile {
+            name: "persistent-worker".to_string(),
+            model: "test".to_string(),
+        },
+        capabilities: harness::AgentCapabilities {
+            tags: vec![],
+            description: "worker".to_string(),
+        },
+        kind: harness::AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: harness::AgentToolPermissions::default(),
+    });
+
+    let candidate = harness::ExperienceCandidate::knowledge(
+        uuid::Uuid::new_v4(),
+        task_id,
+        collector_id,
+        "top-level fact".to_string(),
+        "content".to_string(),
+        harness::LongTermMemoryKind::Fact,
+    );
+    let candidate_id = candidate.candidate_id;
+    app.world_mut()
+        .resource_mut::<harness::ExperienceStore>()
+        .stage_root_candidate(candidate);
+
+    app.world_mut().spawn(harness::ExperienceCollectionCompletedMessage {
+        task_id,
+        parent_task_id: None,
+        agent_id: collector_id,
+        governing_agent_id,
+    });
+
+    app.update();
+
+    // 验证候选的 governing_agent_id 被设置为原任务治理者，而非 collector。
+    // experience_governance_system 会在治理阶段将 request.agent_id 写入 governing_agent_id。
+    let store = app.world().resource::<harness::ExperienceStore>();
+    let candidate = store.candidates.get(&candidate_id).unwrap();
+    assert_eq!(
+        candidate.governing_agent_id,
+        Some(governing_agent_id),
+        "candidate governing_agent_id must be set to the task delegate, not collector"
+    );
+}
+
+#[test]
+fn child_task_experience_still_aggregates_into_parent_inbox() {
+    use harness::{ExperienceStore, TaskId};
+
+    let mut store = ExperienceStore::default();
+    let parent_task_id: TaskId = uuid::Uuid::new_v4();
+    let child_task_id: TaskId = uuid::Uuid::new_v4();
+    let parent_agent_id = uuid::Uuid::new_v4();
+
+    let child_candidate = harness::ExperienceCandidate::knowledge(
+        uuid::Uuid::new_v4(),
+        child_task_id,
+        uuid::Uuid::new_v4(),
+        "child fact".to_string(),
+        "content".to_string(),
+        harness::LongTermMemoryKind::Fact,
+    );
+    store.queue_for_parent(parent_task_id, parent_agent_id, child_candidate);
+
+    let ids = store.aggregate_inbox_for_task(parent_task_id);
+    assert!(!ids.is_empty());
+    assert_eq!(
+        store.candidates.get(&ids[0]).unwrap().status,
+        harness::ExperienceCandidateStatus::Aggregated
+    );
+}
