@@ -14,6 +14,7 @@
 | `plans/2026-06-09-space-module-convergence.md` | Space 模块收敛 | 活跃 |
 | `plans/2026-06-10-memory-convergence-implementation.md` | 记忆系统收敛 | 活跃 |
 | `plans/2026-06-11-experience-candidate-governance.md` | 经验候选治理与可执行记忆实施 | 活跃 |
+| `plans/2026-06-15-experience-governance-writeback.md` | 经验治理统一写回与任务级孵化实施 | 活跃 |
 
 ### 活跃规格
 
