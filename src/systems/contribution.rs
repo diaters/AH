@@ -4,11 +4,13 @@ use tracing::{debug, warn};
 use crate::domain::{
     Agent, ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
     ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
-    ExperienceGovernanceRequestMessage, ExperienceKindHint, IncubationProposal,
-    IncubationProposalStatus, LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry,
-    ShortTermMemory, SpaceToolRegistry, Task, TaskSummary, TaskTerminatedMessage,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, WorkItem,
+    ExperienceConfirmationPolicy, ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage,
+    ExperienceKindHint, ExperienceRiskLevel, ExperienceWritebackDestination,
+    ExperienceWritebackRequestMessage, IncubationProposalStatus, LongTermMemory,
+    LongTermMemoryEntry, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
+    SpaceToolRegistry, Task, TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 
@@ -294,8 +296,8 @@ pub(crate) fn experience_collection_completion_system(
                 "aggregated child candidates into parent inbox"
             );
         } else {
-            // 顶层：将 root 候选推进到 GovernancePending 并触发治理。
-            let ids = store.promote_root_candidates_to_governance(msg.task_id);
+            // 顶层：统一收束 root 候选与子层汇聚候选，推进到 GovernancePending 并触发治理。
+            let ids = store.collect_top_level_governance_candidates(msg.task_id);
             if !ids.is_empty() {
                 commands.spawn(ExperienceGovernanceRequestMessage {
                     task_id: msg.task_id,
@@ -316,15 +318,13 @@ pub(crate) fn experience_collection_completion_system(
 }
 
 /// 经验治理系统：顶层唯一最终分流点。
-#[allow(clippy::too_many_arguments)]
+///
+/// 治理只负责"决定去向"，产出治理决议。不直接写盘。
+/// 决议产出后：若无需确认则进入 WritebackPending，若需确认则进入 NeedsUserApproval。
 pub(crate) fn experience_governance_system(
     mut commands: Commands,
     mut store: ResMut<crate::domain::ExperienceStore>,
-    mut long_memories: Query<&mut LongTermMemory>,
     agents: Query<&Agent>,
-    mut service: ResMut<LongTermMemoryService>,
-    mut upgrade_queue: ResMut<crate::domain::SharedKnowledgeUpgradeQueue>,
-    upgrade_service: Res<crate::infrastructure::memory::SharedKnowledgeUpgradeService>,
     requests: Query<(Entity, &ExperienceGovernanceRequestMessage)>,
 ) {
     for (entity, request) in &requests {
@@ -369,7 +369,7 @@ pub(crate) fn experience_governance_system(
                 None => continue,
             };
 
-            match candidate.kind_hint {
+            let decision = match candidate.kind_hint {
                 ExperienceKindHint::Discard => {
                     if let Some(c) = store.candidates.get_mut(candidate_id) {
                         c.status = ExperienceCandidateStatus::Rejected;
@@ -380,47 +380,105 @@ pub(crate) fn experience_governance_system(
                         task_id = %request.task_id,
                         "discarded candidate"
                     );
+                    continue;
                 }
                 ExperienceKindHint::SharedKnowledge => {
-                    upgrade_queue
-                        .candidates
-                        .push(crate::domain::SharedKnowledgeUpgradeCandidate {
-                            candidate_id: uuid::Uuid::new_v4(),
-                            content: candidate.payload.content().unwrap_or_default(),
-                            kind: crate::domain::LongTermMemoryKind::Fact,
-                            scope_tags: Vec::new(),
-                            source_candidate_id: candidate.candidate_id,
-                            source_agent_id: candidate.producer_agent_id,
-                            source_task_id: candidate.producer_task_id,
-                            validation_status: crate::domain::KnowledgeValidationStatus::Candidate,
-                            created_at: chrono::Utc::now(),
-                        });
-                    match upgrade_service.persist(&upgrade_queue) {
-                        Ok(_) => {
-                            if let Some(c) = store.candidates.get_mut(candidate_id) {
-                                c.status = ExperienceCandidateStatus::Persisted;
-                            }
-                            debug!(
-                                event = "ExperienceGovernanceSharedKnowledgeQueued",
-                                candidate_id = %candidate_id,
-                                task_id = %request.task_id,
-                                "queued and persisted shared knowledge upgrade candidate"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                event = "ExperienceWritebackFailed",
-                                candidate_id = %candidate_id,
-                                task_id = %request.task_id,
-                                target = "SharedKnowledgeUpgradeQueue",
-                                error = %e,
-                                "failed to persist shared knowledge upgrade candidate"
-                            );
-                        }
+                    let confirmation_policy = if candidate.risk_level == ExperienceRiskLevel::High {
+                        ExperienceConfirmationPolicy::User
+                    } else {
+                        ExperienceConfirmationPolicy::None
+                    };
+                    ExperienceGovernanceDecision {
+                        candidate_id: *candidate_id,
+                        destination: ExperienceWritebackDestination::SharedKnowledgeUpgrade,
+                        confirmation_policy,
+                        final_risk_level: candidate.risk_level,
+                        risk_overridden: false,
+                        decision_rationale: "shared knowledge candidate".to_string(),
                     }
                 }
                 ExperienceKindHint::Executable => {
                     if is_default {
+                        ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::IncubationProposal,
+                            confirmation_policy: ExperienceConfirmationPolicy::User,
+                            final_risk_level: candidate.risk_level,
+                            risk_overridden: false,
+                            decision_rationale: "default agent executable -> incubation"
+                                .to_string(),
+                        }
+                    } else {
+                        ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::SkillPackage,
+                            confirmation_policy: ExperienceConfirmationPolicy::User,
+                            final_risk_level: candidate.risk_level,
+                            risk_overridden: false,
+                            decision_rationale: "executable requires user confirmation".to_string(),
+                        }
+                    }
+                }
+                ExperienceKindHint::Knowledge => {
+                    if is_default {
+                        ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::IncubationProposal,
+                            confirmation_policy: ExperienceConfirmationPolicy::User,
+                            final_risk_level: candidate.risk_level,
+                            risk_overridden: false,
+                            decision_rationale: "default agent knowledge -> incubation".to_string(),
+                        }
+                    } else {
+                        let confirmation_policy =
+                            if candidate.risk_level == ExperienceRiskLevel::High {
+                                ExperienceConfirmationPolicy::User
+                            } else {
+                                ExperienceConfirmationPolicy::None
+                            };
+                        ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::LongTermMemory,
+                            confirmation_policy,
+                            final_risk_level: candidate.risk_level,
+                            risk_overridden: false,
+                            decision_rationale: "persistent agent private knowledge".to_string(),
+                        }
+                    }
+                }
+            };
+
+            // 标记候选为 GovernanceResolved
+            if let Some(c) = store.candidates.get_mut(candidate_id) {
+                c.status = ExperienceCandidateStatus::GovernanceResolved;
+            }
+
+            debug!(
+                event = "ExperienceGovernanceResolved",
+                candidate_id = %candidate_id,
+                task_id = %request.task_id,
+                destination = ?decision.destination,
+                confirmation_policy = ?decision.confirmation_policy,
+                "governance decision made"
+            );
+
+            match decision.confirmation_policy {
+                ExperienceConfirmationPolicy::None => {
+                    // 无需确认，直接进入 WritebackPending
+                    if let Some(c) = store.candidates.get_mut(candidate_id) {
+                        c.status = ExperienceCandidateStatus::WritebackPending;
+                    }
+                    commands.spawn(ExperienceWritebackRequestMessage {
+                        decision: decision.clone(),
+                    });
+                }
+                ExperienceConfirmationPolicy::User => {
+                    // 需要用户确认
+                    if let Some(c) = store.candidates.get_mut(candidate_id) {
+                        c.status = ExperienceCandidateStatus::NeedsUserApproval;
+                    }
+                    // 对于 IncubationProposal 目标，生成 proposal
+                    if decision.destination == ExperienceWritebackDestination::IncubationProposal {
                         spawn_incubation_confirmation(
                             &mut commands,
                             &mut store,
@@ -429,9 +487,6 @@ pub(crate) fn experience_governance_system(
                             candidate_id,
                         );
                     } else {
-                        if let Some(c) = store.candidates.get_mut(candidate_id) {
-                            c.status = ExperienceCandidateStatus::NeedsUserApproval;
-                        }
                         spawn_experience_confirmation(
                             &mut commands,
                             &mut store,
@@ -440,70 +495,244 @@ pub(crate) fn experience_governance_system(
                             &candidate,
                         );
                     }
-                }
-                ExperienceKindHint::Knowledge => {
-                    if is_default {
-                        spawn_incubation_confirmation(
-                            &mut commands,
-                            &mut store,
-                            request,
-                            agent,
-                            candidate_id,
-                        );
-                    } else {
-                        let mut persisted = false;
-                        if let Some(mut entry) = candidate.as_long_term_memory_entry() {
-                            entry.source_candidate_id = Some(candidate.candidate_id);
-                            entry.source_task_id = Some(candidate.producer_task_id);
-                            entry.agent_id = Some(candidate.producer_agent_id);
-
-                            if let Some(mut memory) = long_memories
-                                .iter_mut()
-                                .find(|lm| lm.agent_name.as_deref() == Some(&agent.profile.name))
-                            {
-                                match service.add_entry(&mut memory, entry) {
-                                    Ok(_) => persisted = true,
-                                    Err(e) => {
-                                        warn!(
-                                            event = "ExperienceWritebackFailed",
-                                            candidate_id = %candidate_id,
-                                            task_id = %request.task_id,
-                                            target = "LongTermMemory",
-                                            error = %e,
-                                            "failed to auto-persist knowledge candidate"
-                                        );
-                                    }
-                                }
-                            } else {
-                                warn!(
-                                    event = "ExperienceWritebackFailed",
-                                    candidate_id = %candidate_id,
-                                    task_id = %request.task_id,
-                                    target = "LongTermMemory",
-                                    reason = "agent_memory_not_found",
-                                    "no LongTermMemory component found for governing agent"
-                                );
-                            }
-                        }
-                        if persisted {
-                            if let Some(c) = store.candidates.get_mut(candidate_id) {
-                                c.status = ExperienceCandidateStatus::Persisted;
-                            }
-                            debug!(
-                                event = "ExperienceGovernancePersisted",
-                                candidate_id = %candidate_id,
-                                task_id = %request.task_id,
-                                agent_name = %agent.profile.name,
-                                "persisted knowledge candidate to long-term memory"
-                            );
-                        }
-                    }
+                    // 暂存决策，等确认后使用
+                    commands.spawn(decision);
                 }
             }
         }
 
         commands.entity(entity).despawn();
     }
+}
+
+/// 统一写回执行系统：根据治理决议执行正式写回。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn experience_writeback_system(
+    mut commands: Commands,
+    mut store: ResMut<crate::domain::ExperienceStore>,
+    mut long_memories: Query<&mut LongTermMemory>,
+    agents: Query<&Agent>,
+    mut service: ResMut<LongTermMemoryService>,
+    asset_service: Res<crate::infrastructure::assets::AgentAssetService>,
+    mut upgrade_queue: ResMut<crate::domain::SharedKnowledgeUpgradeQueue>,
+    upgrade_service: Res<crate::infrastructure::memory::SharedKnowledgeUpgradeService>,
+    proposal_store: Res<crate::infrastructure::incubation::proposal_store::IncubationProposalStore>,
+    agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
+    requests: Query<(Entity, &ExperienceWritebackRequestMessage)>,
+) {
+    for (entity, request) in &requests {
+        let decision = &request.decision;
+        let candidate_id = decision.candidate_id;
+
+        let candidate = match store.candidates.get(&candidate_id).cloned() {
+            Some(c) => c,
+            None => {
+                debug!(
+                    event = "ExperienceWritebackCandidateNotFound",
+                    candidate_id = %candidate_id,
+                    "candidate not found for writeback, skipping"
+                );
+                commands.entity(entity).despawn();
+                continue;
+            }
+        };
+
+        // 标记为 WritebackPending（若尚未被标记）
+        if let Some(c) = store.candidates.get_mut(&candidate_id)
+            && c.status != ExperienceCandidateStatus::WritebackPending
+        {
+            c.status = ExperienceCandidateStatus::WritebackPending;
+        }
+
+        debug!(
+            event = "ExperienceWritebackStarted",
+            candidate_id = %candidate_id,
+            destination = ?decision.destination,
+            "starting experience writeback"
+        );
+
+        let result = match decision.destination {
+            ExperienceWritebackDestination::LongTermMemory => {
+                writeback_to_long_term_memory(&candidate, &agents, &mut long_memories, &mut service)
+            }
+            ExperienceWritebackDestination::SkillPackage => {
+                writeback_to_skill_package(&candidate, &agents, &asset_service)
+            }
+            ExperienceWritebackDestination::SharedKnowledgeUpgrade => {
+                writeback_to_shared_knowledge_upgrade(
+                    &candidate,
+                    &mut upgrade_queue,
+                    &upgrade_service,
+                )
+            }
+            ExperienceWritebackDestination::IncubationProposal => {
+                // IncubationProposal 写回：执行孵化，创建新 Agent 记录
+                writeback_incubation_proposal(&candidate, &store, &proposal_store, &agent_registry)
+            }
+            ExperienceWritebackDestination::Rejected => Ok(()),
+        };
+
+        match result {
+            Ok(_) => {
+                if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                    c.status = ExperienceCandidateStatus::Persisted;
+                }
+                debug!(
+                    event = "ExperienceWritebackSucceeded",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    "experience writeback succeeded"
+                );
+            }
+            Err(error) => {
+                if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                    c.status = ExperienceCandidateStatus::WritebackFailed;
+                }
+                warn!(
+                    event = "ExperienceWritebackFailed",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    error = %error,
+                    "experience writeback failed"
+                );
+            }
+        }
+
+        commands.entity(entity).despawn();
+    }
+}
+
+fn writeback_to_long_term_memory(
+    candidate: &crate::domain::ExperienceCandidate,
+    agents: &Query<&Agent>,
+    long_memories: &mut Query<&mut LongTermMemory>,
+    service: &mut LongTermMemoryService,
+) -> Result<(), String> {
+    let governing_agent_id = candidate
+        .governing_agent_id
+        .ok_or_else(|| "no governing_agent_id".to_string())?;
+    let agent = agents
+        .iter()
+        .find(|a| a.id == governing_agent_id)
+        .ok_or_else(|| format!("agent {} not found", governing_agent_id))?;
+
+    let mut entry = candidate
+        .as_long_term_memory_entry()
+        .ok_or_else(|| "candidate cannot be converted to LTM entry".to_string())?;
+    entry.source_candidate_id = Some(candidate.candidate_id);
+    entry.source_task_id = Some(candidate.producer_task_id);
+    entry.agent_id = Some(candidate.producer_agent_id);
+
+    let mut memory = long_memories
+        .iter_mut()
+        .find(|lm| lm.agent_name.as_deref() == Some(&agent.profile.name))
+        .ok_or_else(|| {
+            format!(
+                "no LongTermMemory component found for agent {}",
+                agent.profile.name
+            )
+        })?;
+
+    service
+        .add_entry(&mut memory, entry)
+        .map_err(|e| e.to_string())
+}
+
+fn writeback_to_skill_package(
+    candidate: &crate::domain::ExperienceCandidate,
+    agents: &Query<&Agent>,
+    asset_service: &crate::infrastructure::assets::AgentAssetService,
+) -> Result<(), String> {
+    let governing_agent_id = candidate
+        .governing_agent_id
+        .ok_or_else(|| "no governing_agent_id".to_string())?;
+    let agent = agents
+        .iter()
+        .find(|a| a.id == governing_agent_id)
+        .ok_or_else(|| format!("agent {} not found", governing_agent_id))?;
+
+    let crate::domain::ExperienceCandidatePayload::Executable {
+        intent,
+        when_to_use,
+        asset_refs,
+    } = &candidate.payload
+    else {
+        return Err("candidate payload is not executable".to_string());
+    };
+
+    let draft = crate::infrastructure::assets::SkillPackageDraft {
+        skill_id: format!("{}", candidate.candidate_id),
+        title: candidate.title.clone(),
+        problem: intent.clone(),
+        when_to_use: when_to_use.clone(),
+        steps: "参见 skill.md 与 scripts/ 目录".to_string(),
+        asset_refs: asset_refs.clone(),
+        dependency_refs: candidate.dependency_refs.clone(),
+        risks: candidate.risk_reason.clone(),
+        source_task_id: Some(candidate.producer_task_id),
+        source_candidate_id: Some(candidate.candidate_id),
+    };
+    asset_service
+        .persist_skill_package(&agent.profile.name, &draft)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn writeback_to_shared_knowledge_upgrade(
+    candidate: &crate::domain::ExperienceCandidate,
+    upgrade_queue: &mut crate::domain::SharedKnowledgeUpgradeQueue,
+    upgrade_service: &crate::infrastructure::memory::SharedKnowledgeUpgradeService,
+) -> Result<(), String> {
+    upgrade_queue
+        .candidates
+        .push(crate::domain::SharedKnowledgeUpgradeCandidate {
+            candidate_id: uuid::Uuid::new_v4(),
+            content: candidate.payload.content().unwrap_or_default(),
+            kind: crate::domain::LongTermMemoryKind::Fact,
+            scope_tags: Vec::new(),
+            source_candidate_id: candidate.candidate_id,
+            source_agent_id: candidate.producer_agent_id,
+            source_task_id: candidate.producer_task_id,
+            validation_status: crate::domain::KnowledgeValidationStatus::Candidate,
+            created_at: chrono::Utc::now(),
+        });
+    upgrade_service
+        .persist(upgrade_queue)
+        .map_err(|e| e.to_string())
+}
+
+fn writeback_incubation_proposal(
+    candidate: &crate::domain::ExperienceCandidate,
+    store: &crate::domain::ExperienceStore,
+    proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
+    agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
+) -> Result<(), String> {
+    // 查找任务级 proposal
+    let proposal = store
+        .proposals
+        .get(&candidate.producer_task_id)
+        .ok_or_else(|| {
+            format!(
+                "no IncubationProposal found for task {}",
+                candidate.producer_task_id
+            )
+        })?;
+
+    // 持久化 proposal
+    proposal_store
+        .persist(proposal)
+        .map_err(|e| e.to_string())?;
+
+    // 创建新 Agent 记录
+    let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
+        profile: proposal.proposed_agent_profile.clone(),
+        tags: vec!["incubated".to_string()],
+        description: proposal.incubation_rationale.clone(),
+        tools: vec![],
+    };
+    agent_registry.append(&record).map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 fn is_default_agent(agent: &Agent) -> bool {
@@ -554,45 +783,29 @@ fn spawn_incubation_confirmation(
     }
     let candidate = store.candidates.get(candidate_id).cloned();
     if let Some(candidate) = candidate {
-        let proposal_id = uuid::Uuid::new_v4();
-        let (knowledge_ids, executable_ids, shared_ids) = match candidate.kind_hint {
-            ExperienceKindHint::Knowledge => (vec![*candidate_id], vec![], vec![]),
-            ExperienceKindHint::Executable => (vec![], vec![*candidate_id], vec![]),
-            ExperienceKindHint::SharedKnowledge => (vec![], vec![], vec![*candidate_id]),
-            ExperienceKindHint::Discard => (vec![], vec![], vec![]),
-        };
-
-        commands.spawn(IncubationProposal {
-            proposal_id,
-            source_agent_id: request.agent_id,
-            source_task_id: request.task_id,
-            proposed_agent_profile: crate::domain::AgentProfile {
-                name: format!("incubated-{}", proposal_id),
+        // 合并到任务级提案（查找已有或新建）
+        store.merge_into_proposal(
+            request.task_id,
+            request.agent_id,
+            crate::domain::AgentProfile {
+                name: format!("incubated-{}", request.task_id),
                 model: agent.profile.model.clone(),
             },
-            knowledge_candidate_ids: knowledge_ids,
-            executable_candidate_ids: executable_ids,
-            shared_knowledge_candidate_ids: shared_ids,
-            status: IncubationProposalStatus::Proposed,
-            created_at: chrono::Utc::now(),
-        });
+            &candidate,
+        );
 
         spawn_experience_confirmation(commands, store, request, candidate_id, &candidate);
     }
 }
 
-/// 经验确认结果系统：处理用户对经验候选的确认，触发最终写回。
-#[allow(clippy::too_many_arguments)]
+/// 经验确认结果系统：处理用户对经验候选的确认，触发统一写回。
+///
+/// 审批只负责"放行"，不直接写盘。批准后将候选置为 WritebackPending 并
+/// 查找之前暂存的治理决议，生成写回请求。
 pub(crate) fn experience_approval_result_system(
     mut commands: Commands,
     mut store: ResMut<crate::domain::ExperienceStore>,
-    mut long_memories: Query<&mut LongTermMemory>,
-    agents: Query<&Agent>,
-    mut service: ResMut<LongTermMemoryService>,
-    asset_service: Res<crate::infrastructure::assets::AgentAssetService>,
-    mut upgrade_queue: ResMut<crate::domain::SharedKnowledgeUpgradeQueue>,
-    upgrade_service: Res<crate::infrastructure::memory::SharedKnowledgeUpgradeService>,
-    mut proposals: Query<&mut IncubationProposal>,
+    pending_decisions: Query<(Entity, &ExperienceGovernanceDecision)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
 ) {
     for (entity, response) in &responses {
@@ -612,154 +825,84 @@ pub(crate) fn experience_approval_result_system(
             }
         };
 
-        let approved = response.selected_option != "deny";
+        let approved = matches!(
+            response.selected_option.as_str(),
+            "allow_once" | "allow_always" | "approve"
+        );
 
         if approved {
-            let candidate = match store.candidates.get(&candidate_id).cloned() {
-                Some(c) => c,
-                None => {
-                    commands.entity(entity).despawn();
-                    continue;
-                }
-            };
+            // 查找暂存的治理决议
+            let decision = pending_decisions
+                .iter()
+                .find(|(_, d)| d.candidate_id == candidate_id)
+                .map(|(e, d)| (e, d.clone()));
 
-            let is_default = candidate
-                .governing_agent_id
-                .and_then(|id| agents.iter().find(|a| a.id == id))
-                .map(is_default_agent)
-                .unwrap_or(false);
-
-            match candidate.kind_hint {
-                ExperienceKindHint::Knowledge => {
-                    if is_default {
-                        if let Some(mut proposal) = proposals
-                            .iter_mut()
-                            .find(|p| p.knowledge_candidate_ids.contains(&candidate.candidate_id))
-                        {
-                            proposal.status = IncubationProposalStatus::Approved;
-                        }
-                        if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
-                            c.status = ExperienceCandidateStatus::Persisted;
-                        }
-                    } else if let Some(mut entry) = candidate.as_long_term_memory_entry() {
-                        entry.source_candidate_id = Some(candidate.candidate_id);
-                        entry.source_task_id = Some(candidate.producer_task_id);
-                        entry.agent_id = Some(candidate.producer_agent_id);
-
-                        let mut persisted = false;
-                        let producer_agent =
-                            agents.iter().find(|a| a.id == candidate.producer_agent_id);
-                        if let Some(agent) = producer_agent
-                            && let Some(mut memory) = long_memories
-                                .iter_mut()
-                                .find(|lm| lm.agent_name.as_deref() == Some(&agent.profile.name))
-                        {
-                            match service.add_entry(&mut memory, entry) {
-                                Ok(_) => persisted = true,
-                                Err(e) => {
-                                    warn!(
-                                        event = "ExperienceWritebackFailed",
-                                        candidate_id = %candidate.candidate_id,
-                                        target = "LongTermMemory",
-                                        error = %e,
-                                        "failed to persist knowledge candidate"
-                                    );
-                                }
-                            }
-                        }
-                        if persisted
-                            && let Some(c) = store.candidates.get_mut(&candidate.candidate_id)
-                        {
-                            c.status = ExperienceCandidateStatus::Persisted;
-                        }
-                    }
+            if let Some((decision_entity, decision)) = decision {
+                // 标记候选为 WritebackPending
+                if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                    c.status = ExperienceCandidateStatus::WritebackPending;
                 }
-                ExperienceKindHint::Executable => {
-                    if is_default {
-                        if let Some(mut proposal) = proposals
-                            .iter_mut()
-                            .find(|p| p.executable_candidate_ids.contains(&candidate.candidate_id))
-                        {
-                            proposal.status = IncubationProposalStatus::Approved;
-                        }
-                        if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
-                            c.status = ExperienceCandidateStatus::Persisted;
-                        }
-                    } else if let Some(agent) =
-                        agents.iter().find(|a| a.id == candidate.producer_agent_id)
-                        && let crate::domain::ExperienceCandidatePayload::Executable {
-                            intent,
-                            when_to_use,
-                            asset_refs,
-                        } = &candidate.payload
-                    {
-                        let draft = crate::infrastructure::assets::SkillPackageDraft {
-                            skill_id: format!("{}", candidate.candidate_id),
-                            title: candidate.title.clone(),
-                            problem: intent.clone(),
-                            when_to_use: when_to_use.clone(),
-                            steps: "参见 skill.md 与 scripts/ 目录".to_string(),
-                            asset_refs: asset_refs.clone(),
-                            dependency_refs: candidate.dependency_refs.clone(),
-                            risks: "首版实现，需人工复核".to_string(),
-                            source_task_id: Some(candidate.producer_task_id),
-                            source_candidate_id: Some(candidate.candidate_id),
-                        };
-                        match asset_service.persist_skill_package(&agent.profile.name, &draft) {
-                            Ok(_) => {
-                                if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
-                                    c.status = ExperienceCandidateStatus::Persisted;
-                                }
-                            }
-                            Err(e) => {
-                                warn!(
-                                    event = "ExperienceWritebackFailed",
-                                    candidate_id = %candidate.candidate_id,
-                                    target = "SkillPackage",
-                                    error = %e,
-                                    "failed to persist skill package"
-                                );
-                            }
-                        }
-                    }
-                }
-                ExperienceKindHint::SharedKnowledge => {
-                    if let Some(existing) = upgrade_queue
+
+                // 对于 IncubationProposal 目标，更新 store 中 proposal 状态
+                if decision.destination == ExperienceWritebackDestination::IncubationProposal {
+                    let task_id = store
                         .candidates
-                        .iter_mut()
-                        .find(|u| u.source_candidate_id == candidate.candidate_id)
+                        .get(&candidate_id)
+                        .map(|c| c.producer_task_id);
+                    if let Some(task_id) = task_id
+                        && let Some(proposal) = store.proposals.get_mut(&task_id)
                     {
-                        existing.validation_status =
-                            crate::domain::KnowledgeValidationStatus::Approved;
-                    }
-                    match upgrade_service.persist(&upgrade_queue) {
-                        Ok(_) => {
-                            if let Some(c) = store.candidates.get_mut(&candidate.candidate_id) {
-                                c.status = ExperienceCandidateStatus::Persisted;
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                event = "ExperienceWritebackFailed",
-                                candidate_id = %candidate.candidate_id,
-                                target = "SharedKnowledgeUpgradeQueue",
-                                error = %e,
-                                "failed to persist shared knowledge approval"
-                            );
-                        }
+                        proposal.status = IncubationProposalStatus::Approved;
+                        proposal.updated_at = chrono::Utc::now();
                     }
                 }
-                ExperienceKindHint::Discard => {}
-            }
 
-            debug!(
-                event = "ExperienceCandidateFinalWriteback",
-                candidate_id = %candidate.candidate_id,
-                kind = ?candidate.kind_hint,
-                is_default = is_default,
-                "finalized experience candidate after user approval"
-            );
+                // 生成写回请求
+                commands.spawn(ExperienceWritebackRequestMessage {
+                    decision: decision.clone(),
+                });
+                commands.entity(decision_entity).despawn();
+
+                debug!(
+                    event = "ExperienceApprovalResolved",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    "approval resolved, spawning writeback request"
+                );
+            } else {
+                // 没有找到暂存的决议（可能是旧路径），直接标记
+                if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                    c.status = ExperienceCandidateStatus::WritebackPending;
+                }
+                debug!(
+                    event = "ExperienceApprovalNoDecision",
+                    candidate_id = %candidate_id,
+                    "approved but no pending governance decision found"
+                );
+            }
         } else {
+            // 用户拒绝
+            if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                c.status = ExperienceCandidateStatus::Rejected;
+            }
+            // 清理暂存的决议
+            if let Some((decision_entity, _)) = pending_decisions
+                .iter()
+                .find(|(_, d)| d.candidate_id == candidate_id)
+            {
+                commands.entity(decision_entity).despawn();
+            }
+            // 拒绝孵化提案中的相关候选
+            let task_id = store
+                .candidates
+                .get(&candidate_id)
+                .map(|c| c.producer_task_id);
+            if let Some(task_id) = task_id
+                && let Some(proposal) = store.proposals.get_mut(&task_id)
+            {
+                proposal.status = IncubationProposalStatus::Rejected;
+                proposal.updated_at = chrono::Utc::now();
+            }
             debug!(
                 event = "ExperienceCandidateRejected",
                 request_id = %response.request_id,
@@ -905,6 +1048,10 @@ mod tests {
             dependency_refs: vec![],
             status: ExperienceCandidateStatus::NeedsUserApproval,
             governing_agent_id: None,
+            risk_level: crate::domain::ExperienceRiskLevel::default(),
+            risk_reason: String::new(),
+            suggested_confirmation: crate::domain::ExperienceConfirmationPolicy::default(),
+            derived_from_candidate_ids: vec![],
         };
         let candidate_id = candidate.candidate_id;
         store.stage_root_candidate(candidate);

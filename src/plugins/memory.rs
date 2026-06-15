@@ -21,6 +21,13 @@ impl Plugin for MemoryPlugin {
         // 注册长期记忆服务 Resource
         app.insert_resource(LongTermMemoryService::default_json());
         app.insert_resource(AgentAssetService::default_path());
+        app.insert_resource(
+            crate::infrastructure::incubation::proposal_store::IncubationProposalStore::default_path(),
+        );
+        app.insert_resource(
+            crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry::default_path(
+            ),
+        );
 
         app.add_systems(
             Update,

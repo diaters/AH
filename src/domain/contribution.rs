@@ -72,10 +72,51 @@ pub enum ExperienceCandidateStatus {
     InInbox,
     Aggregated,
     GovernancePending,
+    GovernanceResolved,
     NeedsUserApproval,
+    WritebackPending,
     Approved,
     Rejected,
     Persisted,
+    WritebackFailed,
+}
+
+/// 经验候选风险级别：由候选产生阶段的 LLM 初判。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ExperienceRiskLevel {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
+/// 经验候选确认策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ExperienceConfirmationPolicy {
+    #[default]
+    None,
+    User,
+}
+
+/// 经验写回目标：治理决议后的唯一最终去向。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExperienceWritebackDestination {
+    LongTermMemory,
+    SkillPackage,
+    SharedKnowledgeUpgrade,
+    IncubationProposal,
+    Rejected,
+}
+
+/// 经验治理决议：顶层治理对单个候选给出的最终判定。
+#[derive(Debug, Clone, Component, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExperienceGovernanceDecision {
+    pub candidate_id: uuid::Uuid,
+    pub destination: ExperienceWritebackDestination,
+    pub confirmation_policy: ExperienceConfirmationPolicy,
+    pub final_risk_level: ExperienceRiskLevel,
+    pub risk_overridden: bool,
+    pub decision_rationale: String,
 }
 
 /// 经验候选载荷。
@@ -115,6 +156,14 @@ pub struct ExperienceCandidate {
     pub status: ExperienceCandidateStatus,
     /// 最终治理该候选的顶层 Agent ID，用于确认后的写回路由。
     pub governing_agent_id: Option<AgentId>,
+    /// 候选产生阶段的风险初判。
+    pub risk_level: ExperienceRiskLevel,
+    /// 风险判断理由。
+    pub risk_reason: String,
+    /// 候选产生阶段建议的确认策略。
+    pub suggested_confirmation: ExperienceConfirmationPolicy,
+    /// 若此候选由顶层基于多个候选重写出，记录来源候选 ID。
+    pub derived_from_candidate_ids: Vec<uuid::Uuid>,
 }
 
 impl ExperienceCandidate {
@@ -140,6 +189,10 @@ impl ExperienceCandidate {
             dependency_refs: Vec::new(),
             status: ExperienceCandidateStatus::Submitted,
             governing_agent_id: None,
+            risk_level: ExperienceRiskLevel::default(),
+            risk_reason: String::new(),
+            suggested_confirmation: ExperienceConfirmationPolicy::default(),
+            derived_from_candidate_ids: Vec::new(),
         }
     }
 
@@ -195,6 +248,8 @@ pub struct ExperienceStore {
     pub inboxes: std::collections::HashMap<TaskId, ExperienceInbox>,
     /// 顶层候选（无父任务的 Agent 自身产生的候选）
     pub root_candidates: std::collections::HashMap<TaskId, Vec<uuid::Uuid>>,
+    /// 任务级孵化提案：同一任务最多一个活跃 proposal。
+    pub proposals: std::collections::HashMap<TaskId, IncubationProposal>,
     /// 审批请求 ID 到候选 ID 的精确绑定。
     approval_bindings: std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
 }
@@ -281,6 +336,32 @@ impl ExperienceStore {
         ids
     }
 
+    /// 统一收束顶层治理输入：合并顶层自身候选与子层汇聚候选。
+    ///
+    /// 顶层治理只消费这一份统一输入，不再分别读取两个存储区域。
+    pub fn collect_top_level_governance_candidates(&mut self, task_id: TaskId) -> Vec<uuid::Uuid> {
+        let mut ids = self.root_candidates_for_task(task_id);
+
+        if let Some(inbox) = self.inboxes.get(&task_id) {
+            ids.extend(inbox.candidate_ids.iter().copied().filter(|id| {
+                self.candidates
+                    .get(id)
+                    .is_some_and(|c| c.status == ExperienceCandidateStatus::Aggregated)
+            }));
+        }
+
+        ids.sort_unstable();
+        ids.dedup();
+
+        for id in &ids {
+            if let Some(candidate) = self.candidates.get_mut(id) {
+                candidate.status = ExperienceCandidateStatus::GovernancePending;
+            }
+        }
+
+        ids
+    }
+
     /// 按 producer_task_id 查找候选。
     pub fn candidates_by_producer_task(&self, task_id: TaskId) -> Vec<&ExperienceCandidate> {
         self.candidates
@@ -289,16 +370,19 @@ impl ExperienceStore {
             .collect()
     }
 
-    /// 获取指定任务中处于 GovernancePending 状态的候选。
+    /// 获取指定任务中处于 GovernancePending 状态的候选（包含 root 和 aggregated）。
     pub fn governance_candidates_for_task(&self, task_id: TaskId) -> Vec<uuid::Uuid> {
-        self.root_candidates_for_task(task_id)
-            .into_iter()
-            .filter(|id| {
-                self.candidates
-                    .get(id)
-                    .map(|c| c.status == ExperienceCandidateStatus::GovernancePending)
-                    .unwrap_or(false)
+        self.candidates
+            .values()
+            .filter(|c| {
+                c.status == ExperienceCandidateStatus::GovernancePending
+                    && (c.producer_task_id == task_id
+                        || self
+                            .inboxes
+                            .get(&task_id)
+                            .is_some_and(|inbox| inbox.candidate_ids.contains(&c.candidate_id)))
             })
+            .map(|c| c.candidate_id)
             .collect()
     }
 
@@ -336,6 +420,39 @@ impl ExperienceStore {
     pub fn apply_confirmation_response(&mut self, request_id: uuid::Uuid, selected_option: &str) {
         self.apply_confirmation_response_precise(request_id, selected_option);
     }
+
+    /// 查找或创建任务级孵化提案。
+    ///
+    /// 同一任务最多一个活跃 proposal，后续候选 merge 到已有 proposal。
+    pub fn find_or_create_proposal(
+        &mut self,
+        task_id: TaskId,
+        agent_id: AgentId,
+        profile: super::AgentProfile,
+    ) -> &mut IncubationProposal {
+        self.proposals.entry(task_id).or_insert_with(|| {
+            IncubationProposal::new(task_id, agent_id, profile)
+        });
+        self.proposals.get_mut(&task_id).unwrap()
+    }
+
+    /// 将候选合并到任务级提案中。若不存在则创建。
+    pub fn merge_into_proposal(
+        &mut self,
+        task_id: TaskId,
+        agent_id: AgentId,
+        profile: super::AgentProfile,
+        candidate: &ExperienceCandidate,
+    ) {
+        let proposal = self.find_or_create_proposal(task_id, agent_id, profile);
+        proposal.merge_candidate(candidate);
+    }
+}
+
+/// 经验写回请求消息：治理决议后由统一写回层消费。
+#[derive(Debug, Clone, Component)]
+pub struct ExperienceWritebackRequestMessage {
+    pub decision: ExperienceGovernanceDecision,
 }
 
 /// 经验收集请求消息。
@@ -361,11 +478,14 @@ pub enum IncubationProposalStatus {
     #[default]
     Proposed,
     Approved,
+    Executing,
+    Executed,
+    ExecutionFailed,
     Rejected,
 }
 
-/// 孵化提案：default Agent 的正式治理输出。
-#[derive(Debug, Clone, Component)]
+/// 孵化提案：default Agent 的任务级正式治理输出。
+#[derive(Debug, Clone, Component, Serialize, Deserialize)]
 pub struct IncubationProposal {
     pub proposal_id: uuid::Uuid,
     pub source_agent_id: AgentId,
@@ -374,8 +494,48 @@ pub struct IncubationProposal {
     pub knowledge_candidate_ids: Vec<uuid::Uuid>,
     pub executable_candidate_ids: Vec<uuid::Uuid>,
     pub shared_knowledge_candidate_ids: Vec<uuid::Uuid>,
+    pub incubation_rationale: String,
     pub status: IncubationProposalStatus,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl IncubationProposal {
+    /// 创建新的任务级孵化提案。
+    pub fn new(
+        source_task_id: TaskId,
+        source_agent_id: AgentId,
+        proposed_agent_profile: super::AgentProfile,
+    ) -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            proposal_id: uuid::Uuid::new_v4(),
+            source_agent_id,
+            source_task_id,
+            proposed_agent_profile,
+            knowledge_candidate_ids: Vec::new(),
+            executable_candidate_ids: Vec::new(),
+            shared_knowledge_candidate_ids: Vec::new(),
+            incubation_rationale: String::new(),
+            status: IncubationProposalStatus::Proposed,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    /// 将候选合并到提案中，按 kind_hint 分类，不允许重复。
+    pub fn merge_candidate(&mut self, candidate: &ExperienceCandidate) {
+        let ids = match candidate.kind_hint {
+            ExperienceKindHint::Knowledge => &mut self.knowledge_candidate_ids,
+            ExperienceKindHint::Executable => &mut self.executable_candidate_ids,
+            ExperienceKindHint::SharedKnowledge => &mut self.shared_knowledge_candidate_ids,
+            ExperienceKindHint::Discard => return,
+        };
+        if !ids.contains(&candidate.candidate_id) {
+            ids.push(candidate.candidate_id);
+        }
+        self.updated_at = chrono::Utc::now();
+    }
 }
 
 /// 共享知识升级入口候选：已被顶层治理判定具备公共价值，但尚未成为最终共享知识正文。
@@ -433,12 +593,53 @@ mod tests {
             ExperienceCandidateStatus::InInbox,
             ExperienceCandidateStatus::Aggregated,
             ExperienceCandidateStatus::GovernancePending,
+            ExperienceCandidateStatus::GovernanceResolved,
             ExperienceCandidateStatus::NeedsUserApproval,
+            ExperienceCandidateStatus::WritebackPending,
             ExperienceCandidateStatus::Approved,
             ExperienceCandidateStatus::Rejected,
             ExperienceCandidateStatus::Persisted,
+            ExperienceCandidateStatus::WritebackFailed,
         ];
-        assert_eq!(statuses.len(), 8);
+        assert_eq!(statuses.len(), 11);
+    }
+
+    #[test]
+    fn experience_candidate_tracks_risk_metadata() {
+        let candidate = ExperienceCandidate {
+            candidate_id: uuid::Uuid::new_v4(),
+            producer_task_id: uuid::Uuid::new_v4(),
+            producer_agent_id: uuid::Uuid::new_v4(),
+            title: "risk tagged".to_string(),
+            kind_hint: ExperienceKindHint::Knowledge,
+            payload: ExperienceCandidatePayload::Knowledge {
+                content: "stable rule".to_string(),
+                memory_kind: super::super::LongTermMemoryKind::Constraint,
+            },
+            dependency_refs: vec![],
+            status: ExperienceCandidateStatus::Submitted,
+            governing_agent_id: None,
+            risk_level: ExperienceRiskLevel::Low,
+            risk_reason: "collector judged it low risk".to_string(),
+            suggested_confirmation: ExperienceConfirmationPolicy::None,
+            derived_from_candidate_ids: vec![],
+        };
+
+        assert_eq!(candidate.risk_level, ExperienceRiskLevel::Low);
+        assert_eq!(
+            candidate.suggested_confirmation,
+            ExperienceConfirmationPolicy::None
+        );
+    }
+
+    #[test]
+    fn candidate_status_machine_contains_writeback_states() {
+        let statuses = [
+            ExperienceCandidateStatus::GovernanceResolved,
+            ExperienceCandidateStatus::WritebackPending,
+            ExperienceCandidateStatus::WritebackFailed,
+        ];
+        assert_eq!(statuses.len(), 3);
     }
 
     #[test]

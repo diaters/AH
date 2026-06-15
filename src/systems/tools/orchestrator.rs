@@ -734,6 +734,22 @@ fn submission_to_candidate(
         },
     };
 
+    let risk_level = match submission.risk_level.to_lowercase().as_str() {
+        "high" => crate::domain::ExperienceRiskLevel::High,
+        "medium" => crate::domain::ExperienceRiskLevel::Medium,
+        _ => crate::domain::ExperienceRiskLevel::Low,
+    };
+    let suggested_confirmation = match submission
+        .suggested_confirmation
+        .as_deref()
+        .unwrap_or("none")
+        .to_lowercase()
+        .as_str()
+    {
+        "user" => crate::domain::ExperienceConfirmationPolicy::User,
+        _ => crate::domain::ExperienceConfirmationPolicy::None,
+    };
+
     ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
         producer_task_id: task_id,
@@ -744,6 +760,10 @@ fn submission_to_candidate(
         dependency_refs: submission.dependency_refs.clone(),
         status: crate::domain::ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
+        risk_level,
+        risk_reason: submission.risk_reason.clone(),
+        suggested_confirmation,
+        derived_from_candidate_ids: Vec::new(),
     }
 }
 

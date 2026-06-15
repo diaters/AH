@@ -5,7 +5,7 @@ use crate::app::MemoryConfig;
 use crate::domain::{
     ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, SharedKnowledgeBase,
     SharedKnowledgeEntry, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
-    TaskStatus, TaskTerminatedMessage, UserCommand, UserInputMessage,
+    TaskStatus, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -81,8 +81,6 @@ pub(crate) fn command_parse_system(
                         task_content = %task.content,
                         "finishing current task via /finish command"
                     );
-                    commands.spawn(TaskTerminatedMessage { task_id: task.id });
-                    // 标记任务为完成
                     commands.spawn(FinishTaskMessage { task_id: task.id });
                 } else {
                     debug!(event = "FinishCommandNoTask", "no active task to finish");

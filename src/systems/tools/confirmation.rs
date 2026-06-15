@@ -52,11 +52,18 @@ pub fn tool_confirmation_result_system(
             .iter()
             .find(|(_, r)| r.pending_confirmation_id == Some(response.request_id))
         else {
-            warn!(
-                event = "ToolConfirmationNoMatch",
-                request_id = %response.request_id,
-                "no matching tool request found"
-            );
+            // 经验治理与孵化审批不属于 ToolExecutionRequestMessage，留给专用 system 处理。
+            // 检查是否有对应的经验候选审批绑定，有则跳过（不报 NoMatch）。
+            let is_experience_approval = experience_store
+                .candidate_id_for_request(response.request_id)
+                .is_some();
+            if !is_experience_approval {
+                warn!(
+                    event = "ToolConfirmationNoMatch",
+                    request_id = %response.request_id,
+                    "no matching tool request found"
+                );
+            }
             commands.entity(entity).despawn();
             continue;
         };

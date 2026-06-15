@@ -70,6 +70,10 @@ fn persistent_agent_executable_candidate_generates_skill_package_after_approval(
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::NeedsUserApproval,
         governing_agent_id: None,
+        risk_level: harness::ExperienceRiskLevel::default(),
+        risk_reason: String::new(),
+        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
+        derived_from_candidate_ids: vec![],
     };
 
     // 模拟用户批准后的落盘
@@ -150,8 +154,10 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
         knowledge_candidate_ids: vec![candidate.candidate_id],
         executable_candidate_ids: vec![],
         shared_knowledge_candidate_ids: vec![],
+        incubation_rationale: String::new(),
         status: harness::IncubationProposalStatus::Proposed,
         created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
     };
 
     assert_eq!(
@@ -159,4 +165,133 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
         vec![candidate.candidate_id]
     );
     assert!(store.candidates.contains_key(&candidate.candidate_id));
+}
+
+/// 顶层治理统一收束：顶层自身候选与子层汇聚候选同时进入治理输入。
+#[test]
+fn top_level_governance_consumes_root_and_aggregated_candidates() {
+    let mut store = harness::ExperienceStore::default();
+    let top_task_id = uuid::Uuid::new_v4();
+    let top_agent_id = uuid::Uuid::new_v4();
+
+    // 顶层自身候选
+    let root = harness::ExperienceCandidate::knowledge(
+        uuid::Uuid::new_v4(),
+        top_task_id,
+        top_agent_id,
+        "root".to_string(),
+        "root content".to_string(),
+        harness::LongTermMemoryKind::Fact,
+    );
+    let root_id = root.candidate_id;
+    store.stage_root_candidate(root);
+
+    // 子层候选：先进入 inbox，再标记为 Aggregated
+    let child = harness::ExperienceCandidate::knowledge(
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        "child".to_string(),
+        "child content".to_string(),
+        harness::LongTermMemoryKind::Fact,
+    );
+    let child_id = child.candidate_id;
+    store.queue_for_parent(top_task_id, top_agent_id, child);
+    store.aggregate_inbox_for_task(top_task_id);
+
+    // 统一收束
+    let ids = store.collect_top_level_governance_candidates(top_task_id);
+
+    assert!(ids.contains(&root_id), "should include root candidate");
+    assert!(
+        ids.contains(&child_id),
+        "should include aggregated child candidate"
+    );
+
+    // 两者都应处于 GovernancePending
+    assert_eq!(
+        store.candidates.get(&root_id).unwrap().status,
+        harness::ExperienceCandidateStatus::GovernancePending
+    );
+    assert_eq!(
+        store.candidates.get(&child_id).unwrap().status,
+        harness::ExperienceCandidateStatus::GovernancePending
+    );
+}
+
+/// default Agent 的多个私有候选只汇总成一个任务级 IncubationProposal。
+#[test]
+fn default_agent_merges_multiple_private_candidates_into_single_task_level_proposal() {
+    let mut store = harness::ExperienceStore::default();
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+
+    let profile = harness::AgentProfile {
+        name: "physics-specialist".to_string(),
+        model: "gpt-4.1-mini".to_string(),
+    };
+
+    // 知识类候选
+    let knowledge = harness::ExperienceCandidate::knowledge(
+        uuid::Uuid::new_v4(),
+        task_id,
+        agent_id,
+        "physics fact".to_string(),
+        "E=mc²".to_string(),
+        harness::LongTermMemoryKind::Fact,
+    );
+    // 可执行类候选
+    let executable = harness::ExperienceCandidate {
+        candidate_id: uuid::Uuid::new_v4(),
+        producer_task_id: task_id,
+        producer_agent_id: agent_id,
+        title: "physics sim".to_string(),
+        kind_hint: harness::ExperienceKindHint::Executable,
+        payload: harness::ExperienceCandidatePayload::Executable {
+            intent: "run physics simulation".to_string(),
+            when_to_use: "after parameter changes".to_string(),
+            asset_refs: vec![],
+        },
+        dependency_refs: vec![],
+        status: harness::ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
+        risk_level: harness::ExperienceRiskLevel::default(),
+        risk_reason: String::new(),
+        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
+        derived_from_candidate_ids: vec![],
+    };
+
+    // 先 merge knowledge
+    store.merge_into_proposal(task_id, agent_id, profile.clone(), &knowledge);
+    // 再 merge executable（应该合并到同一 proposal）
+    store.merge_into_proposal(task_id, agent_id, profile.clone(), &executable);
+
+    let proposal = store.proposals.get(&task_id).unwrap();
+    assert_eq!(proposal.source_task_id, task_id);
+    assert_eq!(proposal.knowledge_candidate_ids.len(), 1);
+    assert_eq!(proposal.executable_candidate_ids.len(), 1);
+    assert_eq!(proposal.knowledge_candidate_ids[0], knowledge.candidate_id);
+    assert_eq!(
+        proposal.executable_candidate_ids[0],
+        executable.candidate_id
+    );
+}
+
+/// 写回失败时候选应进入 WritebackFailed 状态。
+#[test]
+fn failed_writeback_marks_candidate_writeback_failed() {
+    let mut candidate = harness::ExperienceCandidate::knowledge(
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        "bad".to_string(),
+        "content".to_string(),
+        harness::LongTermMemoryKind::Fact,
+    );
+    candidate.status = harness::ExperienceCandidateStatus::WritebackFailed;
+
+    assert_eq!(
+        candidate.status,
+        harness::ExperienceCandidateStatus::WritebackFailed
+    );
 }

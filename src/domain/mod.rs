@@ -50,9 +50,12 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 // contribution
 pub use contribution::{
     AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
-    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
-    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint,
-    ExperienceStore, IncubationProposal, IncubationProposalStatus, MemoryAbsorptionMessage,
+    ExperienceCandidatePayload, ExperienceCandidateStatus,
+    ExperienceCandidateStatus as ExperienceStatus, ExperienceCollectionRequestMessage,
+    ExperienceConfirmationPolicy, ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage,
+    ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint, ExperienceRiskLevel,
+    ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
+    IncubationProposal, IncubationProposalStatus, MemoryAbsorptionMessage,
     MemoryContributionRequestMessage, MemoryWritebackBatch, SharedKnowledgeUpgradeCandidate,
     TaskSummary,
 };

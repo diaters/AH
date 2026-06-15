@@ -52,6 +52,10 @@ fn executable_candidate_requires_user_approval() {
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
+        risk_level: harness::ExperienceRiskLevel::default(),
+        risk_reason: String::new(),
+        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
+        derived_from_candidate_ids: vec![],
     };
 
     assert!(candidate.requires_user_confirmation());
@@ -134,6 +138,10 @@ fn candidate_conversion_to_long_term_memory() {
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
+        risk_level: harness::ExperienceRiskLevel::default(),
+        risk_reason: String::new(),
+        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
+        derived_from_candidate_ids: vec![],
     };
     assert!(executable_candidate.as_long_term_memory_entry().is_none());
 }
