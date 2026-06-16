@@ -1,3 +1,5 @@
+> **状态：当前有效**
+
 # 经验治理模块运行时缺陷修复设计
 
 ## 问题背景
@@ -74,7 +76,9 @@ governance → approval_result → writeback
 - 若已经是 `Approved`/`Executing`/`Executed`，说明该 proposal 已有写回请求生成，
   跳过 `commands.spawn(ExperienceWritebackRequestMessage)` 和
   `commands.entity(decision_entity).despawn()`
-- 仅标记候选状态为 `WritebackPending`
+- 候选状态根据 proposal 当前状态决定：
+  - 若 proposal 为 `Executed`：候选直接标记为 `Persisted`（已随首次写回落盘）
+  - 若 proposal 为 `Approved`/`Executing`：候选标记为 `WritebackPending`（等待在途写回完成）
 
 变更：
 
@@ -97,12 +101,28 @@ governance → approval_result → writeback
 | `src/plugins/execution.rs` | 修改 | D1: 系统集归属调整 |
 | `src/systems/contribution.rs` | 修改 | D2: 审批源头去重 |
 | `src/systems/frontend_output.rs` | 修改 | D3: Deny 描述修正 |
-| `tests/experience_layered_governance_flow.rs` | 修改 | D1+D2 回归验证 |
+| `tests/experience_layered_governance_flow.rs` | 修改 | D1: 调整断言方式；D2: 新增多候选去重测试 |
 
 ## 测试策略
 
-- 现有 P0 测试 `experience_governance_confirmation_skips_tool_execution` 和
-  `approved_candidate_spawns_writeback_request` 继续通过
+### 需调整的现有测试
+
+`approved_candidate_spawns_writeback_request` 当前断言 `ExperienceWritebackRequestMessage`
+在 `app.update()` 后仍存在。D1 实施后 `experience_writeback_system` 在同一帧内消费并
+despawn 该消息，断言将失败。需改为断言候选状态变为 `Persisted` 或 proposal 状态变为
+`Executed`。
+
+### 新增测试
+
+| 测试目标 | 验证点 |
+|---|---|
+| 多候选 IncubationProposal 审批去重 | 同一 proposal 的 3 个候选分别审批后，只生成 1 个 `ExperienceWritebackRequestMessage` |
+| 审批→写回同帧完成 | 用户响应后单帧内 proposal 状态从 `Proposed` → `Approved` → `Executing` → `Executed` |
+| Deny 选项描述 | `EngineEvent::ApprovalRequest` 中 `deny` 选项的 `description` 为"拒绝" |
+
+### 回归
+
+- 现有 P0 测试 `experience_governance_confirmation_skips_tool_execution` 继续通过
 - 现有 P1 测试继续通过
 - 全量 `cargo test` 通过
 - `cargo clippy` + `cargo fmt` 通过
