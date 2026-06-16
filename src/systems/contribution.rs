@@ -2,15 +2,15 @@ use bevy::prelude::*;
 use tracing::{debug, warn};
 
 use crate::domain::{
-    Agent, ConfirmationOption, ConfirmationSource, ExperienceCandidateStatus,
-    ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
-    ExperienceConfirmationPolicy, ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage,
-    ExperienceKindHint, ExperienceRiskLevel, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, IncubationProposalStatus, LongTermMemory,
-    LongTermMemoryEntry, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
+    Agent, AgentExecutionRequest, AgentRequestKind, ConfirmationOption, ConfirmationSource,
+    ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
+    ExperienceCollectionRequestMessage, ExperienceConfirmationPolicy, ExperienceGovernanceDecision,
+    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceRiskLevel,
+    ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
+    LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
     MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
     SpaceToolRegistry, Task, TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, WorkItem,
+    ToolConfirmationResponseMessage, ToolExecutionRequestMessage, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 
@@ -518,6 +518,7 @@ pub(crate) fn experience_writeback_system(
     upgrade_service: Res<crate::infrastructure::memory::SharedKnowledgeUpgradeService>,
     proposal_store: Res<crate::infrastructure::incubation::proposal_store::IncubationProposalStore>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
+    settings: Res<crate::app::HarnessSettings>,
     requests: Query<(Entity, &ExperienceWritebackRequestMessage)>,
 ) {
     for (entity, request) in &requests {
@@ -567,7 +568,12 @@ pub(crate) fn experience_writeback_system(
             }
             ExperienceWritebackDestination::IncubationProposal => {
                 // IncubationProposal 写回：执行孵化，创建新 Agent 记录
-                writeback_incubation_proposal(&candidate, &store, &proposal_store, &agent_registry)
+                writeback_incubation_proposal(
+                    &mut store,
+                    &proposal_store,
+                    &agent_registry,
+                    &settings.0.agents_config_path,
+                )
             }
             ExperienceWritebackDestination::Rejected => Ok(()),
         };
@@ -702,37 +708,98 @@ fn writeback_to_shared_knowledge_upgrade(
 }
 
 fn writeback_incubation_proposal(
-    candidate: &crate::domain::ExperienceCandidate,
-    store: &crate::domain::ExperienceStore,
+    store: &mut crate::domain::ExperienceStore,
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
+    config_path: &str,
 ) -> Result<(), String> {
-    // 查找任务级 proposal
-    let proposal = store
+    // 查找任何未执行的任务级 proposal
+    let (task_id, profile, rationale) = store
         .proposals
-        .get(&candidate.producer_task_id)
-        .ok_or_else(|| {
-            format!(
-                "no IncubationProposal found for task {}",
-                candidate.producer_task_id
+        .iter()
+        .find(|(_, p)| p.status == crate::domain::IncubationProposalStatus::Approved)
+        .map(|(tid, p)| {
+            (
+                *tid,
+                p.proposed_agent_profile.clone(),
+                p.incubation_rationale.clone(),
             )
-        })?;
+        })
+        .ok_or_else(|| "no Approved IncubationProposal found".to_string())?;
+
+    // 去重：若已 Executed，跳过
+    if let Some(proposal) = store.proposals.get(&task_id)
+        && proposal.status == crate::domain::IncubationProposalStatus::Executed
+    {
+        debug!(
+            event = "IncubationExecutionSkipped",
+            task_id = %task_id,
+            "proposal already executed, skipping"
+        );
+        return Ok(());
+    }
+
+    // 推进状态为 Executing
+    if let Some(proposal) = store.proposals.get_mut(&task_id) {
+        proposal.status = crate::domain::IncubationProposalStatus::Executing;
+        proposal.updated_at = chrono::Utc::now();
+    }
+
+    debug!(
+        event = "IncubationExecutionStarted",
+        task_id = %task_id,
+        "starting incubation writeback"
+    );
 
     // 持久化 proposal
+    let proposal = store
+        .proposals
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| format!("no IncubationProposal found for task {}", task_id))?;
     proposal_store
-        .persist(proposal)
+        .persist(&proposal)
         .map_err(|e| e.to_string())?;
 
     // 创建新 Agent 记录
     let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
-        profile: proposal.proposed_agent_profile.clone(),
+        name: profile.name.clone(),
+        model: profile.model.clone(),
         tags: vec!["incubated".to_string()],
-        description: proposal.incubation_rationale.clone(),
-        tools: vec![],
+        description: rationale,
+        tools: None,
     };
-    agent_registry.append(&record).map_err(|e| e.to_string())?;
+    let result = agent_registry
+        .append(config_path, &record)
+        .map_err(|e| e.to_string());
 
-    Ok(())
+    match result {
+        Ok(()) => {
+            if let Some(proposal) = store.proposals.get_mut(&task_id) {
+                proposal.status = crate::domain::IncubationProposalStatus::Executed;
+                proposal.updated_at = chrono::Utc::now();
+            }
+            debug!(
+                event = "IncubationExecutionSucceeded",
+                task_id = %task_id,
+                "incubation writeback succeeded"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            if let Some(proposal) = store.proposals.get_mut(&task_id) {
+                proposal.status = crate::domain::IncubationProposalStatus::ExecutionFailed;
+                proposal.updated_at = chrono::Utc::now();
+            }
+            warn!(
+                event = "IncubationExecutionFailed",
+                task_id = %task_id,
+                error = %e,
+                "incubation writeback failed"
+            );
+            Err(e)
+        }
+    }
 }
 
 fn is_default_agent(agent: &Agent) -> bool {
@@ -768,6 +835,30 @@ fn spawn_experience_confirmation(
         options: ConfirmationOption::default_options(),
         source: ConfirmationSource::User,
         parent_agent_id: None,
+    });
+
+    // 配对 ToolExecutionRequestMessage 占位实体，使 tool_confirmation_result_system
+    // 能通过 pending_confirmation_id 找到匹配，不提前销毁 ToolConfirmationResponseMessage。
+    commands.spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id: request.task_id,
+            agent_id: request.agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "experience_governance".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({
+            "candidate_id": candidate_id.to_string(),
+        }),
+        pending_confirmation_id: Some(request_id),
+        tool_call_id: None,
+        pending_confirmation_options: Some(ConfirmationOption::default_options()),
     });
 }
 
@@ -843,12 +934,55 @@ pub(crate) fn experience_approval_result_system(
                     c.status = ExperienceCandidateStatus::WritebackPending;
                 }
 
-                // 对于 IncubationProposal 目标，更新 store 中 proposal 状态
+                // 对于 IncubationProposal 目标，检查 proposal 状态做源头去重
                 if decision.destination == ExperienceWritebackDestination::IncubationProposal {
                     let task_id = store
                         .candidates
                         .get(&candidate_id)
                         .map(|c| c.producer_task_id);
+
+                    // 先读取 proposal 状态（不可变借用），再根据结果做可变操作
+                    let proposal_status = task_id
+                        .as_ref()
+                        .and_then(|tid| store.proposals.get(tid))
+                        .map(|p| p.status);
+
+                    match proposal_status {
+                        Some(IncubationProposalStatus::Approved)
+                        | Some(IncubationProposalStatus::Executing) => {
+                            // 已有写回请求在途，候选等待完成
+                            if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                                c.status = ExperienceCandidateStatus::WritebackPending;
+                            }
+                            debug!(
+                                event = "ExperienceApprovalDeduplicated",
+                                candidate_id = %candidate_id,
+                                proposal_status = ?proposal_status,
+                                "proposal already has writeback in progress, skipping"
+                            );
+                            commands.entity(decision_entity).despawn();
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        Some(IncubationProposalStatus::Executed) => {
+                            // 已写回完成，候选直接标记为 Persisted
+                            if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                                c.status = ExperienceCandidateStatus::Persisted;
+                            }
+                            debug!(
+                                event = "ExperienceApprovalDeduplicated",
+                                candidate_id = %candidate_id,
+                                proposal_status = ?proposal_status,
+                                "proposal already executed, marking candidate as persisted"
+                            );
+                            commands.entity(decision_entity).despawn();
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        _ => {}
+                    }
+
+                    // 首次审批：设置 proposal 为 Approved
                     if let Some(task_id) = task_id
                         && let Some(proposal) = store.proposals.get_mut(&task_id)
                     {
