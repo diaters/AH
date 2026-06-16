@@ -525,3 +525,108 @@ fn approved_candidate_spawns_writeback_request() {
         "approved LongTermMemory candidate should be persisted after same-frame writeback"
     );
 }
+
+/// 验证审批→写回在同一 Execution set 内同帧完成。
+///
+/// D1 修复后 approval_result 在 writeback 之前执行，
+/// 用户审批后单帧内 proposal 状态从 Proposed → Approved → Executing → Executed。
+#[test]
+fn approval_to_writeback_completes_in_same_frame() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+    let request_id = uuid::Uuid::new_v4();
+
+    // 设置候选和 proposal
+    let candidate_id = {
+        let mut store = app.world_mut().resource_mut::<ExperienceStore>();
+        let candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "incubation test".to_string(),
+            "content".to_string(),
+            harness::LongTermMemoryKind::Fact,
+        );
+        let cid = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+        let ids = store.promote_root_candidates_to_governance(task_id);
+        assert!(!ids.is_empty());
+        store.bind_approval_request(request_id, ids[0]);
+
+        // 先克隆候选再传入 merge_into_proposal（避免同时可变+不可变借用 store）
+        let candidate_snapshot = store.candidates.get(&ids[0]).cloned().unwrap();
+        store.merge_into_proposal(
+            task_id,
+            agent_id,
+            harness::AgentProfile {
+                name: "incubated-test".to_string(),
+                model: "test".to_string(),
+            },
+            &candidate_snapshot,
+        );
+        cid
+    };
+
+    // 存储治理决议：目标是 IncubationProposal
+    app.world_mut().spawn(ExperienceGovernanceDecision {
+        candidate_id,
+        destination: ExperienceWritebackDestination::IncubationProposal,
+        confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
+        final_risk_level: harness::ExperienceRiskLevel::default(),
+        risk_overridden: false,
+        decision_rationale: "test".to_string(),
+    });
+
+    // 创建配对实体和审批响应
+    app.world_mut().spawn(ToolConfirmationRequestMessage {
+        request_id,
+        task_id,
+        agent_id,
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({"candidate_id": candidate_id.to_string()}),
+        options: harness::ConfirmationOption::default_options(),
+        source: harness::ConfirmationSource::User,
+        parent_agent_id: None,
+    });
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "experience_governance".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({}),
+        pending_confirmation_id: Some(request_id),
+        tool_call_id: None,
+        pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+    });
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "approve".to_string(),
+    });
+
+    app.update();
+
+    // 验证单帧内 proposal 状态推进到 Executed
+    let store = app.world_mut().resource::<ExperienceStore>();
+    let proposal = store.proposals.get(&task_id);
+    assert!(proposal.is_some(), "proposal should exist for task");
+    assert_eq!(
+        proposal.unwrap().status,
+        harness::IncubationProposalStatus::Executed,
+        "proposal should reach Executed in same frame after approval"
+    );
+}
