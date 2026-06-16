@@ -16,9 +16,9 @@ use crossbeam_channel::unbounded;
 use harness::{
     AgentAssetService, AgentExecutionRequest, AgentRequestKind, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceGovernanceDecision,
-    ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
-    HarnessConfig, SharedKnowledgeUpgradeQueue,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
+    ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination, HarnessConfig,
+    SharedKnowledgeUpgradeQueue, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolExecutionRequestMessage,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 use harness::{AgentExecutor, ExecutorFuture, build_harness_app};
@@ -515,10 +515,7 @@ fn approved_candidate_spawns_writeback_request() {
     // 验证候选最终状态：LongTermMemory 目标写回成功后候选为 Persisted。
     let store = app.world_mut().resource::<ExperienceStore>();
     let candidate = store.candidates.get(&promoted_ids[0]);
-    assert!(
-        candidate.is_some(),
-        "candidate should exist after approval"
-    );
+    assert!(candidate.is_some(), "candidate should exist after approval");
     assert_eq!(
         candidate.unwrap().status,
         ExperienceCandidateStatus::Persisted,
