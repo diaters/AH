@@ -630,3 +630,122 @@ fn approval_to_writeback_completes_in_same_frame() {
         "proposal should reach Executed in same frame after approval"
     );
 }
+
+/// 验证同一 proposal 的多个候选审批后只生成一个写回请求。
+///
+/// D2 修复后，首个候选审批生成写回请求，后续候选审批跳过写回请求生成，
+/// 候选根据 proposal 状态标记为 WritebackPending 或 Persisted。
+#[test]
+fn multiple_candidates_same_proposal_deduplicate_writeback() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+
+    // 创建 3 个候选绑定到同一 proposal
+    let candidate_ids: Vec<uuid::Uuid> = {
+        let mut store = app.world_mut().resource_mut::<ExperienceStore>();
+        let profile = harness::AgentProfile {
+            name: "incubated-test".to_string(),
+            model: "test".to_string(),
+        };
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let candidate = ExperienceCandidate::knowledge(
+                uuid::Uuid::new_v4(),
+                task_id,
+                agent_id,
+                format!("candidate {i}"),
+                format!("content {i}"),
+                harness::LongTermMemoryKind::Fact,
+            );
+            let cid = candidate.candidate_id;
+            store.stage_root_candidate(candidate.clone());
+            store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
+            ids.push(cid);
+        }
+        ids
+    };
+
+    // 为每个候选创建治理决议和审批请求
+    let request_ids: Vec<uuid::Uuid> = (0..3).map(|_| uuid::Uuid::new_v4()).collect();
+
+    for (i, (cid, req_id)) in candidate_ids.iter().zip(request_ids.iter()).enumerate() {
+        app.world_mut().spawn(ExperienceGovernanceDecision {
+            candidate_id: *cid,
+            destination: ExperienceWritebackDestination::IncubationProposal,
+            confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
+            final_risk_level: harness::ExperienceRiskLevel::default(),
+            risk_overridden: false,
+            decision_rationale: format!("test {i}"),
+        });
+
+        {
+            let mut store = app.world_mut().resource_mut::<ExperienceStore>();
+            store.bind_approval_request(*req_id, *cid);
+        }
+
+        app.world_mut().spawn(ToolConfirmationRequestMessage {
+            request_id: *req_id,
+            task_id,
+            agent_id,
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({"candidate_id": cid.to_string()}),
+            options: harness::ConfirmationOption::default_options(),
+            source: harness::ConfirmationSource::User,
+            parent_agent_id: None,
+        });
+        app.world_mut().spawn(ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "experience_governance".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+            },
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({}),
+            pending_confirmation_id: Some(*req_id),
+            tool_call_id: None,
+            pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        });
+    }
+
+    // 逐个审批每个候选
+    for req_id in &request_ids {
+        app.world_mut().spawn(ToolConfirmationResponseMessage {
+            request_id: *req_id,
+            selected_option: "approve".to_string(),
+        });
+        app.update();
+    }
+
+    // 验证 proposal 只被执行一次
+    let store = app.world_mut().resource::<ExperienceStore>();
+    let proposal = store.proposals.get(&task_id).unwrap();
+    assert_eq!(
+        proposal.status,
+        harness::IncubationProposalStatus::Executed,
+        "proposal should be Executed after first candidate writeback"
+    );
+
+    // 验证所有候选最终状态不为 WritebackFailed
+    for cid in &candidate_ids {
+        let candidate = store.candidates.get(cid).unwrap();
+        assert_ne!(
+            candidate.status,
+            ExperienceCandidateStatus::WritebackFailed,
+            "candidate {} should not be WritebackFailed",
+            cid
+        );
+    }
+}
