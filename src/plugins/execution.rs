@@ -54,7 +54,11 @@ impl Plugin for ExecutionPlugin {
                     .in_set(HarnessSet::Execution)
                     .after(experience_governance_system),
                 // 经验确认结果：处理用户对经验候选的确认
-                experience_approval_result_system.in_set(HarnessSet::Maintenance),
+                experience_approval_result_system
+                    .in_set(HarnessSet::Execution)
+                    .after(crate::systems::tool_confirmation_result_system)
+                    .after(experience_governance_system)
+                    .before(experience_writeback_system),
                 // 记忆贡献
                 memory_contribution_system.in_set(HarnessSet::Execution),
             ),

@@ -5,13 +5,25 @@
 //! - 普通持久型 Agent executable 候选用户批准后生成 Skill Package
 //! - 公共规则类候选进入 SharedKnowledgeUpgradeQueue
 //! - default Agent 的私有候选生成 IncubationProposal
+//!
+//! P0 修复验证：
+//! - 审批→写回链路：配对 ToolExecutionRequestMessage 后确认系统保留响应实体
+//! - 审批通过后 ExperienceWritebackRequestMessage 被创建
 
+use std::sync::Arc;
+
+use crossbeam_channel::unbounded;
 use harness::{
-    AgentAssetService, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-    ExperienceKindHint, ExperienceStore, SharedKnowledgeUpgradeQueue,
+    AgentAssetService, AgentExecutionRequest, AgentRequestKind, ExperienceCandidate,
+    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceGovernanceDecision,
+    ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
+    HarnessConfig, SharedKnowledgeUpgradeQueue,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
+use harness::{AgentExecutor, ExecutorFuture, build_harness_app};
 use tempfile::TempDir;
+use tokio::runtime::Runtime;
 
 fn make_service(dir: &TempDir) -> LongTermMemoryService {
     let store = JsonFileMemoryStore::new(dir.path().join("agents"));
@@ -293,5 +305,223 @@ fn failed_writeback_marks_candidate_writeback_failed() {
     assert_eq!(
         candidate.status,
         harness::ExperienceCandidateStatus::WritebackFailed
+    );
+}
+
+// ============ P0: 审批→写回链路修复验证 ============
+
+struct NoOpExecutor;
+
+impl AgentExecutor for NoOpExecutor {
+    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
+        Box::pin(async move {
+            Ok(harness::AgentExecutionOutput {
+                content: harness::OutputContent::Text("ok".to_string()),
+                reasoning_content: None,
+            })
+        })
+    }
+}
+
+fn test_config() -> HarnessConfig {
+    HarnessConfig::default()
+}
+
+/// 验证 experience_governance 特判分支：占位实体被清理，不触发工具执行。
+///
+/// tool_confirmation_result_system 对 experience_governance 做特判后：
+/// - 占位 ToolExecutionRequestMessage 被 despawn
+/// - 不生成 ToolExecutionResultMessage（不执行工具）
+/// - ToolConfirmationResponseMessage 保留给 experience_approval_result_system
+#[test]
+fn experience_governance_confirmation_skips_tool_execution() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    app.update();
+
+    let request_id = uuid::Uuid::new_v4();
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+
+    // 模拟 spawn_experience_confirmation 的输出：配对的确认请求和执行请求
+    app.world_mut().spawn(ToolConfirmationRequestMessage {
+        request_id,
+        task_id,
+        agent_id,
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({"candidate_id": uuid::Uuid::new_v4().to_string()}),
+        options: harness::ConfirmationOption::default_options(),
+        source: harness::ConfirmationSource::User,
+        parent_agent_id: None,
+    });
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "experience_governance".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({}),
+        pending_confirmation_id: Some(request_id),
+        tool_call_id: None,
+        pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+    });
+
+    // 模拟用户批准
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "approve".to_string(),
+    });
+
+    app.update();
+
+    // 验证 ToolExecutionRequestMessage 占位实体被清理（特判分支 despawn）
+    let exec_requests: Vec<_> = app
+        .world_mut()
+        .query::<&ToolExecutionRequestMessage>()
+        .iter(app.world())
+        .filter(|r| r.tool_name == "experience_governance")
+        .collect();
+    assert!(
+        exec_requests.is_empty(),
+        "experience_governance placeholder ToolExecutionRequestMessage should be despawned"
+    );
+
+    // 验证没有生成 ToolExecutionResultMessage（特判阻止了工具执行）
+    let exec_results: Vec<_> = app
+        .world_mut()
+        .query::<&harness::ToolExecutionResultMessage>()
+        .iter(app.world())
+        .filter(|r| r.tool_name == "experience_governance")
+        .collect();
+    assert!(
+        exec_results.is_empty(),
+        "experience_governance should not produce ToolExecutionResultMessage"
+    );
+}
+
+/// 验证审批通过后候选同帧完成写回。
+#[test]
+fn approved_candidate_spawns_writeback_request() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+    let candidate_id = uuid::Uuid::new_v4();
+    let request_id = uuid::Uuid::new_v4();
+    let agent_name = "test-agent".to_string();
+
+    // 创建 Agent 实体和 LongTermMemory 组件（writeback_to_long_term_memory 需要）
+    app.world_mut().spawn((
+        harness::Agent {
+            id: agent_id,
+            profile: harness::AgentProfile {
+                name: agent_name.clone(),
+                model: "test".to_string(),
+            },
+            capabilities: harness::AgentCapabilities {
+                tags: vec![],
+                description: String::new(),
+            },
+            kind: harness::AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: harness::AgentToolPermissions::default(),
+        },
+        harness::LongTermMemory::with_name(&agent_name),
+    ));
+
+    // 设置 ExperienceStore：添加候选、设置 governing_agent_id、治理决议
+    let promoted_ids = {
+        let mut store = app.world_mut().resource_mut::<ExperienceStore>();
+        let mut candidate = ExperienceCandidate::knowledge(
+            candidate_id,
+            task_id,
+            agent_id,
+            "test candidate".to_string(),
+            "test content".to_string(),
+            harness::LongTermMemoryKind::Fact,
+        );
+        candidate.governing_agent_id = Some(agent_id);
+        store.stage_root_candidate(candidate);
+        let ids = store.promote_root_candidates_to_governance(task_id);
+        assert!(!ids.is_empty());
+        store.bind_approval_request(request_id, ids[0]);
+        ids
+    };
+
+    // 存储治理决议
+    app.world_mut().spawn(ExperienceGovernanceDecision {
+        candidate_id: promoted_ids[0],
+        destination: ExperienceWritebackDestination::LongTermMemory,
+        confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
+        final_risk_level: harness::ExperienceRiskLevel::default(),
+        risk_overridden: false,
+        decision_rationale: "test".to_string(),
+    });
+
+    // 创建配对实体
+    app.world_mut().spawn(ToolConfirmationRequestMessage {
+        request_id,
+        task_id,
+        agent_id,
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({"candidate_id": promoted_ids[0].to_string()}),
+        options: harness::ConfirmationOption::default_options(),
+        source: harness::ConfirmationSource::User,
+        parent_agent_id: None,
+    });
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "experience_governance".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "experience_governance".to_string(),
+        tool_input: serde_json::json!({}),
+        pending_confirmation_id: Some(request_id),
+        tool_call_id: None,
+        pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+    });
+    app.world_mut().spawn(ToolConfirmationResponseMessage {
+        request_id,
+        selected_option: "approve".to_string(),
+    });
+
+    app.update();
+
+    // D1 修复后 approval_result 和 writeback 在同一 Execution set 内顺序执行，
+    // ExperienceWritebackRequestMessage 已被 writeback 系统消费。
+    // 验证候选最终状态：LongTermMemory 目标写回成功后候选为 Persisted。
+    let store = app.world_mut().resource::<ExperienceStore>();
+    let candidate = store.candidates.get(&promoted_ids[0]);
+    assert!(
+        candidate.is_some(),
+        "candidate should exist after approval"
+    );
+    assert_eq!(
+        candidate.unwrap().status,
+        ExperienceCandidateStatus::Persisted,
+        "approved LongTermMemory candidate should be persisted after same-frame writeback"
     );
 }
