@@ -713,35 +713,48 @@ fn writeback_to_shared_knowledge_upgrade(
 }
 
 fn writeback_incubation_proposal(
+    task_id: TaskId,
     store: &mut crate::domain::ExperienceStore,
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
     config_path: &str,
 ) -> Result<(), String> {
-    // 查找任何未执行的任务级 proposal
-    let (task_id, profile, rationale) = store
+    // 按 task_id 查找任务级 proposal
+    let proposal = store
         .proposals
-        .iter()
-        .find(|(_, p)| p.status == crate::domain::IncubationProposalStatus::Approved)
-        .map(|(tid, p)| {
-            (
-                *tid,
-                p.proposed_agent_profile.clone(),
-                p.incubation_rationale.clone(),
-            )
-        })
-        .ok_or_else(|| "no Approved IncubationProposal found".to_string())?;
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| format!("no IncubationProposal found for task {}", task_id))?;
 
-    // 去重：若已 Executed，跳过
-    if let Some(proposal) = store.proposals.get(&task_id)
-        && proposal.status == crate::domain::IncubationProposalStatus::Executed
-    {
-        debug!(
-            event = "IncubationExecutionSkipped",
-            task_id = %task_id,
-            "proposal already executed, skipping"
-        );
-        return Ok(());
+    let profile = proposal.proposed_agent_profile.clone();
+    let rationale = proposal.incubation_rationale.clone();
+
+    match proposal.status {
+        crate::domain::IncubationProposalStatus::Executing => {
+            debug!(
+                event = "IncubationExecutionInProgress",
+                task_id = %task_id,
+                "incubation writeback already in progress"
+            );
+            return Ok(());
+        }
+        crate::domain::IncubationProposalStatus::Executed => {
+            debug!(
+                event = "IncubationExecutionAlreadyDone",
+                task_id = %task_id,
+                "incubation proposal already executed"
+            );
+            return Ok(());
+        }
+        crate::domain::IncubationProposalStatus::Approved => {
+            // continue below
+        }
+        other => {
+            return Err(format!(
+                "incubation proposal for task {} is not approved (status: {:?})",
+                task_id, other
+            ));
+        }
     }
 
     // 推进状态为 Executing
