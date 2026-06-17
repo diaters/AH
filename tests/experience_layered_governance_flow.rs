@@ -749,3 +749,167 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
         );
     }
 }
+
+/// 验证子任务候选聚合到父任务 inbox 后，多候选审批写回正常。
+///
+/// 场景：父任务有一个自身候选 + 两个子任务候选；所有候选合并到同一 IncubationProposal；
+/// 用户依次批准，首个候选触发执行，后续候选幂等，所有候选最终为 Persisted。
+#[test]
+fn aggregated_child_candidates_writeback_idempotently() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    app.update();
+
+    let parent_task_id = uuid::Uuid::new_v4();
+    let child_task_id_1 = uuid::Uuid::new_v4();
+    let child_task_id_2 = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+
+    let (root_id, child_id_1, child_id_2, request_ids): (
+        uuid::Uuid,
+        uuid::Uuid,
+        uuid::Uuid,
+        Vec<uuid::Uuid>,
+    ) = {
+        let mut store = app.world_mut().resource_mut::<ExperienceStore>();
+
+        // 父任务自身候选
+        let root = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            parent_task_id,
+            agent_id,
+            "root candidate".to_string(),
+            "root content".to_string(),
+            harness::LongTermMemoryKind::Fact,
+        );
+        let root_id = root.candidate_id;
+        store.stage_root_candidate(root);
+
+        // 子任务候选 1
+        let child1 = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            child_task_id_1,
+            agent_id,
+            "child candidate 1".to_string(),
+            "child content 1".to_string(),
+            harness::LongTermMemoryKind::Fact,
+        );
+        let child_id_1 = child1.candidate_id;
+        store.queue_for_parent(parent_task_id, agent_id, child1);
+
+        // 子任务候选 2
+        let child2 = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            child_task_id_2,
+            agent_id,
+            "child candidate 2".to_string(),
+            "child content 2".to_string(),
+            harness::LongTermMemoryKind::Fact,
+        );
+        let child_id_2 = child2.candidate_id;
+        store.queue_for_parent(parent_task_id, agent_id, child2);
+
+        // 消费 inbox，使子候选状态变为 Aggregated
+        store.aggregate_inbox_for_task(parent_task_id);
+
+        // 统一收束为 GovernancePending
+        let ids = store.collect_top_level_governance_candidates(parent_task_id);
+        assert!(ids.contains(&root_id));
+        assert!(ids.contains(&child_id_1));
+        assert!(ids.contains(&child_id_2));
+
+        // 合并到同一 proposal
+        let profile = harness::AgentProfile {
+            name: "incubated-test".to_string(),
+            model: "test".to_string(),
+        };
+        for id in &ids {
+            let snapshot = store.candidates.get(id).cloned().unwrap();
+            store.merge_into_proposal(parent_task_id, agent_id, profile.clone(), &snapshot);
+        }
+
+        // 绑定审批请求
+        let request_ids: Vec<uuid::Uuid> = ids.iter().map(|_| uuid::Uuid::new_v4()).collect();
+        for (id, req_id) in ids.iter().zip(request_ids.iter()) {
+            store.bind_approval_request(*req_id, *id);
+        }
+
+        (root_id, child_id_1, child_id_2, request_ids)
+    };
+
+    let candidate_ids = vec![root_id, child_id_1, child_id_2];
+
+    // 为每个候选生成治理决议和配对确认实体
+    for (cid, req_id) in candidate_ids.iter().zip(request_ids.iter()) {
+        app.world_mut().spawn(ExperienceGovernanceDecision {
+            candidate_id: *cid,
+            destination: ExperienceWritebackDestination::IncubationProposal,
+            confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
+            final_risk_level: harness::ExperienceRiskLevel::default(),
+            risk_overridden: false,
+            decision_rationale: "test".to_string(),
+            source_task_id: parent_task_id,
+        });
+
+        app.world_mut().spawn(ToolConfirmationRequestMessage {
+            request_id: *req_id,
+            task_id: parent_task_id,
+            agent_id,
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({"candidate_id": cid.to_string()}),
+            options: harness::ConfirmationOption::default_options(),
+            source: harness::ConfirmationSource::User,
+            parent_agent_id: None,
+        });
+        app.world_mut().spawn(ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id: parent_task_id,
+                agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "experience_governance".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+            },
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({}),
+            pending_confirmation_id: Some(*req_id),
+            tool_call_id: None,
+            pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        });
+    }
+
+    // 逐个审批
+    for req_id in &request_ids {
+        app.world_mut().spawn(ToolConfirmationResponseMessage {
+            request_id: *req_id,
+            selected_option: "approve".to_string(),
+        });
+        app.update();
+    }
+
+    // 验证 proposal 最终为 Executed
+    let store = app.world_mut().resource::<ExperienceStore>();
+    let proposal = store.proposals.get(&parent_task_id).unwrap();
+    assert_eq!(
+        proposal.status,
+        harness::IncubationProposalStatus::Executed,
+        "proposal should be Executed after first successful writeback"
+    );
+
+    // 验证所有候选最终为 Persisted
+    for cid in &candidate_ids {
+        let candidate = store.candidates.get(cid).unwrap();
+        assert_eq!(
+            candidate.status,
+            ExperienceCandidateStatus::Persisted,
+            "candidate {} should be Persisted",
+            cid
+        );
+    }
+}
