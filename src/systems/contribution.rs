@@ -941,10 +941,7 @@ pub(crate) fn experience_approval_result_system(
 
                 // 对于 IncubationProposal 目标，检查 proposal 状态做源头去重
                 if decision.destination == ExperienceWritebackDestination::IncubationProposal {
-                    let task_id = store
-                        .candidates
-                        .get(&candidate_id)
-                        .map(|c| c.producer_task_id);
+                    let task_id = Some(decision.source_task_id);
 
                     // 先读取 proposal 状态（不可变借用），再根据结果做可变操作
                     let proposal_status = task_id
