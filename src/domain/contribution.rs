@@ -1,5 +1,6 @@
 use bevy::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use super::{AgentId, LongTermMemoryEntry, SharedKnowledgeEntry, TaskId};
 
@@ -117,6 +118,7 @@ pub struct ExperienceGovernanceDecision {
     pub final_risk_level: ExperienceRiskLevel,
     pub risk_overridden: bool,
     pub decision_rationale: String,
+    pub source_task_id: TaskId,
 }
 
 /// 经验候选载荷。
@@ -430,9 +432,9 @@ impl ExperienceStore {
         agent_id: AgentId,
         profile: super::AgentProfile,
     ) -> &mut IncubationProposal {
-        self.proposals.entry(task_id).or_insert_with(|| {
-            IncubationProposal::new(task_id, agent_id, profile)
-        });
+        self.proposals
+            .entry(task_id)
+            .or_insert_with(|| IncubationProposal::new(task_id, agent_id, profile));
         self.proposals.get_mut(&task_id).unwrap()
     }
 
@@ -446,6 +448,12 @@ impl ExperienceStore {
     ) {
         let proposal = self.find_or_create_proposal(task_id, agent_id, profile);
         proposal.merge_candidate(candidate);
+        debug!(
+            event = "IncubationProposalMerged",
+            task_id = %task_id,
+            candidate_id = %candidate.candidate_id,
+            "candidate merged into incubation proposal"
+        );
     }
 }
 
