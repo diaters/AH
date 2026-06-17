@@ -471,6 +471,7 @@ fn approved_candidate_spawns_writeback_request() {
         final_risk_level: harness::ExperienceRiskLevel::default(),
         risk_overridden: false,
         decision_rationale: "test".to_string(),
+        source_task_id: task_id,
     });
 
     // 创建配对实体
@@ -578,6 +579,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         final_risk_level: harness::ExperienceRiskLevel::default(),
         risk_overridden: false,
         decision_rationale: "test".to_string(),
+        source_task_id: task_id,
     });
 
     // 创建配对实体和审批响应
@@ -679,6 +681,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
             final_risk_level: harness::ExperienceRiskLevel::default(),
             risk_overridden: false,
             decision_rationale: format!("test {i}"),
+            source_task_id: task_id,
         });
 
         {
