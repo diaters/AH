@@ -395,6 +395,7 @@ pub(crate) fn experience_governance_system(
                         final_risk_level: candidate.risk_level,
                         risk_overridden: false,
                         decision_rationale: "shared knowledge candidate".to_string(),
+                        source_task_id: request.task_id,
                     }
                 }
                 ExperienceKindHint::Executable => {
@@ -407,6 +408,7 @@ pub(crate) fn experience_governance_system(
                             risk_overridden: false,
                             decision_rationale: "default agent executable -> incubation"
                                 .to_string(),
+                            source_task_id: request.task_id,
                         }
                     } else {
                         ExperienceGovernanceDecision {
@@ -416,6 +418,7 @@ pub(crate) fn experience_governance_system(
                             final_risk_level: candidate.risk_level,
                             risk_overridden: false,
                             decision_rationale: "executable requires user confirmation".to_string(),
+                            source_task_id: request.task_id,
                         }
                     }
                 }
@@ -428,6 +431,7 @@ pub(crate) fn experience_governance_system(
                             final_risk_level: candidate.risk_level,
                             risk_overridden: false,
                             decision_rationale: "default agent knowledge -> incubation".to_string(),
+                            source_task_id: request.task_id,
                         }
                     } else {
                         let confirmation_policy =
@@ -443,6 +447,7 @@ pub(crate) fn experience_governance_system(
                             final_risk_level: candidate.risk_level,
                             risk_overridden: false,
                             decision_rationale: "persistent agent private knowledge".to_string(),
+                            source_task_id: request.task_id,
                         }
                     }
                 }
