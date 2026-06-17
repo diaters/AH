@@ -25,8 +25,7 @@ impl Plugin for MemoryPlugin {
             crate::infrastructure::incubation::proposal_store::IncubationProposalStore::default_path(),
         );
         app.insert_resource(
-            crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry::default_path(
-            ),
+            crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
         );
 
         app.add_systems(

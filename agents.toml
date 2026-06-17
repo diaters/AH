@@ -6,11 +6,11 @@ description = "默认 LLM Agent，处理通用任务"
 
 [agent.tools]
 default_permission = "Confirm"
-read_file = "Allow"
-search_web = "Allow"
-write_file = "Confirm"
-execute_code = "Deny"
 spawn_agent = "Deny"
+execute_code = "Deny"
+read_file = "Allow"
+write_file = "Confirm"
+search_web = "Allow"
 
 [[agent]]
 name = "brain"
@@ -20,8 +20,8 @@ description = "Brain Agent，负责调度决策"
 
 [agent.tools]
 default_permission = "Deny"
-read_file = "Allow"
 spawn_agent = "Deny"
+read_file = "Allow"
 
 [[agent]]
 name = "summarizer"
@@ -50,3 +50,9 @@ description = "经验收敛专家，负责从任务终态材料中提炼经验�
 [agent.tools]
 default_permission = "Deny"
 submit_experience_candidate = "Allow"
+
+[[agent]]
+name = "incubated-test"
+model = "test"
+tags = ["incubated"]
+description = ""

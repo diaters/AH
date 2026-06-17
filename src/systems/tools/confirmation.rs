@@ -68,6 +68,18 @@ pub fn tool_confirmation_result_system(
             continue;
         };
 
+        // experience_governance 特判：销毁执行占位实体，不执行工具，不销毁响应
+        if tool_request.tool_name == "experience_governance" {
+            debug!(
+                event = "ExperienceGovernanceConfirmationSkipped",
+                request_id = %response.request_id,
+                "experience_governance confirmation handled by dedicated system"
+            );
+            commands.entity(request_entity).despawn();
+            // 不 despawn response entity，留给 experience_approval_result_system
+            continue;
+        }
+
         // 从 ToolExecutionRequestMessage 保存的选项中查找
         let options = tool_request
             .pending_confirmation_options

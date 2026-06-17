@@ -23,7 +23,7 @@ mod workflow;
 
 use std::{future::Future, pin::Pin};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ============ 类型别名 ============
@@ -145,12 +145,12 @@ pub trait AgentExecutor: Send + Sync {
 
 // ============ 配置类型（保留在 mod.rs） ============
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub agent: Vec<AgentEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEntry {
     pub name: String,
     pub model: String,
