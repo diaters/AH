@@ -8,7 +8,7 @@ use crate::systems::{
     HarnessSet, agent_execution_system, experience_approval_result_system,
     experience_collection_completion_system, experience_collection_workitem_system,
     experience_governance_system, experience_writeback_system, ingest_execution_results_system,
-    llm_response_system, memory_contribution_system, task_terminated_experience_trigger_system,
+    llm_response_system, task_terminated_experience_trigger_system,
     tool_calling_orchestrator_system,
 };
 
@@ -59,8 +59,6 @@ impl Plugin for ExecutionPlugin {
                     .after(crate::systems::tool_confirmation_result_system)
                     .after(experience_governance_system)
                     .before(experience_writeback_system),
-                // 记忆贡献
-                memory_contribution_system.in_set(HarnessSet::Execution),
             ),
         );
     }

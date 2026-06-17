@@ -13,5 +13,4 @@ pub use domain::*;
 pub use infrastructure::assets::{AgentAssetService, ExperienceAssetDraft, SkillPackageDraft};
 pub use llm::*;
 pub use plugins::*;
-pub use systems::extract_memory_writebacks;
 pub use systems::tools::NativeProcessBackend;
