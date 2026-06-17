@@ -9,8 +9,9 @@ use crate::domain::{
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
     LongTermMemory, LongTermMemoryEntry, MemoryAbsorptionMessage, MemoryContributionRequestMessage,
     MemoryImportance, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
-    SpaceToolRegistry, Task, TaskSummary, TaskTerminatedMessage, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, ToolExecutionRequestMessage, WorkItem,
+    SpaceToolRegistry, Task, TaskId, TaskSummary, TaskTerminatedMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
+    WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 
@@ -574,6 +575,7 @@ pub(crate) fn experience_writeback_system(
             ExperienceWritebackDestination::IncubationProposal => {
                 // IncubationProposal 写回：执行孵化，创建新 Agent 记录
                 writeback_incubation_proposal(
+                    decision.source_task_id,
                     &mut store,
                     &proposal_store,
                     &agent_registry,
