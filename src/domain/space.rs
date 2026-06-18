@@ -213,6 +213,9 @@ pub struct ExperienceCandidateSubmission {
     pub kind_hint: ExperienceKindHint,
     pub payload: serde_json::Value,
     pub dependency_refs: Vec<String>,
+    pub risk_level: String,
+    pub risk_reason: String,
+    pub suggested_confirmation: Option<String>,
 }
 
 impl ExperienceCandidateSubmission {
@@ -247,11 +250,29 @@ impl ExperienceCandidateSubmission {
             })
             .unwrap_or_default();
 
+        let risk_level = input
+            .get("risk_level")
+            .and_then(|v| v.as_str())
+            .unwrap_or("low")
+            .to_string();
+        let risk_reason = input
+            .get("risk_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let suggested_confirmation = input
+            .get("suggested_confirmation")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
         Ok(Self {
             title: title.to_string(),
             kind_hint,
             payload,
             dependency_refs,
+            risk_level,
+            risk_reason,
+            suggested_confirmation,
         })
     }
 }
@@ -327,4 +348,10 @@ mod tests {
         assert_eq!(entry.validation_status, KnowledgeValidationStatus::Approved);
         assert_eq!(entry.source, KnowledgeSource::UserCommand);
     }
+}
+
+/// 共享知识升级入口队列：已被顶层治理判定具备公共价值的候选缓冲。
+#[derive(Resource, Default, Serialize, Deserialize)]
+pub struct SharedKnowledgeUpgradeQueue {
+    pub candidates: Vec<super::SharedKnowledgeUpgradeCandidate>,
 }

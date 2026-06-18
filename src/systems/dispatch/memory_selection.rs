@@ -133,6 +133,9 @@ mod tests {
             decay_score: 1.0,
             source: "test".to_string(),
             confidence: 1.0,
+            source_candidate_id: None,
+            source_task_id: None,
+            agent_id: None,
         });
         long_term.entries.push(LongTermMemoryEntry {
             content: "frontend color tweak".to_string(),
@@ -146,6 +149,9 @@ mod tests {
             decay_score: 0.1,
             source: "test".to_string(),
             confidence: 0.7,
+            source_candidate_id: None,
+            source_task_id: None,
+            agent_id: None,
         });
 
         let selected = select_long_term_memories(

@@ -11,8 +11,8 @@ use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
     ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceCollectionRequestMessage, ExperienceKindHint, FrontendKind, LongTermMemoryKind,
-    OutputContent, SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
+    ExperienceKindHint, ExperienceStore, FrontendKind, LongTermMemoryKind, OutputContent,
+    SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
     TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
@@ -384,6 +384,8 @@ pub fn handle_tool_action<B: SessionBackend>(
     action: Result<ToolAction, ToolError>,
     tasks: &mut Query<(Entity, &mut Task)>,
     backend: &B,
+    experience_store: &mut ExperienceStore,
+    parent_agent_id: Option<AgentId>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -627,13 +629,23 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request.request.agent_id,
                 request.request.task_id,
             );
-            // 发出经验收集请求，由 experience_collection 系统处理入队
-            commands.spawn(ExperienceCollectionRequestMessage {
-                task_id: request.request.task_id,
-                agent_id: request.request.agent_id,
-                parent_task_id: None,
-                parent_agent_id: None,
-            });
+
+            // 判断当前任务是否有父任务：有则写入父层 inbox，无则作为顶层 root 候选。
+            let parent_task_id = tasks
+                .iter()
+                .find(|(_, t)| t.id == request.request.task_id)
+                .and_then(|(_, t)| t.parent_task_id);
+
+            match parent_task_id {
+                Some(pid) => {
+                    let owner_agent_id = parent_agent_id.unwrap_or(request.request.agent_id);
+                    experience_store.queue_for_parent(pid, owner_agent_id, candidate.clone());
+                }
+                None => {
+                    experience_store.stage_root_candidate(candidate.clone());
+                }
+            }
+
             spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }
         Err(e) => {
@@ -722,6 +734,22 @@ fn submission_to_candidate(
         },
     };
 
+    let risk_level = match submission.risk_level.to_lowercase().as_str() {
+        "high" => crate::domain::ExperienceRiskLevel::High,
+        "medium" => crate::domain::ExperienceRiskLevel::Medium,
+        _ => crate::domain::ExperienceRiskLevel::Low,
+    };
+    let suggested_confirmation = match submission
+        .suggested_confirmation
+        .as_deref()
+        .unwrap_or("none")
+        .to_lowercase()
+        .as_str()
+    {
+        "user" => crate::domain::ExperienceConfirmationPolicy::User,
+        _ => crate::domain::ExperienceConfirmationPolicy::None,
+    };
+
     ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
         producer_task_id: task_id,
@@ -731,6 +759,11 @@ fn submission_to_candidate(
         payload,
         dependency_refs: submission.dependency_refs.clone(),
         status: crate::domain::ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
+        risk_level,
+        risk_reason: submission.risk_reason.clone(),
+        suggested_confirmation,
+        derived_from_candidate_ids: Vec::new(),
     }
 }
 

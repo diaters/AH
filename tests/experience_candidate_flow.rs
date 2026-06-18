@@ -51,12 +51,17 @@ fn executable_candidate_requires_user_approval() {
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
+        risk_level: harness::ExperienceRiskLevel::default(),
+        risk_reason: String::new(),
+        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
+        derived_from_candidate_ids: vec![],
     };
 
     assert!(candidate.requires_user_confirmation());
 }
 
-/// 验证 ExperienceStore.apply_confirmation_response 可以审批和拒绝候选。
+/// 验证 ExperienceStore.apply_confirmation_response 精确审批目标候选。
 #[test]
 fn confirmation_response_approves_and_rejects_candidates() {
     let mut store = ExperienceStore::default();
@@ -76,8 +81,9 @@ fn confirmation_response_approves_and_rejects_candidates() {
     let candidate_id = candidate.candidate_id;
     store.stage_root_candidate(candidate);
 
-    // Approve
-    store.apply_confirmation_response(uuid::Uuid::new_v4(), "approve");
+    let approve_request_id = uuid::Uuid::new_v4();
+    store.bind_approval_request(approve_request_id, candidate_id);
+    store.apply_confirmation_response(approve_request_id, "approve");
     assert_eq!(
         store.candidates.get(&candidate_id).unwrap().status,
         ExperienceCandidateStatus::Approved
@@ -96,7 +102,9 @@ fn confirmation_response_approves_and_rejects_candidates() {
     let candidate2_id = candidate2.candidate_id;
     store.stage_root_candidate(candidate2);
 
-    store.apply_confirmation_response(uuid::Uuid::new_v4(), "deny");
+    let reject_request_id = uuid::Uuid::new_v4();
+    store.bind_approval_request(reject_request_id, candidate2_id);
+    store.apply_confirmation_response(reject_request_id, "deny");
     assert_eq!(
         store.candidates.get(&candidate2_id).unwrap().status,
         ExperienceCandidateStatus::Rejected
@@ -129,6 +137,11 @@ fn candidate_conversion_to_long_term_memory() {
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
+        governing_agent_id: None,
+        risk_level: harness::ExperienceRiskLevel::default(),
+        risk_reason: String::new(),
+        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
+        derived_from_candidate_ids: vec![],
     };
     assert!(executable_candidate.as_long_term_memory_entry().is_none());
 }

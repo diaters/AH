@@ -30,7 +30,7 @@ pub fn tool_dispatch_system(
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
-    experience_store: Res<ExperienceStore>,
+    mut experience_store: ResMut<ExperienceStore>,
     agents: Query<&Agent>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
@@ -159,6 +159,7 @@ pub fn tool_dispatch_system(
                 if let Some((task_entity, _)) =
                     tasks.iter().find(|(_, t)| t.id == request.request.task_id)
                 {
+                    let parent_agent_id = agent.parent_id;
                     handle_tool_action(
                         &mut commands,
                         entity,
@@ -167,6 +168,8 @@ pub fn tool_dispatch_system(
                         action,
                         &mut tasks,
                         &*backend,
+                        &mut experience_store,
+                        parent_agent_id,
                     );
                 }
 

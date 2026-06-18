@@ -180,3 +180,95 @@ fn workitem_without_matching_agent_is_marked_failed() {
         "Work item should be marked Failed when no matching agent"
     );
 }
+
+/// Test: Pending ExperienceCollection WorkItem is dispatched to collector agent
+#[test]
+fn pending_experience_collection_workitem_is_dispatched_to_collector() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let tool = harness::ToolDefinition {
+        name: "submit_experience_candidate".to_string(),
+        description: "submit".to_string(),
+        parameters: harness::ToolSchema::default(),
+        default_permission: harness::ToolPermission::Allow,
+        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        required_tag: None,
+    };
+    let work_item = WorkItem::experience_collection(
+        task_id,
+        "collect experience".to_string(),
+        None,
+        vec![],
+        vec![tool],
+        uuid::Uuid::new_v4(),
+    );
+    let work_item_id = work_item.id;
+    app.world_mut().spawn(work_item);
+
+    app.update();
+
+    let states: Vec<_> = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].status, WorkItemStatus::Running);
+    assert_eq!(states[0].id, work_item_id);
+    assert!(states[0].assigned_agent.is_some());
+}
+
+/// Test: ExperienceCollection WorkItem without collector agent is marked Failed
+#[test]
+fn experience_collection_workitem_without_collector_is_failed() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut cfg = test_config();
+    cfg.agents_config_path = "/nonexistent_agents.toml".to_string();
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
+
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let tool = harness::ToolDefinition {
+        name: "submit_experience_candidate".to_string(),
+        description: "submit".to_string(),
+        parameters: harness::ToolSchema::default(),
+        default_permission: harness::ToolPermission::Allow,
+        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        required_tag: None,
+    };
+    let work_item = WorkItem::experience_collection(
+        task_id,
+        "collect experience".to_string(),
+        None,
+        vec![],
+        vec![tool],
+        uuid::Uuid::new_v4(),
+    );
+    app.world_mut().spawn(work_item);
+
+    for _ in 0..5 {
+        app.update();
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let states: Vec<_> = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(states.len(), 1);
+    assert_eq!(
+        states[0].status,
+        WorkItemStatus::Failed,
+        "ExperienceCollection WorkItem should be Failed when no collector agent"
+    );
+}

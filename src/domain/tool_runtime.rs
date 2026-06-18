@@ -23,4 +23,6 @@ pub struct ToolCallingState {
     pub tools: Vec<ToolDefinition>,
     /// 原始请求类型（follow-up 请求需要保留）
     pub request_kind: AgentRequestKind,
+    /// 关联的 WorkItem ID（仅治理型 WorkItem 使用）
+    pub work_item_id: Option<uuid::Uuid>,
 }

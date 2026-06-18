@@ -23,7 +23,7 @@ mod workflow;
 
 use std::{future::Future, pin::Pin};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ============ 类型别名 ============
@@ -49,11 +49,12 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 
 // contribution
 pub use contribution::{
-    AbsorbedMemory, ContributionEvaluation, DiscardedMemory, ExperienceCandidate,
-    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionRequestMessage,
-    ExperienceCollectionTracker, ExperienceGovernanceRequestMessage, ExperienceInbox,
-    ExperienceKindHint, ExperienceStore, IncubationProposal, MemoryAbsorptionMessage,
-    MemoryContributionRequestMessage, MemoryWritebackBatch, TaskSummary,
+    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
+    ExperienceCandidateStatus as ExperienceStatus, ExperienceCollectionRequestMessage,
+    ExperienceConfirmationPolicy, ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage,
+    ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint, ExperienceRiskLevel,
+    ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
+    IncubationProposal, IncubationProposalStatus, SharedKnowledgeUpgradeCandidate,
 };
 
 // error
@@ -88,12 +89,13 @@ pub use memory::{
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExternalInput, FinishTaskMessage, OutputKind, OutputMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
-    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, OutputKind,
+    OutputMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
+    SessionStartedMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
+    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
+    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
+    WaitingReason,
 };
 
 // session
@@ -107,8 +109,8 @@ pub use session::{
 pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
     KnowledgeSource, KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry,
-    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
-    ToolSchema,
+    SharedKnowledgeUpgradeQueue, SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition,
+    ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 // summarization
@@ -140,12 +142,12 @@ pub trait AgentExecutor: Send + Sync {
 
 // ============ 配置类型（保留在 mod.rs） ============
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub agent: Vec<AgentEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEntry {
     pub name: String,
     pub model: String,

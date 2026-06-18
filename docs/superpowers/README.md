@@ -14,6 +14,7 @@
 | `plans/2026-06-09-space-module-convergence.md` | Space 模块收敛 | 活跃 |
 | `plans/2026-06-10-memory-convergence-implementation.md` | 记忆系统收敛 | 活跃 |
 | `plans/2026-06-11-experience-candidate-governance.md` | 经验候选治理与可执行记忆实施 | 活跃 |
+| `plans/2026-06-15-experience-governance-writeback.md` | 经验治理统一写回与任务级孵化实施 | 活跃 |
 
 ### 活跃规格
 
@@ -24,6 +25,10 @@
 | `specs/2026-06-10-memory-convergence-design.md` | 记忆系统收敛设计 | 活跃 |
 | `specs/2026-06-11-memory-persistence-design.md` | 长期记忆持久化与跨会话加载设计 | 活跃 |
 | `specs/2026-06-11-experience-candidate-governance-design.md` | 经验候选治理与可执行记忆极简设计 | 活跃 |
+| `specs/2026-06-14-experience-collection-workitem-design.md` | 经验收集 WorkItem 化设计 | 活跃 |
+| `specs/2026-06-14-experience-module-layered-governance-design.md` | 经验模块两层分层汇聚治理设计 | 活跃 |
+| `specs/2026-06-14-experience-persistence-fix-design.md` | 经验落盘链路完整修复设计 | 活跃 |
+| `specs/2026-06-15-experience-governance-writeback-design.md` | 经验治理统一写回与任务级孵化设计 | 活跃 |
 
 ## 生命周期规则
 

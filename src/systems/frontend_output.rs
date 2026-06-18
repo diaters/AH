@@ -112,9 +112,13 @@ pub(crate) fn frontend_output_system(
             .map(|opt| crate::domain::ApprovalOption {
                 id: opt.id.clone(),
                 label: opt.label.clone(),
-                description: match opt.mode {
-                    crate::domain::GrantMode::Once => "仅本次允许".to_string(),
-                    crate::domain::GrantMode::Permanent => "永久允许此工具".to_string(),
+                description: if opt.id == "deny" {
+                    "拒绝".to_string()
+                } else {
+                    match opt.mode {
+                        crate::domain::GrantMode::Once => "仅本次允许".to_string(),
+                        crate::domain::GrantMode::Permanent => "永久允许此工具".to_string(),
+                    }
                 },
             })
             .collect();

@@ -52,15 +52,19 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 #### 经验候选治理
 
-- 任务结束后不再直接写回长期记忆，改用「候选生成 → 入箱 → 顶层治理 → 选择性持久化/孵化」流程
-- `ExperienceCandidate` 区分 Knowledge、Executable 两种载荷类型
-- Knowledge 候选可转换为 `LongTermMemoryEntry`，Executable 候选需要用户确认
-- `ExperienceStore` 作为全局运行时资源管理候选与收件箱
-- `experience_governance_system` 根据候选类型和 Agent 属性路由：
-  - 非 default 持久型 Agent 的 Knowledge 候选 → 自动持久化到长期记忆
-  - default Agent 的 Knowledge 候选 → 生成 `IncubationProposal`
-  - Executable 候选 → 用户确认（`ToolConfirmationRequestMessage`）
-- `experience_approval_result_system` 处理用户确认响应，更新候选状态
+- 经验治理已收敛为两层分层模型：非顶层 `TaskScoped Agent` 只产生、汇聚、向上贡献；顶层 `Persistent Agent` 做最终治理与落盘
+- `ExperienceCandidate` 是经验治理唯一中间态，具备完整状态机：
+  `Submitted / InInbox / Aggregated / GovernancePending / NeedsUserApproval / Approved / Rejected / Persisted`
+- 非顶层候选通过父任务 `ExperienceInbox` 上送，顶层候选进入 root 后触发 `ExperienceGovernanceRequestMessage`
+- 顶层治理后四类最终去向全部可达：
+  - `Knowledge` → 普通持久型 Agent 的 `LongTermMemory`
+  - `Executable` → 用户确认后生成 Agent 私有 `Skill Package`
+  - `SharedKnowledge` → `SharedKnowledgeUpgradeQueue` 升级入口（已持久化到 `.harness/memory/shared_knowledge/upgrades.json`）
+  - `default Agent` 的私有 `Knowledge / Executable` → `IncubationProposal`
+- `default Agent` 通过 `tags` 中的 `default` 识别，不直接沉淀私有长期身份资产
+- `LongTermMemoryEntry` 已具备最小来源追溯字段：`source_candidate_id`、`source_task_id`、`agent_id`
+- `IncubationProposal` 已扩展为正式治理输出结构，包含 `proposal_id`、`proposed_agent_profile`、按类型分列的候选 ID、`status`、`created_at`
+- 写回失败时保留 `warn` 级审计日志，候选状态不推进到 `Persisted`
 
 ### 待完善
 
@@ -74,6 +78,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Planning WorkItem` 已删除，不再作为未来预留项保留
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
+- `ExperienceCollectionTracker` 与 task-scoped agent 保活逻辑已移除，经验收集改为独立 WorkItem
 
 ## 当前架构结论
 
@@ -126,7 +131,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 3. `README.md` — 项目简介
 4. `docs/configuration.md` — 配置说明
 5. `docs/TODO.md` — 待办事项
-6. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
-7. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
-8. `docs/design/README.md` — 设计文档索引
-9. `docs/superpowers/README.md` — 当前活跃计划与规格
+6. `docs/wiki/system-pipeline.md` — 系统管线流程与 System 注解
+7. `docs/wiki/llm-context-assembly.md` — LLM 上下文组装机制与例子
+8. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
+9. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
+10. `docs/design/README.md` — 设计文档索引
+11. `docs/superpowers/README.md` — 当前活跃计划与规格

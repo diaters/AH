@@ -78,7 +78,7 @@ pub fn approval_result_system(
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
-    experience_store: Res<ExperienceStore>,
+    mut experience_store: ResMut<ExperienceStore>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -209,6 +209,8 @@ pub fn approval_result_system(
                         action,
                         &mut tasks,
                         &*backend,
+                        &mut experience_store,
+                        None,
                     );
                 }
 

@@ -39,7 +39,7 @@ pub fn tool_confirmation_result_system(
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
-    experience_store: Res<ExperienceStore>,
+    mut experience_store: ResMut<ExperienceStore>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -52,14 +52,33 @@ pub fn tool_confirmation_result_system(
             .iter()
             .find(|(_, r)| r.pending_confirmation_id == Some(response.request_id))
         else {
-            warn!(
-                event = "ToolConfirmationNoMatch",
-                request_id = %response.request_id,
-                "no matching tool request found"
-            );
+            // 经验治理与孵化审批不属于 ToolExecutionRequestMessage，留给专用 system 处理。
+            // 检查是否有对应的经验候选审批绑定，有则跳过（不报 NoMatch）。
+            let is_experience_approval = experience_store
+                .candidate_id_for_request(response.request_id)
+                .is_some();
+            if !is_experience_approval {
+                warn!(
+                    event = "ToolConfirmationNoMatch",
+                    request_id = %response.request_id,
+                    "no matching tool request found"
+                );
+            }
             commands.entity(entity).despawn();
             continue;
         };
+
+        // experience_governance 特判：销毁执行占位实体，不执行工具，不销毁响应
+        if tool_request.tool_name == "experience_governance" {
+            debug!(
+                event = "ExperienceGovernanceConfirmationSkipped",
+                request_id = %response.request_id,
+                "experience_governance confirmation handled by dedicated system"
+            );
+            commands.entity(request_entity).despawn();
+            // 不 despawn response entity，留给 experience_approval_result_system
+            continue;
+        }
 
         // 从 ToolExecutionRequestMessage 保存的选项中查找
         let options = tool_request
@@ -185,6 +204,8 @@ pub fn tool_confirmation_result_system(
                         action,
                         &mut tasks,
                         &*backend,
+                        &mut experience_store,
+                        None,
                     );
                 }
 
