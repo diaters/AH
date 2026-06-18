@@ -7,6 +7,27 @@ use crate::domain::{
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 
+fn build_incubated_agent_description(
+    store: &crate::domain::ExperienceStore,
+    proposal: &crate::domain::IncubationProposal,
+) -> String {
+    let titles: Vec<String> = proposal
+        .knowledge_candidate_ids
+        .iter()
+        .filter_map(|id| store.candidates.get(id).map(|c| c.title.clone()))
+        .collect();
+
+    match titles.len() {
+        0 => String::new(),
+        1 => titles[0].clone(),
+        n => format!(
+            "基于 {} 条经验孵化：{}",
+            n,
+            titles.iter().take(3).cloned().collect::<Vec<_>>().join("；")
+        ),
+    }
+}
+
 /// 统一写回执行系统：根据治理决议执行正式写回。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn experience_writeback_system(
@@ -315,5 +336,47 @@ fn writeback_incubation_proposal(
             );
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn description_builds_from_candidate_titles() {
+        let mut store = crate::domain::ExperienceStore::default();
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+
+        let c1 = crate::domain::ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "公式推导".to_string(),
+            "content1".to_string(),
+            crate::domain::LongTermMemoryKind::Fact,
+        );
+        let c2 = crate::domain::ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "数值验证".to_string(),
+            "content2".to_string(),
+            crate::domain::LongTermMemoryKind::Fact,
+        );
+        store.stage_root_candidate(c1.clone());
+        store.stage_root_candidate(c2.clone());
+
+        let profile = crate::domain::AgentProfile {
+            name: "incubated-test".to_string(),
+            model: "test".to_string(),
+        };
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &c1);
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &c2);
+        let proposal = store.proposals.get(&task_id).unwrap().clone();
+
+        let description = build_incubated_agent_description(&store, &proposal);
+        assert_eq!(description, "基于 2 条经验孵化：公式推导；数值验证");
     }
 }
