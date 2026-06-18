@@ -117,7 +117,7 @@ impl MemoryStore for JsonFileMemoryStore {
         self.ensure_dir()?;
 
         let path = self.snapshot_path(&snapshot.agent_name);
-        let tmp_path = path.with_extension("json.tmp");
+        let tmp_path = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
 
         let mut updated = snapshot.clone();
         updated.updated_at = Utc::now();

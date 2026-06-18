@@ -23,7 +23,12 @@ fn build_incubated_agent_description(
         n => format!(
             "基于 {} 条经验孵化：{}",
             n,
-            titles.iter().take(3).cloned().collect::<Vec<_>>().join("；")
+            titles
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("；")
         ),
     }
 }
@@ -374,7 +379,9 @@ mod tests {
     };
     use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
     use crate::infrastructure::incubation::proposal_store::IncubationProposalStore;
-    use crate::infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository};
+    use crate::infrastructure::memory::{
+        JsonFileMemoryStore, LongTermMemoryService, MemoryRepository,
+    };
     use tempfile::TempDir;
 
     fn make_memory_service(dir: &TempDir) -> LongTermMemoryService {
@@ -473,9 +480,6 @@ mod tests {
         assert_eq!(config.agent.len(), 1);
         assert_eq!(config.agent[0].name, profile.name);
         assert_eq!(config.agent[0].model, profile.model);
-        assert_eq!(
-            config.agent[0].description,
-            "天体表面重力加速度计算流程"
-        );
+        assert_eq!(config.agent[0].description, "天体表面重力加速度计算流程");
     }
 }

@@ -419,14 +419,13 @@ impl LongTermMemory {
 
     /// 添加长期记忆条目。
     pub fn add_entry(&mut self, entry: LongTermMemoryEntry) {
-        if let Some(candidate_id) = entry.source_candidate_id {
-            if self
+        if let Some(candidate_id) = entry.source_candidate_id
+            && self
                 .entries
                 .iter()
                 .any(|e| e.source_candidate_id == Some(candidate_id))
-            {
-                return;
-            }
+        {
+            return;
         }
         self.entries.push(entry);
     }
