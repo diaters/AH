@@ -248,7 +248,6 @@ fn writeback_incubation_proposal(
         .ok_or_else(|| format!("no IncubationProposal found for task {}", task_id))?;
 
     let profile = proposal.proposed_agent_profile.clone();
-    let rationale = proposal.incubation_rationale.clone();
 
     match proposal.status {
         crate::domain::IncubationProposalStatus::Executing => {
@@ -300,12 +299,37 @@ fn writeback_incubation_proposal(
         .persist(&proposal)
         .map_err(|e| e.to_string())?;
 
+    // 把知识候选写入目标 Agent 的 LTM
+    let candidate_entries: Vec<crate::domain::LongTermMemoryEntry> = proposal
+        .knowledge_candidate_ids
+        .iter()
+        .filter_map(|id| store.candidates.get(id))
+        .filter_map(|candidate| {
+            let mut entry = candidate.as_long_term_memory_entry()?;
+            entry.source_candidate_id = Some(candidate.candidate_id);
+            entry.source_task_id = Some(candidate.producer_task_id);
+            entry.agent_id = Some(candidate.producer_agent_id);
+            Some(entry)
+        })
+        .collect();
+
+    if !candidate_entries.is_empty() {
+        let mut memory = crate::domain::LongTermMemory::with_name(profile.name.clone());
+        memory.entries = service.load_entries(&profile.name);
+        for entry in candidate_entries {
+            service
+                .add_entry(&mut memory, entry)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     // 创建新 Agent 记录
+    let description = build_incubated_agent_description(store, &proposal);
     let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
         name: profile.name.clone(),
         model: profile.model.clone(),
         tags: vec!["incubated".to_string()],
-        description: rationale,
+        description,
         tools: None,
     };
     let result = agent_registry
@@ -344,6 +368,19 @@ fn writeback_incubation_proposal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{
+        AgentProfile, ExperienceCandidate, ExperienceStore, IncubationProposalStatus,
+        LongTermMemoryKind,
+    };
+    use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
+    use crate::infrastructure::incubation::proposal_store::IncubationProposalStore;
+    use crate::infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository};
+    use tempfile::TempDir;
+
+    fn make_memory_service(dir: &TempDir) -> LongTermMemoryService {
+        let store = JsonFileMemoryStore::new(dir.path().join("agents"));
+        LongTermMemoryService::new(MemoryRepository::new(Box::new(store)))
+    }
 
     #[test]
     fn description_builds_from_candidate_titles() {
@@ -380,5 +417,65 @@ mod tests {
 
         let description = build_incubated_agent_description(&store, &proposal);
         assert_eq!(description, "基于 2 条经验孵化：公式推导；数值验证");
+    }
+
+    #[test]
+    fn incubation_writeback_persists_knowledge_to_ltm_and_agents_toml() {
+        let memory_dir = TempDir::new().unwrap();
+        let proposal_dir = TempDir::new().unwrap();
+        let config_dir = TempDir::new().unwrap();
+        let config_path = config_dir.path().join("agents.toml");
+
+        let mut memory_service = make_memory_service(&memory_dir);
+        let proposal_store = IncubationProposalStore::new(proposal_dir.path().join("proposals"));
+        let registry = IncubatedAgentRegistry;
+
+        let mut store = ExperienceStore::default();
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+
+        let candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "天体表面重力加速度计算流程".to_string(),
+            "使用万有引力公式 g = G·M/R²".to_string(),
+            LongTermMemoryKind::Fact,
+        );
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate.clone());
+
+        let profile = AgentProfile {
+            name: "incubated-test-flow".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        };
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
+        store.proposals.get_mut(&task_id).unwrap().status = IncubationProposalStatus::Approved;
+
+        let result = writeback_incubation_proposal(
+            task_id,
+            &mut store,
+            &proposal_store,
+            &registry,
+            &mut memory_service,
+            config_path.to_str().unwrap(),
+        );
+
+        assert!(result.is_ok(), "writeback failed: {:?}", result);
+
+        let loaded = memory_service.load_entries(&profile.name);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].content, "使用万有引力公式 g = G·M/R²");
+        assert_eq!(loaded[0].source_candidate_id, Some(candidate_id));
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: crate::domain::AgentConfig = toml::from_str(&content).unwrap();
+        assert_eq!(config.agent.len(), 1);
+        assert_eq!(config.agent[0].name, profile.name);
+        assert_eq!(config.agent[0].model, profile.model);
+        assert_eq!(
+            config.agent[0].description,
+            "天体表面重力加速度计算流程"
+        );
     }
 }
