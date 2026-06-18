@@ -108,6 +108,19 @@ mod tests {
         assert!(entry.source_task_id.is_some());
         assert!(entry.agent_id.is_some());
     }
+
+    #[test]
+    fn add_entry_dedups_by_source_candidate_id() {
+        let mut memory = LongTermMemory::with_name("dedup-agent");
+        let candidate_id = uuid::Uuid::new_v4();
+        let mut entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "content");
+        entry.source_candidate_id = Some(candidate_id);
+
+        memory.add_entry(entry.clone());
+        memory.add_entry(entry);
+
+        assert_eq!(memory.entries.len(), 1);
+    }
 }
 
 /// 估算文本的 token 数
@@ -406,6 +419,15 @@ impl LongTermMemory {
 
     /// 添加长期记忆条目。
     pub fn add_entry(&mut self, entry: LongTermMemoryEntry) {
+        if let Some(candidate_id) = entry.source_candidate_id {
+            if self
+                .entries
+                .iter()
+                .any(|e| e.source_candidate_id == Some(candidate_id))
+            {
+                return;
+            }
+        }
         self.entries.push(entry);
     }
 
