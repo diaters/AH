@@ -96,6 +96,7 @@ pub(crate) fn experience_writeback_system(
                     &mut store,
                     &proposal_store,
                     &agent_registry,
+                    &mut service,
                     &settings.0.agents_config_path,
                 )
             }
@@ -236,6 +237,7 @@ fn writeback_incubation_proposal(
     store: &mut ExperienceStore,
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
+    service: &mut crate::infrastructure::memory::LongTermMemoryService,
     config_path: &str,
 ) -> Result<(), String> {
     // 按 task_id 查找任务级 proposal
