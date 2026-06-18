@@ -533,7 +533,15 @@ fn approval_to_writeback_completes_in_same_frame() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let agents_dir = tempfile::TempDir::new().unwrap();
+    let mut cfg = test_config();
+    cfg.agents_config_path = agents_dir
+        .path()
+        .join("agents.toml")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
@@ -639,7 +647,15 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let agents_dir = tempfile::TempDir::new().unwrap();
+    let mut cfg = test_config();
+    cfg.agents_config_path = agents_dir
+        .path()
+        .join("agents.toml")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
@@ -759,7 +775,15 @@ fn aggregated_child_candidates_writeback_idempotently() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let agents_dir = tempfile::TempDir::new().unwrap();
+    let mut cfg = test_config();
+    cfg.agents_config_path = agents_dir
+        .path()
+        .join("agents.toml")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
     app.update();
 
     let parent_task_id = uuid::Uuid::new_v4();

@@ -51,8 +51,3 @@ description = "经验收敛专家，负责从任务终态材料中提炼经验�
 default_permission = "Deny"
 submit_experience_candidate = "Allow"
 
-[[agent]]
-name = "incubated-test"
-model = "test"
-tags = ["incubated"]
-description = ""
