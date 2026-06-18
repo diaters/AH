@@ -1,9 +1,8 @@
 mod command;
-mod contribution;
 mod dispatch;
-pub mod experience;
 mod evaluation;
 mod execution;
+pub mod experience;
 mod frontend_input;
 mod frontend_output;
 mod ingress;
@@ -17,16 +16,14 @@ mod transform;
 use bevy::ecs::schedule::SystemSet;
 
 pub(crate) use command::command_parse_system;
-pub(crate) use contribution::{
-    experience_approval_result_system, experience_governance_system, experience_writeback_system,
-};
-pub(crate) use experience::{
-    experience_collection_completion_system, experience_collection_workitem_system,
-    task_terminated_experience_trigger_system,
-};
 pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system, workitem_dispatch_system};
 pub(crate) use evaluation::evaluation_trigger_system;
 pub(crate) use execution::agent_execution_system;
+pub(crate) use experience::{
+    experience_approval_result_system, experience_collection_completion_system,
+    experience_collection_workitem_system, experience_governance_system,
+    experience_writeback_system, task_terminated_experience_trigger_system,
+};
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};

@@ -5,8 +5,7 @@
 //! - Contribution absorption persists to disk
 
 use harness::{
-    LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryImportance, TaskSummary,
-    extract_memory_writebacks,
+    LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 
@@ -134,48 +133,6 @@ fn contribution_absorption_persists_to_disk() {
         assert_eq!(entries[1].content, "child learned fact");
         assert_eq!(entries[2].content, "child learned strategy");
     }
-}
-
-/// 验证 extract_memory_writebacks 只接受高价值、高置信度且非临时的记忆。
-#[test]
-fn extract_memory_writebacks_filters_correctly() {
-    let summary = TaskSummary {
-        task_id: uuid::Uuid::nil(),
-        goal: "test task".to_string(),
-        outcome: "done".to_string(),
-    };
-
-    let entries = vec![
-        // 应接受（高重要性 + 高置信度）
-        {
-            let mut e = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "important fact");
-            e.importance = MemoryImportance::High;
-            e.confidence = 0.95;
-            e
-        },
-        // 应拒绝（包含 temporary）
-        {
-            let mut e = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "temporary note");
-            e.importance = MemoryImportance::High;
-            e.confidence = 0.95;
-            e
-        },
-        // 应接受但不共享（中重要度不满足 >= High && >= 0.9）
-        {
-            let mut e = LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "medium strategy");
-            e.importance = MemoryImportance::Medium;
-            e.confidence = 0.8;
-            e
-        },
-    ];
-
-    let (accepted, candidates) = extract_memory_writebacks("worker", &summary, &entries);
-
-    // 重要条目和中等条目都被接受（都通过了空内容和衰减检查）
-    assert!(accepted.len() >= 2);
-    // 只有高重要度 + 高置信度的才成为共享知识候选
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].content, "important fact");
 }
 
 /// 验证不存在持久化文件时 service 返回空记忆。

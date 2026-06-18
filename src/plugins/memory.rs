@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use crate::infrastructure::assets::AgentAssetService;
 use crate::infrastructure::memory::LongTermMemoryService;
 use crate::systems::{
-    HarnessSet, init_agent_memory_system, long_term_memory_decay_system,
-    memory_compression_system, summarization_dispatch_system,
+    HarnessSet, init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
+    summarization_dispatch_system,
 };
 
 /// 记忆 Plugin

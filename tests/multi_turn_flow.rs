@@ -5,8 +5,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole, ExecutorFuture,
-    FrontendKind, HarnessConfig, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind,
-    ShortTermMemory, Task, TaskStatus, WaitingReason, build_harness_app,
+    ExperienceCollectionRequestMessage, FrontendKind, HarnessConfig, LongTermMemory,
+    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -232,7 +232,7 @@ fn agent_has_long_term_memory() {
 }
 
 #[test]
-fn memory_contribution_on_agent_termination() {
+fn experience_collection_triggered_on_agent_termination() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
@@ -262,39 +262,27 @@ fn memory_contribution_on_agent_termination() {
         LongTermMemory::default(),
     ));
 
-    // Create child task-scoped agent with memory
+    // Create child task-scoped agent
     let child_id = uuid::Uuid::new_v4();
     let task_id = uuid::Uuid::new_v4();
-    let child_entity_id = {
-        let entity = app.world_mut().spawn((
-            Agent {
-                id: child_id,
-                profile: AgentProfile {
-                    name: "child".to_string(),
-                    model: "gpt-4".to_string(),
-                },
-                capabilities: AgentCapabilities {
-                    tags: vec!["general".to_string()],
-                    description: "child agent".to_string(),
-                },
-                kind: AgentKind::TaskScoped,
-                parent_id: Some(parent_id),
-                bound_task_id: Some(task_id),
-                tool_permissions: AgentToolPermissions::default(),
+    app.world_mut().spawn((
+        Agent {
+            id: child_id,
+            profile: AgentProfile {
+                name: "child".to_string(),
+                model: "gpt-4".to_string(),
             },
-            LongTermMemory::default(),
-        ));
-        entity.id()
-    };
-
-    // Add some memory to the child agent
-    {
-        let mut long_memory = app
-            .world_mut()
-            .get_mut::<LongTermMemory>(child_entity_id)
-            .unwrap();
-        long_memory.add_archive("learned something important");
-    }
+            capabilities: AgentCapabilities {
+                tags: vec!["general".to_string()],
+                description: "child agent".to_string(),
+            },
+            kind: AgentKind::TaskScoped,
+            parent_id: Some(parent_id),
+            bound_task_id: Some(task_id),
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 
     // Create a task for the terminated message to reference
     app.world_mut().spawn(Task {
@@ -323,79 +311,56 @@ fn memory_contribution_on_agent_termination() {
     app.world_mut()
         .spawn(harness::TaskTerminatedMessage { task_id });
 
-    // Run frames to allow systems to process
-    for _ in 0..10 {
+    let terminated_before = app
+        .world_mut()
+        .query::<&harness::TaskTerminatedMessage>()
+        .iter(app.world())
+        .count();
+    assert_eq!(terminated_before, 1, "TaskTerminatedMessage should exist");
+
+    let task_before = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .find(|t| t.id == task_id)
+        .map(|t| (t.status.clone(), t.delegate));
+
+    // 运行一帧，让 Execution 阶段的经验收集触发系统处理 TaskTerminatedMessage
+    app.update();
+
+    let terminated_after = app
+        .world_mut()
+        .query::<&harness::TaskTerminatedMessage>()
+        .iter(app.world())
+        .count();
+
+    // 验证新的经验治理流程被触发：任务终止后应生成 ExperienceCollectionRequestMessage
+    // 或 WorkItem（请求可能被 experience_collection_workitem_system 立即消费）
+    let collection_requests = app
+        .world_mut()
+        .query::<&ExperienceCollectionRequestMessage>()
+        .iter(app.world())
+        .count();
+    let work_items = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .filter(|w| matches!(w.work_type, harness::WorkItemType::ExperienceCollection))
+        .count();
+
+    assert!(
+        collection_requests > 0 || work_items > 0,
+        "task termination should trigger experience collection: requests={}, work_items={}; terminated_after={}; task_before={:?}",
+        collection_requests,
+        work_items,
+        terminated_after,
+        task_before
+    );
+
+    // 继续运行多帧，确保系统稳定处理
+    for _ in 0..9 {
         app.update();
     }
-
-    // Verify that either:
-    // 1. MemoryContributionRequestMessage was generated, or
-    // 2. MemoryAbsorptionMessage was generated (contribution processed), or
-    // 3. Child agent was despawned and memory was absorbed
-    let contribution_requests = app
-        .world_mut()
-        .query::<&harness::MemoryContributionRequestMessage>()
-        .iter(app.world())
-        .count();
-
-    let absorption_messages = app
-        .world_mut()
-        .query::<&harness::MemoryAbsorptionMessage>()
-        .iter(app.world())
-        .count();
-
-    // Check if child agent still exists
-    let child_exists = app
-        .world_mut()
-        .query::<&Agent>()
-        .iter(app.world())
-        .any(|a| a.id == child_id);
-
-    // Check if parent has absorbed memory
-    let parent_memory = app
-        .world_mut()
-        .query::<(&Agent, &LongTermMemory)>()
-        .iter(app.world())
-        .find(|(a, _)| a.id == parent_id)
-        .map(|(_, m)| m.entries.len());
-
-    // At least one of these should indicate the contribution flow worked
-    assert!(
-        contribution_requests > 0
-            || absorption_messages > 0
-            || !child_exists
-            || parent_memory.is_some_and(|len| len > 0),
-        "contribution flow should have processed: requests={}, absorptions={}, child_exists={}, parent_memory={:?}",
-        contribution_requests,
-        absorption_messages,
-        child_exists,
-        parent_memory
-    );
-}
-
-#[test]
-fn parent_agent_absorbs_filtered_long_term_memory_only() {
-    let mut child_memory = LongTermMemory::default();
-    child_memory.entries.push(LongTermMemoryEntry::new(
-        LongTermMemoryKind::Strategy,
-        "Prefer two-phase application for borrow-heavy mutations",
-    ));
-    child_memory.entries.push(LongTermMemoryEntry::new(
-        LongTermMemoryKind::Fact,
-        "temporary scratch pad",
-    ));
-
-    let summary = harness::TaskSummary {
-        task_id: uuid::Uuid::nil(),
-        goal: "refactor memory logic".to_string(),
-        outcome: "done".to_string(),
-    };
-
-    let (accepted, _) =
-        harness::extract_memory_writebacks("child", &summary, &child_memory.entries);
-
-    assert_eq!(accepted.len(), 1);
-    assert!(accepted[0].content.contains("two-phase application"));
 }
 
 #[test]

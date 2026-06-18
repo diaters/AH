@@ -193,3 +193,55 @@ pub(crate) fn experience_collection_completion_system(
         commands.entity(entity).despawn();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::{
+        ExperienceCandidate, ExperienceCandidateStatus, ExperienceStore, LongTermMemoryKind, TaskId,
+    };
+
+    #[test]
+    fn experience_collection_completion_aggregates_child_candidates() {
+        let parent_task_id: TaskId = uuid::Uuid::new_v4();
+        let child_task_id: TaskId = uuid::Uuid::new_v4();
+        let parent_agent_id = uuid::Uuid::new_v4();
+
+        let mut store = ExperienceStore::default();
+
+        // 子层候选进入父层 inbox
+        let child_candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            child_task_id,
+            uuid::Uuid::new_v4(),
+            "child fact".to_string(),
+            "content".to_string(),
+            LongTermMemoryKind::Fact,
+        );
+        store.queue_for_parent(parent_task_id, parent_agent_id, child_candidate);
+
+        // 汇聚：消费 inbox
+        let ids = store.aggregate_inbox_for_task(parent_task_id);
+        assert!(!ids.is_empty());
+        assert_eq!(
+            store.candidates.get(&ids[0]).unwrap().status,
+            ExperienceCandidateStatus::Aggregated
+        );
+
+        // 顶层：暂存 root 候选并推进到治理
+        let root_candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            parent_task_id,
+            parent_agent_id,
+            "root fact".to_string(),
+            "root content".to_string(),
+            LongTermMemoryKind::Fact,
+        );
+        store.stage_root_candidate(root_candidate);
+        let governance_ids = store.promote_root_candidates_to_governance(parent_task_id);
+        assert!(!governance_ids.is_empty());
+        assert_eq!(
+            store.candidates.get(&governance_ids[0]).unwrap().status,
+            ExperienceCandidateStatus::GovernancePending
+        );
+    }
+}
