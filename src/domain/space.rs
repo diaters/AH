@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, ExperienceKindHint, ExperienceStore, MemoryImportance, SessionHandleId,
+    AgentId, ExperienceStore, MemoryImportance, SessionHandleId,
     SessionInputRequest, SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId,
     ToolError,
 };

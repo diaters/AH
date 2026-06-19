@@ -124,6 +124,7 @@ impl ExperienceCandidate {
     }
 
     /// 创建 Skill 类候选。
+    #[allow(clippy::too_many_arguments)]
     pub fn skill(
         candidate_id: uuid::Uuid,
         producer_task_id: TaskId,
