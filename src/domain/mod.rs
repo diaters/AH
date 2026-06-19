@@ -51,10 +51,10 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 pub use contribution::{
     ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
     ExperienceCandidateStatus as ExperienceStatus, ExperienceCollectionRequestMessage,
-    ExperienceConfirmationPolicy, ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage,
-    ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint, ExperienceRiskLevel,
-    ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
-    IncubationProposal, IncubationProposalStatus, SharedKnowledgeUpgradeCandidate,
+    ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage, ExperienceInbox,
+    ExperienceInboxStatus, ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
+    ExperienceWritebackRequestMessage, IncubationProposal, IncubationProposalStatus, SkillFileRef,
+    SkillFileRole,
 };
 
 // error
@@ -81,8 +81,7 @@ pub use frontend::{
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
-    LongTermMemoryKind, MemoryEntry, MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall,
-    estimate_tokens,
+    MemoryEntry, MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall, estimate_tokens,
 };
 
 // message
@@ -109,8 +108,8 @@ pub use session::{
 pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
     KnowledgeSource, KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry,
-    SharedKnowledgeUpgradeQueue, SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition,
-    ToolExecutorKind, ToolPermission, ToolSchema,
+    SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission,
+    ToolSchema,
 };
 
 // summarization

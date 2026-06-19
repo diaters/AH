@@ -9,9 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, ExperienceKindHint, ExperienceStore, LongTermMemoryKind, MemoryImportance,
-    SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest,
-    SubTaskDefinition, TaskId, ToolError,
+    AgentId, ExperienceKindHint, ExperienceStore, MemoryImportance, SessionHandleId,
+    SessionInputRequest, SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId,
+    ToolError,
 };
 
 /// 共享知识审核状态。
@@ -35,7 +35,7 @@ pub enum KnowledgeSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SharedKnowledgeEntry {
     pub content: String,
-    pub kind: LongTermMemoryKind,
+    pub kind: String,
     pub scope_tags: Vec<String>,
     pub importance: MemoryImportance,
     pub created_at: DateTime<Utc>,
@@ -52,7 +52,7 @@ impl SharedKnowledgeEntry {
     pub fn approved_from_user_input(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            kind: LongTermMemoryKind::Fact,
+            kind: "fact".to_string(),
             scope_tags: Vec::new(),
             importance: MemoryImportance::High,
             created_at: Utc::now(),
@@ -66,10 +66,10 @@ impl SharedKnowledgeEntry {
     }
 
     /// 创建待审核的共享知识候选条目。
-    pub fn candidate(content: impl Into<String>, kind: LongTermMemoryKind) -> Self {
+    pub fn candidate(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            kind,
+            kind: "fact".to_string(),
             scope_tags: Vec::new(),
             importance: MemoryImportance::Medium,
             created_at: Utc::now(),
@@ -210,12 +210,11 @@ pub enum ToolAction {
 #[derive(Debug, Clone)]
 pub struct ExperienceCandidateSubmission {
     pub title: String,
-    pub kind_hint: ExperienceKindHint,
-    pub payload: serde_json::Value,
-    pub dependency_refs: Vec<String>,
-    pub risk_level: String,
-    pub risk_reason: String,
-    pub suggested_confirmation: Option<String>,
+    pub kind: crate::domain::ExperienceKindHint,
+    pub content: Option<String>,
+    pub skill_description: Option<String>,
+    pub instructions: Option<String>,
+    pub file_refs: Vec<crate::domain::SkillFileRef>,
 }
 
 impl ExperienceCandidateSubmission {
@@ -227,52 +226,68 @@ impl ExperienceCandidateSubmission {
         input: &serde_json::Value,
     ) -> Result<Self, ToolError> {
         let kind_str = input
-            .get("kind_hint")
+            .get("kind")
             .and_then(|v| v.as_str())
             .unwrap_or("knowledge");
-        let kind_hint = match kind_str {
-            "executable" => ExperienceKindHint::Executable,
-            "shared_knowledge" => ExperienceKindHint::SharedKnowledge,
-            "discard" => ExperienceKindHint::Discard,
-            _ => ExperienceKindHint::Knowledge,
+        let kind = match kind_str {
+            "skill" => crate::domain::ExperienceKindHint::Skill,
+            _ => crate::domain::ExperienceKindHint::Knowledge,
         };
-        let payload = input
-            .get("payload")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
-        let dependency_refs = input
-            .get("dependency_refs")
+
+        let content = input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let skill_description = input
+            .get("skill_description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let instructions = input
+            .get("instructions")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let file_refs = input
+            .get("file_refs")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .filter_map(|item| {
+                        let path = item.get("path")?.as_str()?.to_string();
+                        let role_str = item
+                            .get("role")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let role = match role_str {
+                            "script" => crate::domain::SkillFileRole::Script,
+                            "reference" => crate::domain::SkillFileRole::Reference,
+                            "asset" => crate::domain::SkillFileRole::Asset,
+                            _ => {
+                                // 根据扩展名推断
+                                if path.ends_with(".sh") || path.ends_with(".py") {
+                                    crate::domain::SkillFileRole::Script
+                                } else if path.ends_with(".md") || path.ends_with(".txt") {
+                                    crate::domain::SkillFileRole::Reference
+                                } else {
+                                    crate::domain::SkillFileRole::Asset
+                                }
+                            }
+                        };
+                        Some(crate::domain::SkillFileRef { path, role })
+                    })
                     .collect()
             })
             .unwrap_or_default();
 
-        let risk_level = input
-            .get("risk_level")
-            .and_then(|v| v.as_str())
-            .unwrap_or("low")
-            .to_string();
-        let risk_reason = input
-            .get("risk_reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let suggested_confirmation = input
-            .get("suggested_confirmation")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
         Ok(Self {
             title: title.to_string(),
-            kind_hint,
-            payload,
-            dependency_refs,
-            risk_level,
-            risk_reason,
-            suggested_confirmation,
+            kind,
+            content,
+            skill_description,
+            instructions,
+            file_refs,
         })
     }
 }
@@ -350,8 +365,3 @@ mod tests {
     }
 }
 
-/// 共享知识升级入口队列：已被顶层治理判定具备公共价值的候选缓冲。
-#[derive(Resource, Default, Serialize, Deserialize)]
-pub struct SharedKnowledgeUpgradeQueue {
-    pub candidates: Vec<super::SharedKnowledgeUpgradeCandidate>,
-}
