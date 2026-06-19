@@ -43,7 +43,7 @@ impl crate::domain::BuiltinTool for KnowledgeSearchTool {
 mod tests {
     use super::*;
     use crate::domain::{
-        BuiltinTool, ExperienceStore, LongTermMemoryKind, SharedKnowledgeBase, SharedKnowledgeEntry,
+        BuiltinTool, ExperienceStore, SharedKnowledgeBase, SharedKnowledgeEntry,
     };
 
     fn test_knowledge() -> SharedKnowledgeBase {
@@ -133,7 +133,6 @@ mod tests {
         let mut knowledge = SharedKnowledgeBase::default();
         knowledge.entries.push(SharedKnowledgeEntry::candidate(
             "Unreviewed shell note",
-            LongTermMemoryKind::Fact,
         ));
 
         let experience_store = ExperienceStore::default();

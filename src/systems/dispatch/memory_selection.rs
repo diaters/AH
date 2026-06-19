@@ -116,14 +116,13 @@ fn relevance_score(task_keywords: &[String], entry: &LongTermMemoryEntry) -> u32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{LongTermMemoryKind, MemoryImportance};
+    use crate::domain::MemoryImportance;
 
     #[test]
     fn select_long_term_memories_skips_unrelated_and_low_decay_entries() {
         let mut long_term = LongTermMemory::default();
         long_term.entries.push(LongTermMemoryEntry {
             content: "Shell tools should expose honest waiting semantics".to_string(),
-            kind: LongTermMemoryKind::Constraint,
             scope_tags: vec!["shell".to_string()],
             importance: MemoryImportance::Critical,
             pin: true,
@@ -139,7 +138,6 @@ mod tests {
         });
         long_term.entries.push(LongTermMemoryEntry {
             content: "frontend color tweak".to_string(),
-            kind: LongTermMemoryKind::Preference,
             scope_tags: vec!["ui".to_string()],
             importance: MemoryImportance::Low,
             pin: false,

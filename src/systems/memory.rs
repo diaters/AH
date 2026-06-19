@@ -152,8 +152,7 @@ pub(crate) fn long_term_memory_decay_system(mut agents: Query<(&Agent, &mut Long
 mod tests {
     use super::*;
     use crate::domain::{
-        ChannelId, EntryRole, FrontendKind, LongTermMemoryEntry, LongTermMemoryKind,
-        MemoryImportance, Task,
+        ChannelId, EntryRole, FrontendKind, LongTermMemoryEntry, MemoryImportance, Task,
     };
 
     #[test]
@@ -237,7 +236,6 @@ mod tests {
             agent_name: None,
             entries: vec![LongTermMemoryEntry {
                 content: "stale note".to_string(),
-                kind: LongTermMemoryKind::Fact,
                 scope_tags: vec![],
                 importance: MemoryImportance::Low,
                 pin: false,

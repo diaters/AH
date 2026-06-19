@@ -42,7 +42,7 @@ impl crate::domain::BuiltinTool for ListExperienceCandidatesTool {
 mod tests {
     use super::*;
     use crate::domain::{
-        BuiltinTool, ExperienceCandidate, ExperienceStore, LongTermMemoryKind, SharedKnowledgeBase,
+        BuiltinTool, ExperienceCandidate, ExperienceStore, SharedKnowledgeBase,
     };
 
     #[test]
@@ -60,7 +60,6 @@ mod tests {
                 agent_id,
                 "shell timeout".to_string(),
                 "shell_stop 默认等待退出".to_string(),
-                LongTermMemoryKind::Fact,
             ),
         );
 

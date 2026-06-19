@@ -227,8 +227,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, EntryMetadata, EntryRole,
-        FrontendKind, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryImportance,
-        ShortTermMemory,
+        FrontendKind, LongTermMemory, LongTermMemoryEntry, MemoryImportance, ShortTermMemory,
     };
     use uuid::Uuid;
 
@@ -319,7 +318,6 @@ mod tests {
             entries: vec![
                 LongTermMemoryEntry {
                     content: "Always keep shell tools truthful".to_string(),
-                    kind: LongTermMemoryKind::Constraint,
                     scope_tags: vec!["shell".to_string()],
                     importance: MemoryImportance::Critical,
                     pin: true,
@@ -335,7 +333,6 @@ mod tests {
                 },
                 LongTermMemoryEntry {
                     content: "Use bounded timeout handling for shell commands".to_string(),
-                    kind: LongTermMemoryKind::Strategy,
                     scope_tags: vec!["shell".to_string()],
                     importance: MemoryImportance::High,
                     pin: false,
@@ -351,7 +348,6 @@ mod tests {
                 },
                 LongTermMemoryEntry {
                     content: "Unrelated frontend palette note".to_string(),
-                    kind: LongTermMemoryKind::Preference,
                     scope_tags: vec!["ui".to_string()],
                     importance: MemoryImportance::Low,
                     pin: false,
