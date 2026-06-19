@@ -8,9 +8,22 @@ use super::{AgentId, TaskId};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExperienceKindHint {
     Knowledge,
-    Executable,
-    SharedKnowledge,
-    Discard,
+    Skill,
+}
+
+/// Skill 关联文件角色。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SkillFileRole {
+    Script,
+    Reference,
+    Asset,
+}
+
+/// Skill 关联文件引用。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillFileRef {
+    pub path: String,
+    pub role: SkillFileRole,
 }
 
 /// 经验候选状态。
@@ -29,29 +42,11 @@ pub enum ExperienceCandidateStatus {
     WritebackFailed,
 }
 
-/// 经验候选风险级别：由候选产生阶段的 LLM 初判。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum ExperienceRiskLevel {
-    #[default]
-    Low,
-    Medium,
-    High,
-}
-
-/// 经验候选确认策略。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum ExperienceConfirmationPolicy {
-    #[default]
-    None,
-    User,
-}
-
 /// 经验写回目标：治理决议后的唯一最终去向。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExperienceWritebackDestination {
     LongTermMemory,
     SkillPackage,
-    SharedKnowledgeUpgrade,
     IncubationProposal,
     Rejected,
 }
@@ -61,9 +56,7 @@ pub enum ExperienceWritebackDestination {
 pub struct ExperienceGovernanceDecision {
     pub candidate_id: uuid::Uuid,
     pub destination: ExperienceWritebackDestination,
-    pub confirmation_policy: ExperienceConfirmationPolicy,
-    pub final_risk_level: ExperienceRiskLevel,
-    pub risk_overridden: bool,
+    pub requires_user_confirmation: bool,
     pub decision_rationale: String,
     pub source_task_id: TaskId,
 }
@@ -71,23 +64,21 @@ pub struct ExperienceGovernanceDecision {
 /// 经验候选载荷。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExperienceCandidatePayload {
-    Knowledge {
-        content: String,
-        memory_kind: super::LongTermMemoryKind,
-    },
-    Executable {
-        intent: String,
-        when_to_use: String,
-        asset_refs: Vec<String>,
+    Knowledge { content: String },
+    Skill {
+        name: String,
+        description: String,
+        instructions: String,
+        file_refs: Vec<SkillFileRef>,
     },
 }
 
 impl ExperienceCandidatePayload {
-    /// 返回知识类载荷的文本内容，可执行类返回 None。
+    /// 返回知识类载荷的文本内容，Skill 类返回 None。
     pub fn content(&self) -> Option<String> {
         match self {
             ExperienceCandidatePayload::Knowledge { content, .. } => Some(content.clone()),
-            ExperienceCandidatePayload::Executable { .. } => None,
+            ExperienceCandidatePayload::Skill { .. } => None,
         }
     }
 }
@@ -105,12 +96,6 @@ pub struct ExperienceCandidate {
     pub status: ExperienceCandidateStatus,
     /// 最终治理该候选的顶层 Agent ID，用于确认后的写回路由。
     pub governing_agent_id: Option<AgentId>,
-    /// 候选产生阶段的风险初判。
-    pub risk_level: ExperienceRiskLevel,
-    /// 风险判断理由。
-    pub risk_reason: String,
-    /// 候选产生阶段建议的确认策略。
-    pub suggested_confirmation: ExperienceConfirmationPolicy,
     /// 若此候选由顶层基于多个候选重写出，记录来源候选 ID。
     pub derived_from_candidate_ids: Vec<uuid::Uuid>,
 }
@@ -123,7 +108,6 @@ impl ExperienceCandidate {
         producer_agent_id: AgentId,
         title: String,
         content: String,
-        memory_kind: super::LongTermMemoryKind,
     ) -> Self {
         Self {
             candidate_id,
@@ -131,44 +115,63 @@ impl ExperienceCandidate {
             producer_agent_id,
             title,
             kind_hint: ExperienceKindHint::Knowledge,
-            payload: ExperienceCandidatePayload::Knowledge {
-                content,
-                memory_kind,
+            payload: ExperienceCandidatePayload::Knowledge { content },
+            dependency_refs: Vec::new(),
+            status: ExperienceCandidateStatus::Submitted,
+            governing_agent_id: None,
+            derived_from_candidate_ids: Vec::new(),
+        }
+    }
+
+    /// 创建 Skill 类候选。
+    pub fn skill(
+        candidate_id: uuid::Uuid,
+        producer_task_id: TaskId,
+        producer_agent_id: AgentId,
+        title: String,
+        name: String,
+        description: String,
+        instructions: String,
+        file_refs: Vec<SkillFileRef>,
+    ) -> Self {
+        Self {
+            candidate_id,
+            producer_task_id,
+            producer_agent_id,
+            title,
+            kind_hint: ExperienceKindHint::Skill,
+            payload: ExperienceCandidatePayload::Skill {
+                name,
+                description,
+                instructions,
+                file_refs,
             },
             dependency_refs: Vec::new(),
             status: ExperienceCandidateStatus::Submitted,
             governing_agent_id: None,
-            risk_level: ExperienceRiskLevel::default(),
-            risk_reason: String::new(),
-            suggested_confirmation: ExperienceConfirmationPolicy::default(),
             derived_from_candidate_ids: Vec::new(),
         }
     }
 
     /// 判断候选是否需要用户确认。
     ///
-    /// 可执行类或带资产依赖的候选需要用户确认。
+    /// Skill 类候选需要用户确认。
     pub fn requires_user_confirmation(&self) -> bool {
-        matches!(self.kind_hint, ExperienceKindHint::Executable)
-            || matches!(
-                &self.payload,
-                ExperienceCandidatePayload::Executable { asset_refs, .. } if !asset_refs.is_empty()
-            )
+        matches!(self.kind_hint, ExperienceKindHint::Skill)
     }
 
     /// 将知识类候选转换为长期记忆条目。
     ///
-    /// 仅知识类候选可以转换，可执行类返回 `None`。
+    /// 仅知识类候选可以转换，Skill 类返回 `None`。
     pub fn as_long_term_memory_entry(&self) -> Option<super::LongTermMemoryEntry> {
         match &self.payload {
-            ExperienceCandidatePayload::Knowledge {
-                content,
-                memory_kind,
-            } => Some(super::LongTermMemoryEntry::new(
-                *memory_kind,
-                content.clone(),
-            )),
-            ExperienceCandidatePayload::Executable { .. } => None,
+            ExperienceCandidatePayload::Knowledge { content } => {
+                Some(super::LongTermMemoryEntry::new(
+                    super::LongTermMemoryKind::Fact,
+                    content.clone(),
+                ))
+            }
+            ExperienceCandidatePayload::Skill { .. } => None,
         }
     }
 }
@@ -447,8 +450,7 @@ pub struct IncubationProposal {
     pub source_task_id: TaskId,
     pub proposed_agent_profile: super::AgentProfile,
     pub knowledge_candidate_ids: Vec<uuid::Uuid>,
-    pub executable_candidate_ids: Vec<uuid::Uuid>,
-    pub shared_knowledge_candidate_ids: Vec<uuid::Uuid>,
+    pub skill_candidate_ids: Vec<uuid::Uuid>,
     pub incubation_rationale: String,
     pub status: IncubationProposalStatus,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -469,8 +471,7 @@ impl IncubationProposal {
             source_task_id,
             proposed_agent_profile,
             knowledge_candidate_ids: Vec::new(),
-            executable_candidate_ids: Vec::new(),
-            shared_knowledge_candidate_ids: Vec::new(),
+            skill_candidate_ids: Vec::new(),
             incubation_rationale: String::new(),
             status: IncubationProposalStatus::Proposed,
             created_at: now,
@@ -482,29 +483,13 @@ impl IncubationProposal {
     pub fn merge_candidate(&mut self, candidate: &ExperienceCandidate) {
         let ids = match candidate.kind_hint {
             ExperienceKindHint::Knowledge => &mut self.knowledge_candidate_ids,
-            ExperienceKindHint::Executable => &mut self.executable_candidate_ids,
-            ExperienceKindHint::SharedKnowledge => &mut self.shared_knowledge_candidate_ids,
-            ExperienceKindHint::Discard => return,
+            ExperienceKindHint::Skill => &mut self.skill_candidate_ids,
         };
         if !ids.contains(&candidate.candidate_id) {
             ids.push(candidate.candidate_id);
         }
         self.updated_at = chrono::Utc::now();
     }
-}
-
-/// 共享知识升级入口候选：已被顶层治理判定具备公共价值，但尚未成为最终共享知识正文。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SharedKnowledgeUpgradeCandidate {
-    pub candidate_id: uuid::Uuid,
-    pub content: String,
-    pub kind: super::LongTermMemoryKind,
-    pub scope_tags: Vec<String>,
-    pub source_candidate_id: uuid::Uuid,
-    pub source_agent_id: AgentId,
-    pub source_task_id: TaskId,
-    pub validation_status: super::KnowledgeValidationStatus,
-    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[cfg(test)]
@@ -521,7 +506,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "shell timeout knowledge".to_string(),
             "shell_stop 默认会等待退出".to_string(),
-            super::super::LongTermMemoryKind::Fact,
         );
 
         let mut store = ExperienceStore::default();
@@ -560,34 +544,6 @@ mod tests {
     }
 
     #[test]
-    fn experience_candidate_tracks_risk_metadata() {
-        let candidate = ExperienceCandidate {
-            candidate_id: uuid::Uuid::new_v4(),
-            producer_task_id: uuid::Uuid::new_v4(),
-            producer_agent_id: uuid::Uuid::new_v4(),
-            title: "risk tagged".to_string(),
-            kind_hint: ExperienceKindHint::Knowledge,
-            payload: ExperienceCandidatePayload::Knowledge {
-                content: "stable rule".to_string(),
-                memory_kind: super::super::LongTermMemoryKind::Constraint,
-            },
-            dependency_refs: vec![],
-            status: ExperienceCandidateStatus::Submitted,
-            governing_agent_id: None,
-            risk_level: ExperienceRiskLevel::Low,
-            risk_reason: "collector judged it low risk".to_string(),
-            suggested_confirmation: ExperienceConfirmationPolicy::None,
-            derived_from_candidate_ids: vec![],
-        };
-
-        assert_eq!(candidate.risk_level, ExperienceRiskLevel::Low);
-        assert_eq!(
-            candidate.suggested_confirmation,
-            ExperienceConfirmationPolicy::None
-        );
-    }
-
-    #[test]
     fn candidate_status_machine_contains_writeback_states() {
         let statuses = [
             ExperienceCandidateStatus::GovernanceResolved,
@@ -619,7 +575,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "child fact".to_string(),
             "content".to_string(),
-            super::super::LongTermMemoryKind::Fact,
         );
 
         let mut store = ExperienceStore::default();
@@ -651,7 +606,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "bound fact".to_string(),
             "content".to_string(),
-            super::super::LongTermMemoryKind::Fact,
         );
         let candidate_id = candidate.candidate_id;
         store.stage_root_candidate(candidate);
@@ -674,7 +628,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "first".to_string(),
             "content".to_string(),
-            super::super::LongTermMemoryKind::Fact,
         );
         c1.status = ExperienceCandidateStatus::NeedsUserApproval;
         let c1_id = c1.candidate_id;
@@ -686,7 +639,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "second".to_string(),
             "content".to_string(),
-            super::super::LongTermMemoryKind::Fact,
         );
         c2.status = ExperienceCandidateStatus::NeedsUserApproval;
         let c2_id = c2.candidate_id;
@@ -715,7 +667,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "orphan".to_string(),
             "content".to_string(),
-            super::super::LongTermMemoryKind::Fact,
         );
         candidate.status = ExperienceCandidateStatus::NeedsUserApproval;
         let candidate_id = candidate.candidate_id;
