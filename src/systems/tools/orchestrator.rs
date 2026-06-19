@@ -11,7 +11,7 @@ use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
     ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceKindHint, ExperienceStore, FrontendKind, LongTermMemoryKind, OutputContent,
+    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent,
     SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
     TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
@@ -656,98 +656,29 @@ pub fn handle_tool_action<B: SessionBackend>(
 
 /// 将 ExperienceCandidateSubmission 转换为 ExperienceCandidate。
 ///
-/// 将工具层的提交数据转换为领域模型，载荷根据 kind_hint 进行解析。
+/// 将工具层的提交数据转换为领域模型，载荷根据 kind 进行解析。
 fn submission_to_candidate(
     submission: &ExperienceCandidateSubmission,
     agent_id: AgentId,
     task_id: TaskId,
 ) -> ExperienceCandidate {
-    let payload = match &submission.kind_hint {
+    let payload = match &submission.kind {
         ExperienceKindHint::Knowledge => {
-            let content = submission
-                .payload
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let memory_kind_str = submission
-                .payload
-                .get("memory_kind")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Fact");
-            let memory_kind = match memory_kind_str {
-                "Constraint" => LongTermMemoryKind::Constraint,
-                "Preference" => LongTermMemoryKind::Preference,
-                "Strategy" => LongTermMemoryKind::Strategy,
-                "AntiPattern" => LongTermMemoryKind::AntiPattern,
-                _ => LongTermMemoryKind::Fact,
-            };
-            ExperienceCandidatePayload::Knowledge {
-                content,
-                memory_kind,
+            let content = submission.content.clone().unwrap_or_default();
+            ExperienceCandidatePayload::Knowledge { content }
+        }
+        ExperienceKindHint::Skill => {
+            let name = submission.title.clone();
+            let description = submission.skill_description.clone().unwrap_or_default();
+            let instructions = submission.instructions.clone().unwrap_or_default();
+            let file_refs = submission.file_refs.clone();
+            ExperienceCandidatePayload::Skill {
+                name,
+                description,
+                instructions,
+                file_refs,
             }
         }
-        ExperienceKindHint::Executable => {
-            let intent = submission
-                .payload
-                .get("intent")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let when_to_use = submission
-                .payload
-                .get("when_to_use")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let asset_refs = submission
-                .payload
-                .get("asset_refs")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            ExperienceCandidatePayload::Executable {
-                intent,
-                when_to_use,
-                asset_refs,
-            }
-        }
-        ExperienceKindHint::SharedKnowledge => {
-            let content = submission
-                .payload
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            ExperienceCandidatePayload::Knowledge {
-                content,
-                memory_kind: LongTermMemoryKind::Fact,
-            }
-        }
-        ExperienceKindHint::Discard => ExperienceCandidatePayload::Knowledge {
-            content: String::new(),
-            memory_kind: LongTermMemoryKind::Fact,
-        },
-    };
-
-    let risk_level = match submission.risk_level.to_lowercase().as_str() {
-        "high" => crate::domain::ExperienceRiskLevel::High,
-        "medium" => crate::domain::ExperienceRiskLevel::Medium,
-        _ => crate::domain::ExperienceRiskLevel::Low,
-    };
-    let suggested_confirmation = match submission
-        .suggested_confirmation
-        .as_deref()
-        .unwrap_or("none")
-        .to_lowercase()
-        .as_str()
-    {
-        "user" => crate::domain::ExperienceConfirmationPolicy::User,
-        _ => crate::domain::ExperienceConfirmationPolicy::None,
     };
 
     ExperienceCandidate {
@@ -755,14 +686,11 @@ fn submission_to_candidate(
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: submission.title.clone(),
-        kind_hint: submission.kind_hint.clone(),
+        kind_hint: submission.kind.clone(),
         payload,
-        dependency_refs: submission.dependency_refs.clone(),
+        dependency_refs: Vec::new(),
         status: crate::domain::ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
-        risk_level,
-        risk_reason: submission.risk_reason.clone(),
-        suggested_confirmation,
         derived_from_candidate_ids: Vec::new(),
     }
 }

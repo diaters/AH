@@ -286,31 +286,53 @@ pub fn register_builtin_tools(
     // Experience candidate tools
     registry.register(ToolDefinition {
         name: "submit_experience_candidate".to_string(),
-        description: "Submit an experience candidate for governance review. Use this when you discover reusable knowledge, patterns, or behaviors during task execution that should be preserved for future use.".to_string(),
+        description: "提交经验候选。knowledge 类提交可复用知识，skill 类提交可复用技能包（对齐 Agent Skills 规范）。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "Short descriptive title for the experience candidate"
+                        "description": "简明标题，概括此经验的核心要点"
                     },
-                    "kind_hint": {
+                    "kind": {
                         "type": "string",
-                        "enum": ["knowledge", "executable", "shared_knowledge", "discard"],
-                        "description": "Type hint: knowledge, executable, shared_knowledge, or discard"
+                        "enum": ["knowledge", "skill"],
+                        "description": "经验类型：knowledge=可复用知识，skill=可复用技能包"
                     },
-                    "payload": {
-                        "type": "object",
-                        "description": "The experience payload content"
+                    "content": {
+                        "type": "string",
+                        "description": "knowledge 类的经验正文"
                     },
-                    "dependency_refs": {
+                    "skill_description": {
+                        "type": "string",
+                        "description": "skill 类的简要描述，说明做什么+何时触发"
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "skill 类的分步指令正文"
+                    },
+                    "file_refs": {
                         "type": "array",
-                        "items": { "type": "string" },
-                        "description": "References to dependencies (e.g., asset file paths)"
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "文件路径（绝对路径或相对于项目根目录的相对路径）"
+                                },
+                                "role": {
+                                    "type": "string",
+                                    "enum": ["script", "reference", "asset"],
+                                    "description": "文件角色，默认根据扩展名自动推断"
+                                }
+                            },
+                            "required": ["path"]
+                        },
+                        "description": "skill 关联的资源文件列表"
                     }
                 },
-                "required": ["title"]
+                "required": ["title", "kind"]
             }),
         },
         default_permission: ToolPermission::Allow,
