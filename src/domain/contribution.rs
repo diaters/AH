@@ -166,10 +166,7 @@ impl ExperienceCandidate {
     pub fn as_long_term_memory_entry(&self) -> Option<super::LongTermMemoryEntry> {
         match &self.payload {
             ExperienceCandidatePayload::Knowledge { content } => {
-                Some(super::LongTermMemoryEntry::new(
-                    super::LongTermMemoryKind::Fact,
-                    content.clone(),
-                ))
+                Some(super::LongTermMemoryEntry::new(content.clone()))
             }
             ExperienceCandidatePayload::Skill { .. } => None,
         }
