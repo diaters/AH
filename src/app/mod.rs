@@ -212,13 +212,6 @@ pub fn build_harness_app(
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());
 
-    // Shared Knowledge Upgrade Queue
-    let upgrade_service =
-        crate::infrastructure::memory::SharedKnowledgeUpgradeService::default_path();
-    let upgrade_queue = upgrade_service.load().unwrap_or_default();
-    app.insert_resource(upgrade_service);
-    app.insert_resource(upgrade_queue);
-
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);
 

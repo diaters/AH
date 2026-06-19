@@ -104,7 +104,7 @@ impl LongTermMemoryService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::LongTermMemoryKind;
+
     use tempfile::TempDir;
 
     fn make_service() -> (LongTermMemoryService, TempDir) {
@@ -126,7 +126,7 @@ mod tests {
     fn add_entry_persists_to_disk() {
         let (mut service, dir) = make_service();
         let mut memory = LongTermMemory::with_name("test-agent");
-        let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "persisted fact");
+        let entry = LongTermMemoryEntry::new("persisted fact");
 
         service.add_entry(&mut memory, entry).unwrap();
 
@@ -145,8 +145,8 @@ mod tests {
         let (mut service, _dir) = make_service();
         let mut memory = LongTermMemory::with_name("absorb-agent");
         let entries = vec![
-            LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "strategy 1"),
-            LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "strategy 2"),
+            LongTermMemoryEntry::new("strategy 1"),
+            LongTermMemoryEntry::new("strategy 2"),
         ];
 
         service.absorb_entries(&mut memory, entries).unwrap();
@@ -161,7 +161,7 @@ mod tests {
         service
             .add_entry(
                 &mut memory,
-                LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "fact"),
+                LongTermMemoryEntry::new("fact"),
             )
             .unwrap();
 
@@ -174,7 +174,7 @@ mod tests {
     fn flush_fails_gracefully_without_agent_name() {
         let (mut service, _dir) = make_service();
         let mut memory = LongTermMemory::default(); // agent_name = None
-        let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "orphan");
+        let entry = LongTermMemoryEntry::new("orphan");
 
         let result = service.add_entry(&mut memory, entry);
         assert!(result.is_err());
