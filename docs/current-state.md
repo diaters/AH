@@ -56,15 +56,16 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `ExperienceCandidate` 是经验治理唯一中间态，具备完整状态机：
   `Submitted / InInbox / Aggregated / GovernancePending / NeedsUserApproval / Approved / Rejected / Persisted`
 - 非顶层候选通过父任务 `ExperienceInbox` 上送，顶层候选进入 root 后触发 `ExperienceGovernanceRequestMessage`
-- 顶层治理后四类最终去向全部可达：
+- 经验类型简化为两类：`Knowledge`（可复用知识）和 `Skill`（可复用技能包，对齐 Agent Skills 规范）
+- 顶层治理后三类最终去向全部可达：
   - `Knowledge` → 普通持久型 Agent 的 `LongTermMemory`
-  - `Executable` → 用户确认后生成 Agent 私有 `Skill Package`
-  - `SharedKnowledge` → `SharedKnowledgeUpgradeQueue` 升级入口（已持久化到 `.harness/memory/shared_knowledge/upgrades.json`）
-  - `default Agent` 的私有 `Knowledge / Executable` → `IncubationProposal`
+  - `Skill` → 用户确认后生成 Agent 私有 `Skill Package`（SKILL.md 目录结构，对齐 agentskills.io 规范）
+  - `default Agent` 的 `Knowledge / Skill` → `IncubationProposal`
 - `default Agent` 通过 `tags` 中的 `default` 识别，不直接沉淀私有长期身份资产
 - `LongTermMemoryEntry` 已具备最小来源追溯字段：`source_candidate_id`、`source_task_id`、`agent_id`
 - `IncubationProposal` 已扩展为正式治理输出结构，包含 `proposal_id`、`proposed_agent_profile`、按类型分列的候选 ID、`status`、`created_at`
 - 写回失败时保留 `warn` 级审计日志，候选状态不推进到 `Persisted`
+- Skill 候选提交时验证 `file_refs` 文件存在性，缺失文件拒绝提交
 
 ### 待完善
 
