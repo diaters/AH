@@ -168,11 +168,11 @@ pub(crate) fn experience_approval_result_system(
 mod tests {
     use crate::domain::{
         ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-        ExperienceConfirmationPolicy, ExperienceKindHint, ExperienceStore,
+        ExperienceKindHint, ExperienceStore,
     };
 
     #[test]
-    fn approved_executable_becomes_persisted() {
+    fn approved_skill_becomes_persisted() {
         let mut store = ExperienceStore::default();
         let request_id = uuid::Uuid::new_v4();
         let candidate = ExperienceCandidate {
@@ -180,18 +180,16 @@ mod tests {
             producer_task_id: uuid::Uuid::new_v4(),
             producer_agent_id: uuid::Uuid::new_v4(),
             title: "test skill".to_string(),
-            kind_hint: ExperienceKindHint::Executable,
-            payload: ExperienceCandidatePayload::Executable {
-                intent: "run smoke test".to_string(),
-                when_to_use: "after changes".to_string(),
-                asset_refs: vec![],
+            kind_hint: ExperienceKindHint::Skill,
+            payload: ExperienceCandidatePayload::Skill {
+                name: "test-skill".to_string(),
+                description: "run smoke test".to_string(),
+                instructions: "1. Run test".to_string(),
+                file_refs: vec![],
             },
             dependency_refs: vec![],
             status: ExperienceCandidateStatus::NeedsUserApproval,
             governing_agent_id: None,
-            risk_level: crate::domain::ExperienceRiskLevel::default(),
-            risk_reason: String::new(),
-            suggested_confirmation: ExperienceConfirmationPolicy::default(),
             derived_from_candidate_ids: vec![],
         };
         let candidate_id = candidate.candidate_id;
@@ -202,7 +200,7 @@ mod tests {
         assert_eq!(
             store.candidates.get(&candidate_id).unwrap().status,
             ExperienceCandidateStatus::Approved,
-            "approved executable should be marked Approved"
+            "approved skill should be marked Approved"
         );
     }
 }

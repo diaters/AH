@@ -196,9 +196,7 @@ pub(crate) fn experience_collection_completion_system(
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{
-        ExperienceCandidate, ExperienceCandidateStatus, ExperienceStore, LongTermMemoryKind, TaskId,
-    };
+    use crate::domain::{ExperienceCandidate, ExperienceCandidateStatus, ExperienceStore, TaskId};
 
     #[test]
     fn experience_collection_completion_aggregates_child_candidates() {
@@ -215,7 +213,6 @@ mod tests {
             uuid::Uuid::new_v4(),
             "child fact".to_string(),
             "content".to_string(),
-            LongTermMemoryKind::Fact,
         );
         store.queue_for_parent(parent_task_id, parent_agent_id, child_candidate);
 
@@ -234,7 +231,6 @@ mod tests {
             parent_agent_id,
             "root fact".to_string(),
             "root content".to_string(),
-            LongTermMemoryKind::Fact,
         );
         store.stage_root_candidate(root_candidate);
         let governance_ids = store.promote_root_candidates_to_governance(parent_task_id);
