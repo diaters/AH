@@ -2,13 +2,13 @@
 //!
 //! Tests for the experience candidate governance flow:
 //! - Knowledge candidates are auto-persisted for persistent non-default agents
-//! - Executable candidates require user approval
+//! - Skill candidates require user approval
 //! - Default-tagged agents generate incubation proposals instead of direct persistence
 //! - Governance system processes ExperienceGovernanceRequestMessage correctly
 
 use harness::{
     ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceKindHint,
-    ExperienceStore, LongTermMemory, LongTermMemoryKind,
+    ExperienceStore, LongTermMemory, SkillFileRole, SkillFileRef,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 
@@ -24,7 +24,6 @@ fn knowledge_candidate_is_persisted_for_persistent_agent() {
         agent_id,
         "shell timeout".to_string(),
         "shell_stop 默认等待退出".to_string(),
-        LongTermMemoryKind::Fact,
     );
 
     store.stage_root_candidate(candidate.clone());
@@ -35,26 +34,27 @@ fn knowledge_candidate_is_persisted_for_persistent_agent() {
     assert!(!candidate.requires_user_confirmation());
 }
 
-/// 验证可执行类候选需要用户确认。
+/// 验证 Skill 类候选需要用户确认。
 #[test]
-fn executable_candidate_requires_user_approval() {
+fn skill_candidate_requires_user_approval() {
     let candidate = ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
         producer_task_id: uuid::Uuid::new_v4(),
         producer_agent_id: uuid::Uuid::new_v4(),
         title: "shell smoke test".to_string(),
-        kind_hint: ExperienceKindHint::Executable,
-        payload: ExperienceCandidatePayload::Executable {
-            intent: "run smoke test".to_string(),
-            when_to_use: "after shell changes".to_string(),
-            asset_refs: vec!["default-agent/script.sh".to_string()],
+        kind_hint: ExperienceKindHint::Skill,
+        payload: ExperienceCandidatePayload::Skill {
+            name: "smoke test".to_string(),
+            description: "run smoke test".to_string(),
+            instructions: "after shell changes".to_string(),
+            file_refs: vec![SkillFileRef {
+                path: "default-agent/script.sh".to_string(),
+                role: SkillFileRole::Script,
+            }],
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
-        risk_level: harness::ExperienceRiskLevel::default(),
-        risk_reason: String::new(),
-        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
         derived_from_candidate_ids: vec![],
     };
 
@@ -74,7 +74,6 @@ fn confirmation_response_approves_and_rejects_candidates() {
         agent_id,
         "test knowledge".to_string(),
         "some fact".to_string(),
-        LongTermMemoryKind::Fact,
     );
     candidate.status = ExperienceCandidateStatus::NeedsUserApproval;
 
@@ -96,7 +95,6 @@ fn confirmation_response_approves_and_rejects_candidates() {
         agent_id,
         "test knowledge 2".to_string(),
         "another fact".to_string(),
-        LongTermMemoryKind::Fact,
     );
     candidate2.status = ExperienceCandidateStatus::NeedsUserApproval;
     let candidate2_id = candidate2.candidate_id;
@@ -111,7 +109,7 @@ fn confirmation_response_approves_and_rejects_candidates() {
     );
 }
 
-/// 验证 as_long_term_memory_entry 对知识类候选返回 Some，对可执行类返回 None。
+/// 验证 as_long_term_memory_entry 对知识类候选返回 Some，对 Skill 类返回 None。
 #[test]
 fn candidate_conversion_to_long_term_memory() {
     let knowledge_candidate = ExperienceCandidate::knowledge(
@@ -120,33 +118,30 @@ fn candidate_conversion_to_long_term_memory() {
         uuid::Uuid::new_v4(),
         "test fact".to_string(),
         "some content".to_string(),
-        LongTermMemoryKind::Fact,
     );
     assert!(knowledge_candidate.as_long_term_memory_entry().is_some());
 
-    let executable_candidate = ExperienceCandidate {
+    let skill_candidate = ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
         producer_task_id: uuid::Uuid::new_v4(),
         producer_agent_id: uuid::Uuid::new_v4(),
-        title: "test executable".to_string(),
-        kind_hint: ExperienceKindHint::Executable,
-        payload: ExperienceCandidatePayload::Executable {
-            intent: "do something".to_string(),
-            when_to_use: "when needed".to_string(),
-            asset_refs: vec![],
+        title: "test skill".to_string(),
+        kind_hint: ExperienceKindHint::Skill,
+        payload: ExperienceCandidatePayload::Skill {
+            name: "do something".to_string(),
+            description: "test skill".to_string(),
+            instructions: "when needed".to_string(),
+            file_refs: vec![],
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
-        risk_level: harness::ExperienceRiskLevel::default(),
-        risk_reason: String::new(),
-        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
         derived_from_candidate_ids: vec![],
     };
-    assert!(executable_candidate.as_long_term_memory_entry().is_none());
+    assert!(skill_candidate.as_long_term_memory_entry().is_none());
 }
 
-/// 验证带有资产的 Knowledge 类候选不需要用户确认（资产只有 Executable 载荷才需要）。
+/// 验证知识类候选不需要用户确认。
 #[test]
 fn knowledge_candidate_without_assets_does_not_require_approval() {
     let candidate = ExperienceCandidate::knowledge(
@@ -155,7 +150,6 @@ fn knowledge_candidate_without_assets_does_not_require_approval() {
         uuid::Uuid::new_v4(),
         "simple fact".to_string(),
         "simple content".to_string(),
-        LongTermMemoryKind::Fact,
     );
     assert!(!candidate.requires_user_confirmation());
 }
@@ -177,7 +171,6 @@ fn governance_persists_knowledge_candidate_content_via_service() {
         uuid::Uuid::new_v4(),
         "governance fact".to_string(),
         "governance-persisted content".to_string(),
-        LongTermMemoryKind::Fact,
     );
 
     let entry = candidate.as_long_term_memory_entry().unwrap();

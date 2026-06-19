@@ -96,7 +96,6 @@ fn proposal_status_advances_to_executed() {
         agent_id,
         "physics fact".to_string(),
         "E=mc²".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     store.stage_root_candidate(candidate.clone());
 

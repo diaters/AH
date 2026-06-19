@@ -1,9 +1,8 @@
 //! 经验模块两层分层汇聚治理集成测试
 //!
-//! 覆盖 spec 要求的四条主链路：
+//! 覆盖 spec 要求的主链路：
 //! - 普通持久型 Agent 知识类候选自动落盘到 LongTermMemory
-//! - 普通持久型 Agent executable 候选用户批准后生成 Skill Package
-//! - 公共规则类候选进入 SharedKnowledgeUpgradeQueue
+//! - 普通持久型 Agent Skill 候选用户批准后生成 Skill Package
 //! - default Agent 的私有候选生成 IncubationProposal
 //!
 //! P0 修复验证：
@@ -17,7 +16,7 @@ use harness::{
     AgentAssetService, AgentExecutionRequest, AgentRequestKind, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceGovernanceDecision,
     ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination, HarnessConfig,
-    SharedKnowledgeUpgradeQueue, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
     ToolExecutionRequestMessage,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
@@ -45,7 +44,6 @@ fn persistent_agent_knowledge_candidate_persists_to_ltm() {
         uuid::Uuid::new_v4(),
         "shell timeout fact".to_string(),
         "shell_stop 默认等待退出".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     let producer_task_id = candidate.producer_task_id;
     store.stage_root_candidate(candidate);
@@ -62,9 +60,9 @@ fn persistent_agent_knowledge_candidate_persists_to_ltm() {
     assert_eq!(memory.entries[0].content, "shell_stop 默认等待退出");
 }
 
-/// Case 2: 普通持久型 Agent 的 executable 候选需要用户确认，批准后生成 Skill Package。
+/// Case 2: 普通持久型 Agent 的 Skill 候选需要用户确认，批准后生成 Skill Package。
 #[test]
-fn persistent_agent_executable_candidate_generates_skill_package_after_approval() {
+fn persistent_agent_skill_candidate_generates_skill_package_after_approval() {
     let dir = TempDir::new().unwrap();
     let asset_service = AgentAssetService::new(dir.path().join("assets"));
 
@@ -73,18 +71,16 @@ fn persistent_agent_executable_candidate_generates_skill_package_after_approval(
         producer_task_id: uuid::Uuid::new_v4(),
         producer_agent_id: uuid::Uuid::new_v4(),
         title: "smoke test skill".to_string(),
-        kind_hint: ExperienceKindHint::Executable,
-        payload: ExperienceCandidatePayload::Executable {
-            intent: "run smoke test".to_string(),
-            when_to_use: "after shell changes".to_string(),
-            asset_refs: vec![],
+        kind_hint: ExperienceKindHint::Skill,
+        payload: ExperienceCandidatePayload::Skill {
+            name: "smoke test".to_string(),
+            description: "run smoke test".to_string(),
+            instructions: "after shell changes".to_string(),
+            file_refs: vec![],
         },
         dependency_refs: vec![],
         status: ExperienceCandidateStatus::NeedsUserApproval,
         governing_agent_id: None,
-        risk_level: harness::ExperienceRiskLevel::default(),
-        risk_reason: String::new(),
-        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
         derived_from_candidate_ids: vec![],
     };
 
@@ -92,12 +88,10 @@ fn persistent_agent_executable_candidate_generates_skill_package_after_approval(
     let draft = harness::SkillPackageDraft {
         skill_id: format!("{}", candidate.candidate_id),
         title: candidate.title.clone(),
-        problem: "run smoke test".to_string(),
-        when_to_use: "after shell changes".to_string(),
-        steps: "参见 skill.md".to_string(),
-        asset_refs: vec![],
-        dependency_refs: vec![],
-        risks: "需复核".to_string(),
+        name: "smoke test".to_string(),
+        description: "run smoke test".to_string(),
+        instructions: "after shell changes".to_string(),
+        file_refs: vec![],
         source_task_id: Some(candidate.producer_task_id),
         source_candidate_id: Some(candidate.candidate_id),
     };
@@ -109,36 +103,12 @@ fn persistent_agent_executable_candidate_generates_skill_package_after_approval(
         dir.path()
             .join("assets")
             .join(&relative)
-            .join("skill.md")
+            .join("SKILL.md")
             .exists()
     );
 }
 
-/// Case 3: 公共规则类候选进入 SharedKnowledge 升级入口。
-#[test]
-fn shared_knowledge_candidate_queues_upgrade_entry() {
-    let mut queue = SharedKnowledgeUpgradeQueue::default();
-    let candidate_id = uuid::Uuid::new_v4();
-
-    queue
-        .candidates
-        .push(harness::SharedKnowledgeUpgradeCandidate {
-            candidate_id: uuid::Uuid::new_v4(),
-            content: "所有 Agent 必须使用中文撰写文档".to_string(),
-            kind: harness::LongTermMemoryKind::Constraint,
-            scope_tags: vec!["global".to_string()],
-            source_candidate_id: candidate_id,
-            source_agent_id: uuid::Uuid::new_v4(),
-            source_task_id: uuid::Uuid::new_v4(),
-            validation_status: harness::KnowledgeValidationStatus::Candidate,
-            created_at: chrono::Utc::now(),
-        });
-
-    assert_eq!(queue.candidates.len(), 1);
-    assert_eq!(queue.candidates[0].source_candidate_id, candidate_id);
-}
-
-/// Case 4: default Agent 的私有候选生成 IncubationProposal。
+/// Case 3: default Agent 的私有候选生成 IncubationProposal。
 #[test]
 fn default_agent_private_candidate_spawns_incubation_proposal() {
     let mut store = ExperienceStore::default();
@@ -150,7 +120,6 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
         agent_id,
         "default agent private fact".to_string(),
         "this should not directly persist".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     store.stage_root_candidate(candidate.clone());
 
@@ -164,8 +133,7 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
             model: "gpt-4.1-mini".to_string(),
         },
         knowledge_candidate_ids: vec![candidate.candidate_id],
-        executable_candidate_ids: vec![],
-        shared_knowledge_candidate_ids: vec![],
+        skill_candidate_ids: vec![],
         incubation_rationale: String::new(),
         status: harness::IncubationProposalStatus::Proposed,
         created_at: chrono::Utc::now(),
@@ -193,7 +161,6 @@ fn top_level_governance_consumes_root_and_aggregated_candidates() {
         top_agent_id,
         "root".to_string(),
         "root content".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     let root_id = root.candidate_id;
     store.stage_root_candidate(root);
@@ -205,7 +172,6 @@ fn top_level_governance_consumes_root_and_aggregated_candidates() {
         uuid::Uuid::new_v4(),
         "child".to_string(),
         "child content".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     let child_id = child.candidate_id;
     store.queue_for_parent(top_task_id, top_agent_id, child);
@@ -250,43 +216,37 @@ fn default_agent_merges_multiple_private_candidates_into_single_task_level_propo
         agent_id,
         "physics fact".to_string(),
         "E=mc²".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
-    // 可执行类候选
-    let executable = harness::ExperienceCandidate {
+    // Skill 类候选
+    let skill = harness::ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics sim".to_string(),
-        kind_hint: harness::ExperienceKindHint::Executable,
-        payload: harness::ExperienceCandidatePayload::Executable {
-            intent: "run physics simulation".to_string(),
-            when_to_use: "after parameter changes".to_string(),
-            asset_refs: vec![],
+        kind_hint: harness::ExperienceKindHint::Skill,
+        payload: harness::ExperienceCandidatePayload::Skill {
+            name: "physics simulation".to_string(),
+            description: "run physics simulation".to_string(),
+            instructions: "after parameter changes".to_string(),
+            file_refs: vec![],
         },
         dependency_refs: vec![],
         status: harness::ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
-        risk_level: harness::ExperienceRiskLevel::default(),
-        risk_reason: String::new(),
-        suggested_confirmation: harness::ExperienceConfirmationPolicy::default(),
         derived_from_candidate_ids: vec![],
     };
 
     // 先 merge knowledge
     store.merge_into_proposal(task_id, agent_id, profile.clone(), &knowledge);
-    // 再 merge executable（应该合并到同一 proposal）
-    store.merge_into_proposal(task_id, agent_id, profile.clone(), &executable);
+    // 再 merge skill（应该合并到同一 proposal）
+    store.merge_into_proposal(task_id, agent_id, profile.clone(), &skill);
 
     let proposal = store.proposals.get(&task_id).unwrap();
     assert_eq!(proposal.source_task_id, task_id);
     assert_eq!(proposal.knowledge_candidate_ids.len(), 1);
-    assert_eq!(proposal.executable_candidate_ids.len(), 1);
+    assert_eq!(proposal.skill_candidate_ids.len(), 1);
     assert_eq!(proposal.knowledge_candidate_ids[0], knowledge.candidate_id);
-    assert_eq!(
-        proposal.executable_candidate_ids[0],
-        executable.candidate_id
-    );
+    assert_eq!(proposal.skill_candidate_ids[0], skill.candidate_id);
 }
 
 /// 写回失败时候选应进入 WritebackFailed 状态。
@@ -298,7 +258,6 @@ fn failed_writeback_marks_candidate_writeback_failed() {
         uuid::Uuid::new_v4(),
         "bad".to_string(),
         "content".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     candidate.status = harness::ExperienceCandidateStatus::WritebackFailed;
 
@@ -453,7 +412,6 @@ fn approved_candidate_spawns_writeback_request() {
             agent_id,
             "test candidate".to_string(),
             "test content".to_string(),
-            harness::LongTermMemoryKind::Fact,
         );
         candidate.governing_agent_id = Some(agent_id);
         store.stage_root_candidate(candidate);
@@ -467,9 +425,7 @@ fn approved_candidate_spawns_writeback_request() {
     app.world_mut().spawn(ExperienceGovernanceDecision {
         candidate_id: promoted_ids[0],
         destination: ExperienceWritebackDestination::LongTermMemory,
-        confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
-        final_risk_level: harness::ExperienceRiskLevel::default(),
-        risk_overridden: false,
+        requires_user_confirmation: false,
         decision_rationale: "test".to_string(),
         source_task_id: task_id,
     });
@@ -557,7 +513,6 @@ fn approval_to_writeback_completes_in_same_frame() {
             agent_id,
             "incubation test".to_string(),
             "content".to_string(),
-            harness::LongTermMemoryKind::Fact,
         );
         let cid = candidate.candidate_id;
         store.stage_root_candidate(candidate);
@@ -583,9 +538,7 @@ fn approval_to_writeback_completes_in_same_frame() {
     app.world_mut().spawn(ExperienceGovernanceDecision {
         candidate_id,
         destination: ExperienceWritebackDestination::IncubationProposal,
-        confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
-        final_risk_level: harness::ExperienceRiskLevel::default(),
-        risk_overridden: false,
+        requires_user_confirmation: false,
         decision_rationale: "test".to_string(),
         source_task_id: task_id,
     });
@@ -676,7 +629,6 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
                 agent_id,
                 format!("candidate {i}"),
                 format!("content {i}"),
-                harness::LongTermMemoryKind::Fact,
             );
             let cid = candidate.candidate_id;
             store.stage_root_candidate(candidate.clone());
@@ -693,9 +645,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
         app.world_mut().spawn(ExperienceGovernanceDecision {
             candidate_id: *cid,
             destination: ExperienceWritebackDestination::IncubationProposal,
-            confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
-            final_risk_level: harness::ExperienceRiskLevel::default(),
-            risk_overridden: false,
+            requires_user_confirmation: false,
             decision_rationale: format!("test {i}"),
             source_task_id: task_id,
         });
@@ -806,7 +756,6 @@ fn aggregated_child_candidates_writeback_idempotently() {
             agent_id,
             "root candidate".to_string(),
             "root content".to_string(),
-            harness::LongTermMemoryKind::Fact,
         );
         let root_id = root.candidate_id;
         store.stage_root_candidate(root);
@@ -818,7 +767,6 @@ fn aggregated_child_candidates_writeback_idempotently() {
             agent_id,
             "child candidate 1".to_string(),
             "child content 1".to_string(),
-            harness::LongTermMemoryKind::Fact,
         );
         let child_id_1 = child1.candidate_id;
         store.queue_for_parent(parent_task_id, agent_id, child1);
@@ -830,7 +778,6 @@ fn aggregated_child_candidates_writeback_idempotently() {
             agent_id,
             "child candidate 2".to_string(),
             "child content 2".to_string(),
-            harness::LongTermMemoryKind::Fact,
         );
         let child_id_2 = child2.candidate_id;
         store.queue_for_parent(parent_task_id, agent_id, child2);
@@ -870,9 +817,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
         app.world_mut().spawn(ExperienceGovernanceDecision {
             candidate_id: *cid,
             destination: ExperienceWritebackDestination::IncubationProposal,
-            confirmation_policy: harness::ExperienceConfirmationPolicy::default(),
-            final_risk_level: harness::ExperienceRiskLevel::default(),
-            risk_overridden: false,
+            requires_user_confirmation: false,
             decision_rationale: "test".to_string(),
             source_task_id: parent_task_id,
         });
