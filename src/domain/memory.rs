@@ -45,10 +45,7 @@ mod tests {
 
     #[test]
     fn long_term_memory_entry_defaults_to_decay_ready_state() {
-        let entry = LongTermMemoryEntry::new(
-            LongTermMemoryKind::Strategy,
-            "Always prefer truthful shell semantics",
-        );
+        let entry = LongTermMemoryEntry::new("Always prefer truthful shell semantics");
 
         assert_eq!(entry.reuse_count, 0);
         assert!(!entry.pin);
@@ -58,7 +55,7 @@ mod tests {
 
     #[test]
     fn memory_snapshot_new_sets_current_schema_version() {
-        let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "test content");
+        let entry = LongTermMemoryEntry::new("test content");
         let snapshot = MemorySnapshot::new("test-agent", vec![entry]);
 
         assert_eq!(
@@ -71,7 +68,7 @@ mod tests {
 
     #[test]
     fn memory_snapshot_round_trip_serialization() {
-        let entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "important fact");
+        let entry = LongTermMemoryEntry::new("important fact");
         let snapshot = MemorySnapshot::new("summarizer", vec![entry]);
 
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -99,7 +96,7 @@ mod tests {
 
     #[test]
     fn long_term_memory_entry_carries_source_traceability() {
-        let mut entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "traceable fact");
+        let mut entry = LongTermMemoryEntry::new("traceable fact");
         entry.source_candidate_id = Some(uuid::Uuid::new_v4());
         entry.source_task_id = Some(uuid::Uuid::new_v4());
         entry.agent_id = Some(uuid::Uuid::new_v4());
@@ -113,7 +110,7 @@ mod tests {
     fn add_entry_dedups_by_source_candidate_id() {
         let mut memory = LongTermMemory::with_name("dedup-agent");
         let candidate_id = uuid::Uuid::new_v4();
-        let mut entry = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "content");
+        let mut entry = LongTermMemoryEntry::new("content");
         entry.source_candidate_id = Some(candidate_id);
 
         memory.add_entry(entry.clone());
@@ -312,7 +309,7 @@ pub struct MemorySnapshot {
 
 impl MemorySnapshot {
     /// 当前快照版本
-    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
     /// 创建新的快照。
     pub fn new(agent_name: impl Into<String>, entries: Vec<LongTermMemoryEntry>) -> Self {
@@ -323,16 +320,6 @@ impl MemorySnapshot {
             entries,
         }
     }
-}
-
-/// 长期记忆条目类型。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum LongTermMemoryKind {
-    Constraint,
-    Preference,
-    Strategy,
-    Fact,
-    AntiPattern,
 }
 
 /// 长期记忆重要度。
@@ -348,7 +335,6 @@ pub enum MemoryImportance {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LongTermMemoryEntry {
     pub content: String,
-    pub kind: LongTermMemoryKind,
     pub scope_tags: Vec<String>,
     pub importance: MemoryImportance,
     pub pin: bool,
@@ -368,10 +354,9 @@ pub struct LongTermMemoryEntry {
 
 impl LongTermMemoryEntry {
     /// 创建默认可衰退的长期记忆条目。
-    pub fn new(kind: LongTermMemoryKind, content: impl Into<String>) -> Self {
+    pub fn new(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            kind,
             scope_tags: Vec::new(),
             importance: MemoryImportance::Medium,
             pin: false,
@@ -441,7 +426,7 @@ impl LongTermMemory {
             "long term memory archive added"
         );
         self.entries
-            .push(LongTermMemoryEntry::new(LongTermMemoryKind::Fact, content));
+            .push(LongTermMemoryEntry::new(content));
     }
 
     /// 吸收来自子 Agent 的长期记忆条目。
@@ -453,7 +438,7 @@ impl LongTermMemory {
             absorbing_count = absorbing_count,
             total_entries_before = total_before,
             total_entries_after = total_before + absorbing_count,
-            absorbing_entries = ?entries.iter().map(|entry| (&entry.kind, &entry.content)).collect::<Vec<_>>(),
+            absorbing_entries = ?entries.iter().map(|entry| &entry.content).collect::<Vec<_>>(),
             "long term memory absorbed entries"
         );
         self.entries.extend(entries);
