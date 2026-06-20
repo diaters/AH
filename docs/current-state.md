@@ -47,6 +47,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `LongTermMemory` 采用 `Core + Relevant` 的受控注入策略，避免全量拼接 prompt
 - 共享知识写入默认仅允许用户显式命令或主控审核链路，不允许普通 Agent 直写
 - 长期记忆已具备基础衰退治理能力，会结合访问时间、重要度与复用次数更新分数
+- 长期记忆已实现淘汰机制：`decay_score < 0.1` 且非 `pin` 非 `Critical` 的条目被移除并归档到 `<agent-name>/archive.jsonl`
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
 
@@ -54,7 +55,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 - 经验治理已收敛为两层分层模型：非顶层 `TaskScoped Agent` 只产生、汇聚、向上贡献；顶层 `Persistent Agent` 做最终治理与落盘
 - `ExperienceCandidate` 是经验治理唯一中间态，具备完整状态机：
-  `Submitted / InInbox / Aggregated / GovernancePending / NeedsUserApproval / Approved / Rejected / Persisted`
+  `Submitted / InInbox / Aggregated / Superseded / GovernancePending / NeedsUserApproval / Approved / Rejected / Persisted`
 - 非顶层候选通过父任务 `ExperienceInbox` 上送，顶层候选进入 root 后触发 `ExperienceGovernanceRequestMessage`
 - 经验类型简化为两类：`Knowledge`（可复用知识）和 `Skill`（可复用技能包，对齐 Agent Skills 规范）
 - 顶层治理后三类最终去向全部可达：
@@ -66,6 +67,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `IncubationProposal` 已扩展为正式治理输出结构，包含 `proposal_id`、`proposed_agent_profile`、按类型分列的候选 ID、`status`、`created_at`
 - 写回失败时保留 `warn` 级审计日志，候选状态不推进到 `Persisted`
 - Skill 候选提交时验证 `file_refs` 文件存在性，缺失文件拒绝提交
+- 非顶层候选汇聚后，同类候选数 > 1 时触发 LLM 合并（`ExperienceConsolidationRequestMessage`），原始候选标记为 `Superseded`
+- Skill Package 写回后，Agent 启动时通过 `SkillLoader` 扫描 `skills/` 目录，将 SKILL.md 内容注入系统提示
+- `IncubationProposal` 执行时同时处理 `skill_candidate_ids`，将 Skill 写入新 Agent 的 Skill Package 目录
 
 ### 待完善
 
