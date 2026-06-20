@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::Resource;
+use bevy::prelude::{Component, Resource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -290,6 +290,16 @@ impl ExperienceCandidateSubmission {
             file_refs,
         })
     }
+}
+
+/// 经验合并请求消息：触发 LLM 对多个相似候选做去重合并。
+#[derive(Debug, Clone, Component)]
+pub struct ExperienceConsolidationRequestMessage {
+    pub task_id: TaskId,
+    pub parent_task_id: TaskId,
+    pub governing_agent_id: AgentId,
+    pub candidate_kind: crate::domain::ExperienceKindHint,
+    pub candidate_ids: Vec<uuid::Uuid>,
 }
 
 /// 内置 Tool 执行上下文

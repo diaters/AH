@@ -32,6 +32,7 @@ pub enum ExperienceCandidateStatus {
     Submitted,
     InInbox,
     Aggregated,
+    Superseded, // 被合并候选替代
     GovernancePending,
     GovernanceResolved,
     NeedsUserApproval,
@@ -529,6 +530,7 @@ mod tests {
             ExperienceCandidateStatus::Submitted,
             ExperienceCandidateStatus::InInbox,
             ExperienceCandidateStatus::Aggregated,
+            ExperienceCandidateStatus::Superseded,
             ExperienceCandidateStatus::GovernancePending,
             ExperienceCandidateStatus::GovernanceResolved,
             ExperienceCandidateStatus::NeedsUserApproval,
@@ -538,7 +540,7 @@ mod tests {
             ExperienceCandidateStatus::Persisted,
             ExperienceCandidateStatus::WritebackFailed,
         ];
-        assert_eq!(statuses.len(), 11);
+        assert_eq!(statuses.len(), 12);
     }
 
     #[test]
