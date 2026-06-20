@@ -22,11 +22,25 @@ impl crate::domain::BuiltinTool for ListExperienceCandidatesTool {
             .list_for_task(ctx.current_task_id)
             .into_iter()
             .map(|candidate| {
+                let kind = format!("{:?}", candidate.kind_hint);
+                let summary = match &candidate.payload {
+                    crate::domain::ExperienceCandidatePayload::Knowledge { content } => {
+                        if content.len() > 200 {
+                            format!("{}…", &content[..200])
+                        } else {
+                            content.clone()
+                        }
+                    }
+                    crate::domain::ExperienceCandidatePayload::Skill { description, .. } => {
+                        description.clone()
+                    }
+                };
                 serde_json::json!({
                     "candidate_id": candidate.candidate_id,
                     "title": candidate.title,
-                    "kind_hint": format!("{:?}", candidate.kind_hint),
+                    "kind": kind,
                     "status": format!("{:?}", candidate.status),
+                    "summary": summary,
                 })
             })
             .collect();
@@ -80,6 +94,10 @@ mod tests {
         match action {
             ToolAction::Direct(value) => {
                 assert_eq!(value["count"], 1);
+                let item = &value["items"][0];
+                assert_eq!(item["kind"], "Knowledge");
+                assert_eq!(item["summary"], "shell_stop 默认等待退出");
+                assert!(item.get("kind_hint").is_none(), "kind_hint should be replaced by kind");
             }
             other => panic!("expected direct action, got {:?}", other),
         }
