@@ -6,3 +6,4 @@
 pub mod assets;
 pub mod incubation;
 pub mod memory;
+pub mod skills;

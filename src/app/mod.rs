@@ -212,6 +212,9 @@ pub fn build_harness_app(
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());
 
+    // Skill 加载器
+    app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
+
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);
 
