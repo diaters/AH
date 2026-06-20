@@ -3,6 +3,9 @@
 //! 收口运行期长期记忆变更，修改内存后立即调用 repository 落盘。
 //! 所有系统层应通过此服务修改 `LongTermMemory`，而非直接操作 entries。
 
+use std::io::Write;
+use std::path::PathBuf;
+
 use anyhow::Result;
 use bevy::prelude::Resource;
 use tracing::warn;
@@ -21,12 +24,16 @@ use crate::infrastructure::memory::repository::MemoryRepository;
 #[derive(Resource)]
 pub struct LongTermMemoryService {
     repository: MemoryRepository,
+    base_dir: PathBuf,
 }
 
 impl LongTermMemoryService {
     /// 使用指定 repository 创建服务。
     pub fn new(repository: MemoryRepository) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            base_dir: PathBuf::from(".harness/memory/agents"),
+        }
     }
 
     /// 使用默认 JSON 文件存储创建服务。
@@ -98,6 +105,26 @@ impl LongTermMemoryService {
             }
         };
         self.repository.persist(&agent_name, memory.entries.clone())
+    }
+
+    /// 将被驱逐的长期记忆条目归档到文件。
+    ///
+    /// 归档路径为 `<base_dir>/<agent_name>/archive.jsonl`，每行一条 JSON 记录。
+    pub fn archive_entries(&self, agent_name: &str, entries: &[LongTermMemoryEntry]) {
+        let archive_path = self.base_dir.join(agent_name).join("archive.jsonl");
+        if let Some(parent) = archive_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&archive_path)
+        else {
+            return;
+        };
+        for entry in entries {
+            let _ = writeln!(file, "{}", serde_json::to_string(entry).unwrap());
+        }
     }
 }
 

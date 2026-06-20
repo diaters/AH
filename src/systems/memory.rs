@@ -116,11 +116,14 @@ pub(crate) fn init_agent_memory_system(
 }
 
 /// 根据最近访问时间、重要度和复用次数更新长期记忆衰退分数。
+///
+/// 返回被驱逐的条目列表：decay_score < 0.1、未钉选、非 Critical 的条目将被移除。
 pub(crate) fn apply_memory_decay(
-    entries: &mut [LongTermMemoryEntry],
+    entries: &mut Vec<LongTermMemoryEntry>,
     now: chrono::DateTime<chrono::Utc>,
-) {
-    for entry in entries {
+) -> Vec<LongTermMemoryEntry> {
+    // Phase 1: update decay scores
+    for entry in entries.iter_mut() {
         let age_days = now
             .signed_duration_since(entry.last_accessed_at.unwrap_or(entry.created_at))
             .num_days()
@@ -138,13 +141,44 @@ pub(crate) fn apply_memory_decay(
         entry.decay_score =
             (entry.decay_score - base_penalty + importance_bonus + reuse_bonus).clamp(0.0, 1.0);
     }
+
+    // Phase 2: evict low-value entries
+    let mut evicted = Vec::new();
+    entries.retain(|entry| {
+        let should_evict = entry.decay_score < 0.1
+            && !entry.pin
+            && entry.importance != MemoryImportance::Critical;
+
+        if should_evict {
+            evicted.push(entry.clone());
+            false // remove
+        } else {
+            true // keep
+        }
+    });
+    evicted
 }
 
 /// 周期性执行长期记忆衰退治理，压低长期未访问且低价值条目的分数。
-pub(crate) fn long_term_memory_decay_system(mut agents: Query<(&Agent, &mut LongTermMemory)>) {
+/// 低价值条目被驱逐后归档到文件。
+pub(crate) fn long_term_memory_decay_system(
+    mut agents: Query<(&Agent, &mut LongTermMemory)>,
+    service: Res<LongTermMemoryService>,
+) {
     let now = chrono::Utc::now();
     for (_agent, mut memory) in &mut agents {
-        apply_memory_decay(&mut memory.entries, now);
+        let evicted = apply_memory_decay(&mut memory.entries, now);
+        if !evicted.is_empty() {
+            if let Some(name) = &memory.agent_name {
+                service.archive_entries(name, &evicted);
+            }
+            debug!(
+                event = "LongTermMemoryEvicted",
+                agent_name = ?memory.agent_name,
+                evicted_count = evicted.len(),
+                "evicted low-value memory entries to archive"
+            );
+        }
     }
 }
 
@@ -237,12 +271,12 @@ mod tests {
             entries: vec![LongTermMemoryEntry {
                 content: "stale note".to_string(),
                 scope_tags: vec![],
-                importance: MemoryImportance::Low,
+                importance: MemoryImportance::Critical,
                 pin: false,
                 created_at: now - chrono::Duration::days(30),
                 last_accessed_at: Some(now - chrono::Duration::days(30)),
                 reuse_count: 0,
-                decay_score: 0.25,
+                decay_score: 0.5,
                 source: "test".to_string(),
                 confidence: 0.7,
                 source_candidate_id: None,
@@ -251,8 +285,54 @@ mod tests {
             }],
         };
 
-        apply_memory_decay(&mut memory.entries, now);
+        let _evicted = apply_memory_decay(&mut memory.entries, now);
 
-        assert!(memory.entries[0].decay_score < 0.25);
+        // Critical importance: +0.2 bonus, so decay_score = 0.5 - 0.5 + 0.2 = 0.2
+        // Critical entries are never evicted, so entry remains
+        assert_eq!(memory.entries.len(), 1);
+        assert!(memory.entries[0].decay_score < 0.5);
+    }
+
+    #[test]
+    fn decay_system_evicts_low_value_entries() {
+        let mut entries = vec![LongTermMemoryEntry::new("stale entry")];
+        entries[0].decay_score = 0.05;
+        entries[0].pin = false;
+        entries[0].importance = MemoryImportance::Low;
+
+        let now = chrono::Utc::now();
+        let evicted = apply_memory_decay(&mut entries, now);
+
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].content, "stale entry");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn critical_entries_are_never_evicted() {
+        let mut entries = vec![LongTermMemoryEntry::new("critical entry")];
+        entries[0].decay_score = 0.01;
+        entries[0].pin = false;
+        entries[0].importance = MemoryImportance::Critical;
+
+        let now = chrono::Utc::now();
+        let evicted = apply_memory_decay(&mut entries, now);
+
+        assert!(evicted.is_empty());
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn pinned_entries_are_never_evicted() {
+        let mut entries = vec![LongTermMemoryEntry::new("pinned entry")];
+        entries[0].decay_score = 0.01;
+        entries[0].pin = true;
+        entries[0].importance = MemoryImportance::Low;
+
+        let now = chrono::Utc::now();
+        let evicted = apply_memory_decay(&mut entries, now);
+
+        assert!(evicted.is_empty());
+        assert_eq!(entries.len(), 1);
     }
 }
