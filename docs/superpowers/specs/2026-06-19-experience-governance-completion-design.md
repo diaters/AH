@@ -75,7 +75,7 @@ pub struct IncubatedAgentRecord {
 **涉及文件**：
 - `src/systems/experience/writeback.rs` — 增加 Skill 候选处理
 - `src/infrastructure/incubation/agent_registry.rs` — `IncubatedAgentRecord` 新增 `skills` 字段
-- `src/domain/contribution.rs` — `AgentConfig/AgentConfigEntry` 新增 `skills` 字段（如果 agents.toml 解析需要）
+- `src/domain/mod.rs` — `AgentEntry` 新增 `skills` 字段（如果 agents.toml 解析需要）
 
 ---
 
@@ -380,7 +380,7 @@ if let Some(parent_task_id) = msg.parent_task_id {
 | `src/systems/tools/builtin/list_experience_candidates.rs` | 修改 |
 | `src/systems/experience/writeback.rs` | 修改 |
 | `src/infrastructure/incubation/agent_registry.rs` | 修改 |
-| `src/domain/contribution.rs` | 修改（AgentConfigEntry 新增 skills） |
+| `src/domain/mod.rs` | 修改（AgentEntry 新增 skills） |
 
 ### 子项目 B
 
