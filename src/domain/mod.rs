@@ -154,6 +154,9 @@ pub struct AgentEntry {
     pub description: String,
     /// Tool 权限配置
     pub tools: Option<AgentToolsConfig>,
+    /// Skill 路径列表
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
 }
 
 // ============ 测试 ============

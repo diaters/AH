@@ -21,6 +21,7 @@ fn incubated_agent_appended_to_agents_toml() {
             tags: vec!["default".to_string()],
             description: "default agent".to_string(),
             tools: None,
+            skills: None,
         }],
     };
     std::fs::write(&toml_path, toml::to_string(&initial).unwrap()).unwrap();
@@ -34,6 +35,7 @@ fn incubated_agent_appended_to_agents_toml() {
                 tags: vec!["incubated".to_string(), "physics".to_string()],
                 description: "derived from top-level proposal".to_string(),
                 tools: None,
+                skills: None,
             },
         )
         .unwrap();
@@ -60,6 +62,7 @@ fn duplicate_incubation_skips_if_name_exists() {
             tags: vec![],
             description: "existing".to_string(),
             tools: None,
+            skills: None,
         }],
     };
     std::fs::write(&toml_path, toml::to_string(&initial).unwrap()).unwrap();
@@ -73,6 +76,7 @@ fn duplicate_incubation_skips_if_name_exists() {
                 tags: vec![],
                 description: "duplicate".to_string(),
                 tools: None,
+                skills: None,
             },
         )
         .unwrap();

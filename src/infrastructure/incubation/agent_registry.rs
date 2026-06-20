@@ -15,6 +15,7 @@ pub struct IncubatedAgentRecord {
     pub tags: Vec<String>,
     pub description: String,
     pub tools: Option<AgentToolsConfig>,
+    pub skills: Option<Vec<String>>,
 }
 
 /// 孵化 Agent 注册持久化服务。
@@ -68,6 +69,7 @@ impl IncubatedAgentRegistry {
             tags: record.tags.clone(),
             description: record.description.clone(),
             tools: record.tools.clone(),
+            skills: record.skills.clone(),
         });
 
         // 序列化
@@ -112,6 +114,7 @@ mod tests {
                     tags: vec!["incubated".to_string()],
                     description: "physics specialist".to_string(),
                     tools: None,
+                    skills: None,
                 },
             )
             .unwrap();
@@ -136,6 +139,7 @@ mod tests {
                 tags: vec!["default".to_string()],
                 description: "default agent".to_string(),
                 tools: None,
+                skills: None,
             }],
         };
         fs::write(&path, toml::to_string(&initial).unwrap()).unwrap();
@@ -150,6 +154,7 @@ mod tests {
                     tags: vec!["incubated".to_string()],
                     description: "incubated".to_string(),
                     tools: None,
+                    skills: None,
                 },
             )
             .unwrap();
@@ -173,6 +178,7 @@ mod tests {
                 tags: vec![],
                 description: "existing".to_string(),
                 tools: None,
+                skills: None,
             }],
         };
         fs::write(&path, toml::to_string(&initial).unwrap()).unwrap();
@@ -187,6 +193,7 @@ mod tests {
                     tags: vec![],
                     description: "duplicate".to_string(),
                     tools: None,
+                    skills: None,
                 },
             )
             .unwrap();
@@ -217,6 +224,7 @@ mod tests {
                         m
                     },
                 }),
+                skills: None,
             }],
         };
 

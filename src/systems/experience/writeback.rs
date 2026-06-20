@@ -93,6 +93,7 @@ pub(crate) fn experience_writeback_system(
                     &proposal_store,
                     &agent_registry,
                     &mut service,
+                    &asset_service,
                     &settings.0.agents_config_path,
                 )
             }
@@ -210,6 +211,7 @@ fn writeback_incubation_proposal(
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
     service: &mut crate::infrastructure::memory::LongTermMemoryService,
+    asset_service: &crate::infrastructure::assets::AgentAssetService,
     config_path: &str,
 ) -> Result<(), String> {
     // 按 task_id 查找任务级 proposal
@@ -295,6 +297,41 @@ fn writeback_incubation_proposal(
         }
     }
 
+    // 处理 Skill 候选
+    let mut skill_paths: Vec<String> = Vec::new();
+    for skill_id in &proposal.skill_candidate_ids {
+        if let Some(candidate) = store.candidates.get(skill_id)
+            && let crate::domain::ExperienceCandidatePayload::Skill {
+                name,
+                description,
+                instructions,
+                file_refs,
+            } = &candidate.payload
+        {
+            let draft = crate::infrastructure::assets::SkillPackageDraft {
+                skill_id: format!("{}", candidate.candidate_id),
+                title: candidate.title.clone(),
+                name: name.clone(),
+                description: description.clone(),
+                instructions: instructions.clone(),
+                file_refs: file_refs.clone(),
+                source_task_id: Some(candidate.producer_task_id),
+                source_candidate_id: Some(candidate.candidate_id),
+            };
+            match asset_service.persist_skill_package(&profile.name, &draft) {
+                Ok(path) => skill_paths.push(path),
+                Err(e) => {
+                    tracing::warn!(
+                        event = "IncubationSkillPersistFailed",
+                        skill_id = %skill_id,
+                        error = %e,
+                        "failed to persist skill package during incubation"
+                    );
+                }
+            }
+        }
+    }
+
     // 创建新 Agent 记录
     let description = build_incubated_agent_description(store, &proposal);
     let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
@@ -303,6 +340,11 @@ fn writeback_incubation_proposal(
         tags: vec!["incubated".to_string()],
         description,
         tools: None,
+        skills: if skill_paths.is_empty() {
+            None
+        } else {
+            Some(skill_paths)
+        },
     };
     let result = agent_registry
         .append(config_path, &record)
@@ -395,11 +437,13 @@ mod tests {
         let memory_dir = TempDir::new().unwrap();
         let proposal_dir = TempDir::new().unwrap();
         let config_dir = TempDir::new().unwrap();
+        let asset_dir = TempDir::new().unwrap();
         let config_path = config_dir.path().join("agents.toml");
 
         let mut memory_service = make_memory_service(&memory_dir);
         let proposal_store = IncubationProposalStore::new(proposal_dir.path().join("proposals"));
         let registry = IncubatedAgentRegistry;
+        let asset_service = crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
 
         let mut store = ExperienceStore::default();
         let task_id = uuid::Uuid::new_v4();
@@ -428,6 +472,7 @@ mod tests {
             &proposal_store,
             &registry,
             &mut memory_service,
+            &asset_service,
             config_path.to_str().unwrap(),
         );
 
