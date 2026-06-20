@@ -3,8 +3,9 @@ use tracing::debug;
 
 use crate::domain::{
     ConversationMessage, EntryRole, ExperienceCollectionCompletedMessage,
-    ExperienceCollectionRequestMessage, ExperienceGovernanceRequestMessage, ExperienceStore,
-    ShortTermMemory, SpaceToolRegistry, Task, TaskTerminatedMessage, WorkItem,
+    ExperienceCollectionRequestMessage, ExperienceConsolidationRequestMessage,
+    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, ShortTermMemory,
+    SpaceToolRegistry, Task, TaskTerminatedMessage, WorkItem,
 };
 
 /// 任务终态经验收集触发系统：任务进入终态后统一生成经验收集请求。
@@ -172,6 +173,46 @@ pub(crate) fn experience_collection_completion_system(
                 aggregated_count = ids.len(),
                 "aggregated child candidates into parent inbox"
             );
+
+            // 汇聚后检查是否需要合并
+            if ids.len() > 1 {
+                let candidates: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| store.candidates.get(id))
+                    .collect();
+
+                let mut knowledge_ids: Vec<uuid::Uuid> = Vec::new();
+                let mut skill_ids: Vec<uuid::Uuid> = Vec::new();
+                for candidate in &candidates {
+                    match candidate.kind_hint {
+                        ExperienceKindHint::Knowledge => {
+                            knowledge_ids.push(candidate.candidate_id);
+                        }
+                        ExperienceKindHint::Skill => {
+                            skill_ids.push(candidate.candidate_id);
+                        }
+                    }
+                }
+
+                if knowledge_ids.len() > 1 {
+                    commands.spawn(ExperienceConsolidationRequestMessage {
+                        task_id: msg.task_id,
+                        parent_task_id,
+                        governing_agent_id: msg.governing_agent_id,
+                        candidate_kind: ExperienceKindHint::Knowledge,
+                        candidate_ids: knowledge_ids,
+                    });
+                }
+                if skill_ids.len() > 1 {
+                    commands.spawn(ExperienceConsolidationRequestMessage {
+                        task_id: msg.task_id,
+                        parent_task_id,
+                        governing_agent_id: msg.governing_agent_id,
+                        candidate_kind: ExperienceKindHint::Skill,
+                        candidate_ids: skill_ids,
+                    });
+                }
+            }
         } else {
             // 顶层：统一收束 root 候选与子层汇聚候选，推进到 GovernancePending 并触发治理。
             let ids = store.collect_top_level_governance_candidates(msg.task_id);
