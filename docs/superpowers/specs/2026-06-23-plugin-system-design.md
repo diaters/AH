@@ -21,6 +21,17 @@ AI Harness 当前的能力（记忆系统、tool 注册表、Brain 调度、shel
 
 下文未加修饰的"插件"均指**用户插件**。
 
+### Rhai 作为插件脚本引擎的合理性
+
+引入 `rhai` crate 作为插件脚本引擎符合项目依赖原则：
+
+- 纯 Rust 实现，无 C / C++ 依赖，跨平台兼容
+- crates.io 发布，许可证为 MIT / Apache-2.0，与项目兼容
+- 可嵌入式 AST 解释器，天然支持白名单 host API 注册，不做模块导入即可禁止
+  FS / 网络访问
+- 与 Bevy ECS 同进程嵌入，无需跨进程 IPC 协议
+- 不引入 ABI 稳定性负担，host API 在 Rust 层定义、Rhai 侧只能调注册函数
+
 ## 设计目标
 
 - 让框架变得轻量化和模块化，核心保留基础闭环，扩展能力由插件贡献
@@ -128,13 +139,18 @@ description = "汇总当前 task 进展"
 - `agents.toml` 中的内置 Agent 不带前缀；插件贡献的 Agent 永远带前缀，避免冲突
 - 插件 Agent 与内置 Agent 统一注册到 `AgentRegistry`，但 LLM 选择 Agent 时只能看到
   当前 Agent 配置中显式允许的子集（沿用现有 tool 权限模型的可见性规则）
+- 核心需要扩展既有 `AgentRegistry` / `ToolRegistry` / `SkillLoader` 的 id 解析逻辑
+  以支持冒号命名空间；此扩展属于本 spec 实施范围内的工作，具体路径由实施计划定义
 
 ### API 版本兼容
 
 - `api_version` 是 manifest 必填字段，声明插件目标的 Host API 版本
 - 核心暴露 `API_VERSION` 常量；加载时若 manifest `api_version` 与核心不匹配，跳过该
   插件并 `warn` 日志提示版本不兼容
-- 新增 hook 点或 host API 时同步递增核心 `API_VERSION`，旧插件按上面的规则被拒绝加载
+- API_VERSION 仅在**破坏性变更**时递增：host API 签名变更、hook 点语义变更、hook
+  点移除、host API 移除、manifest schema 不兼容变更
+- 加性变更不递增：新增 hook 点、新增 host API、manifest 加可选字段。旧插件按其
+  声明的 api_version 仍可加载，看不到新能力
 
 ## 加载流程
 
@@ -170,15 +186,16 @@ description = "汇总当前 task 进展"
 
 ### `/reload-plugins` 语义
 
-`/reload-plugins` 不在本进程内做热重载，up等同"重新执行启动序列"：
+`/reload-plugins` 等同"重新执行启动序列"：
 
-- 触发当前进程内的 App 重新初始化（保留 TUIDisplay 等基础设施，重置 ECS World 与
-  PluginRegistry，重新执行 PluginLoader 流程）
-- 不退出进程，不依赖外部启动器；headless 模式下同样适用（重置 ECS World 与
-  PluginRegistry）
+- 清空当前 `PluginRegistry` 与所有插件贡献的注册项（tool / agent / skill / command /
+  hook 订阅）
+- 重新扫描 `.harness/plugins/`，按当前磁盘状态重新加载
+- ECS World 的重置策略与正常进程启动保持一致（具体 reset 路径由实施计划定义）
 
-这避免了热重载需要处理"已有 ECS 实体引用插件贡献的 component"等复杂语义，也避免了
-"退出进程再拉起"对启动器协议的依赖。
+不退出进程，不依赖外部启动器；headless 模式与 TUI 模式语义一致。这避免了热重载需要
+处理"已有 ECS 实体引用插件贡献的 component"等复杂语义，也避免了"退出进程再拉起"
+对启动器协议的依赖。
 
 ### `/plugins` 命令
 
@@ -235,6 +252,8 @@ v1 hook 点清单
 - 脚本若需要触发异步动作（如 `spawn_agent`），通过 host API 发指令，不阻塞 hook 返回
 - hook 脚本固定超时 1 秒（v1 保守值），超时视为失败，log warn，下次同类事件继续派
   发。超时是挂墙时间，包含 host API 调用时间
+- v1 host API 所有函数均为进程内同步、快速返回；**不包含** LLM 调用、网络 IO、
+  持久化写入等慢操作。若未来引入慢 host API，超时模型需要重做并算重大变更
 - hook 编写约束：hook 脚本不应做 O(n) 枚举（如 `get_task_ids()` 后逐个读取再处理）
   Host API 提供的查询接口应按句柄访问；若 hook 需要遍历大量实体，属于设计缺陷，应
   通过新增专用 host API 而非在脚本里枚举
@@ -290,8 +309,8 @@ get_agent_ids()                  -> [AgentId]
 
 [写 - 创建]
 create_task(input)               -> TaskId        # 触发 on_task_created
-spawn_agent(profile_id, ctx)     -> AgentId       # 派生 Agent
-create_work_item(task_id, ...)   -> WorkItemId
+spawn_agent(profile_id, task_id, input)  -> AgentId  # 相对于 task 派生 Agent
+create_work_item(task_id, kind, payload)  -> WorkItemId
 
 [写 - 修改 component]
 task_set_tag(task_id, key, val)
@@ -310,13 +329,13 @@ tool_set_result(result)          # 只在 on_tool_returned 中有效（允许替
 
 [Skill / 命令相关]
 list_skills()                    -> [SkillInfo]
-emit_message(channel, payload)   # 发送到消息通道
-register_temp_resource(...)       # 在 PluginRegistry 注册临时资源，reload 时清空
+emit_message(channel, payload)   # channel 是字符串标识符，payload 为可序列化对象
+register_temp_resource(key, value) # 在 PluginRegistry 注册临时资源，reload 时清空
 read_plugin_resource(rel_path)    # 读取插件目录内的静态资源（路径由 Host 校验前缀）
 
 [审批相关]
 approval_request_id()            # 在 on_approval_requested 中拿 ID
-approval_resolve(request_id, decision)
+approval_resolve(request_id, decision)  # decision 为 "approve" | "reject"
 
 [经验治理相关]
 experience_get_candidate(id)    -> ExperienceCandidate
@@ -361,8 +380,8 @@ Rhai 引擎本身无 FS 沙箱，"插件只能读自己目录"通过以下手段
 ### 工具 schema 标准
 
 - 插件 tool 的 `schema` 引用 JSON Schema 文件，核心在加载阶段统一校验
-- v1 采用 JSON Schema Draft 7（与依赖原则一致；具体版本由实施时按 `schemars`/
-  `jsonschema` crate 选定，记入 `docs/configuration.md`）
+- v1 固定采用 JSON Schema Draft 7；如需更换版本需通过 ADR 重新评审，并同步更新
+  `docs/configuration.md`
 - schema 校验失败视为 manifest 校验失败，跳过该插件并 `warn` 日志
 
 ### API 表面演进规则
