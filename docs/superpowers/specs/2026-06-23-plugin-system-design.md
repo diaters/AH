@@ -93,7 +93,7 @@ AI Harness 当前的能力（记忆系统、tool 注册表、Brain 调度、shel
 id = "my-plugin"                          # 必填，全局唯一，作为命名空间
 name = "My Plugin"                         # 可读名
 version = "0.1.0"
-api_version = "1"                          # 必填，目标 Host API 版本，与核心 API_VERSION 匹配
+api_version = 1                            # 必填，整数，目标 Host API 版本，与核心 API_VERSION 匹配
 author = "your-name"
 description = "一个示例插件"
 
@@ -109,6 +109,8 @@ script = "hooks/on_tool_called.rhai"
 # --- 贡献 tool ---
 [[tools]]
 id = "my_tool"                             # 全局 tool id，会以 "my-plugin:my_tool" 暴露
+description = "一个友好的示例工具"           # 必填，LLM 看到的工具描述
+default_permission = "confirm"             # 可选，"allow" | "confirm" | "deny"，缺省 "confirm"
 schema = "tools/my_tool.schema.json"       # JSON schema 描述参数
 handler = "tools/my_tool.rhai"             # 实现脚本
 
@@ -125,7 +127,8 @@ profile = "agents/researcher.toml"          # Agent 配置（沿用现有 Agent 
 # --- 贡献 slash command ---
 [[commands]]
 id = "summarize"                            # 全局内部 id，会以 "my-plugin:summarize" 作为命名空间
-display = "/summarize"                      # TUI 显示与调用的形式，跨插件冲突按 §加载流程 §命名空间处理
+display = "/summarize"                      # TUI 显示与调用的形式，全局唯一，冲突时启动报
+                                            # 错并跳过冲突的命令（后注册者被跳过，warn 日志）
 script = "commands/summarize.rhai"
 description = "汇总当前 task 进展"
 ```
@@ -308,9 +311,15 @@ get_agent(agent_id)              -> Agent
 get_agent_ids()                  -> [AgentId]
 
 [写 - 创建]
-create_task(input)               -> TaskId        # 触发 on_task_created
+create_task(title)               -> TaskId        # 触发 on_task_created
 spawn_agent(profile_id, task_id, input)  -> AgentId  # 相对于 task 派生 Agent
 create_work_item(task_id, kind, payload)  -> WorkItemId
+
+# v1 占位句柄约定：以上三类创建 API 通过 channel 异步下发指令，调用即返回 `Uuid::nil()`
+# 的字符串化占位 id，不作为错误通道（成功返回占位、失败通过 hook 不会派发暴露）。真实
+# id 由对应后 hook（`on_task_created` / `on_agent_started` / `on_workitem_started`）向
+# 插件暴露。这是 v1 的明示约定，不是失败模式的破坏——未来若引入同步返回真实 id 的变体
+# 算 Host API 签名变更（破坏性，按 §API 表面演进规则处理）
 
 [写 - 修改 component]
 task_set_tag(task_id, key, val)
