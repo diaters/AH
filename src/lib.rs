@@ -6,6 +6,7 @@ pub mod llm;
 pub mod plugins;
 pub mod systems;
 pub mod tui;
+pub mod user_plugins;
 
 pub use app::*;
 pub use contracts::*;
