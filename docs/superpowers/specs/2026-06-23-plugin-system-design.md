@@ -6,9 +6,20 @@
 
 AI Harness 当前的能力（记忆系统、tool 注册表、Brain 调度、shell 工具、SkillLoader、
 经验治理、TUI、ECS 主链路）都是核心内置能力，整体框架是一体化结构。为了支持第三方
-用户在不修改核心代码的前提下扩展框架能力，需要引入一套插件系统。
+用户在不修改核心代码的前提下扩展框架能力，需要引入一套用户扩展机制。
 
-参考 VSCode 模型：核心是一个完整可运行的基础平台，插件只做加法，不替换核心能力。
+参考 VSCode 模型：核心是一个完整可运行的基础平台，扩展只做加法，不替换核心能力。
+
+### 术语
+
+本文在术语上做显式区分以避免歧义：
+
+- **Bevy 内部 Plugin**：指 `src/plugins/*.rs` 下的 Bevy ECS 插件，是核心运行时的组织
+  单元，与本文设计无关
+- **用户插件（Plugin）**：本文设计的用户扩展单元，位于 `.harness/plugins/<id>/`，由
+  manifest + Rhai 脚本 + 静态资源组成
+
+下文未加修饰的"插件"均指**用户插件**。
 
 ## 设计目标
 
@@ -71,6 +82,7 @@ AI Harness 当前的能力（记忆系统、tool 注册表、Brain 调度、shel
 id = "my-plugin"                          # 必填，全局唯一，作为命名空间
 name = "My Plugin"                         # 可读名
 version = "0.1.0"
+api_version = "1"                          # 必填，目标 Host API 版本，与核心 API_VERSION 匹配
 author = "your-name"
 description = "一个示例插件"
 
@@ -96,33 +108,55 @@ path = "skills/negotiation/SKILL.md"       # 对齐现有 SkillLoader 规范
 
 # --- 贡献 agent ---
 [[agents]]
-id = "researcher"                          # 在 agents.toml 之外独立注册
+id = "researcher"                          # 全局 agent id，会以 "my-plugin:researcher" 注册到 AgentRegistry
 profile = "agents/researcher.toml"          # Agent 配置（沿用现有 Agent 配置结构）
 
 # --- 贡献 slash command ---
 [[commands]]
-id = "summarize"                            # 调用形式：/summarize
+id = "summarize"                            # 全局内部 id，会以 "my-plugin:summarize" 作为命名空间
+display = "/summarize"                      # TUI 显示与调用的形式，跨插件冲突按 §加载流程 §命名空间处理
 script = "commands/summarize.rhai"
 description = "汇总当前 task 进展"
 ```
 
 ### 命名空间
 
-- 插件贡献的 tool / agent 强制以 `<plugin-id>:<local-id>` 前缀作为全局 id
+- 插件贡献的 tool / agent / skill 强制以 `<plugin-id>:<local-id>` 前缀作为全局 id
+- 插件贡献的 slash command 内部 id 同样以 `<plugin-id>:<command-id>` 命名，但 TUI
+  显示与调用使用 manifest 中的 `display` 字段；`display` 字段允许重名，重名时启动报
+  错并跳过冲突的命令
 - `agents.toml` 中的内置 Agent 不带前缀；插件贡献的 Agent 永远带前缀，避免冲突
-- skill id 同样强制以 `<plugin-id>:<skill-id>` 前缀，与 tool / agent 命名空间保持一致
+- 插件 Agent 与内置 Agent 统一注册到 `AgentRegistry`，但 LLM 选择 Agent 时只能看到
+  当前 Agent 配置中显式允许的子集（沿用现有 tool 权限模型的可见性规则）
+
+### API 版本兼容
+
+- `api_version` 是 manifest 必填字段，声明插件目标的 Host API 版本
+- 核心暴露 `API_VERSION` 常量；加载时若 manifest `api_version` 与核心不匹配，跳过该
+  插件并 `warn` 日志提示版本不兼容
+- 新增 hook 点或 host API 时同步递增核心 `API_VERSION`，旧插件按上面的规则被拒绝加载
 
 ## 加载流程
 
-1. 启动时 `PluginLoader` 扫描 `.harness/plugins/*/manifest.toml`
+1. 启动时 `PluginLoader` 扫描 `.harness/plugins/*/manifest.toml`，按 manifest `id`
+   字母序排序，确定后续 hook 派发顺序
 2. 解析 manifest，校验 schema：
    - `id` 全局唯一
+   - `api_version` 与核心 `API_VERSION` 匹配
    - hook `event` 必须在核心契约清单内
    - 引用的脚本 / SKILL.md / schema 文件必须存在
-   - hook 脚本语法在启动时静态编译，语法错误在加载阶段暴露
+   - hook 脚本与 command 脚本在启动时静态编译，语法错误在加载阶段暴露
+   - JSON schema 由核心统一在加载阶段校验（见 §工具 schema 标准）
+   - slash command `display` 字段全局唯一，冲突时跳过后注册者并 `warn` 日志
 3. 校验通过的插件按 id 注册到 `PluginRegistry`（ECS Resource）
 4. 失败的插件跳过，写入 `warn` 日志，其他插件继续加载
-5. 核心启动完成后，后续系统按 `PluginRegistry` 实际派发 hook、暴露 tool、注入 skill、
+5. `PluginLoader` 把所有插件贡献的 skill 元数据（带前缀 id、SKILL.md 路径）注入
+   `SkillLoader`，与 `.harness/skills/` 的扫描结果合并；`SkillLoader` 在为 Agent 组装
+   系统 prompt 时按统一规则注入
+6. `PluginLoader` 把所有插件贡献的 agent profile 注册到 `AgentRegistry`，与
+   `agents.toml` 的内置 Agent 合并；插件 Agent 的 profile 字段结构与内置 Agent 完全
+   一致，仅 id 带前缀
+7. 核心启动完成后，后续系统按 `PluginRegistry` 实际派发 hook、暴露 tool、注入 skill、
    加载 agent
 
 ### 启动时输出
@@ -136,13 +170,15 @@ description = "汇总当前 task 进展"
 
 ### `/reload-plugins` 语义
 
-`/reload-plugins` 不在本进程内做热重载，而是触发"重启执行流"：
+`/reload-plugins` 不在本进程内做热重载，up等同"重新执行启动序列"：
 
-- 退出当前进程（或仅 TUI 模式的内部启动序列重置）
-- 再次进入启动流程，按当前磁盘上的 `.harness/plugins/` 重新加载
+- 触发当前进程内的 App 重新初始化（保留 TUIDisplay 等基础设施，重置 ECS World 与
+  PluginRegistry，重新执行 PluginLoader 流程）
+- 不退出进程，不依赖外部启动器；headless 模式下同样适用（重置 ECS World 与
+  PluginRegistry）
 
-这避免了热重载需要处理"已有 ECS 实体引用插件贡献的 component"等复杂语义。在语义上等
-同于重启。
+这避免了热重载需要处理"已有 ECS 实体引用插件贡献的 component"等复杂语义，也避免了
+"退出进程再拉起"对启动器协议的依赖。
 
 ### `/plugins` 命令
 
@@ -193,12 +229,15 @@ v1 hook 点清单
 
 ### 派发顺序
 
-- hook 顺序同步派发，按插件加载顺序依次执行
-- 前一个 hook 完成才下一个；不并行
-- 派发在线程内同步执行；脚本若需要触发异步动作（如 `spawn_agent`），通过 host API
-  发指令，不阻塞 hook 返回
+- 同一 hook 点的多个订阅者按插件 id 字母序依次派发；同一插件内部多个 hook 订阅同一
+  点时按 manifest 中 `[[hooks]]` 出现顺序派发
+- 派发在线程内同步执行；前一个 hook 完成才下一个，不并行
+- 脚本若需要触发异步动作（如 `spawn_agent`），通过 host API 发指令，不阻塞 hook 返回
 - hook 脚本固定超时 1 秒（v1 保守值），超时视为失败，log warn，下次同类事件继续派
-  发
+  发。超时是挂墙时间，包含 host API 调用时间
+- hook 编写约束：hook 脚本不应做 O(n) 枚举（如 `get_task_ids()` 后逐个读取再处理）
+  Host API 提供的查询接口应按句柄访问；若 hook 需要遍历大量实体，属于设计缺陷，应
+  通过新增专用 host API 而非在脚本里枚举
 
 ### 上下文对象
 
@@ -262,10 +301,18 @@ task_set_metadata(task_id, k, v)
 tool_deny(reason)                # 只在 on_tool_called 中有效
 tool_set_result(result)          # 只在 on_tool_returned 中有效（允许替换结果）
 
+# tool_deny / tool_set_result 的 LLM 可见语义：
+# - tool_deny: 核心生成标准工具错误 message 回给 LLM，原因为插件提供内容；
+#   工具调用历史记录 denied_by_plugin + 插件 id + reason
+# - tool_set_result: 原始 result 保留为 audit 字段（不回传 LLM），插件提供的 result
+#   作为正式 result 回传 LLM 并写入工具调用历史；审计日志记录原值与新值
+# - 两类操作强制写入结构化审计日志（tracing），便于事后追踪
+
 [Skill / 命令相关]
 list_skills()                    -> [SkillInfo]
 emit_message(channel, payload)   # 发送到消息通道
 register_temp_resource(...)       # 在 PluginRegistry 注册临时资源，reload 时清空
+read_plugin_resource(rel_path)    # 读取插件目录内的静态资源（路径由 Host 校验前缀）
 
 [审批相关]
 approval_request_id()            # 在 on_approval_requested 中拿 ID
@@ -294,14 +341,36 @@ log_error(msg)
 | host API 白名单 | Rhai 只能调用 manifest 注册的函数 |
 | 无 World 句柄 | 插件不能拿 World / Entity 直接引用 |
 | 插件间隔离 | 不暴露跨插件调用能力 |
-| 插件沙箱目录 | 插件只能读自己目录（SKILL.md / scripts）；不能读其他插件目录、不能读 `.harness/` 之外 |
+| 插件沙箱目录 | 见下方"沙箱实现机制" |
 | tool / agent id 命名空间 | 强制 `plugin-id:tool-id` 前缀 |
 | 无网络 / 文件系统 host API | v1 不暴露网络、任意文件读写 API；插件要操作文件必须通过贡献的 shell tool 间接访问 |
+
+### 沙箱实现机制
+
+Rhai 引擎本身无 FS 沙箱，"插件只能读自己目录"通过以下手段保证：
+
+- **完全禁用 Rhai 的 std 文件 API**：注册到 Rhai 的 host 函数集不包含任何 FS 原语
+- **manifest 引用的资源由 Host 解析**：SKILL.md、schema 文件、脚本文件在加载阶段
+  由 `PluginLoader` 用 Rust 侧路径解析，校验路径必须位于插件根目录树内（canonicalize
+  后做前缀检查）
+- **脚本运行时无法访问任何路径**：脚本若想读取自身目录下的 SKILL.md、schema 等静态
+  资源，通过 host API `read_plugin_resource(rel_path)`，Host 内部再做路径前缀校验；
+  脚本不能直接构造绝对路径
+- **跨插件可见性为零**：不存在任何 `list_plugins` / `read_other_plugin` host API
+
+### 工具 schema 标准
+
+- 插件 tool 的 `schema` 引用 JSON Schema 文件，核心在加载阶段统一校验
+- v1 采用 JSON Schema Draft 7（与依赖原则一致；具体版本由实施时按 `schemars`/
+  `jsonschema` crate 选定，记入 `docs/configuration.md`）
+- schema 校验失败视为 manifest 校验失败，跳过该插件并 `warn` 日志
 
 ### API 表面演进规则
 
 - 新增 host API 算核心契约变更，需要设计评审
 - 已有 API 的签名变更算破坏性变更，按重大变更流程处理（ADR 或设计文档）
+- v1 不支持插件配置（如 API key、路径映射）；未来通过 `get_plugin_config(key)` 扩展
+  位提供，需要在核心层面定义配置 schema 与持久化路径
 
 ## 错误处理
 
@@ -309,13 +378,17 @@ log_error(msg)
 错误层次                                处理策略
 ──────────────────────────────────────────────────────────────────
 manifest 校验失败                       跳过该插件，warn 日志，启动继续
+api_version 不匹配                      跳过该插件，warn 日志，提示版本不兼容
 hook 脚本引用文件缺失                   跳过该插件，warn 日志
 hook 脚本语法错误                       启动时静态编译失败，跳过该插件
+JSON schema 校验失败                    跳过该插件，warn 日志
+slash command display 冲突              跳过后注册者，warn 日志，前注册者保留
 hook 脚本运行时 panic                   一次失败仅 log warn，下次继续派发
 hook 脚本超时 (1s)                      视为失败，log warn，下次继续派发
 host API 调用失败                        返回 Result，脚本可处理
 host API 调用越权                        返回 Error，记 warn 日志
 插件贡献的 tool / command 执行失败       返回错误给调用方，写入工具调用历史
+tool_deny / tool_set_result 被调用       强制写入结构化审计日志
 ```
 
 核心原则：插件失败永远是"软失败"——不扩散到其他插件、不毁核心进程。日志是主要可
@@ -333,9 +406,12 @@ host API 调用越权                        返回 Error，记 warn 日志
 ### 集成测试
 
 - 插件加载 → hook 被派发 → host API 副作用可见
-- 多插件共存，hook 顺序派发
+- 多插件共存，hook 按 id 字母序顺序派发
 - 坏插件（manifest 错误 / 脚本 panic）不影响好插件
-- `/reload-plugins` 触发重启效果
+- `api_version` 不匹配的插件被跳过且 log warn
+- slash command `display` 冲突时后注册者被跳过
+- 沙箱违规（脚本尝试访问其他插件目录或 `.harness/` 之外）被 host 拒绝
+- `/reload-plugins` 触发 App 重新初始化，插件层被重置
 
 ### 回归测试
 
@@ -358,7 +434,8 @@ host API 调用越权                        返回 Error，记 warn 日志
 - 订阅 `on_task_created` hook 写一条 metadata
 - 贡献一个 `/test-hello` slash command
 
-该插件不进 `.harness/plugins/` 默认目录，只在测试期间由测试框架读入。
+该插件不进 `.harness/plugins/` 默认目录，放在 `tests/fixtures/plugins/test-plugin/`，
+只在测试期间由测试框架读入。
 
 ## 实现范围
 
