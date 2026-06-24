@@ -217,6 +217,7 @@ pub fn build_harness_app(
 
     // Startup: Load persistent agents before any systems run
     app.add_systems(Startup, load_agents_system);
+    app.add_systems(Startup, crate::user_plugins::plugin_load_startup_system);
 
     // Configure SystemSets
     app.configure_sets(
