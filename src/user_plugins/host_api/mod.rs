@@ -1,6 +1,6 @@
 //! 注册到 Rhai Engine 的 Host API 表面。
 //!
-//! 每个子模块导出一个 `register(Engine)` 函数，由
+//! 每个子模块导出一个 `register(Engine, ctx)` 函数，由
 //! `register_all` 在派发前一次性注册。
 
 use rhai::Engine;
@@ -25,11 +25,23 @@ use entity_write::WorldWriter;
 /// 每次派发 hook 时，dispatcher 会为本插件构造一个独立的 Engine 实例，
 /// 调用此函数后再注入插件上下文（plugin_id、ctx），最后执行 AST。
 pub fn register_all(engine: &mut Engine) {
-    approval::register(engine);
-    entity_query::register(engine, WorldSnapshot::empty());
     let (tx, _rx) = crossbeam_channel::unbounded();
-    entity_write::register(engine, WorldWriter::new(tx));
-    experience::register(engine);
+    approval::register(
+        engine,
+        approval::ApprovalContext {
+            current_request_id: None,
+            tx: tx.clone(),
+        },
+    );
+    entity_query::register(engine, WorldSnapshot::empty());
+    entity_write::register(engine, WorldWriter::new(tx.clone()));
+    experience::register(
+        engine,
+        experience::ExperienceContext {
+            store: Arc::new(crate::domain::ExperienceStore::default()),
+            tx: tx.clone(),
+        },
+    );
     log::register(engine);
     plugin_resource::register(engine, plugin_resource::PluginRoots::single(PathBuf::new()));
     state::register(engine);

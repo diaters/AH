@@ -29,6 +29,24 @@ pub enum WorldCommand {
         key: String,
         value: String,
     },
+    SpawnAgent {
+        profile_id: String,
+        task_id: Uuid,
+        input: String,
+    },
+    CreateWorkItem {
+        task_id: Uuid,
+        kind: String,
+        payload: serde_json::Value,
+    },
+    SetApprovalDecision {
+        request_id: Uuid,
+        decision: String,
+    },
+    ExperienceSetPinned {
+        id: Uuid,
+        pinned: bool,
+    },
 }
 
 /// 每个 hook 派发携带的 sender。
@@ -83,6 +101,72 @@ pub fn register(engine: &mut Engine, writer: WorldWriter) {
             }
         },
     );
+
+    let w = writer.clone();
+    engine.register_fn(
+        "spawn_agent",
+        move |profile_id: &str, task_id: &str, input: &str| -> String {
+            if let Ok(tid) = Uuid::parse_str(task_id) {
+                let _ = w.tx.send(WorldCommand::SpawnAgent {
+                    profile_id: profile_id.to_string(),
+                    task_id: tid,
+                    input: input.to_string(),
+                });
+            }
+            uuid::Uuid::nil().to_string()
+        },
+    );
+
+    let w = writer.clone();
+    engine.register_fn(
+        "create_work_item",
+        move |task_id: &str, kind: &str, payload: rhai::Dynamic| -> String {
+            if let Ok(tid) = Uuid::parse_str(task_id) {
+                let payload_json = rhai_dynamic_to_json(payload);
+                let _ = w.tx.send(WorldCommand::CreateWorkItem {
+                    task_id: tid,
+                    kind: kind.to_string(),
+                    payload: payload_json,
+                });
+            }
+            uuid::Uuid::nil().to_string()
+        },
+    );
+}
+
+fn rhai_dynamic_to_json(v: rhai::Dynamic) -> serde_json::Value {
+    if v.is_unit() {
+        return serde_json::Value::Null;
+    }
+    if v.is::<bool>() {
+        return serde_json::Value::Bool(v.as_bool().unwrap());
+    }
+    if v.is::<i64>() {
+        return serde_json::Value::from(v.as_int().unwrap());
+    }
+    if v.is::<f64>() {
+        return serde_json::json!(v.as_float().unwrap());
+    }
+    if v.is::<String>() {
+        return serde_json::Value::String(v.cast::<String>());
+    }
+    if v.is::<rhai::Map>() {
+        let m = v.cast::<rhai::Map>();
+        let mut obj = serde_json::Map::new();
+        for (k, val) in m.iter() {
+            obj.insert(k.to_string(), rhai_dynamic_to_json(val.clone()));
+        }
+        return serde_json::Value::Object(obj);
+    }
+    if v.is::<rhai::Array>() {
+        let arr = v.cast::<rhai::Array>();
+        return serde_json::Value::Array(
+            arr.iter()
+                .map(|v| rhai_dynamic_to_json(v.clone()))
+                .collect(),
+        );
+    }
+    serde_json::Value::Null
 }
 
 #[cfg(test)]
@@ -130,6 +214,59 @@ mod tests {
                 assert_eq!(task_id, id);
                 assert_eq!(key, "env");
                 assert_eq!(value, "ci");
+            }
+            _ => panic!("wrong cmd"),
+        }
+    }
+
+    #[test]
+    fn spawn_agent_returns_placeholder_and_sends_command() {
+        let (tx, rx) = unbounded();
+        let mut e = Engine::new();
+        register(&mut e, WorldWriter::new(tx));
+        let tid = uuid::Uuid::new_v4();
+        let script = format!(r#"spawn_agent("researcher", "{}", "find x")"#, tid);
+        let ret: String = e.eval(&script).unwrap();
+        assert_eq!(ret, uuid::Uuid::nil().to_string());
+        match rx.recv().unwrap() {
+            WorldCommand::SpawnAgent {
+                profile_id,
+                task_id,
+                input,
+            } => {
+                assert_eq!(profile_id, "researcher");
+                assert_eq!(task_id, tid);
+                assert_eq!(input, "find x");
+            }
+            _ => panic!("wrong cmd"),
+        }
+    }
+
+    #[test]
+    fn create_work_item_sends_payload_command() {
+        let (tx, rx) = unbounded();
+        let mut e = Engine::new();
+        register(&mut e, WorldWriter::new(tx));
+        let tid = uuid::Uuid::new_v4();
+        let script = format!(
+            r#"
+let p = #{{"topic": "ci-fail", "severity": 5}};
+create_work_item("{}", "triage", p)
+"#,
+            tid
+        );
+        let ret: String = e.eval(&script).unwrap();
+        assert_eq!(ret, uuid::Uuid::nil().to_string());
+        match rx.recv().unwrap() {
+            WorldCommand::CreateWorkItem {
+                task_id,
+                kind,
+                payload,
+            } => {
+                assert_eq!(task_id, tid);
+                assert_eq!(kind, "triage");
+                assert_eq!(payload["topic"], "ci-fail");
+                assert_eq!(payload["severity"], 5);
             }
             _ => panic!("wrong cmd"),
         }
