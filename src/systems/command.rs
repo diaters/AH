@@ -3,9 +3,9 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, SharedKnowledgeBase,
-    SharedKnowledgeEntry, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
-    TaskStatus, UserCommand, UserInputMessage,
+    ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, NewlyCreatedTask,
+    SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory, SummarizationRequestMessage,
+    SummarizationTrigger, Task, TaskStatus, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -42,7 +42,8 @@ pub(crate) fn command_parse_system(
                         topic = %topic,
                         "creating sub-task via /btw command"
                     );
-                    // 创建子任务（Pending 状态）
+                    // 创建子任务（Pending 状态）。附带 NewlyCreatedTask 标记，
+                    // 使 on_task_created_hook_system 能对称地为 /btw 子任务派发 hook。
                     let child_task = Task::from_user_input(
                         if topic.is_empty() {
                             &input.content
@@ -55,7 +56,7 @@ pub(crate) fn command_parse_system(
                             user_id: "default".to_string(),
                         },
                     );
-                    commands.spawn((child_task, ShortTermMemory::default()));
+                    commands.spawn((child_task, ShortTermMemory::default(), NewlyCreatedTask));
                 } else {
                     debug!(
                         event = "NoParentTask",

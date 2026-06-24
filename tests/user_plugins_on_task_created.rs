@@ -7,7 +7,7 @@
 //! hook 脚本同时调用 `task_set_metadata`（用于验证 deferred 分支不 panic）
 //! 与 `get_task_ids()`（用于验证 snapshot 注入）。
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
@@ -38,6 +38,16 @@ impl AgentExecutor for EchoExecutor {
         })
     }
 }
+
+/// 进程内串行化 HARNESS_PLUGINS_DIR 访问的全局锁。
+///
+/// `std::env::set_var` / `std::env::var` 都是进程级全局状态。Rust 测试二进制默认
+/// 并行运行测试函数，若多个测试同时读写同一 env var 会触发 UB（即使 var
+/// 只在一个测试里用）。这里用一把全局 Mutex 约束：本二进制中任何需要触碰
+/// `HARNESS_PLUGINS_DIR` 的测试都必须先持锁，从而把并发 set_var 串行化。这不是
+/// “环境变量是线程安全的” 的证据——恰恰相反，正是因为环境变量并非线程安全，
+/// 才需要用 Mutex 在测试层面强制独占。
+static PLUGIN_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// 写入一个订阅 `on_task_created` 的最小插件到 dir/alpha。
 fn write_alpha_plugin(dir: &std::path::Path) {
@@ -71,9 +81,19 @@ fn on_task_created_hook_dispatches_without_panic_and_clears_marker() {
     let dir = TempDir::new().unwrap();
     write_alpha_plugin(dir.path());
 
-    // 用 HARNESS_PLUGINS_DIR 指向临时插件目录。注意：本测试只在一个测试函数内使用，
-    // 同二进制无其它测试并行读取此环境变量。
-    // SAFETY: 单线程测试，无并发 set_var/read。
+    // 用 HARNESS_PLUGINS_DIR 指向临时插件目录。通过 `PLUGIN_ENV_LOCK` 进程内串行化，
+    // 避免与同二进制其它测试并发 set_var/read env 触发 UB。
+    //
+    // 曾经以 `unsafe { std::env::set_var(..) }` 配“单线程测试” SAFETY 论证是不对的：
+    // Rust 测试二进制默认并行运行多个 test 函数，`set_var` 并非单线程独有。
+    // 取而代之以 Mutex 序列化所有触碰 HARNESS_PLUGINS_DIR 的测试，锁析构后变量仍可能
+    // 残留进程级状态，但不影响正确性：后续若新增同 env 的测试，持锁后即可安全覆写。
+    let _env_guard = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // SAFETY: `std::env::set_var` 操作的是进程级全局 environ。Rust 测试二进制默认
+    // 并行执行多个 test 函数，若不串行化则同进程内并发的 set/var 即为 UB。此处
+    // 通过 `PLUGIN_ENV_LOCK` 全局 Mutex 强制本二进制中所有触碰此 env 的测试串行
+    // 运行，且本测试在持锁期间不会向其它线程分发读取此 env 的工作。临时目录由
+    // `TempDir` 持有到本函数结束，env 指向的路径在 set 之后到测试结束之间均合法。
     unsafe {
         std::env::set_var("HARNESS_PLUGINS_DIR", dir.path());
     }
