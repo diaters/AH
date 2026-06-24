@@ -116,7 +116,7 @@ pub use space::{
 pub use summarization::SummarizationTrigger;
 
 // task
-pub use task::{Task, TaskStatus, WaitingForSessionInfo, WaitingForTasksInfo};
+pub use task::{NewlyCreatedTask, Task, TaskStatus, WaitingForSessionInfo, WaitingForTasksInfo};
 
 // tool_runtime
 pub use tool_runtime::ToolCallingState;

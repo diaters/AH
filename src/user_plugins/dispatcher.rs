@@ -9,10 +9,12 @@ use std::thread;
 use std::time::Duration;
 
 use bevy::prelude::World;
+use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use rhai::{Engine, Scope};
 use tracing::{debug, warn};
 
+use crate::domain::{ChannelId, FrontendKind, Task};
 use crate::user_plugins::hook_point::HookPoint;
 use crate::user_plugins::host_api;
 use crate::user_plugins::host_api::approval::ApprovalContext;
@@ -180,6 +182,77 @@ fn run_one_ast(
     // 注：超时线程在后台继续运行直到脚本退出。v1 接受这一潜在泄漏，因为 host API
     // 都是同步进程内快速操作，最长 1s 内必然结束。
     let _ = handle;
+}
+
+/// replay hook 期间累积的 `WorldCommand` 到 `world`。
+///
+/// 在系统（system）调用 `dispatch_hook` 之后调用此函数，按到达顺序逐条应用
+/// 插件通过 host API 写出的指令。失败（如 task_id 不存在）以 `debug!` 记录，
+/// 不中断 flush。
+pub fn flush_world_commands(world: &mut World, rx: &Receiver<WorldCommand>) {
+    while let Ok(cmd) = rx.try_recv() {
+        apply_world_command(world, cmd);
+    }
+}
+
+/// 应用单条 `WorldCommand`。
+///
+/// v1 仅实现 `CreateTask` 与 `SetTaskMetadata`/`SetTaskTag`；
+/// 其余变体（`SpawnAgent` / `CreateWorkItem` / `SetApprovalDecision` /
+/// `ExperienceSetPinned`）留作后续任务接入，先以 `debug!` 记录跳过。
+fn apply_world_command(world: &mut World, cmd: WorldCommand) {
+    match cmd {
+        WorldCommand::CreateTask { title, parent: _ } => {
+            // Task 无 metadata 字段，Task::new 也不存在，使用 from_user_input
+            // 走与用户消息相同的多轮 Pending 路径，origin_channel 标记为 plugin 来源。
+            let channel = ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "plugin".to_string(),
+            };
+            let task = Task::from_user_input(title, 0, channel);
+            world.spawn((task, crate::domain::ShortTermMemory::default()));
+        }
+        WorldCommand::SetTaskMetadata {
+            task_id,
+            key,
+            value,
+        } => {
+            // Task 暂无 metadata 字段（spec 期望此能力但未实施）。
+            // 先以 `debug!` 记录并不写回，确保 hook 脚本可安全调用。
+            debug!(
+                event = "WorldCommandSetTaskMetadataDeferred",
+                task_id = %task_id,
+                key = %key,
+                value = %value,
+                "SetTaskMetadata deferred: Task.metadata 字段尚未添加"
+            );
+        }
+        WorldCommand::SetTaskTag {
+            task_id,
+            key,
+            value,
+        } => {
+            // Task 暂无 tags 字段，先以 `debug!` 记录并不写回。
+            debug!(
+                event = "WorldCommandSetTaskTagDeferred",
+                task_id = %task_id,
+                key = %key,
+                value = %value,
+                "SetTaskTag deferred: Task.tags 字段尚未添加"
+            );
+        }
+        WorldCommand::SpawnAgent { .. }
+        | WorldCommand::CreateWorkItem { .. }
+        | WorldCommand::SetApprovalDecision { .. }
+        | WorldCommand::ExperienceSetPinned { .. } => {
+            // 后续任务接入
+            debug!(
+                event = "WorldCommandDeferred",
+                ?cmd,
+                "WorldCommand 变体尚未实现"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

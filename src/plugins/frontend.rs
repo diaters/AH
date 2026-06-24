@@ -6,9 +6,9 @@ use bevy::prelude::*;
 
 use crate::systems::{
     HarnessSet, command_parse_system, continue_task_system, finish_task_system,
-    frontend_input_system, frontend_output_system, input_ingress_system, retry_wakeup_system,
-    signal_ingest_system, tick_clock_system, tool_confirmation_request_system,
-    user_input_routing_system, user_message_to_task_system,
+    frontend_input_system, frontend_output_system, input_ingress_system,
+    on_task_created_hook_system, retry_wakeup_system, signal_ingest_system, tick_clock_system,
+    tool_confirmation_request_system, user_input_routing_system, user_message_to_task_system,
 };
 
 /// 前端 Plugin
@@ -45,6 +45,10 @@ impl Plugin for FrontendPlugin {
                 user_message_to_task_system
                     .in_set(HarnessSet::Transform)
                     .after(user_input_routing_system),
+                // 派发 on_task_created hook（独占 &mut World，在 task 创建之后）
+                on_task_created_hook_system
+                    .in_set(HarnessSet::Transform)
+                    .after(user_message_to_task_system),
                 // 继续任务
                 continue_task_system
                     .in_set(HarnessSet::Transform)

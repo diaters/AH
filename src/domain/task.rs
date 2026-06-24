@@ -57,6 +57,14 @@ pub struct Task {
     pub last_evaluated_turn: Option<u32>,
 }
 
+/// 标记刚创建、尚未派发 `on_task_created` hook 的 Task entity。
+///
+/// 由 `user_message_to_task_system` 在创建 Task 时附带，由 companion 系统
+/// `on_task_created_hook_system` 派发 hook 后移除。用户插件 hook 在创建后即可执行，
+/// hook 内可通过 `get_task_ids()` / `get_task(id)` 查询刚创建的 Task。
+#[derive(Component, Debug, Clone, Default)]
+pub struct NewlyCreatedTask;
+
 /// Task 等待其他任务完成的状态信息
 /// 此组件添加到发起等待的 Task Entity 上
 #[derive(Component, Debug, Clone)]
