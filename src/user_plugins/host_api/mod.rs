@@ -4,6 +4,7 @@
 //! `register_all` 在派发前一次性注册。
 
 use rhai::Engine;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub mod approval;
@@ -30,7 +31,7 @@ pub fn register_all(engine: &mut Engine) {
     entity_write::register(engine, WorldWriter::new(tx));
     experience::register(engine);
     log::register(engine);
-    plugin_resource::register(engine);
+    plugin_resource::register(engine, plugin_resource::PluginRoots::single(PathBuf::new()));
     state::register(engine);
     let outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
     tool_control::register(engine, outcome);
