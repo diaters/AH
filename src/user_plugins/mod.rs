@@ -26,7 +26,13 @@ use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};
 ///
 /// 同时从 PluginRegistry 中提取所有已声明 skill 的路径，
 /// 构建并插入 `PluginSkillContributions` 资源。
-pub fn plugin_load_startup_system(mut commands: Commands) {
+/// 最后，将插件贡献的 Tool 以 `plugin_id:tool_id` 命名空间注册到
+/// SpaceToolRegistry 和 BuiltinToolExecutors。
+pub fn plugin_load_startup_system(
+    mut commands: Commands,
+    mut tool_registry: ResMut<crate::domain::SpaceToolRegistry>,
+    mut tool_executors: ResMut<crate::domain::BuiltinToolExecutors>,
+) {
     let plugins_dir = PathBuf::from(
         std::env::var("HARNESS_PLUGINS_DIR").unwrap_or_else(|_| DEFAULT_PLUGINS_DIR.to_string()),
     );
@@ -83,6 +89,13 @@ pub fn plugin_load_startup_system(mut commands: Commands) {
             "plugin skill contributions registered"
         );
     }
+
+    // 注册插件贡献的 Tool（在同一个系统内完成，避免 Startup 阶段命令延迟问题）
+    crate::systems::tools::register_plugin_tools(
+        &mut tool_registry,
+        &mut tool_executors,
+        &registry,
+    );
 
     commands.insert_resource(registry);
     commands.insert_resource(skill_contributions);

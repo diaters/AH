@@ -185,6 +185,23 @@ fn build_loaded_plugin(manifest: &PluginManifest, root_dir: &Path) -> Result<Loa
 
     let mut tool_asts = std::collections::HashMap::new();
     for tool in &manifest.tools {
+        // 读取并校验 JSON Schema
+        let schema_path = root_dir.join(&tool.schema);
+        let schema_str = fs::read_to_string(&schema_path)
+            .map_err(|e| format!("read tool schema {}: {e}", schema_path.display()))?;
+        let schema_value: serde_json::Value = serde_json::from_str(&schema_str)
+            .map_err(|e| format!("parse tool schema {}: {e}", schema_path.display()))?;
+        if let Err(e) = jsonschema::validator_for(&schema_value) {
+            warn!(
+                event = "PluginToolSchemaInvalid",
+                plugin_id = %manifest.id,
+                tool_id = %tool.id,
+                error = %e,
+                "tool schema is not a valid JSON Schema, skipping this tool"
+            );
+            continue;
+        }
+
         let script_path = root_dir.join(&tool.handler);
         let source = fs::read_to_string(&script_path)
             .map_err(|e| format!("read tool handler {}: {e}", script_path.display()))?;
@@ -335,5 +352,72 @@ script = "hooks/x.rhai"
         let registry = load_plugins_from_dir(dir.path());
         assert_eq!(registry.plugins().len(), 0);
         assert_eq!(registry.failures().len(), 1);
+    }
+
+    #[test]
+    fn invalid_tool_schema_skips_tool_but_loads_plugin() {
+        let dir = TempDir::new().unwrap();
+        let plugin_dir = dir.path().join("bad-schema");
+        fs::create_dir(&plugin_dir).unwrap();
+        write_plugin(
+            &plugin_dir,
+            r#"
+id = "bad-schema"
+api_version = 1
+[[tools]]
+id = "broken"
+description = "a tool with bad schema"
+schema = "tools/broken.schema.json"
+handler = "tools/broken.rhai"
+"#,
+            &[
+                // Schema 声明 type="object" 但 properties 不是 object，属于无效 JSON Schema
+                (
+                    "tools/broken.schema.json",
+                    r#"{"type": "object", "properties": 42}"#,
+                ),
+                ("tools/broken.rhai", "42\n"),
+            ],
+        );
+
+        let registry = load_plugins_from_dir(dir.path());
+        // 插件本身可以加载，但 tool_asts 不包含 schema 无效的 tool
+        assert_eq!(registry.plugins().len(), 1);
+        assert_eq!(registry.plugins()[0].manifest.id, "bad-schema");
+        assert!(
+            registry.plugins()[0].tool_asts.is_empty(),
+            "tool with invalid schema should be skipped"
+        );
+    }
+
+    #[test]
+    fn valid_tool_schema_loads_successfully() {
+        let dir = TempDir::new().unwrap();
+        let plugin_dir = dir.path().join("good-tool");
+        fs::create_dir(&plugin_dir).unwrap();
+        write_plugin(
+            &plugin_dir,
+            r#"
+id = "good-tool"
+api_version = 1
+[[tools]]
+id = "search"
+description = "search tool"
+schema = "tools/search.schema.json"
+handler = "tools/search.rhai"
+"#,
+            &[
+                (
+                    "tools/search.schema.json",
+                    r#"{"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}"#,
+                ),
+                ("tools/search.rhai", "42\n"),
+            ],
+        );
+
+        let registry = load_plugins_from_dir(dir.path());
+        assert_eq!(registry.plugins().len(), 1);
+        assert_eq!(registry.plugins()[0].tool_asts.len(), 1);
+        assert!(registry.plugins()[0].tool_asts.contains_key("search"));
     }
 }

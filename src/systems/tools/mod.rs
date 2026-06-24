@@ -364,6 +364,94 @@ pub fn register_builtin_tools(
     executors.register(Box::new(ListExperienceCandidatesTool));
 }
 
+/// 注册插件贡献的 Tool
+///
+/// 扫描 PluginRegistry 中所有已加载插件的 tools 声明，
+/// 以 `plugin_id:tool_id` 命名空间注册到 SpaceToolRegistry 和 BuiltinToolExecutors。
+/// Schema 文件无法解析或校验不通过的工具会被跳过并记录警告日志。
+pub fn register_plugin_tools(
+    registry: &mut SpaceToolRegistry,
+    executors: &mut BuiltinToolExecutors,
+    plugin_registry: &crate::user_plugins::registry::PluginRegistry,
+) {
+    use crate::user_plugins::tool_executor::RhaiToolExecutor;
+    use tracing::warn;
+
+    for plugin in plugin_registry.plugins() {
+        for tool_def in &plugin.manifest.tools {
+            let namespaced = format!("{}:{}", plugin.manifest.id, tool_def.id);
+
+            // 读取 schema 文件
+            let schema_path = plugin.root_dir.join(&tool_def.schema);
+            let schema_str = match std::fs::read_to_string(&schema_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        event = "PluginToolSchemaReadFailed",
+                        plugin_id = %plugin.manifest.id,
+                        tool_id = %tool_def.id,
+                        error = %e,
+                        "skipping plugin tool: cannot read schema file"
+                    );
+                    continue;
+                }
+            };
+
+            let schema_value: serde_json::Value = match serde_json::from_str(&schema_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        event = "PluginToolSchemaParseFailed",
+                        plugin_id = %plugin.manifest.id,
+                        tool_id = %tool_def.id,
+                        error = %e,
+                        "skipping plugin tool: schema is not valid JSON"
+                    );
+                    continue;
+                }
+            };
+
+            // 校验 schema 是否为合法 JSON Schema
+            if let Err(e) = jsonschema::validator_for(&schema_value) {
+                warn!(
+                    event = "PluginToolSchemaInvalid",
+                    plugin_id = %plugin.manifest.id,
+                    tool_id = %tool_def.id,
+                    error = %e,
+                    "skipping plugin tool: schema validation failed"
+                );
+                continue;
+            }
+
+            let default_permission = tool_def
+                .default_permission
+                .unwrap_or(ToolPermission::Confirm);
+
+            registry.register(ToolDefinition {
+                name: namespaced.clone(),
+                description: tool_def.description.clone(),
+                parameters: ToolSchema {
+                    schema: schema_value,
+                },
+                default_permission,
+                executor: ToolExecutorKind::Builtin(namespaced.clone()),
+                required_tag: None,
+            });
+
+            executors.register(Box::new(RhaiToolExecutor {
+                plugin_id: plugin.manifest.id.clone(),
+                tool_id: tool_def.id.clone(),
+            }));
+
+            tracing::info!(
+                event = "PluginToolRegistered",
+                namespaced = %namespaced,
+                "plugin tool registered"
+            );
+        }
+    }
+}
+
 // Re-export tests module for backward compatibility
 #[cfg(test)]
 mod tests {
