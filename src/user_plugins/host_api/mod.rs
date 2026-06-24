@@ -15,6 +15,7 @@ pub mod state;
 pub mod tool_control;
 
 use entity_query::WorldSnapshot;
+use entity_write::WorldWriter;
 
 /// 把所有 host API 注册到给定 Engine 上。
 ///
@@ -23,7 +24,8 @@ use entity_query::WorldSnapshot;
 pub fn register_all(engine: &mut Engine) {
     approval::register(engine);
     entity_query::register(engine, WorldSnapshot::empty());
-    entity_write::register(engine);
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    entity_write::register(engine, WorldWriter::new(tx));
     experience::register(engine);
     log::register(engine);
     plugin_resource::register(engine);
