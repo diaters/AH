@@ -17,6 +17,7 @@ pub(crate) fn command_parse_system(
     config: Res<MemoryConfig>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
+    plugin_registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
 ) {
     for (entity, input) in &user_inputs {
         let cmd = UserCommand::parse(&input.content);
@@ -161,6 +162,75 @@ pub(crate) fn command_parse_system(
                 // 普通输入，交给路由系统处理
                 // 不 despawn，让 user_input_routing_system 处理
             }
+            UserCommand::ListPlugins => {
+                // /plugins - 列出已加载的插件
+                if let Some(registry) = &plugin_registry {
+                    let plugins: Vec<String> = registry
+                        .plugins()
+                        .iter()
+                        .map(|p| {
+                            let name = p.manifest.name.as_deref().unwrap_or(&p.manifest.id);
+                            let version = p.manifest.version.as_deref().unwrap_or("?");
+                            format!("  {} v{} — {}", p.manifest.id, version, name)
+                        })
+                        .collect();
+                    if plugins.is_empty() {
+                        eprintln!("[plugins] no plugins loaded");
+                    } else {
+                        eprintln!("[plugins] loaded plugins ({}):", plugins.len());
+                        for line in &plugins {
+                            eprintln!("{}", line);
+                        }
+                    }
+                    let failures: Vec<String> = registry
+                        .failures()
+                        .iter()
+                        .map(|f| {
+                            format!("  {}: {}", f.plugin_id.as_deref().unwrap_or("?"), f.error)
+                        })
+                        .collect();
+                    if !failures.is_empty() {
+                        eprintln!("[plugins] failed plugins ({}):", failures.len());
+                        for line in &failures {
+                            eprintln!("{}", line);
+                        }
+                    }
+                } else {
+                    eprintln!("[plugins] plugin system not initialized");
+                }
+                commands.entity(entity).despawn();
+            }
+            UserCommand::PluginCommand {
+                plugin_id,
+                command,
+                args,
+            } => {
+                // 插件 slash command：/plugin_id:command [args]
+                // v1 简化实现：记录日志，后续 Phase 8 补充完整 Rhai 脚本派发
+                debug!(
+                    event = "PluginCommandReceived",
+                    plugin_id = %plugin_id,
+                    command = %command,
+                    args = %args,
+                    "plugin slash command parsed (v1 stub)"
+                );
+                if let Some(registry) = &plugin_registry {
+                    if registry.get(&plugin_id).is_some() {
+                        eprintln!(
+                            "[plugins] /{}:{} — command dispatch not yet implemented",
+                            plugin_id, command
+                        );
+                    } else {
+                        eprintln!(
+                            "[plugins] unknown plugin: {} (no such plugin loaded)",
+                            plugin_id
+                        );
+                    }
+                } else {
+                    eprintln!("[plugins] plugin system not initialized");
+                }
+                commands.entity(entity).despawn();
+            }
         }
     }
 }
@@ -282,5 +352,61 @@ mod tests {
                 content: "Docs should stay in Chinese".to_string()
             }
         );
+    }
+
+    #[test]
+    fn parse_list_plugins() {
+        let cmd = UserCommand::parse("/plugins");
+        assert_eq!(cmd, UserCommand::ListPlugins);
+        assert!(cmd.is_command());
+    }
+
+    #[test]
+    fn parse_plugin_command_with_args() {
+        let cmd = UserCommand::parse("/alpha:hello world");
+        assert_eq!(
+            cmd,
+            UserCommand::PluginCommand {
+                plugin_id: "alpha".to_string(),
+                command: "hello".to_string(),
+                args: "world".to_string(),
+            }
+        );
+        assert!(cmd.is_command());
+    }
+
+    #[test]
+    fn parse_plugin_command_without_args() {
+        let cmd = UserCommand::parse("/alpha:hello");
+        assert_eq!(
+            cmd,
+            UserCommand::PluginCommand {
+                plugin_id: "alpha".to_string(),
+                command: "hello".to_string(),
+                args: String::new(),
+            }
+        );
+        assert!(cmd.is_command());
+    }
+
+    #[test]
+    fn parse_plugin_command_empty_plugin_id_falls_back() {
+        // /:hello — 空 plugin_id，回退到 PlainText
+        let cmd = UserCommand::parse("/:hello");
+        assert!(matches!(cmd, UserCommand::PlainText(_)));
+    }
+
+    #[test]
+    fn parse_plugin_command_empty_command_falls_back() {
+        // /alpha: — 空 command，回退到 PlainText
+        let cmd = UserCommand::parse("/alpha:");
+        assert!(matches!(cmd, UserCommand::PlainText(_)));
+    }
+
+    #[test]
+    fn parse_plugin_command_no_colon_falls_back() {
+        // /alpha — 不含冒号，回退到 PlainText
+        let cmd = UserCommand::parse("/alpha");
+        assert!(matches!(cmd, UserCommand::PlainText(_)));
     }
 }
