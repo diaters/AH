@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 use tiktoken_rs::cl100k_base;
 use tracing::debug;
 
+/// 标记刚写入长期记忆、尚未触发 `on_long_term_memory_write` 观察 hook 的 Agent entity。
+///
+/// 由 `init_agent_memory_system` 或运行时写入长期记忆的系统附带，
+/// 由 companion 系统 `on_ltm_write_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct LtmWriteHookPending;
+
+/// 标记刚发生长期记忆驱逐、尚未触发 `on_long_term_memory_evicted` 观察 hook 的 Agent entity。
+///
+/// 由 `long_term_memory_decay_system` 在检测到驱逐后附带，
+/// 由 companion 系统 `on_ltm_evicted_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct LtmEvictedHookPending;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,8 +439,7 @@ impl LongTermMemory {
             total_entries = self.entries.len(),
             "long term memory archive added"
         );
-        self.entries
-            .push(LongTermMemoryEntry::new(content));
+        self.entries.push(LongTermMemoryEntry::new(content));
     }
 
     /// 吸收来自子 Agent 的长期记忆条目。

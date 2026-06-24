@@ -9,7 +9,8 @@ use crate::{
     domain::{
         Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
         AgentProfile, AgentSpawnRequestMessage, AgentStoppingHookPending, AgentToolPermissions,
-        FailureReason, SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
+        FailureReason, MessageDispatchedHookPending, SpaceToolRegistry, Task, TaskId,
+        TaskTerminatedMessage, ToolPermission,
     },
 };
 
@@ -269,9 +270,12 @@ fn handle_spawn_request(
         work_item_id: None,
     };
 
-    commands.spawn(AgentExecutionRequestMessage {
-        request: execution_request,
-    });
+    commands.spawn((
+        AgentExecutionRequestMessage {
+            request: execution_request,
+        },
+        MessageDispatchedHookPending,
+    ));
 }
 
 fn handle_termination(

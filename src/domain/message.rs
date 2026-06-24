@@ -100,6 +100,28 @@ pub struct RetryReadyMessage {
 
 // ============ 执行请求/响应 ============
 
+/// 标记刚派发、尚未触发 `on_message_dispatched` 观察 hook 的 `AgentExecutionRequestMessage`。
+///
+/// 由 `AgentExecutionRequestMessage` 的所有 spawn 点附带，由 companion 系统
+/// `on_message_dispatched_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct MessageDispatchedHookPending;
+
+/// 标记刚到达、尚未触发 `on_message_received` 观察 hook 的外部输入 entity。
+///
+/// 由 `input_ingress_system` 在 spawn `Signal::user_input` 或
+/// `ToolConfirmationResponseMessage` 时附带，由 companion 系统
+/// `on_message_received_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct MessageReceivedHookPending;
+
+/// 标记刚接收、尚未触发 `on_llm_response` 观察 hook 的 `AgentExecutionResultMessage`。
+///
+/// 由 `ingest_execution_results_system` 在 spawn `AgentExecutionResultMessage` 时附带，
+/// 由 companion 系统 `on_llm_response_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct LlmResponseHookPending;
+
 /// Agent 执行请求消息
 #[derive(Debug, Clone, Component)]
 pub struct AgentExecutionRequestMessage {

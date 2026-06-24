@@ -9,7 +9,8 @@ use crate::{
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentKind, AgentRequestKind, BrainDecisionError,
-        FailureReason, OutputContent, Task, TaskStatus, ToolDefinition, WaitingReason,
+        FailureReason, MessageDispatchedHookPending, OutputContent, Task, TaskStatus,
+        ToolDefinition, WaitingReason,
     },
     llm::parse_brain_decision,
 };
@@ -106,7 +107,10 @@ pub fn brain_decision_system(
                         task.delegate = Some(fallback.id);
                         task.status = TaskStatus::Waiting(WaitingReason::Agent);
                         task.updated_at = clock.0;
-                        commands.spawn(AgentExecutionRequestMessage { request });
+                        commands.spawn((
+                            AgentExecutionRequestMessage { request },
+                            MessageDispatchedHookPending,
+                        ));
                         commands.entity(entity).despawn();
                         continue;
                     };
@@ -126,7 +130,10 @@ pub fn brain_decision_system(
                     task.delegate = Some(selected_agent.id);
                     task.status = TaskStatus::Waiting(WaitingReason::Agent);
                     task.updated_at = clock.0;
-                    commands.spawn(AgentExecutionRequestMessage { request });
+                    commands.spawn((
+                        AgentExecutionRequestMessage { request },
+                        MessageDispatchedHookPending,
+                    ));
                 }
                 Err(BrainDecisionError::ParseFailed(msg)) => {
                     task.last_error = Some(format!("brain decision parse failed: {msg}"));

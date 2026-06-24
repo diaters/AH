@@ -11,10 +11,10 @@ use crate::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
         EntryRole, ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
-        OffTrackPolicy, OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
-        ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem,
-        WorkItemLifecycleHookPending, WorkItemType,
+        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ShortTermMemory,
+        SystemOutputMessage, Task, TaskStatus, ToolCalledHookPending, ToolCallingState,
+        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, UserOutputMessage,
+        WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     user_plugins::hook_point::HookPoint,
 };
@@ -1097,7 +1097,10 @@ pub fn tool_calling_orchestrator_system(
             "spawning follow-up LLM request with tool results"
         );
 
-        commands.spawn(AgentExecutionRequestMessage { request });
+        commands.spawn((
+            AgentExecutionRequestMessage { request },
+            MessageDispatchedHookPending,
+        ));
 
         // Set task back to Waiting(Agent) — 但不修改 ExperienceCollection 关联的原任务状态
         if state.work_item_id.is_none()

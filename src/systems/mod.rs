@@ -6,8 +6,10 @@ pub mod experience;
 mod frontend_input;
 mod frontend_output;
 mod ingress;
+mod ingress_hook;
 mod maintenance;
 mod memory;
+mod memory_hook;
 mod routing;
 mod summarization;
 pub mod tools;
@@ -18,7 +20,8 @@ use bevy::ecs::schedule::SystemSet;
 pub(crate) use command::command_parse_system;
 pub(crate) use dispatch::{
     agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system,
-    task_dispatch_system, workitem_dispatch_system, workitem_lifecycle_hook_system,
+    on_message_dispatched_hook_system, task_dispatch_system, workitem_dispatch_system,
+    workitem_lifecycle_hook_system,
 };
 pub(crate) use evaluation::evaluation_trigger_system;
 pub(crate) use execution::agent_execution_system;
@@ -31,10 +34,12 @@ pub(crate) use experience::{
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
+pub(crate) use ingress_hook::on_message_received_hook_system;
 pub(crate) use maintenance::{agent_factory_system, load_agents_system};
 pub(crate) use memory::{
     init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
 };
+pub(crate) use memory_hook::{on_ltm_evicted_hook_system, on_ltm_write_hook_system};
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
 pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{
@@ -46,9 +51,10 @@ pub(crate) use tools::{
 pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{
     brain_decision_system, finish_task_system, ingest_execution_results_system,
-    llm_response_system, on_task_created_hook_system, retry_ready_system, signal_ingest_system,
-    sub_task_batch_block_system, sub_task_completion_system, task_completion_hook_system,
-    task_termination_system, tool_calling_orchestrator_system, user_message_to_task_system,
+    llm_response_system, on_llm_response_hook_system, on_task_created_hook_system,
+    retry_ready_system, signal_ingest_system, sub_task_batch_block_system,
+    sub_task_completion_system, task_completion_hook_system, task_termination_system,
+    tool_calling_orchestrator_system, user_message_to_task_system,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]

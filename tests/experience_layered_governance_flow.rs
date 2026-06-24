@@ -16,8 +16,7 @@ use harness::{
     AgentAssetService, AgentExecutionRequest, AgentRequestKind, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceGovernanceDecision,
     ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination, HarnessConfig,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    ToolExecutionRequestMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 use harness::{AgentExecutor, ExecutorFuture, build_harness_app};

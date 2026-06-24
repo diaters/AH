@@ -5,8 +5,8 @@ use tracing::{debug, trace};
 use crate::{
     app::{Clock, InputReceiver, ShutdownState},
     domain::{
-        ExternalInput, Signal, SignalPayload, Task, TaskStatus, ToolConfirmationResponseMessage,
-        WaitingReason,
+        ExternalInput, MessageReceivedHookPending, Signal, SignalPayload, Task, TaskStatus,
+        ToolConfirmationResponseMessage, WaitingReason,
     },
 };
 
@@ -41,7 +41,7 @@ pub(crate) fn input_ingress_system(
                     content_len = content.len(),
                     "received external text input"
                 );
-                commands.spawn(Signal::user_input(content));
+                commands.spawn((Signal::user_input(content), MessageReceivedHookPending));
             }
             ExternalInput::Shutdown => {
                 debug!(
@@ -59,10 +59,13 @@ pub(crate) fn input_ingress_system(
                     option = %option,
                     "received tool confirmation"
                 );
-                commands.spawn(ToolConfirmationResponseMessage {
-                    request_id,
-                    selected_option: option,
-                });
+                commands.spawn((
+                    ToolConfirmationResponseMessage {
+                        request_id,
+                        selected_option: option,
+                    },
+                    MessageReceivedHookPending,
+                ));
             }
         }
     }

@@ -9,7 +9,8 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        LongTermMemory, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolPermission,
+        LongTermMemory, MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task,
+        TaskStatus, ToolPermission,
     },
 };
 
@@ -229,7 +230,10 @@ pub fn task_dispatch_system(
         };
 
         task.mark_waiting_for_agent(agent.id, clock.0);
-        commands.spawn(AgentExecutionRequestMessage { request });
+        commands.spawn((
+            AgentExecutionRequestMessage { request },
+            MessageDispatchedHookPending,
+        ));
     }
 }
 

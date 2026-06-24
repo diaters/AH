@@ -9,7 +9,8 @@ use crate::systems::{
     experience_collection_completion_system, experience_collection_workitem_system,
     experience_consolidation_trigger_system, experience_governance_system,
     experience_writeback_system, ingest_execution_results_system, llm_response_system,
-    task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
+    on_llm_response_hook_system, task_terminated_experience_trigger_system,
+    tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -24,6 +25,10 @@ impl Plugin for ExecutionPlugin {
             (
                 // 执行结果接收
                 ingest_execution_results_system.in_set(HarnessSet::Transform),
+                // on_llm_response 观察 hook companion 系统
+                on_llm_response_hook_system
+                    .in_set(HarnessSet::Transform)
+                    .after(ingest_execution_results_system),
                 // LLM 响应处理
                 llm_response_system
                     .in_set(HarnessSet::Transform)

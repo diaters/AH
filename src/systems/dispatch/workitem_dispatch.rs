@@ -6,9 +6,9 @@ use bevy::prelude::*;
 use tracing::{debug, warn};
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind, Task,
-    TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemLifecycleHookPending,
-    WorkItemStatus, WorkItemType,
+    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
+    MessageDispatchedHookPending, Task, TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem,
+    WorkItemLifecycleHookPending, WorkItemStatus, WorkItemType,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -125,18 +125,21 @@ pub(crate) fn workitem_dispatch_system(
         };
 
         // 创建执行请求
-        commands.spawn(AgentExecutionRequestMessage {
-            request: AgentExecutionRequest {
-                task_id: work_item.task_id,
-                agent_id: agent.id,
-                request_kind,
-                prompt: work_item.input.prompt.clone(),
-                system_prompt: work_item.input.context.system_prompt.clone(),
-                tools: work_item.input.context.tools.clone(),
-                conversation: work_item.input.context.conversation.clone(),
-                work_item_id: Some(work_item.id),
+        commands.spawn((
+            AgentExecutionRequestMessage {
+                request: AgentExecutionRequest {
+                    task_id: work_item.task_id,
+                    agent_id: agent.id,
+                    request_kind,
+                    prompt: work_item.input.prompt.clone(),
+                    system_prompt: work_item.input.context.system_prompt.clone(),
+                    tools: work_item.input.context.tools.clone(),
+                    conversation: work_item.input.context.conversation.clone(),
+                    work_item_id: Some(work_item.id),
+                },
             },
-        });
+            MessageDispatchedHookPending,
+        ));
 
         debug!(
             event = "WorkItemDispatched",

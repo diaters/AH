@@ -4,8 +4,9 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, LongTermMemory, LongTermMemoryEntry, MemoryImportance, ShortTermMemory,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
+        Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
+        MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
+        TaskStatus, WaitingReason,
     },
     infrastructure::memory::LongTermMemoryService,
 };
@@ -109,6 +110,8 @@ pub(crate) fn init_agent_memory_system(
         commands.entity(entity).queue_handled(
             |mut entity: EntityWorldMut| {
                 entity.insert(memory);
+                // 标记长期记忆写入，触发 on_long_term_memory_write hook。
+                entity.insert(LtmWriteHookPending);
             },
             |_, _| {},
         );
@@ -145,9 +148,8 @@ pub(crate) fn apply_memory_decay(
     // Phase 2: evict low-value entries
     let mut evicted = Vec::new();
     entries.retain(|entry| {
-        let should_evict = entry.decay_score < 0.1
-            && !entry.pin
-            && entry.importance != MemoryImportance::Critical;
+        let should_evict =
+            entry.decay_score < 0.1 && !entry.pin && entry.importance != MemoryImportance::Critical;
 
         if should_evict {
             evicted.push(entry.clone());
@@ -160,13 +162,15 @@ pub(crate) fn apply_memory_decay(
 }
 
 /// 周期性执行长期记忆衰退治理，压低长期未访问且低价值条目的分数。
-/// 低价值条目被驱逐后归档到文件。
+/// 低价值条目被驱逐后归档到文件。驱逐发生时附带 `LtmEvictedHookPending` 标记，
+/// 由 companion 系统 `on_ltm_evicted_hook_system` 派发 hook 后移除。
 pub(crate) fn long_term_memory_decay_system(
-    mut agents: Query<(&Agent, &mut LongTermMemory)>,
+    mut commands: Commands,
+    mut agents: Query<(Entity, &Agent, &mut LongTermMemory)>,
     service: Res<LongTermMemoryService>,
 ) {
     let now = chrono::Utc::now();
-    for (_agent, mut memory) in &mut agents {
+    for (entity, _agent, mut memory) in &mut agents {
         let evicted = apply_memory_decay(&mut memory.entries, now);
         if !evicted.is_empty() {
             if let Some(name) = &memory.agent_name {
@@ -178,6 +182,8 @@ pub(crate) fn long_term_memory_decay_system(
                 evicted_count = evicted.len(),
                 "evicted low-value memory entries to archive"
             );
+            // 标记驱逐事件，触发 on_long_term_memory_evicted hook。
+            commands.entity(entity).insert(LtmEvictedHookPending);
         }
     }
 }
@@ -206,6 +212,9 @@ mod tests {
                 user_id: "default".to_string(),
             },
         );
+        // 内部恢复/测试夹具，不触发 on_task_created hook：此处仅为构造一个带 STM 的
+        // Task 测试 memory 压缩逻辑，不经过 user_message_to_task 流程，也不会
+        // 在本测试 World 中插入 PluginRegistry。
         let entity = world.spawn((task, ShortTermMemory::default())).id();
 
         // Add entries with known token counts

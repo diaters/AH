@@ -8,7 +8,7 @@
 
 use harness::{
     ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceKindHint,
-    ExperienceStore, LongTermMemory, SkillFileRole, SkillFileRef,
+    ExperienceStore, LongTermMemory, SkillFileRef, SkillFileRole,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 

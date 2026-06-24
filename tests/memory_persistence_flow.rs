@@ -92,7 +92,10 @@ fn contribution_absorption_persists_to_disk() {
 
         let mut parent_memory = LongTermMemory::with_name(parent_agent_name);
         service
-            .add_entry(&mut parent_memory, LongTermMemoryEntry::new("parent's own fact"))
+            .add_entry(
+                &mut parent_memory,
+                LongTermMemoryEntry::new("parent's own fact"),
+            )
             .unwrap();
 
         // 模拟子 Agent 贡献的记忆

@@ -84,20 +84,21 @@ pub use frontend::{
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
-    MemoryEntry, MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall, estimate_tokens,
+    LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, MemorySnapshot,
+    ShortTermMemory, ToolCall, estimate_tokens,
 };
 
 // message
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, OutputKind,
-    OutputMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
-    SessionStartedMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
-    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
-    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
-    WaitingReason,
+    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, LlmResponseHookPending,
+    MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind, OutputMessage,
+    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
+    Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
 };
 
 // session
