@@ -8,8 +8,8 @@ use crate::{
     domain::{BuiltinToolExecutors, ExperienceStore, SpaceToolRegistry},
     systems::{
         HarnessSet, NativeProcessBackend, check_waiting_tasks_system,
-        on_subtask_completed_check_waiting, register_builtin_tools, tool_dispatch_system,
-        tool_result_system,
+        on_subtask_completed_check_waiting, on_tool_called_hook_system, register_builtin_tools,
+        tool_dispatch_system, tool_result_system,
     },
 };
 
@@ -33,6 +33,11 @@ impl Plugin for ToolRuntimePlugin {
         app.add_systems(
             Update,
             (
+                // on_tool_called 前置 hook companion 系统：在 tool_dispatch_system 之前派发 hook，
+                // 若插件调用 tool_deny 则替换为 PermissionDenied 错误结果并销毁请求。
+                on_tool_called_hook_system
+                    .in_set(HarnessSet::Dispatch)
+                    .before(tool_dispatch_system),
                 // Tool 分发
                 tool_dispatch_system.in_set(HarnessSet::Dispatch),
                 // Tool 结果处理

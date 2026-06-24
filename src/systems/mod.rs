@@ -36,9 +36,9 @@ pub(crate) use routing::{continue_task_system, user_input_routing_system};
 pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{
     NativeProcessBackend, approval_dispatch_system, approval_result_system,
-    check_waiting_tasks_system, on_subtask_completed_check_waiting, register_builtin_tools,
-    tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
-    tool_result_system,
+    check_waiting_tasks_system, on_subtask_completed_check_waiting, on_tool_called_hook_system,
+    register_builtin_tools, tool_confirmation_request_system, tool_confirmation_result_system,
+    tool_dispatch_system, tool_result_system,
 };
 pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{

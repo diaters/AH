@@ -12,8 +12,8 @@ use crate::{
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
         EntryRole, ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
         OffTrackPolicy, OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
-        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
+        ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
     },
 };
 
@@ -824,25 +824,28 @@ pub fn llm_response_system(
                     for call in calls {
                         let tool_input: serde_json::Value = serde_json::from_str(&call.arguments)
                             .unwrap_or(serde_json::Value::Null);
-                        commands.spawn(ToolExecutionRequestMessage {
-                            request: AgentExecutionRequest {
-                                task_id: task.id,
-                                agent_id: result.agent_id,
-                                request_kind: AgentRequestKind::ToolExecution {
-                                    tool_name: call.name.clone(),
+                        commands.spawn((
+                            ToolCalledHookPending,
+                            ToolExecutionRequestMessage {
+                                request: AgentExecutionRequest {
+                                    task_id: task.id,
+                                    agent_id: result.agent_id,
+                                    request_kind: AgentRequestKind::ToolExecution {
+                                        tool_name: call.name.clone(),
+                                    },
+                                    prompt: String::new(),
+                                    system_prompt: None,
+                                    tools: vec![],
+                                    conversation: None,
+                                    work_item_id: None,
                                 },
-                                prompt: String::new(),
-                                system_prompt: None,
-                                tools: vec![],
-                                conversation: None,
-                                work_item_id: None,
+                                tool_name: call.name.clone(),
+                                tool_input,
+                                pending_confirmation_id: None,
+                                tool_call_id: Some(call.id.clone()),
+                                pending_confirmation_options: None,
                             },
-                            tool_name: call.name.clone(),
-                            tool_input,
-                            pending_confirmation_id: None,
-                            tool_call_id: Some(call.id.clone()),
-                            pending_confirmation_options: None,
-                        });
+                        ));
                     }
 
                     // Set task to Waiting(ToolExecution) — but not for ExperienceCollection WorkItems

@@ -11,7 +11,7 @@ use std::time::Duration;
 use bevy::prelude::World;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
-use rhai::{Engine, Scope};
+use rhai::Engine;
 use tracing::{debug, warn};
 
 use crate::domain::{ChannelId, FrontendKind, Task};
@@ -133,8 +133,10 @@ fn run_one_ast(
     let handle = thread::Builder::new()
         .name(format!("hook-{point:?}-{}", plugin.manifest.id))
         .spawn(move || {
-            let mut scope = Scope::new();
-            let r = engine.call_fn::<()>(&mut scope, &ast_clone, "", ());
+            // 执行 AST 的顶层语句（而非具名函数）。Rhai 的 `call_fn` 仅调用脚本内
+            // 定义的具名函数，对空名 `""` 会返回 "Function not found"。用 `run_ast`
+            // 执行脚本顶层并丢弃返回值。
+            let r = engine.run_ast(&ast_clone);
             let _ = done_tx.send(r);
         })
         .ok();

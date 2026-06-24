@@ -65,6 +65,15 @@ pub struct Task {
 #[derive(Component, Debug, Clone, Default)]
 pub struct NewlyCreatedTask;
 
+/// 标记刚生成、尚未派发 `on_tool_called` 前置 hook 的 `ToolExecutionRequestMessage`。
+///
+/// 由 `ToolExecutionRequestMessage` 的所有 spawn 点附带，由 companion 系统
+/// `on_tool_called_hook_system` 派发 hook 后移除。若插件调用 `tool_deny` 拒绝调用，
+/// companion 系统会替换请求为 `PermissionDenied` 错误结果并销毁请求 entity，
+/// 不流转到 `tool_dispatch_system`。`task_input` / `pending_*` 等字段决策不受标记影响。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ToolCalledHookPending;
+
 /// Task 等待其他任务完成的状态信息
 /// 此组件添加到发起等待的 Task Entity 上
 #[derive(Component, Debug, Clone)]

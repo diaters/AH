@@ -5,7 +5,7 @@ use crate::domain::{
     Agent, AgentExecutionRequest, AgentRequestKind, ConfirmationOption, ConfirmationSource,
     ExperienceCandidate, ExperienceCandidateStatus, ExperienceGovernanceDecision,
     ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore,
-    ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
+    ExperienceWritebackDestination, ExperienceWritebackRequestMessage, ToolCalledHookPending,
     ToolConfirmationRequestMessage, ToolExecutionRequestMessage,
 };
 
@@ -68,8 +68,7 @@ pub(crate) fn experience_governance_system(
                             candidate_id: *candidate_id,
                             destination: ExperienceWritebackDestination::IncubationProposal,
                             requires_user_confirmation: true,
-                            decision_rationale: "default agent knowledge -> incubation"
-                                .to_string(),
+                            decision_rationale: "default agent knowledge -> incubation".to_string(),
                             source_task_id: request.task_id,
                         }
                     } else {
@@ -124,11 +123,19 @@ pub(crate) fn experience_governance_system(
                 }
                 if decision.destination == ExperienceWritebackDestination::IncubationProposal {
                     spawn_incubation_confirmation(
-                        &mut commands, &mut store, request, agent, candidate_id,
+                        &mut commands,
+                        &mut store,
+                        request,
+                        agent,
+                        candidate_id,
                     );
                 } else {
                     spawn_experience_confirmation(
-                        &mut commands, &mut store, request, candidate_id, &candidate,
+                        &mut commands,
+                        &mut store,
+                        request,
+                        candidate_id,
+                        &candidate,
                     );
                 }
                 commands.spawn(decision);
@@ -184,27 +191,32 @@ fn spawn_experience_confirmation(
 
     // 配对 ToolExecutionRequestMessage 占位实体，使 tool_confirmation_result_system
     // 能通过 pending_confirmation_id 找到匹配，不提前销毁 ToolConfirmationResponseMessage。
-    commands.spawn(ToolExecutionRequestMessage {
-        request: AgentExecutionRequest {
-            task_id: request.task_id,
-            agent_id: request.agent_id,
-            request_kind: AgentRequestKind::ToolExecution {
-                tool_name: "experience_governance".to_string(),
+    // 附带 ToolCalledHookPending 标记以对称参与 on_tool_called hook 派发；companion
+    // 系统仅在不被拒绝时移除标记，横切到所有工具请求 spawn 点。
+    commands.spawn((
+        ToolCalledHookPending,
+        ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id: request.task_id,
+                agent_id: request.agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "experience_governance".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
             },
-            prompt: String::new(),
-            system_prompt: None,
-            tools: vec![],
-            conversation: None,
-            work_item_id: None,
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({
+                "candidate_id": candidate_id.to_string(),
+            }),
+            pending_confirmation_id: Some(request_id),
+            tool_call_id: None,
+            pending_confirmation_options: Some(ConfirmationOption::default_options()),
         },
-        tool_name: "experience_governance".to_string(),
-        tool_input: serde_json::json!({
-            "candidate_id": candidate_id.to_string(),
-        }),
-        pending_confirmation_id: Some(request_id),
-        tool_call_id: None,
-        pending_confirmation_options: Some(ConfirmationOption::default_options()),
-    });
+    ));
 }
 
 fn spawn_incubation_confirmation(
