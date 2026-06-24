@@ -66,6 +66,14 @@ impl From<super::AgentToolsConfig> for AgentToolPermissions {
     }
 }
 
+/// Agent 实体即将被 despawn 前的标记组件。
+///
+/// 由 `handle_termination` 在 Agent 绑定的 Task 进入终态时插入，
+/// 由 `agent_stopped_hook_system` 派发 `OnAgentStopped` hook 后负责 despawn。
+/// 无需内含 `HookPoint` —— 此标记固定对应 `OnAgentStopped`。
+#[derive(Component, Debug, Clone)]
+pub struct AgentStoppingHookPending;
+
 /// Agent 实体
 #[derive(Debug, Clone, Component)]
 pub struct Agent {

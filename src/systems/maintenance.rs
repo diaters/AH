@@ -8,8 +8,8 @@ use crate::{
     app::{Clock, HarnessSettings},
     domain::{
         Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
-        AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions, FailureReason,
-        SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
+        AgentProfile, AgentSpawnRequestMessage, AgentStoppingHookPending, AgentToolPermissions,
+        FailureReason, SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
     },
 };
 
@@ -293,13 +293,15 @@ fn handle_termination(
             .is_some_and(|task| task.status.is_terminal());
         if is_terminal {
             debug!(
-                event = "TaskScopedAgentDespawned",
+                event = "TaskScopedAgentStopping",
                 agent_id = %agent.id,
                 agent_name = %agent.profile.name,
                 task_id = %bound_task_id,
-                "despawning task-scoped agent after task termination"
+                "marking task-scoped agent for stopping after task termination"
             );
-            commands.entity(entity).despawn();
+            // 不直接 despawn，而是插入标记，由 agent_stopped_hook_system
+            // 派发 OnAgentStopped hook 后再 despawn。
+            commands.entity(entity).insert(AgentStoppingHookPending);
         }
     }
 }

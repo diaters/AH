@@ -36,7 +36,10 @@ pub type ExecutorFuture =
 // ============ 从子模块导出 ============
 
 // agent
-pub use agent::{Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
+pub use agent::{
+    Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
+    AgentToolPermissions,
+};
 
 // brain
 pub use brain::{BrainDecisionError, BrainDecisionOutput};
@@ -127,7 +130,8 @@ pub use tool_runtime::ToolCallingState;
 // work_item
 pub use work_item::{
     WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage, WorkItemInput,
-    WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
+    WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
+    WorkItemWritebackTarget,
 };
 
 // workflow
