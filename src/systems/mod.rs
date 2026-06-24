@@ -40,11 +40,12 @@ pub(crate) use tools::{
     tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
     tool_result_system,
 };
+pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{
     brain_decision_system, finish_task_system, ingest_execution_results_system,
     llm_response_system, on_task_created_hook_system, retry_ready_system, signal_ingest_system,
-    sub_task_batch_block_system, sub_task_completion_system, task_termination_system,
-    tool_calling_orchestrator_system, user_message_to_task_system,
+    sub_task_batch_block_system, sub_task_completion_system, task_completion_hook_system,
+    task_termination_system, tool_calling_orchestrator_system, user_message_to_task_system,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]

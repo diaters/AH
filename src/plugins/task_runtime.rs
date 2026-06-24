@@ -9,7 +9,8 @@ use crate::{
     domain::TaskEvaluationConfig,
     systems::{
         HarnessSet, llm_response_system, retry_ready_system, sub_task_batch_block_system,
-        sub_task_completion_system, task_termination_system, tool_result_system,
+        sub_task_completion_system, task_completion_hook_system, task_termination_system,
+        tool_result_system,
     },
 };
 
@@ -23,6 +24,8 @@ impl Plugin for TaskRuntimePlugin {
         // 注册 Task 相关 Resource
         app.init_resource::<MemoryConfig>();
         app.init_resource::<TaskEvaluationConfig>();
+        // 终态 hook 派发去重集合（Task 17/18）
+        app.init_resource::<crate::systems::TaskTerminalDispatched>();
 
         // 注册 Task 生命周期系统（保留原始依赖顺序）
         // 注意：finish_task_system 在 FrontendPlugin 中注册（带 after 依赖）
@@ -33,6 +36,11 @@ impl Plugin for TaskRuntimePlugin {
                 task_termination_system
                     .in_set(HarnessSet::Transform)
                     .after(llm_response_system),
+                // 终态 hook 派发在 task_termination 之后，确保终止清理先跑；
+                // 也消费 Changed<Task>，与 task_termination_system 不互相抑制。
+                task_completion_hook_system
+                    .in_set(HarnessSet::Transform)
+                    .after(task_termination_system),
                 sub_task_completion_system
                     .in_set(HarnessSet::Transform)
                     .after(task_termination_system),

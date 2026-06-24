@@ -6,6 +6,7 @@ mod brain_decision;
 mod llm_response;
 mod signal_ingest;
 mod subtask;
+mod task_completion_hook;
 mod task_creation;
 mod task_lifecycle;
 
@@ -13,6 +14,7 @@ pub use brain_decision::brain_decision_system;
 pub use llm_response::{llm_response_system, tool_calling_orchestrator_system};
 pub use signal_ingest::signal_ingest_system;
 pub use subtask::{sub_task_batch_block_system, sub_task_completion_system};
+pub use task_completion_hook::{TaskTerminalDispatched, task_completion_hook_system};
 pub use task_creation::{on_task_created_hook_system, user_message_to_task_system};
 pub use task_lifecycle::{finish_task_system, retry_ready_system, task_termination_system};
 
