@@ -4,6 +4,7 @@
 //! `register_all` 在派发前一次性注册。
 
 use rhai::Engine;
+use std::sync::{Arc, Mutex};
 
 pub mod approval;
 pub mod entity_query;
@@ -14,6 +15,7 @@ pub mod plugin_resource;
 pub mod state;
 pub mod tool_control;
 
+use crate::user_plugins::dispatcher::{HookOutcome, SharedHookOutcome};
 use entity_query::WorldSnapshot;
 use entity_write::WorldWriter;
 
@@ -30,5 +32,6 @@ pub fn register_all(engine: &mut Engine) {
     log::register(engine);
     plugin_resource::register(engine);
     state::register(engine);
-    tool_control::register(engine);
+    let outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
+    tool_control::register(engine, outcome);
 }
