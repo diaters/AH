@@ -19,9 +19,13 @@ pub const API_VERSION: u32 = 1;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
+use crate::infrastructure::skills::{PluginSkillContributions, PluginSkillEntry};
 use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};
 
 /// Startup 系统：扫描 `.harness/plugins/` 并把 registry 插入 world。
+///
+/// 同时从 PluginRegistry 中提取所有已声明 skill 的路径，
+/// 构建并插入 `PluginSkillContributions` 资源。
 pub fn plugin_load_startup_system(mut commands: Commands) {
     let plugins_dir = PathBuf::from(
         std::env::var("HARNESS_PLUGINS_DIR").unwrap_or_else(|_| DEFAULT_PLUGINS_DIR.to_string()),
@@ -57,5 +61,29 @@ pub fn plugin_load_startup_system(mut commands: Commands) {
         }
     }
 
+    // 从已加载插件的 manifest.skills 中提取 skill 条目
+    let skill_contributions = PluginSkillContributions {
+        entries: registry
+            .plugins()
+            .iter()
+            .flat_map(|plugin| {
+                plugin.manifest.skills.iter().map(|skill| PluginSkillEntry {
+                    plugin_id: plugin.manifest.id.clone(),
+                    skill_id: skill.id.clone(),
+                    path: plugin.root_dir.join(&skill.path),
+                })
+            })
+            .collect(),
+    };
+
+    if !skill_contributions.entries.is_empty() {
+        tracing::info!(
+            event = "PluginSkillsRegistered",
+            count = skill_contributions.entries.len(),
+            "plugin skill contributions registered"
+        );
+    }
+
     commands.insert_resource(registry);
+    commands.insert_resource(skill_contributions);
 }

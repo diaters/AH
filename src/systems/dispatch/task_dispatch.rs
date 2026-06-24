@@ -108,6 +108,7 @@ pub fn task_dispatch_system(
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
     skill_loader: Res<crate::infrastructure::skills::SkillLoader>,
+    plugin_skills: Res<crate::infrastructure::skills::PluginSkillContributions>,
 ) {
     for (mut task, short_term) in &mut tasks {
         // 子任务由 Brain 分发，普通 dispatch 不处理
@@ -197,8 +198,9 @@ pub fn task_dispatch_system(
             .cloned()
             .collect();
 
-        // 构建 skills 系统提示
-        let skills = skill_loader.load_skills(&agent.profile.name);
+        // 构建 skills 系统提示（内置 + 插件贡献）
+        let mut skills = skill_loader.load_skills(&agent.profile.name);
+        skills.extend(skill_loader.load_plugin_skills(&plugin_skills, &agent.profile.name));
         let skills_prompt =
             crate::infrastructure::skills::SkillLoader::format_skills_prompt(&skills);
         let system_prompt = if skills_prompt.is_empty() {
@@ -252,6 +254,7 @@ mod tests {
         app.insert_resource(Clock::default());
         app.insert_resource(SpaceToolRegistry::default());
         app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
+        app.insert_resource(crate::infrastructure::skills::PluginSkillContributions::default());
         app.add_systems(Update, task_dispatch_system);
         app
     }
