@@ -11,7 +11,7 @@ use crate::{
         Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
         GrantMode, SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
         ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolPermission,
+        ToolExecutionResultMessage, ToolPermission, ToolReturnedHookPending,
     },
     systems::NativeProcessBackend,
 };
@@ -115,13 +115,17 @@ pub fn tool_confirmation_result_system(
                     work_item_id: None,
                 };
 
-                commands.spawn(ToolExecutionResultMessage {
-                    result: execution_result,
-                    tool_name: tool_request.tool_name.clone(),
-                    tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
-                    tool_call_id: tool_request.tool_call_id.clone(),
-                    processed: false,
-                });
+                commands.spawn((
+                    ToolExecutionResultMessage {
+                        result: execution_result,
+                        tool_name: tool_request.tool_name.clone(),
+                        tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
+                        tool_call_id: tool_request.tool_call_id.clone(),
+                        processed: false,
+                        original_tool_output: None,
+                    },
+                    ToolReturnedHookPending,
+                ));
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();

@@ -24,7 +24,7 @@ use tracing::{debug, warn};
 
 use crate::domain::{
     AgentExecutionResult, ExecutionError, ToolCalledHookPending, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
 };
 use crate::user_plugins::dispatcher::{
     HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
@@ -99,16 +99,20 @@ pub fn on_tool_called_hook_system(world: &mut World) {
                         work_item_id: None,
                     };
 
-                    world.spawn(ToolExecutionResultMessage {
-                        result: execution_result,
-                        tool_name: request.tool_name.clone(),
-                        tool_output: Err(ToolError::PermissionDenied(format!(
-                            "denied by plugin: {}",
-                            reason
-                        ))),
-                        tool_call_id: request.tool_call_id.clone(),
-                        processed: false,
-                    });
+                    world.spawn((
+                        ToolExecutionResultMessage {
+                            result: execution_result,
+                            tool_name: request.tool_name.clone(),
+                            tool_output: Err(ToolError::PermissionDenied(format!(
+                                "denied by plugin: {}",
+                                reason
+                            ))),
+                            tool_call_id: request.tool_call_id.clone(),
+                            processed: false,
+                            original_tool_output: None,
+                        },
+                        ToolReturnedHookPending,
+                    ));
 
                     // 销毁原请求 entity，避免流转到 tool_dispatch_system 再次产出
                     // 错误结果或触发确认逻辑。

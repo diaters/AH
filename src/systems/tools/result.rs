@@ -50,6 +50,19 @@ pub fn tool_result_system(
                         "tool execution completed"
                     );
 
+                    // 若原始输出被插件替换，记录审计日志。
+                    if let Some(ref original) = result.original_tool_output {
+                        let original_str = serde_json::to_string(original)
+                            .unwrap_or_else(|_| original.to_string());
+                        debug!(
+                            event = "ToolOutputReplacedByPlugin",
+                            tool_name = %result.tool_name,
+                            task_id = %task.id,
+                            original_output = %original_str,
+                            "tool output was replaced by on_tool_returned hook plugin"
+                        );
+                    }
+
                     // Only persist tool_output here.
                     // The original tool_input payload is intentionally not written into STM,
                     // which avoids leaking raw shell_input request text into memory.

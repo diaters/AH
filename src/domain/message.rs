@@ -183,6 +183,9 @@ pub struct ToolExecutionResultMessage {
     pub tool_call_id: Option<String>,
     /// 是否已被 tool_result_system 处理过，防止重复记录日志和 STM
     pub processed: bool,
+    /// 审计字段：插件通过 `tool_set_result` 替换 `tool_output` 时，
+    /// 原始输出值保留在此。仅当 `on_tool_returned` hook 触发过替换时为 `Some`。
+    pub original_tool_output: Option<serde_json::Value>,
 }
 
 // ============ Session 生命周期 ============

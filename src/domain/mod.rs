@@ -117,8 +117,8 @@ pub use summarization::SummarizationTrigger;
 
 // task
 pub use task::{
-    NewlyCreatedTask, Task, TaskStatus, ToolCalledHookPending, WaitingForSessionInfo,
-    WaitingForTasksInfo,
+    NewlyCreatedTask, Task, TaskStatus, ToolCalledHookPending, ToolReturnedHookPending,
+    WaitingForSessionInfo, WaitingForTasksInfo,
 };
 
 // tool_runtime

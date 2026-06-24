@@ -11,7 +11,7 @@ use crate::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
         BuiltinToolExecutors, ExecutionError, ExperienceStore, GrantMode, SharedKnowledgeBase,
         Task, TaskStatus, ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, WaitingReason,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -126,16 +126,20 @@ pub fn approval_result_system(
                     work_item_id: None,
                 };
 
-                commands.spawn(ToolExecutionResultMessage {
-                    result: execution_result,
-                    tool_name: tool_request.tool_name.clone(),
-                    tool_output: Err(ToolError::PermissionDenied(format!(
-                        "parent agent rejected: {}",
-                        result.reasoning
-                    ))),
-                    tool_call_id: tool_request.tool_call_id.clone(),
-                    processed: false,
-                });
+                commands.spawn((
+                    ToolExecutionResultMessage {
+                        result: execution_result,
+                        tool_name: tool_request.tool_name.clone(),
+                        tool_output: Err(ToolError::PermissionDenied(format!(
+                            "parent agent rejected: {}",
+                            result.reasoning
+                        ))),
+                        tool_call_id: tool_request.tool_call_id.clone(),
+                        processed: false,
+                        original_tool_output: None,
+                    },
+                    ToolReturnedHookPending,
+                ));
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
                 commands.entity(request_entity).despawn();

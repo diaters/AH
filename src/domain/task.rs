@@ -74,6 +74,15 @@ pub struct NewlyCreatedTask;
 #[derive(Component, Debug, Clone, Default)]
 pub struct ToolCalledHookPending;
 
+/// 标记刚生成、尚未派发 `on_tool_returned` 观察 hook 的 `ToolExecutionResultMessage`。
+///
+/// 由 `ToolExecutionResultMessage` 的所有 spawn 点附带，由 companion 系统
+/// `on_tool_returned_hook_system` 派发 hook 后移除。若插件调用 `tool_set_result`，
+/// companion 系统会用插件提供的值替换 `tool_output`，原始输出保留在
+/// `original_tool_output` 审计字段中。`deny` 在后 hook 上无语义，若调用仅记录警告。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ToolReturnedHookPending;
+
 /// Task 等待其他任务完成的状态信息
 /// 此组件添加到发起等待的 Task Entity 上
 #[derive(Component, Debug, Clone)]

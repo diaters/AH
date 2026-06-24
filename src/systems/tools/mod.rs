@@ -10,6 +10,7 @@ mod dispatch;
 mod orchestrator;
 mod result;
 mod tool_called_hook;
+mod tool_returned_hook;
 mod waiting;
 
 pub use approval::{approval_dispatch_system, approval_result_system};
@@ -18,6 +19,7 @@ pub use confirmation::{tool_confirmation_request_system, tool_confirmation_resul
 pub use dispatch::tool_dispatch_system;
 pub use result::tool_result_system;
 pub use tool_called_hook::on_tool_called_hook_system;
+pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
 
 use crate::domain::{
