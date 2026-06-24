@@ -56,8 +56,8 @@ pub use contribution::{
     ExperienceCandidateStatus as ExperienceStatus, ExperienceCollectionRequestMessage,
     ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage, ExperienceInbox,
     ExperienceInboxStatus, ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, IncubationProposal, IncubationProposalStatus, SkillFileRef,
-    SkillFileRole,
+    ExperienceWritebackRequestMessage, IncubationProposal, IncubationProposalStatus,
+    PendingExperienceHooks, SkillFileRef, SkillFileRole,
 };
 
 // error
@@ -91,7 +91,8 @@ pub use memory::{
 // message
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
-    ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
+    ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
+    ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
     ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, LlmResponseHookPending,
     MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind, OutputMessage,
     RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
@@ -112,8 +113,8 @@ pub use session::{
 pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
     ExperienceConsolidationRequestMessage, KnowledgeSource, KnowledgeValidationStatus,
-    SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry, ToolAction, ToolContext,
-    ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
+    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 // summarization

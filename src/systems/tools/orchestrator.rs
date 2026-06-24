@@ -11,11 +11,11 @@ use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
     ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, SessionSummary,
-    ShellExecResult, ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
-    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason,
+    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingExperienceHooks,
+    SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
+    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
+    TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -397,6 +397,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     tasks: &mut Query<(Entity, &mut Task)>,
     backend: &B,
     experience_store: &mut ExperienceStore,
+    pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
 ) {
     match action {
@@ -661,6 +662,12 @@ pub fn handle_tool_action<B: SessionBackend>(
                     experience_store.stage_root_candidate(candidate.clone());
                 }
             }
+
+            // 推入待派发队列，由 companion 系统触发 on_experience_candidate_submitted hook。
+            pending_experience_hooks.0.push((
+                crate::user_plugins::hook_point::HookPoint::OnExperienceCandidateSubmitted,
+                candidate.candidate_id,
+            ));
 
             spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }

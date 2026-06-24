@@ -9,8 +9,9 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, SharedKnowledgeBase, Signal, Task,
-        TaskTerminatedMessage, ToolCallingState, UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, Frontend, PendingKnowledgeWriteHooks, RetryReadyMessage,
+        SharedKnowledgeBase, Signal, Task, TaskTerminatedMessage, ToolCallingState,
+        UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     plugins::DefaultRuntimePluginGroup,
@@ -211,6 +212,7 @@ pub fn build_harness_app(
 
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());
+    app.insert_resource(PendingKnowledgeWriteHooks::default());
 
     // Skill 加载器
     app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());

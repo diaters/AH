@@ -9,9 +9,10 @@ use crate::{
     app::HarnessSettings,
     domain::{
         Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
-        GrantMode, SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
-        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolPermission, ToolReturnedHookPending,
+        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, Task, ToolCallingState,
+        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+        ToolReturnedHookPending,
     },
     systems::NativeProcessBackend,
 };
@@ -40,6 +41,7 @@ pub fn tool_confirmation_result_system(
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
+    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -209,6 +211,7 @@ pub fn tool_confirmation_result_system(
                         &mut tasks,
                         &*backend,
                         &mut experience_store,
+                        &mut pending_experience_hooks,
                         None,
                     );
                 }

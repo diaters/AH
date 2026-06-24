@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use crate::systems::{
     HarnessSet, command_parse_system, continue_task_system, finish_task_system,
     frontend_input_system, frontend_output_system, input_ingress_system,
+    on_message_received_hook_system, on_shared_knowledge_write_hook_system,
     on_task_created_hook_system, retry_wakeup_system, signal_ingest_system, tick_clock_system,
     tool_confirmation_request_system, user_input_routing_system, user_message_to_task_system,
 };
@@ -27,12 +28,20 @@ impl Plugin for FrontendPlugin {
                 frontend_input_system.in_set(HarnessSet::Ingress),
                 // 输入入口
                 input_ingress_system.in_set(HarnessSet::Ingress),
+                // on_message_received 观察 hook companion 系统
+                on_message_received_hook_system
+                    .in_set(HarnessSet::Ingress)
+                    .after(input_ingress_system),
                 // 重试唤醒
                 retry_wakeup_system.in_set(HarnessSet::Signal),
                 // 信号转换
                 signal_ingest_system.in_set(HarnessSet::Signal),
                 // 命令解析
                 command_parse_system.in_set(HarnessSet::Transform),
+                // on_shared_knowledge_write 观察 hook companion 系统
+                on_shared_knowledge_write_hook_system
+                    .in_set(HarnessSet::Transform)
+                    .after(command_parse_system),
                 // 任务完成
                 finish_task_system
                     .in_set(HarnessSet::Transform)

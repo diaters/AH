@@ -8,10 +8,11 @@ use tracing::debug;
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
-        BuiltinToolExecutors, ExecutionError, ExperienceStore, GrantMode, SharedKnowledgeBase,
-        Task, TaskStatus, ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
+        Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
+        ApprovalResultMessage, BuiltinToolExecutors, ExecutionError, ExperienceStore, GrantMode,
+        PendingExperienceHooks, SharedKnowledgeBase, Task, TaskStatus, ToolCallingState,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolReturnedHookPending, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -55,14 +56,17 @@ pub fn approval_dispatch_system(
         }
 
         // 生成自动批准结果
-        commands.spawn(ApprovalResultMessage {
-            request_id: request.request_id,
-            source_task_id: request.source_task_id,
-            approval_task_id: request.approval_task_id,
-            decision: ApprovalDecision::Approved,
-            reasoning: "MVP auto-approve: parent agent approval".to_string(),
-            grant_mode: GrantMode::Once,
-        });
+        commands.spawn((
+            ApprovalResultMessage {
+                request_id: request.request_id,
+                source_task_id: request.source_task_id,
+                approval_task_id: request.approval_task_id,
+                decision: ApprovalDecision::Approved,
+                reasoning: "MVP auto-approve: parent agent approval".to_string(),
+                grant_mode: GrantMode::Once,
+            },
+            ApprovalResolvedHookPending,
+        ));
 
         commands.entity(entity).despawn();
     }
@@ -79,6 +83,7 @@ pub fn approval_result_system(
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
+    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -214,6 +219,7 @@ pub fn approval_result_system(
                         &mut tasks,
                         &*backend,
                         &mut experience_store,
+                        &mut pending_experience_hooks,
                         None,
                     );
                 }

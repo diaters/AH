@@ -4,14 +4,16 @@ use tracing::debug;
 use crate::app::MemoryConfig;
 use crate::domain::{
     ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, NewlyCreatedTask,
-    SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory, SummarizationRequestMessage,
-    SummarizationTrigger, Task, TaskStatus, UserCommand, UserInputMessage,
+    PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
+    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, UserCommand,
+    UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
 pub(crate) fn command_parse_system(
     mut commands: Commands,
     mut knowledge: ResMut<SharedKnowledgeBase>,
+    mut pending_writes: ResMut<PendingKnowledgeWriteHooks>,
     config: Res<MemoryConfig>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
@@ -148,11 +150,10 @@ pub(crate) fn command_parse_system(
                         knowledge_entries_before = knowledge.entries.len(),
                         "adding knowledge via /remember command"
                     );
-                    knowledge
-                        .entries
-                        .push(SharedKnowledgeEntry::approved_from_user_input(
-                            content.clone(),
-                        ));
+                    let entry = SharedKnowledgeEntry::approved_from_user_input(content.clone());
+                    knowledge.entries.push(entry.clone());
+                    // 推入待派发队列，由 companion 系统触发 on_shared_knowledge_write hook。
+                    pending_writes.0.push(entry);
                 }
                 commands.entity(entity).despawn();
             }
@@ -172,8 +173,8 @@ mod tests {
     use crate::{
         app::MemoryConfig,
         domain::{
-            KnowledgeValidationStatus, SharedKnowledgeBase, UserCommand, UserCommand::Remember,
-            UserInputMessage,
+            KnowledgeValidationStatus, PendingKnowledgeWriteHooks, SharedKnowledgeBase,
+            UserCommand, UserCommand::Remember, UserInputMessage,
         },
     };
 
@@ -254,6 +255,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.add_systems(Update, command_parse_system);
         app.world_mut().spawn(UserInputMessage {
             content: "/remember Docs should stay in Chinese".to_string(),
@@ -271,6 +273,9 @@ mod tests {
             knowledge.entries[0].approved_by.as_deref(),
             Some("user:/remember")
         );
+        // 待派发 hook 队列也应包含一条记录
+        let pending = app.world().resource::<PendingKnowledgeWriteHooks>();
+        assert_eq!(pending.0.len(), 1);
         assert_eq!(
             UserCommand::parse("/remember Docs should stay in Chinese"),
             Remember {

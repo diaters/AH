@@ -122,6 +122,20 @@ pub struct MessageReceivedHookPending;
 #[derive(Component, Debug, Clone, Default)]
 pub struct LlmResponseHookPending;
 
+/// 标记刚创建、尚未触发 `on_approval_requested` 观察 hook 的 `ApprovalRequestMessage`。
+///
+/// 由 `tool_dispatch_system` 在 spawn `ApprovalRequestMessage` 时附带，
+/// 由 companion 系统 `on_approval_requested_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ApprovalRequestedHookPending;
+
+/// 标记刚产生、尚未触发 `on_approval_resolved` 观察 hook 的 `ApprovalResultMessage`。
+///
+/// 由 `approval_dispatch_system` 在 spawn `ApprovalResultMessage` 时附带，
+/// 由 companion 系统 `on_approval_resolved_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ApprovalResolvedHookPending;
+
 /// Agent 执行请求消息
 #[derive(Debug, Clone, Component)]
 pub struct AgentExecutionRequestMessage {

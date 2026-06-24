@@ -9,8 +9,8 @@ use crate::systems::{
     experience_collection_completion_system, experience_collection_workitem_system,
     experience_consolidation_trigger_system, experience_governance_system,
     experience_writeback_system, ingest_execution_results_system, llm_response_system,
-    on_llm_response_hook_system, task_terminated_experience_trigger_system,
-    tool_calling_orchestrator_system,
+    on_experience_hook_system, on_llm_response_hook_system,
+    task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -68,6 +68,10 @@ impl Plugin for ExecutionPlugin {
                     .after(crate::systems::tool_confirmation_result_system)
                     .after(experience_governance_system)
                     .before(experience_writeback_system),
+                // 经验候选相关 hook companion 系统
+                on_experience_hook_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_approval_result_system),
             ),
         );
     }

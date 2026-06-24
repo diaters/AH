@@ -9,9 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, ExperienceStore, MemoryImportance, SessionHandleId,
-    SessionInputRequest, SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId,
-    ToolError,
+    AgentId, ExperienceStore, MemoryImportance, SessionHandleId, SessionInputRequest,
+    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
 };
 
 /// 共享知识审核状态。
@@ -88,6 +87,14 @@ impl SharedKnowledgeEntry {
 pub struct SharedKnowledgeBase {
     pub entries: Vec<SharedKnowledgeEntry>,
 }
+
+/// 待派发 `on_shared_knowledge_write` hook 的条目队列。
+///
+/// 由于 `SharedKnowledgeBase` 是 Resource 而非 Entity，无法附带 Component 标记，
+/// 因此使用此 scratch resource 作为写入事件队列。写入系统将条目推入此队列，
+/// companion 系统 `on_shared_knowledge_write_hook_system` 逐条派发 hook 后清空。
+#[derive(Resource, Default)]
+pub struct PendingKnowledgeWriteHooks(pub Vec<SharedKnowledgeEntry>);
 
 /// 全局工具注册表
 #[derive(Resource, Default)]
@@ -256,10 +263,7 @@ impl ExperienceCandidateSubmission {
                 arr.iter()
                     .filter_map(|item| {
                         let path = item.get("path")?.as_str()?.to_string();
-                        let role_str = item
-                            .get("role")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let role_str = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
                         let role = match role_str {
                             "script" => crate::domain::SkillFileRole::Script,
                             "reference" => crate::domain::SkillFileRole::Reference,
@@ -374,4 +378,3 @@ mod tests {
         assert_eq!(entry.source, KnowledgeSource::UserCommand);
     }
 }
-

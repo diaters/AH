@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{AgentId, TaskId};
+use crate::user_plugins::hook_point::HookPoint;
 
 /// 经验候选类型提示。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,7 +66,9 @@ pub struct ExperienceGovernanceDecision {
 /// 经验候选载荷。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExperienceCandidatePayload {
-    Knowledge { content: String },
+    Knowledge {
+        content: String,
+    },
     Skill {
         name: String,
         description: String,
@@ -174,6 +177,16 @@ impl ExperienceCandidate {
         }
     }
 }
+
+/// 待派发经验候选相关 hook 的事件队列。
+///
+/// 由于 `ExperienceCandidate` 存储在 `ExperienceStore` Resource 中而非 ECS Entity，
+/// 无法附带 Component 标记，因此使用 scratch resource 记录待派发事件。
+///
+/// 写入系统（提交、批准、拒绝）将 `(HookPoint, candidate_id)` 推入队列，
+/// companion 系统 `on_experience_hook_system` 逐条派发 hook 后清空队列。
+#[derive(Resource, Default)]
+pub struct PendingExperienceHooks(pub Vec<(HookPoint, uuid::Uuid)>);
 
 /// 经验收件箱状态。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    domain::{BuiltinToolExecutors, ExperienceStore, SpaceToolRegistry},
+    domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
     systems::{
         HarnessSet, NativeProcessBackend, check_waiting_tasks_system,
         on_subtask_completed_check_waiting, on_tool_called_hook_system,
@@ -28,6 +28,7 @@ impl Plugin for ToolRuntimePlugin {
         app.insert_resource(tool_registry);
         app.insert_resource(tool_executors);
         app.insert_resource(ExperienceStore::default());
+        app.insert_resource(PendingExperienceHooks::default());
         app.insert_resource(NativeProcessBackend::default());
 
         // 注册 Tool 相关系统
