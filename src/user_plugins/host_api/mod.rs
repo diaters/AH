@@ -3,48 +3,35 @@
 //! 每个子模块导出一个 `register(Engine, ctx)` 函数，由
 //! `register_all` 在派发前一次性注册。
 
-use rhai::Engine;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-
 pub mod approval;
 pub mod entity_query;
 pub mod entity_write;
 pub mod experience;
 pub mod log;
+pub mod message;
 pub mod plugin_resource;
+pub mod skills_meta;
 pub mod state;
+pub mod temp_resource;
 pub mod tool_control;
 
-use crate::user_plugins::dispatcher::{HookOutcome, SharedHookOutcome};
-use entity_query::WorldSnapshot;
-use entity_write::WorldWriter;
+use rhai::Engine;
 
-/// 把所有 host API 注册到给定 Engine 上。
+use crate::user_plugins::dispatcher::PluginContext;
+
+/// 用给定 PluginContext 在 engine 上注册全部 v1 host API。
 ///
-/// 每次派发 hook 时，dispatcher 会为本插件构造一个独立的 Engine 实例，
-/// 调用此函数后再注入插件上下文（plugin_id、ctx），最后执行 AST。
-pub fn register_all(engine: &mut Engine) {
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    approval::register(
-        engine,
-        approval::ApprovalContext {
-            current_request_id: None,
-            tx: tx.clone(),
-        },
-    );
-    entity_query::register(engine, WorldSnapshot::empty());
-    entity_write::register(engine, WorldWriter::new(tx.clone()));
-    experience::register(
-        engine,
-        experience::ExperienceContext {
-            store: Arc::new(crate::domain::ExperienceStore::default()),
-            tx: tx.clone(),
-        },
-    );
+/// dispatcher 在派发每个 hook 脚本前调用此函数构造独立 Engine 实例。
+pub fn register_all(engine: &mut Engine, ctx: &PluginContext) {
     log::register(engine);
-    plugin_resource::register(engine, plugin_resource::PluginRoots::single(PathBuf::new()));
     state::register(engine);
-    let outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
-    tool_control::register(engine, outcome);
+    entity_query::register(engine, ctx.snapshot.clone());
+    entity_write::register(engine, ctx.writer.clone());
+    tool_control::register(engine, ctx.outcome.clone());
+    plugin_resource::register(engine, ctx.plugin_roots.clone());
+    approval::register(engine, ctx.approval.clone());
+    experience::register(engine, ctx.experience.clone());
+    skills_meta::register(engine, ctx.skills.clone());
+    message::register(engine, ctx.message.clone());
+    temp_resource::register(engine, ctx.temp_resource.clone());
 }

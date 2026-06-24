@@ -134,7 +134,7 @@ pub fn register(engine: &mut Engine, writer: WorldWriter) {
     );
 }
 
-fn rhai_dynamic_to_json(v: rhai::Dynamic) -> serde_json::Value {
+pub fn rhai_dynamic_to_json(v: rhai::Dynamic) -> serde_json::Value {
     if v.is_unit() {
         return serde_json::Value::Null;
     }
