@@ -16,7 +16,10 @@ mod transform;
 use bevy::ecs::schedule::SystemSet;
 
 pub(crate) use command::command_parse_system;
-pub(crate) use dispatch::{brain_dispatch_system, task_dispatch_system, workitem_dispatch_system};
+pub(crate) use dispatch::{
+    agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system,
+    task_dispatch_system, workitem_dispatch_system, workitem_lifecycle_hook_system,
+};
 pub(crate) use evaluation::evaluation_trigger_system;
 pub(crate) use execution::agent_execution_system;
 pub(crate) use experience::{

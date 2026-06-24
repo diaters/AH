@@ -5,6 +5,7 @@
 use bevy::prelude::*;
 use uuid::Uuid;
 
+use crate::user_plugins::hook_point::HookPoint;
 use crate::{
     contracts::TagSet,
     domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition},
@@ -37,6 +38,15 @@ pub enum WorkItemStatus {
     /// 失败
     Failed,
 }
+
+/// 标记 WorkItem 状态变更后尚未派发生命周期 hook 的 entity。
+///
+/// 由 `workitem_dispatch_system` / `llm_response_system` 在调用
+/// `work_item.start()` / `.complete()` / `.fail()` 后附带，由 companion 系统
+/// `workitem_lifecycle_hook_system` 派发对应 hook 后移除。内含的 `HookPoint`
+/// 指示应派发的 hook 点（`OnWorkItemStarted` / `OnWorkItemCompleted` / `OnWorkItemFailed`）。
+#[derive(Component, Debug, Clone)]
+pub struct WorkItemLifecycleHookPending(pub HookPoint);
 
 /// 工作项来源
 #[derive(Debug, Clone, PartialEq)]

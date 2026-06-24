@@ -5,9 +5,10 @@
 use bevy::prelude::*;
 
 use crate::systems::{
-    HarnessSet, approval_dispatch_system, approval_result_system, brain_decision_system,
-    brain_dispatch_system, evaluation_trigger_system, task_dispatch_system,
-    tool_confirmation_result_system, workitem_dispatch_system,
+    HarnessSet, agent_started_hook_system, agent_stopped_hook_system, approval_dispatch_system,
+    approval_result_system, brain_decision_system, brain_dispatch_system,
+    evaluation_trigger_system, task_dispatch_system, tool_confirmation_result_system,
+    workitem_dispatch_system, workitem_lifecycle_hook_system,
 };
 
 /// 派发 Plugin
@@ -33,6 +34,18 @@ impl Plugin for DispatchPlugin {
                 workitem_dispatch_system
                     .in_set(HarnessSet::Dispatch)
                     .after(task_dispatch_system),
+                // WorkItem 生命周期 hook companion 系统
+                workitem_lifecycle_hook_system
+                    .in_set(HarnessSet::Dispatch)
+                    .after(workitem_dispatch_system),
+                // Agent 生命周期 hook companion 系统
+                // 两者均放在 Maintenance 集合中：
+                // - agent_started_hook_system 使用 Added<Agent>，与 agent_factory_system 在同一帧即可触发
+                // - agent_stopped_hook_system 必须在 agent_factory_system（handle_termination 插入标记）之后运行
+                agent_started_hook_system.in_set(HarnessSet::Maintenance),
+                agent_stopped_hook_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(crate::systems::agent_factory_system),
                 // 评估系统
                 evaluation_trigger_system.in_set(HarnessSet::Dispatch),
                 // 审批系统

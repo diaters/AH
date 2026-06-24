@@ -13,8 +13,10 @@ use crate::{
         EntryRole, ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
         OffTrackPolicy, OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
         ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
+        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem,
+        WorkItemLifecycleHookPending, WorkItemType,
     },
+    user_plugins::hook_point::HookPoint,
 };
 
 /// 从子任务输出中提取 <<<RESULT>>>...<<</RESULT>>> 标记对内容。
@@ -587,8 +589,16 @@ pub fn llm_response_system(
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 if had_submission {
                                     wi.1.complete();
+                                    commands.entity(work_item_entity).insert(
+                                        WorkItemLifecycleHookPending(
+                                            HookPoint::OnWorkItemCompleted,
+                                        ),
+                                    );
                                 } else {
                                     wi.1.fail();
+                                    commands.entity(work_item_entity).insert(
+                                        WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
+                                    );
                                 }
                             }
 
@@ -606,6 +616,9 @@ pub fn llm_response_system(
                         Err(_) => {
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 wi.1.fail();
+                                commands.entity(work_item_entity).insert(
+                                    WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
+                                );
                             }
                             commands.entity(work_item_entity).despawn();
                             commands.entity(entity).despawn();

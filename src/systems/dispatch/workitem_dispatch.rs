@@ -7,8 +7,10 @@ use tracing::{debug, warn};
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind, Task,
-    TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
+    TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemLifecycleHookPending,
+    WorkItemStatus, WorkItemType,
 };
+use crate::user_plugins::hook_point::HookPoint;
 
 /// WorkItem 调度系统
 ///
@@ -61,6 +63,11 @@ pub(crate) fn workitem_dispatch_system(
             );
             work_item.fail();
 
+            // 标记 WorkItem 已失败，等待 companion 系统派发 on_workitem_failed hook
+            commands
+                .entity(_entity)
+                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+
             // 恢复关联任务的状态，避免任务死锁
             // 经验收集 WorkItem 失败不应回滚原任务状态
             if work_item.work_type != WorkItemType::ExperienceCollection
@@ -103,6 +110,11 @@ pub(crate) fn workitem_dispatch_system(
         // 状态转换：Pending -> Running
         work_item.assign(agent.id);
         work_item.start();
+
+        // 标记 WorkItem 已启动，等待 companion 系统派发 on_workitem_started hook
+        commands
+            .entity(_entity)
+            .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted));
 
         // 根据工作项类型确定请求类型
         let request_kind = match work_item.work_type {
