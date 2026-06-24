@@ -21,7 +21,9 @@ pub struct SkillInfo {
 
 impl SkillsSnapshot {
     pub fn empty() -> Self {
-        Self { skills: Arc::new(Vec::new()) }
+        Self {
+            skills: Arc::new(Vec::new()),
+        }
     }
 }
 

@@ -18,7 +18,8 @@ pub fn register(engine: &mut Engine, ctx: MessageContext) {
     let c = ctx.clone();
     engine.register_fn("emit_message", move |channel: &str, payload: Dynamic| {
         let plugin_id = c.plugin_id.clone();
-        let payload_json = crate::user_plugins::host_api::entity_write::rhai_dynamic_to_json(payload);
+        let payload_json =
+            crate::user_plugins::host_api::entity_write::rhai_dynamic_to_json(payload);
         let _ = c.tx.send(EmittedMessage {
             plugin_id,
             channel: channel.to_string(),
@@ -36,8 +37,15 @@ mod tests {
     fn emit_message_sends_typed_message() {
         let (tx, rx) = unbounded();
         let mut e = Engine::new();
-        register(&mut e, MessageContext { plugin_id: "p".into(), tx });
-        e.eval::<()>(r#"emit_message("progress", "halfway")"#).unwrap();
+        register(
+            &mut e,
+            MessageContext {
+                plugin_id: "p".into(),
+                tx,
+            },
+        );
+        e.eval::<()>(r#"emit_message("progress", "halfway")"#)
+            .unwrap();
         let m = rx.recv().unwrap();
         assert_eq!(m.plugin_id, "p");
         assert_eq!(m.channel, "progress");

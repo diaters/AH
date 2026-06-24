@@ -21,10 +21,13 @@ impl TempResourceSlot {
 
 pub fn register(engine: &mut Engine, slot: TempResourceSlot) {
     let s = slot.clone();
-    engine.register_fn("register_temp_resource", move |key: &str, value: Dynamic| {
-        let mut g = s.inner.lock().unwrap();
-        g.insert(key.to_string(), value);
-    });
+    engine.register_fn(
+        "register_temp_resource",
+        move |key: &str, value: Dynamic| {
+            let mut g = s.inner.lock().unwrap();
+            g.insert(key.to_string(), value);
+        },
+    );
 }
 
 #[cfg(test)]
@@ -47,7 +50,8 @@ mod tests {
         let slot = TempResourceSlot::new();
         let mut e = Engine::new();
         register(&mut e, slot.clone());
-        e.eval::<()>(r#"register_temp_resource("k1", "v1")"#).unwrap();
+        e.eval::<()>(r#"register_temp_resource("k1", "v1")"#)
+            .unwrap();
         let _ = slot.drain();
         assert!(slot.inner.lock().unwrap().is_empty());
     }

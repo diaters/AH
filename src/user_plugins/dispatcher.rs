@@ -13,6 +13,7 @@ use crossbeam_channel::Sender;
 use rhai::{Engine, Scope};
 use tracing::{debug, warn};
 
+use crate::user_plugins::hook_point::HookPoint;
 use crate::user_plugins::host_api;
 use crate::user_plugins::host_api::approval::ApprovalContext;
 use crate::user_plugins::host_api::entity_query::WorldSnapshot;
@@ -22,7 +23,6 @@ use crate::user_plugins::host_api::message::MessageContext;
 use crate::user_plugins::host_api::plugin_resource::PluginRoots;
 use crate::user_plugins::host_api::skills_meta::SkillsSnapshot;
 use crate::user_plugins::host_api::temp_resource::TempResourceSlot;
-use crate::user_plugins::hook_point::HookPoint;
 use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
 
 /// 单次 hook 派发的累积结果。同一 hook 点多个订阅者顺序派发，
