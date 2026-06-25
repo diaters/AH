@@ -34,4 +34,12 @@ pub fn register_all(engine: &mut Engine, ctx: &PluginContext) {
     skills_meta::register(engine, ctx.skills.clone());
     message::register(engine, ctx.message.clone());
     temp_resource::register(engine, ctx.temp_resource.clone());
+
+    // 注册 Vec<String> 的基础方法，供 entity query 返回值使用。
+    // 沙箱引擎不加载 Rhai stdlib，因此需要显式注册。
+    engine.register_fn("len", |v: &mut Vec<String>| -> i64 { v.len() as i64 });
+    engine.register_fn("push", |v: &mut Vec<String>, item: &str| v.push(item.to_string()));
+    engine.register_indexer_get(|v: &mut Vec<String>, idx: i64| -> String {
+        v.get(idx as usize).cloned().unwrap_or_default()
+    });
 }
