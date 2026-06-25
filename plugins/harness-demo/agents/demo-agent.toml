@@ -1,0 +1,9 @@
+name = "demo-agent"
+model = "gpt-4.1-mini"
+tags = ["demo", "plugin"]
+description = "Demo agent contributed by harness-demo plugin"
+
+[tools]
+default_permission = "Deny"
+harness-demo:echo = "Allow"
+harness-demo:query_tasks = "Allow"

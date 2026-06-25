@@ -1,0 +1,132 @@
+id = "harness-demo"
+name = "Harness Demo Plugin"
+version = "0.1.0"
+api_version = 1
+author = "Harness Team"
+description = "示例插件：演示插件系统全部功能，包括 21 个 hook 点、工具、技能、Agent 与命令"
+
+# ── Hooks ──────────────────────────────────────────────────────────────
+
+[[hooks]]
+event = "on_task_created"
+script = "hooks/on_task_created.rhai"
+
+[[hooks]]
+event = "on_task_completed"
+script = "hooks/on_task_completed.rhai"
+
+[[hooks]]
+event = "on_task_failed"
+script = "hooks/on_task_failed.rhai"
+
+[[hooks]]
+event = "on_tool_called"
+script = "hooks/on_tool_called.rhai"
+
+[[hooks]]
+event = "on_tool_returned"
+script = "hooks/on_tool_returned.rhai"
+
+[[hooks]]
+event = "on_workitem_started"
+script = "hooks/on_workitem_started.rhai"
+
+[[hooks]]
+event = "on_workitem_completed"
+script = "hooks/on_workitem_completed.rhai"
+
+[[hooks]]
+event = "on_workitem_failed"
+script = "hooks/on_workitem_failed.rhai"
+
+[[hooks]]
+event = "on_agent_started"
+script = "hooks/on_agent_started.rhai"
+
+[[hooks]]
+event = "on_agent_stopped"
+script = "hooks/on_agent_stopped.rhai"
+
+[[hooks]]
+event = "on_message_dispatched"
+script = "hooks/on_message_dispatched.rhai"
+
+[[hooks]]
+event = "on_message_received"
+script = "hooks/on_message_received.rhai"
+
+[[hooks]]
+event = "on_llm_response"
+script = "hooks/on_llm_response.rhai"
+
+[[hooks]]
+event = "on_long_term_memory_write"
+script = "hooks/on_long_term_memory_write.rhai"
+
+[[hooks]]
+event = "on_long_term_memory_evicted"
+script = "hooks/on_long_term_memory_evicted.rhai"
+
+[[hooks]]
+event = "on_shared_knowledge_write"
+script = "hooks/on_shared_knowledge_write.rhai"
+
+[[hooks]]
+event = "on_experience_candidate_submitted"
+script = "hooks/on_experience_candidate_submitted.rhai"
+
+[[hooks]]
+event = "on_experience_candidate_approved"
+script = "hooks/on_experience_candidate_approved.rhai"
+
+[[hooks]]
+event = "on_experience_candidate_rejected"
+script = "hooks/on_experience_candidate_rejected.rhai"
+
+[[hooks]]
+event = "on_approval_requested"
+script = "hooks/on_approval_requested.rhai"
+
+[[hooks]]
+event = "on_approval_resolved"
+script = "hooks/on_approval_resolved.rhai"
+
+# ── Tools ──────────────────────────────────────────────────────────────
+
+[[tools]]
+id = "echo"
+description = "Echo back the input message with a demo plugin signature"
+schema = "tools/echo.schema.json"
+handler = "tools/echo.rhai"
+
+[[tools]]
+id = "query_tasks"
+description = "Query current tasks from the world snapshot"
+schema = "tools/query_tasks.schema.json"
+handler = "tools/query_tasks.rhai"
+
+# ── Skills ─────────────────────────────────────────────────────────────
+
+[[skills]]
+id = "demo-skill"
+path = "skills/demo-skill.md"
+
+# ── Agents ─────────────────────────────────────────────────────────────
+
+[[agents]]
+id = "demo-agent"
+profile = "agents/demo-agent.toml"
+
+# ── Commands ───────────────────────────────────────────────────────────
+
+[[commands]]
+id = "status"
+display = "/demo-status"
+script = "commands/status.rhai"
+description = "Show world snapshot: task, agent, workitem counts"
+
+[[commands]]
+id = "echo"
+display = "/demo-echo"
+script = "commands/echo.rhai"
+description = "Echo text back with plugin greeting"

@@ -1,0 +1,2 @@
+Hello from harness-demo plugin!
+This file is read via read_plugin_resource("data/greeting.txt").
