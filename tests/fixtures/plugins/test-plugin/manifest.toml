@@ -1,0 +1,21 @@
+id = "test-plugin"
+name = "Test Plugin"
+version = "0.1.0"
+api_version = 1
+description = "internal fixture plugin for harness tests"
+
+[[hooks]]
+event = "on_task_created"
+script = "hooks/on_task_created.rhai"
+
+[[tools]]
+id = "hello"
+description = "Return a friendly greeting"
+schema = "tools/hello.schema.json"
+handler = "tools/hello.rhai"
+
+[[commands]]
+id = "hello"
+display = "/test-hello"
+script = "commands/hello.rhai"
+description = "Say hello from the test plugin"
