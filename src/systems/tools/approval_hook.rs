@@ -13,7 +13,7 @@ use tracing::debug;
 
 use crate::domain::{
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
-    ApprovalResultMessage, ExperienceStore,
+    ApprovalResultMessage,
 };
 use crate::user_plugins::dispatcher::{
     HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
@@ -51,8 +51,13 @@ pub fn on_approval_requested_hook_system(world: &mut World) {
 
     world.resource_scope(
         |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
-            for (entity, _msg) in targets {
-                dispatch_approval_hook(world, &mut registry, HookPoint::OnApprovalRequested);
+            for (entity, msg) in targets {
+                dispatch_approval_hook(
+                    world,
+                    &mut registry,
+                    HookPoint::OnApprovalRequested,
+                    Some(msg.request_id),
+                );
 
                 // 移除标记。
                 if let Ok(mut e) = world.get_entity_mut(entity) {
@@ -87,8 +92,13 @@ pub fn on_approval_resolved_hook_system(world: &mut World) {
 
     world.resource_scope(
         |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
-            for (entity, _msg) in targets {
-                dispatch_approval_hook(world, &mut registry, HookPoint::OnApprovalResolved);
+            for (entity, msg) in targets {
+                dispatch_approval_hook(
+                    world,
+                    &mut registry,
+                    HookPoint::OnApprovalResolved,
+                    Some(msg.request_id),
+                );
 
                 // 移除标记。
                 if let Ok(mut e) = world.get_entity_mut(entity) {
@@ -100,7 +110,12 @@ pub fn on_approval_resolved_hook_system(world: &mut World) {
 }
 
 /// 派发审批相关 hook 并 flush WorldCommand。
-fn dispatch_approval_hook(world: &mut World, registry: &mut PluginRegistry, point: HookPoint) {
+fn dispatch_approval_hook(
+    world: &mut World,
+    registry: &mut PluginRegistry,
+    point: HookPoint,
+    current_request_id: Option<uuid::Uuid>,
+) {
     let (writer_tx, writer_rx) =
         crossbeam_channel::unbounded::<crate::user_plugins::host_api::entity_write::WorldCommand>();
     let (message_tx, _message_rx) = crossbeam_channel::unbounded();
@@ -111,30 +126,37 @@ fn dispatch_approval_hook(world: &mut World, registry: &mut PluginRegistry, poin
         world,
         registry,
         writer_tx: writer_tx.clone(),
-        ctx_builder: Box::new(|plugin: &crate::user_plugins::registry::LoadedPlugin, _| {
-            let local_outcome: SharedHookOutcome =
-                std::sync::Arc::new(std::sync::Mutex::new(HookOutcome::default()));
-            PluginContext {
-                snapshot: snap.clone(),
-                writer: WorldWriter::new(writer_tx.clone()),
-                outcome: local_outcome,
-                plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
-                approval: ApprovalContext {
-                    current_request_id: None,
-                    tx: writer_tx.clone(),
-                },
-                experience: ExperienceContext {
-                    store: std::sync::Arc::new(ExperienceStore::default()),
-                    tx: writer_tx.clone(),
-                },
-                skills: SkillsSnapshot::empty(),
-                message: MessageContext {
-                    plugin_id: plugin.manifest.id.clone(),
-                    tx: message_tx.clone(),
-                },
-                temp_resource: TempResourceSlot::new(),
-            }
-        }),
+        ctx_builder: Box::new(
+            |plugin: &crate::user_plugins::registry::LoadedPlugin, world: &mut World| {
+                let local_outcome: SharedHookOutcome =
+                    std::sync::Arc::new(std::sync::Mutex::new(HookOutcome::default()));
+                PluginContext {
+                    snapshot: snap.clone(),
+                    writer: WorldWriter::new(writer_tx.clone()),
+                    outcome: local_outcome,
+                    plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
+                    approval: ApprovalContext {
+                        current_request_id,
+                        tx: writer_tx.clone(),
+                    },
+                    experience: ExperienceContext {
+                        store: std::sync::Arc::new(
+                            world
+                                .get_resource::<crate::domain::ExperienceStore>()
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
+                        tx: writer_tx.clone(),
+                    },
+                    skills: SkillsSnapshot::empty(),
+                    message: MessageContext {
+                        plugin_id: plugin.manifest.id.clone(),
+                        tx: message_tx.clone(),
+                    },
+                    temp_resource: TempResourceSlot::new(),
+                }
+            },
+        ),
     };
 
     let _ = dispatch_hook(input);

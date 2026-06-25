@@ -135,7 +135,7 @@ fn dispatch_agent_lifecycle_hook(
         world,
         registry,
         writer_tx: writer_tx.clone(),
-        ctx_builder: Box::new(|plugin: &LoadedPlugin, _| {
+        ctx_builder: Box::new(|plugin: &LoadedPlugin, world: &mut World| {
             let local_outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
             PluginContext {
                 snapshot: snap.clone(),
@@ -147,7 +147,12 @@ fn dispatch_agent_lifecycle_hook(
                     tx: writer_tx.clone(),
                 },
                 experience: ExperienceContext {
-                    store: Arc::new(crate::domain::ExperienceStore::default()),
+                    store: Arc::new(
+                        world
+                            .get_resource::<crate::domain::ExperienceStore>()
+                            .cloned()
+                            .unwrap_or_default(),
+                    ),
                     tx: writer_tx.clone(),
                 },
                 skills: SkillsSnapshot::empty(),

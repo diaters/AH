@@ -20,6 +20,13 @@ pub fn register(engine: &mut Engine, ctx: MessageContext) {
         let plugin_id = c.plugin_id.clone();
         let payload_json =
             crate::user_plugins::host_api::entity_write::rhai_dynamic_to_json(payload);
+        // v1 限制：插件消息尚未接入路由层，仅记录日志。
+        tracing::debug!(
+            event = "PluginMessageEmitted",
+            plugin_id = %plugin_id,
+            channel = %channel,
+            "plugin emitted message (v1: not yet routed)"
+        );
         let _ = c.tx.send(EmittedMessage {
             plugin_id,
             channel: channel.to_string(),

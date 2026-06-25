@@ -124,29 +124,36 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
         world,
         registry,
         writer_tx: writer_tx.clone(),
-        ctx_builder: Box::new(|plugin: &crate::user_plugins::registry::LoadedPlugin, _| {
-            let local_outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
-            PluginContext {
-                snapshot: snap.clone(),
-                writer: WorldWriter::new(writer_tx.clone()),
-                outcome: local_outcome,
-                plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
-                approval: ApprovalContext {
-                    current_request_id: None,
-                    tx: writer_tx.clone(),
-                },
-                experience: ExperienceContext {
-                    store: Arc::new(crate::domain::ExperienceStore::default()),
-                    tx: writer_tx.clone(),
-                },
-                skills: SkillsSnapshot::empty(),
-                message: MessageContext {
-                    plugin_id: plugin.manifest.id.clone(),
-                    tx: message_tx.clone(),
-                },
-                temp_resource: TempResourceSlot::new(),
-            }
-        }),
+        ctx_builder: Box::new(
+            |plugin: &crate::user_plugins::registry::LoadedPlugin, world: &mut World| {
+                let local_outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
+                PluginContext {
+                    snapshot: snap.clone(),
+                    writer: WorldWriter::new(writer_tx.clone()),
+                    outcome: local_outcome,
+                    plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
+                    approval: ApprovalContext {
+                        current_request_id: None,
+                        tx: writer_tx.clone(),
+                    },
+                    experience: ExperienceContext {
+                        store: Arc::new(
+                            world
+                                .get_resource::<crate::domain::ExperienceStore>()
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
+                        tx: writer_tx.clone(),
+                    },
+                    skills: SkillsSnapshot::empty(),
+                    message: MessageContext {
+                        plugin_id: plugin.manifest.id.clone(),
+                        tx: message_tx.clone(),
+                    },
+                    temp_resource: TempResourceSlot::new(),
+                }
+            },
+        ),
     };
 
     let _ = dispatch_hook(input);

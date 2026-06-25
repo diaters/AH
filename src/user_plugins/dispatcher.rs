@@ -11,7 +11,6 @@ use std::time::Duration;
 use bevy::prelude::World;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
-use rhai::Engine;
 use tracing::{debug, warn};
 
 use crate::domain::{ChannelId, FrontendKind, Task};
@@ -121,7 +120,7 @@ fn run_one_ast(
     point: HookPoint,
     outcome: &SharedHookOutcome,
 ) {
-    let mut engine = Engine::new();
+    let mut engine = crate::user_plugins::loader::new_sandboxed_engine();
     {
         let cur = outcome.lock().unwrap().clone();
         *ctx.outcome.lock().unwrap() = cur;
