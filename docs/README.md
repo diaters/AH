@@ -35,7 +35,8 @@ docs/
 
 ## 插件系统
 
-Harness 支持通过 Rhai 脚本插件扩展行为。详见 [plugin-development.md](plugin-development.md) 开发指南和 [configuration.md](configuration.md) 的配置章节。
+Harness 支持通过 Rhai 脚本插件扩展行为。详见 [plugin-development.md](plugin-development.md) 开发指南和  
+[configuration.md](configuration.md) 的配置章节。
 
 - 插件通过 `HARNESS_PLUGINS_DIR` 环境变量加载
 - 支持 20 个 hook 点覆盖全生命周期

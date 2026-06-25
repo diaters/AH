@@ -88,13 +88,15 @@ harness/
 
 ### 2.1 app — 应用装配层
 
-**作用**：定义全局配置 `HarnessConfig`（LLM provider、重试策略、Brain 开关等），声明 Bevy ECS 的 Resource 类型（`InputReceiver`、`FrontendRegistry`、`ExecutorHandle` 等），并提供 `build_harness_app()` 函数完成 ECS App 的完整装配——插入 Resource、配置 SystemSet 执行顺序、注册 Plugin Group 和 Startup/Maintenance 系统。
+__作用__：定义全局配置 `HarnessConfig`（LLM provider、重试策略、Brain 开关等），  
+声明 Bevy ECS 的 Resource 类型（`InputReceiver`、`FrontendRegistry`、`ExecutorHandle` 等）。
+并提供 `build_harness_app()` 函数完成 ECS App 的完整装配——插入 Resource、配置 SystemSet 执行顺序、注册 Plugin Group 和 Startup/Maintenance 系统。
 
-**完成情况**：**已完成**。配置从环境变量加载，SystemSet 流水线 7 阶段已定义并串联，`app_is_idle()` 实现了空闲检测。
+__完成情况__：__已完成__。配置从环境变量加载，SystemSet 流水线 7 阶段已定义并串联，`app_is_idle()` 实现了空闲检测。
 
 ### 2.2 domain — 领域类型层
 
-**作用**：定义所有核心领域类型，是整个框架的"语言"。包括：
+__作用__：定义所有核心领域类型，是整个框架的"语言"。包括：
 
 | 子模块 | 核心类型 | 作用 |
 |--------|---------|------|
@@ -110,70 +112,75 @@ harness/
 | `work_item.rs` | `WorkItem`, `WorkItemType` | 统一工作单元抽象（Planning/Execution/Summarization/Evaluation），已定义但未接入 System |
 | `error.rs` | `ExecutionError`, `ToolError` | 统一错误类型，支持可重试判断和指数退避 |
 
-**完成情况**：**已完成**。类型定义完备，`AgentExecutor` trait 作为 LLM 执行的抽象接口已稳定。
+__完成情况__：__已完成__。类型定义完备，`AgentExecutor` trait 作为 LLM 执行的抽象接口已稳定。
 
 ### 2.3 contracts — 契约接口层
 
-**作用**：定义模块间的稳定接口（trait），支撑模块替换和独立测试。5 个契约域：
+__作用__：定义模块间的稳定接口（trait），支撑模块替换和独立测试。5 个契约域：
 
 | 契约域 | 核心 Trait | 默认实现 |
 |--------|-----------|---------|
-| Dispatch | `DispatchPolicy`, `AgentSelector`, `TagMatcher`, `BrainSelectionPolicy`, `SummarizerSelectionPolicy` | `DefaultDispatchPolicy`（标签匹配评分）, `FirstBrainPolicy`, `FirstByTagPolicy` |
+| Dispatch | `DispatchPolicy`, `AgentSelector`, `TagMatcher`, ... | `DefaultDispatchPolicy`（标签匹配评分）, ... |
 | Execution | `ExecutionBackend`, `ExecutionPolicy` | `DefaultExecutionPolicy`（指数退避重试） |
 | Memory | `MemoryStore`, `MemoryCompactor`, `ContributionPolicy` | `DefaultCompactionPolicy`（token 阈值触发） |
 | Planning | `PlanPolicy`, `ReplanPolicy`, `WorkItemDeriver` | `DefaultPlanPolicy`（长度阈值判断） |
 | Tools | `ToolCatalog`, `ToolApprovalPolicy` | `DefaultToolApprovalPolicy`（基于 Agent 权限） |
 
-**完成情况**：**接口已定义，但与实际 System 层存在断层**。所有 trait 均有默认实现，但实际 System 直接操作 ECS 组件而非通过 contract trait 调用——契约层当前更像是一份"规范文档"而非运行时的抽象边界。其中 Planning 契约（`PlanPolicy`、`ReplanPolicy`、`WorkItemDeriver`）已定义但无对应 System 实现。此外，`domain/work_item.rs` 中的 `WorkItem` 组件、`WorkItemCreatedMessage`/`WorkItemCompletedMessage` 事件也已定义但未接入任何 System，与 Planning 契约同属"预留接口"状态。
+__完成情况__：__接口已定义，但与实际 System 层存在断层__。所有 trait 均有默认实现，但实际 System 直接操作 ECS 组件而非通过 contract trait 调用。  
+契约层当前更像是一份"规范文档"而非运行时的抽象边界。其中 Planning 契约（`PlanPolicy`、`ReplanPolicy`、`WorkItemDeriver`）已定义但无对应 System 实现。  
+此外，`domain/work_item.rs` 中的 `WorkItem` 组件、`WorkItemCreatedMessage`/`WorkItemCompletedMessage` 事件也已定义但未接入任何 System。  
+它们与 Planning 契约同属"预留接口"状态。
 
 ### 2.4 llm — LLM 集成层
 
-**作用**：封装 LLM Provider 的配置解析和 API 调用。支持 OpenAI、Anthropic、DeepSeek、OpenAI-Compatible 四种 Provider。通过 `genai` crate 统一适配，提供 `create_executor_from_config()` 工厂函数创建 `AgentExecutor` 实现。还包含 Brain 调度和摘要调度的 prompt 模板。
+__作用__：封装 LLM Provider 的配置解析和 API 调用。支持 OpenAI、Anthropic、DeepSeek、OpenAI-Compatible 四种 Provider。  
+通过 `genai` crate 统一适配，提供 `create_executor_from_config()` 工厂函数创建 `AgentExecutor` 实现。还包含 Brain 调度和摘要调度的 prompt 模板。
 
-**完成情况**：**已完成**。genai 适配层实现了完整的请求构建、响应解析、错误分类（认证/限流/配额/传输/超时等）。
+__完成情况__：__已完成__。genai 适配层实现了完整的请求构建、响应解析、错误分类（认证/限流/配额/传输/超时等）。
 
 ### 2.5 plugins — Bevy 插件装配层
 
-**作用**：将 System 按职责分组为 Bevy Plugin，通过 `DefaultRuntimePluginGroup` 一次性注册。6 个 Plugin：
+__作用__：将 System 按职责分组为 Bevy Plugin，通过 `DefaultRuntimePluginGroup` 一次性注册。6 个 Plugin：
 
 | Plugin | 注册的 Systems |
 |--------|--------------|
-| `FrontendPlugin` | tick_clock, frontend_input, input_ingress, retry_wakeup, signal_ingest, command_parse, finish_task, user_input_routing, user_message_to_task, continue_task, frontend_output, tool_confirmation_request |
+| `FrontendPlugin` | tick_clock, frontend_input, input_ingress, retry_wakeup, signal_ingest, ... |
 | `TaskRuntimePlugin` | retry_ready, task_termination, sub_task_completion, sub_task_batch_block |
-| `DispatchPlugin` | brain_decision, brain_dispatch, task_dispatch, evaluation_trigger/result, approval_dispatch/result, tool_confirmation_result |
-| `ExecutionPlugin` | ingest_execution_results, llm_response, tool_calling_orchestrator, agent_execution, memory_contribution |
+| `DispatchPlugin` | brain_decision, brain_dispatch, task_dispatch, ... |
+| `ExecutionPlugin` | ingest_execution_results, llm_response, tool_calling_orchestrator, ... |
 | `ToolRuntimePlugin` | tool_dispatch, tool_result, check_waiting_tasks, on_subtask_completed_check_waiting |
 | `MemoryPlugin` | memory_compression, init_agent_memory, memory_absorption, summarization_dispatch/result |
 
-**完成情况**：**已完成**。所有 System 均已注册到对应 Plugin，执行顺序通过 `in_set()` + `after()` 约束。
+__完成情况__：__已完成__。所有 System 均已注册到对应 Plugin，执行顺序通过 `in_set()` + `after()` 约束。
 
 ### 2.6 systems — ECS 系统实现层
 
-**作用**：框架的核心逻辑实现，所有 System 均在此定义。按流水线阶段组织（详见第 3 节数据流图）。
+__作用__：框架的核心逻辑实现，所有 System 均在此定义。按流水线阶段组织（详见第 3 节数据流图）。
 
-**完成情况**：**主体已完成**。Ingress→Signal→Transform→Dispatch→Execution→Output→Maintenance 全链路已实现。Evaluation（任务评估）System 已注册但实现较简。
+__完成情况__：__主体已完成__。Ingress→Signal→Transform→Dispatch→Execution→Output→Maintenance 全链路已实现。Evaluation（任务评估）System 已注册但实现较简。
 
 ### 2.7 tui — TUI 前端层
 
-**作用**：基于 `ratatui` + `crossterm` 实现的终端用户界面。`TuiFrontend` 实现 `Frontend` trait，通过 `crossbeam-channel` 与 ECS 主循环双向通信。提供聊天面板、输入框、状态栏等 UI 组件。
+__作用__：基于 `ratatui` + `crossterm` 实现的终端用户界面。`TuiFrontend` 实现 `Frontend` trait，通过 `crossbeam-channel` 与 ECS 主循环双向通信。  
+提供聊天面板、输入框、状态栏等 UI 组件。
 
-**完成情况**：**已完成**。支持键盘/鼠标/粘贴事件，支持 EngineEvent 到 UI 状态的映射和渲染。
+__完成情况__：__已完成__。支持键盘/鼠标/粘贴事件，支持 EngineEvent 到 UI 状态的映射和渲染。
 
 ## 3. 输入类型与数据流转
 
 ### 3.1 框架输入类型
 
-初始化完毕后，框架有 **4 种输入来源**，通过 **双通道** 进入 ECS：
+初始化完毕后，框架有 __4 种输入来源__，通过 __双通道__ 进入 ECS：
 
-- **前端通道**（`Frontend` trait）：TUI 或其他前端实现，通过 `poll_actions()` 拉取
-- **外部通道**（`InputReceiver`）：基于 `crossbeam-channel` 的外部输入，支持非 TUI 场景
+- __前端通道__（`Frontend` trait）：TUI 或其他前端实现，通过 `poll_actions()` 拉取
+- __外部通道__（`InputReceiver`）：基于 `crossbeam-channel` 的外部输入，支持非 TUI 场景
 
 | 输入来源 | 入口通道 | 输入类型 | 说明 |
 |---------|---------|---------|------|
-| **前端用户文本** | 前端通道 | `UserAction::Text` | 用户在 TUI 中输入普通文本 |
-| **前端用户确认** | 前端通道 | `UserAction::Confirmation` | 用户响应工具审批/确认请求 |
-| **外部通道输入** | 外部通道 | `ExternalInput::TextWithChannel` | 带通道标识的文本 |
-| **外部关闭信号** | 外部通道 | `ExternalInput::Shutdown` | 请求优雅关闭 |
+| __前端用户文本__ | 前端通道 | `UserAction::Text` | 用户在 TUI 中输入普通文本 |
+| __前端用户确认__ | 前端通道 | `UserAction::Confirmation` | 用户响应工具审批/确认请求 |
+| __外部通道输入__ | 外部通道 | `ExternalInput::TextWithChannel` | 带通道标识的文本 |
+| __外部关闭信号__ | 外部通道 | `ExternalInput::Shutdown` | 请求优雅关闭 |
 
 ### 3.2 用户命令
 
@@ -467,7 +474,7 @@ Ingress → Signal → Transform → Dispatch → Execution → Output → Maint
 |------|------|------------|
 | Ingress | 接收外部输入 | tick_clock, frontend_input, input_ingress |
 | Signal | 信号生成 | retry_wakeup, signal_ingest |
-| Transform | 数据转换与状态迁移 | command_parse, user_input_routing, llm_response, tool_calling_orchestrator, task_termination, sub_task_completion 等 |
+| Transform | 数据转换与状态迁移 | command_parse, user_input_routing, llm_response, tool_calling_orchestrator, ... 等 |
 | Dispatch | 任务/工具/审批分发 | brain_dispatch, task_dispatch, tool_dispatch |
 | Execution | 异步执行提交 | agent_execution, memory_contribution |
 | Output | 前端输出推送 | frontend_output, tool_confirmation_request |
@@ -488,7 +495,10 @@ Ingress → Signal → Transform → Dispatch → Execution → Output → Maint
 
 ### 7.2 评估系统（Evaluation）
 
-`evaluation_trigger_system` 和 `evaluation_result_system` 已注册到 DispatchPlugin，但 `TaskEvaluationConfig` 默认为 `enabled: false`。这是一个预留的“任务健康检查”框架钩子，设计用于在任务执行过程中由 Evaluator Agent 判断任务是否偏离轨道。
+`evaluation_trigger_system` 和 `evaluation_result_system` 已注册到 DispatchPlugin，  
+但 `TaskEvaluationConfig` 默认为 `enabled: false`。  
+这是一个预留的"任务健康检查"框架钩子，  
+设计用于在任务执行过程中由 Evaluator Agent 判断任务是否偏离轨道。
 
 ### 7.3 推理内容透传（reasoning_content）
 
