@@ -15,6 +15,8 @@ pub enum UserCommand {
     Remember { content: String },
     /// /plugins - 列出已加载的插件
     ListPlugins,
+    /// /reload-plugins - 重新加载所有插件
+    ReloadPlugins,
     /// 插件贡献的 slash command，格式为 /plugin_id:command args
     PluginCommand {
         plugin_id: String,
@@ -51,6 +53,8 @@ impl UserCommand {
             }
         } else if trimmed == "/plugins" {
             Self::ListPlugins
+        } else if trimmed == "/reload-plugins" {
+            Self::ReloadPlugins
         } else if let Some(rest) = trimmed.strip_prefix('/') {
             // 插件 slash command 识别：/plugin_id:command [args]
             // 必须在 `/` 之后、空格之前包含 `:`，且 `:` 两侧均不为空

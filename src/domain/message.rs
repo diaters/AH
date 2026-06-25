@@ -408,3 +408,10 @@ pub struct ExperienceCollectionCompletedMessage {
     /// 原任务治理者，由请求链路显式传递。
     pub governing_agent_id: AgentId,
 }
+
+/// /reload-plugins 触发的重载请求消息。
+///
+/// `command_parse_system` 使用 Commands 无法直接获取 `&mut World`，
+/// 因此 spawn 此消息实体，由 `reload_plugins_system` 消费后执行重载。
+#[derive(Debug, Clone, Component)]
+pub struct ReloadPluginsMessage;

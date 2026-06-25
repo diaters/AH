@@ -18,7 +18,7 @@ mod transform;
 
 use bevy::ecs::schedule::SystemSet;
 
-pub(crate) use command::command_parse_system;
+pub(crate) use command::{command_parse_system, reload_plugins_system};
 pub(crate) use dispatch::{
     agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system,
     on_message_dispatched_hook_system, task_dispatch_system, workitem_dispatch_system,

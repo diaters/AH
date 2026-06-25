@@ -113,6 +113,11 @@ impl SpaceToolRegistry {
         self.tools.get(name)
     }
 
+    /// 移除指定名称的工具，返回被移除的定义。
+    pub fn remove(&mut self, name: &str) -> Option<ToolDefinition> {
+        self.tools.remove(name)
+    }
+
     /// 遍历所有工具定义。
     pub fn iter(&self) -> impl Iterator<Item = &ToolDefinition> {
         self.tools.values()
@@ -353,6 +358,16 @@ impl BuiltinToolExecutors {
     pub fn get(&self, name: &str) -> Option<&dyn BuiltinTool> {
         self.executors.get(name).map(|e| e.as_ref())
     }
+
+    /// 移除指定名称的执行器，返回被移除的实例。
+    pub fn remove(&mut self, name: &str) -> Option<Box<dyn BuiltinTool>> {
+        self.executors.remove(name)
+    }
+
+    /// 遍历所有已注册执行器的名称。
+    pub fn iter_names(&self) -> impl Iterator<Item = &str> {
+        self.executors.keys().map(|s| s.as_str())
+    }
 }
 
 /// Agent 的 Tool 配置（来自 agents.toml）
@@ -376,5 +391,67 @@ mod tests {
 
         assert_eq!(entry.validation_status, KnowledgeValidationStatus::Approved);
         assert_eq!(entry.source, KnowledgeSource::UserCommand);
+    }
+
+    #[test]
+    fn space_tool_registry_add_then_remove() {
+        let mut registry = SpaceToolRegistry::default();
+        let tool = ToolDefinition {
+            name: "test_tool".to_string(),
+            description: "a test tool".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: ToolPermission::Allow,
+            executor: ToolExecutorKind::Builtin("test_tool".to_string()),
+            required_tag: None,
+        };
+        registry.register(tool.clone());
+        assert!(registry.get("test_tool").is_some());
+
+        let removed = registry.remove("test_tool");
+        assert_eq!(removed.as_ref(), Some(&tool));
+        assert!(registry.get("test_tool").is_none());
+    }
+
+    #[test]
+    fn space_tool_registry_remove_nonexistent_returns_none() {
+        let mut registry = SpaceToolRegistry::default();
+        assert!(registry.remove("no_such_tool").is_none());
+    }
+
+    #[test]
+    fn builtin_tool_executors_remove_and_iter_names() {
+        struct FakeTool;
+        impl BuiltinTool for FakeTool {
+            fn name(&self) -> &str {
+                "fake"
+            }
+            fn execute(
+                &self,
+                _input: &serde_json::Value,
+                _ctx: &ToolContext,
+            ) -> Result<ToolAction, ToolError> {
+                Err(ToolError::ExecutionFailed("not implemented".to_string()))
+            }
+        }
+
+        let mut execs = BuiltinToolExecutors::default();
+        execs.register(Box::new(FakeTool));
+        assert!(execs.get("fake").is_some());
+
+        let names: Vec<&str> = execs.iter_names().collect();
+        assert!(names.contains(&"fake"));
+
+        let removed = execs.remove("fake");
+        assert!(removed.is_some());
+        assert!(execs.get("fake").is_none());
+
+        let names: Vec<&str> = execs.iter_names().collect();
+        assert!(!names.contains(&"fake"));
+    }
+
+    #[test]
+    fn builtin_tool_executors_remove_nonexistent_returns_none() {
+        let mut execs = BuiltinToolExecutors::default();
+        assert!(execs.remove("no_such").is_none());
     }
 }

@@ -217,7 +217,7 @@ pub fn build_harness_app(
     // Skill 加载器
     app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
 
-    // Startup: 先加载插件注册表，再加载持久化 Agent（含插件贡献）
+    // Startup: 先加载插件注册表（含 Tool 注册），再加载持久化 Agent（含插件贡献）
     app.add_systems(Startup, crate::user_plugins::plugin_load_startup_system);
     app.add_systems(Startup, load_agents_system);
 

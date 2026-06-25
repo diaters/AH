@@ -6,6 +6,7 @@
 pub mod dispatcher;
 pub mod hook_point;
 pub mod host_api;
+pub mod integrate;
 pub mod loader;
 pub mod manifest;
 pub mod registry;
@@ -19,15 +20,12 @@ pub const API_VERSION: u32 = 1;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
-use crate::infrastructure::skills::{PluginSkillContributions, PluginSkillEntry};
 use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};
 
 /// Startup 系统：扫描 `.harness/plugins/` 并把 registry 插入 world。
 ///
-/// 同时从 PluginRegistry 中提取所有已声明 skill 的路径，
-/// 构建并插入 `PluginSkillContributions` 资源。
-/// 最后，将插件贡献的 Tool 以 `plugin_id:tool_id` 命名空间注册到
-/// SpaceToolRegistry 和 BuiltinToolExecutors。
+/// 加载插件注册表后，委托 `integrate::integrate_plugin_contributions`
+/// 将插件贡献的工具和技能注册到对应 Resource。
 pub fn plugin_load_startup_system(
     mut commands: Commands,
     mut tool_registry: ResMut<crate::domain::SpaceToolRegistry>,
@@ -67,16 +65,25 @@ pub fn plugin_load_startup_system(
         }
     }
 
+    // 注册插件贡献的工具（Startup 阶段需要直接操作 ResMut，无法走 &mut World）
+    crate::systems::tools::register_plugin_tools(
+        &mut tool_registry,
+        &mut tool_executors,
+        &registry,
+    );
+
     // 从已加载插件的 manifest.skills 中提取 skill 条目
-    let skill_contributions = PluginSkillContributions {
+    let skill_contributions = crate::infrastructure::skills::PluginSkillContributions {
         entries: registry
             .plugins()
             .iter()
             .flat_map(|plugin| {
-                plugin.manifest.skills.iter().map(|skill| PluginSkillEntry {
-                    plugin_id: plugin.manifest.id.clone(),
-                    skill_id: skill.id.clone(),
-                    path: plugin.root_dir.join(&skill.path),
+                plugin.manifest.skills.iter().map(|skill| {
+                    crate::infrastructure::skills::PluginSkillEntry {
+                        plugin_id: plugin.manifest.id.clone(),
+                        skill_id: skill.id.clone(),
+                        path: plugin.root_dir.join(&skill.path),
+                    }
                 })
             })
             .collect(),
@@ -89,13 +96,6 @@ pub fn plugin_load_startup_system(
             "plugin skill contributions registered"
         );
     }
-
-    // 注册插件贡献的 Tool（在同一个系统内完成，避免 Startup 阶段命令延迟问题）
-    crate::systems::tools::register_plugin_tools(
-        &mut tool_registry,
-        &mut tool_executors,
-        &registry,
-    );
 
     commands.insert_resource(registry);
     commands.insert_resource(skill_contributions);

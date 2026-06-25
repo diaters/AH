@@ -95,11 +95,12 @@ pub use message::{
     ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
     ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, LlmResponseHookPending,
     MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind, OutputMessage,
-    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
-    Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
-    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+    ReloadPluginsMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
+    SessionStartedMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
+    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
+    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, UserInputMessage, UserOutputMessage,
+    WaitingReason,
 };
 
 // session

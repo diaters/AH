@@ -4,9 +4,9 @@ use tracing::debug;
 use crate::app::MemoryConfig;
 use crate::domain::{
     ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, NewlyCreatedTask,
-    PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
-    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, UserCommand,
-    UserInputMessage,
+    PendingKnowledgeWriteHooks, ReloadPluginsMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
+    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
+    UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -200,6 +200,17 @@ pub(crate) fn command_parse_system(
                 }
                 commands.entity(entity).despawn();
             }
+            UserCommand::ReloadPlugins => {
+                // /reload-plugins - 重新加载所有插件
+                // command_parse_system 使用 Commands，无法直接获取 &mut World，
+                // 因此 spawn ReloadPluginsMessage 由独立系统消费。
+                debug!(
+                    event = "ReloadPluginsCommandReceived",
+                    "spawning ReloadPluginsMessage"
+                );
+                commands.spawn(ReloadPluginsMessage);
+                commands.entity(entity).despawn();
+            }
             UserCommand::PluginCommand {
                 plugin_id,
                 command,
@@ -232,6 +243,32 @@ pub(crate) fn command_parse_system(
                 commands.entity(entity).despawn();
             }
         }
+    }
+}
+
+/// /reload-plugins 伴生系统：消费 `ReloadPluginsMessage` 实体，执行插件重载。
+///
+/// `command_parse_system` 使用 `Commands` 无法直接获取 `&mut World`，
+/// 因此 spawn `ReloadPluginsMessage`，由此系统在下一帧消费并执行重载。
+pub(crate) fn reload_plugins_system(world: &mut World) {
+    let mut messages: Vec<bevy::prelude::Entity> = Vec::new();
+    {
+        let mut query = world.query_filtered::<bevy::prelude::Entity, With<ReloadPluginsMessage>>();
+        for entity in query.iter(world) {
+            messages.push(entity);
+        }
+    }
+
+    if messages.is_empty() {
+        return;
+    }
+
+    // 执行重载
+    crate::user_plugins::reload::reload_plugins(world);
+
+    // despawn 消息实体
+    for entity in messages {
+        world.despawn(entity);
     }
 }
 
@@ -408,5 +445,12 @@ mod tests {
         // /alpha — 不含冒号，回退到 PlainText
         let cmd = UserCommand::parse("/alpha");
         assert!(matches!(cmd, UserCommand::PlainText(_)));
+    }
+
+    #[test]
+    fn parse_reload_plugins() {
+        let cmd = UserCommand::parse("/reload-plugins");
+        assert_eq!(cmd, UserCommand::ReloadPlugins);
+        assert!(cmd.is_command());
     }
 }
