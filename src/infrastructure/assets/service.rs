@@ -119,7 +119,11 @@ impl AgentAssetService {
 
             if src_path.exists() {
                 fs::copy(src_path, &dest_path).with_context(|| {
-                    format!("failed to copy {} to {}", file_ref.path, dest_path.display())
+                    format!(
+                        "failed to copy {} to {}",
+                        file_ref.path,
+                        dest_path.display()
+                    )
                 })?;
             }
         }

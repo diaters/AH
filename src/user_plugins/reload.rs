@@ -21,12 +21,7 @@ pub fn reload_plugins(world: &mut World) {
     // 1) 收集当前已加载插件的 ID（用于按命名空间清理贡献）
     let stale_plugin_ids: Vec<String> = world
         .get_resource::<PluginRegistry>()
-        .map(|r| {
-            r.plugins()
-                .iter()
-                .map(|p| p.manifest.id.clone())
-                .collect()
-        })
+        .map(|r| r.plugins().iter().map(|p| p.manifest.id.clone()).collect())
         .unwrap_or_default();
 
     // 2) 清空 PluginRegistry
@@ -39,7 +34,11 @@ pub fn reload_plugins(world: &mut World) {
         let to_remove: Vec<String> = space
             .iter()
             .map(|t| t.name.clone())
-            .filter(|name| stale_plugin_ids.iter().any(|pid| name.starts_with(&format!("{pid}:"))))
+            .filter(|name| {
+                stale_plugin_ids
+                    .iter()
+                    .any(|pid| name.starts_with(&format!("{pid}:")))
+            })
             .collect();
         for name in to_remove {
             space.remove(&name);
@@ -48,7 +47,11 @@ pub fn reload_plugins(world: &mut World) {
     if let Some(mut execs) = world.get_resource_mut::<BuiltinToolExecutors>() {
         let to_remove: Vec<String> = execs
             .iter_names()
-            .filter(|n| stale_plugin_ids.iter().any(|pid| n.starts_with(&format!("{pid}:"))))
+            .filter(|n| {
+                stale_plugin_ids
+                    .iter()
+                    .any(|pid| n.starts_with(&format!("{pid}:")))
+            })
             .map(String::from)
             .collect();
         for n in to_remove {

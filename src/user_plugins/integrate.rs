@@ -23,8 +23,10 @@ use crate::user_plugins::registry::PluginRegistry;
 pub fn integrate_plugin_contributions(world: &mut World, registry: &PluginRegistry) {
     // 注册插件贡献的工具：逐个 resource_scope 避免同时 &mut World。
     world.resource_scope(
-        |world: &mut World, mut space: bevy::ecs::change_detection::Mut<crate::domain::SpaceToolRegistry>| {
-            if let Some(mut execs) = world.get_resource_mut::<crate::domain::BuiltinToolExecutors>() {
+        |world: &mut World,
+         mut space: bevy::ecs::change_detection::Mut<crate::domain::SpaceToolRegistry>| {
+            if let Some(mut execs) = world.get_resource_mut::<crate::domain::BuiltinToolExecutors>()
+            {
                 register_plugin_tools(&mut space, &mut execs, registry);
             }
         },

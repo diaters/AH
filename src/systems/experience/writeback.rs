@@ -443,7 +443,8 @@ mod tests {
         let mut memory_service = make_memory_service(&memory_dir);
         let proposal_store = IncubationProposalStore::new(proposal_dir.path().join("proposals"));
         let registry = IncubatedAgentRegistry;
-        let asset_service = crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
+        let asset_service =
+            crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
 
         let mut store = ExperienceStore::default();
         let task_id = uuid::Uuid::new_v4();

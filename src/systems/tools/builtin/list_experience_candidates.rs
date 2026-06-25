@@ -55,9 +55,7 @@ impl crate::domain::BuiltinTool for ListExperienceCandidatesTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        BuiltinTool, ExperienceCandidate, ExperienceStore, SharedKnowledgeBase,
-    };
+    use crate::domain::{BuiltinTool, ExperienceCandidate, ExperienceStore, SharedKnowledgeBase};
 
     #[test]
     fn list_experience_candidates_reads_current_task_inbox() {
@@ -97,7 +95,10 @@ mod tests {
                 let item = &value["items"][0];
                 assert_eq!(item["kind"], "Knowledge");
                 assert_eq!(item["summary"], "shell_stop 默认等待退出");
-                assert!(item.get("kind_hint").is_none(), "kind_hint should be replaced by kind");
+                assert!(
+                    item.get("kind_hint").is_none(),
+                    "kind_hint should be replaced by kind"
+                );
             }
             other => panic!("expected direct action, got {:?}", other),
         }

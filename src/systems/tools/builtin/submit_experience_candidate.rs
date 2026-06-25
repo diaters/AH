@@ -1,6 +1,8 @@
 //! 经验候选提交工具
 
-use crate::domain::{ExperienceCandidateSubmission, ExperienceKindHint, ToolAction, ToolContext, ToolError};
+use crate::domain::{
+    ExperienceCandidateSubmission, ExperienceKindHint, ToolAction, ToolContext, ToolError,
+};
 
 /// 提交经验候选工具
 ///
@@ -38,7 +40,12 @@ impl crate::domain::BuiltinTool for SubmitExperienceCandidateTool {
                 }
             }
             ExperienceKindHint::Skill => {
-                if submission.skill_description.as_deref().unwrap_or("").is_empty() {
+                if submission
+                    .skill_description
+                    .as_deref()
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err(ToolError::InvalidInput(
                         "skill kind requires non-empty skill_description".to_string(),
                     ));
@@ -151,7 +158,10 @@ mod tests {
         assert!(result.is_err());
         match result {
             Err(ToolError::InvalidInput(msg)) => {
-                assert!(msg.contains("content"), "expected content-related error, got: {msg}");
+                assert!(
+                    msg.contains("content"),
+                    "expected content-related error, got: {msg}"
+                );
             }
             other => panic!("expected InvalidInput error, got: {:?}", other),
         }

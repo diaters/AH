@@ -186,10 +186,7 @@ mod tests {
         let (mut service, _dir) = make_service();
         let mut memory = LongTermMemory::with_name("clear-agent");
         service
-            .add_entry(
-                &mut memory,
-                LongTermMemoryEntry::new("fact"),
-            )
+            .add_entry(&mut memory, LongTermMemoryEntry::new("fact"))
             .unwrap();
 
         service.clear(&mut memory).unwrap();

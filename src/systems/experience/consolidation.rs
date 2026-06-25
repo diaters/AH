@@ -89,7 +89,10 @@ fn build_consolidation_prompt(
                 instructions,
                 ..
             } => {
-                prompt.push_str(&format!("描述：{}\n\n指令：{}\n\n", description, instructions));
+                prompt.push_str(&format!(
+                    "描述：{}\n\n指令：{}\n\n",
+                    description, instructions
+                ));
             }
         }
     }

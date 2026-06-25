@@ -8,9 +8,9 @@ use crate::systems::{
     HarnessSet, command_parse_system, continue_task_system, finish_task_system,
     frontend_input_system, frontend_output_system, input_ingress_system,
     on_message_received_hook_system, on_shared_knowledge_write_hook_system,
-    on_task_created_hook_system, reload_plugins_system, retry_wakeup_system,
-    signal_ingest_system, tick_clock_system, tool_confirmation_request_system,
-    user_input_routing_system, user_message_to_task_system,
+    on_task_created_hook_system, reload_plugins_system, retry_wakeup_system, signal_ingest_system,
+    tick_clock_system, tool_confirmation_request_system, user_input_routing_system,
+    user_message_to_task_system,
 };
 
 /// 前端 Plugin
