@@ -86,6 +86,14 @@ pub fn on_tool_returned_hook_system(world: &mut World) {
                     }
                     // 替换 tool_output 为插件提供的值。
                     msg.tool_output = Ok(replaced);
+
+                    // 审计：插件以 tool_set_result 替换了工具结果。
+                    warn!(
+                        event = "PluginToolResultSetByHook",
+                        tool_call_id = %result.tool_call_id.as_deref().unwrap_or(""),
+                        tool_name = %result.tool_name,
+                        "tool result replaced by on_tool_returned hook plugin"
+                    );
                 }
 
                 // 始终移除标记，结果继续在 tool_result_system 中处理。
@@ -158,9 +166,7 @@ fn dispatch_on_tool_returned(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        AgentExecutionResult, AgentRequestKind, ChannelId, FrontendKind, Task,
-    };
+    use crate::domain::{AgentExecutionResult, AgentRequestKind, ChannelId, FrontendKind, Task};
 
     /// 构造一个占位 `ToolExecutionResultMessage` 用于测试派发路径。
     fn make_result(task_id: crate::domain::TaskId) -> ToolExecutionResultMessage {

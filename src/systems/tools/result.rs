@@ -54,9 +54,10 @@ pub fn tool_result_system(
                     if let Some(ref original) = result.original_tool_output {
                         let original_str = serde_json::to_string(original)
                             .unwrap_or_else(|_| original.to_string());
-                        debug!(
+                        warn!(
                             event = "ToolOutputReplacedByPlugin",
                             tool_name = %result.tool_name,
+                            tool_call_id = %result.tool_call_id.as_deref().unwrap_or(""),
                             task_id = %task.id,
                             original_output = %original_str,
                             "tool output was replaced by on_tool_returned hook plugin"
