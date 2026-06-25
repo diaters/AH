@@ -170,7 +170,10 @@ fn build_genai_tools(tools: &[crate::domain::ToolDefinition]) -> Vec<Tool> {
     tools
         .iter()
         .map(|td| {
-            let mut tool = Tool::new(td.name.as_str());
+            // OpenAI 兼容 API 要求 function.name 匹配 ^[a-zA-Z0-9_-]+$，
+            // 插件命名空间使用冒号（如 harness-demo:echo），需替换为双下划线。
+            let safe_name = sanitize_tool_name(&td.name);
+            let mut tool = Tool::new(safe_name.as_str());
             if !td.description.is_empty() {
                 tool = tool.with_description(td.description.as_str());
             }
@@ -178,6 +181,16 @@ fn build_genai_tools(tools: &[crate::domain::ToolDefinition]) -> Vec<Tool> {
             tool
         })
         .collect()
+}
+
+/// 将工具名中的冒号替换为双下划线，以符合 OpenAI API 的 function.name 格式要求。
+fn sanitize_tool_name(name: &str) -> String {
+    name.replace(':', "__")
+}
+
+/// 将 LLM 返回的工具名还原为内部命名空间格式（双下划线 → 冒号）。
+fn unsanitize_tool_name(name: &str) -> String {
+    name.replace("__", ":")
 }
 
 fn parse_response(
@@ -192,7 +205,7 @@ fn parse_response(
             .iter()
             .map(|tc| LlmToolCall {
                 id: tc.call_id.clone(),
-                name: tc.fn_name.clone(),
+                name: unsanitize_tool_name(&tc.fn_name),
                 arguments: tc.fn_arguments.to_string(),
             })
             .collect();
