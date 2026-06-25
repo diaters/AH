@@ -9,8 +9,9 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, Frontend, RetryReadyMessage, SharedKnowledgeBase, Signal, Task,
-        TaskTerminatedMessage, ToolCallingState, UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, Frontend, PendingKnowledgeWriteHooks, RetryReadyMessage,
+        SharedKnowledgeBase, Signal, Task, TaskTerminatedMessage, ToolCallingState,
+        UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     plugins::DefaultRuntimePluginGroup,
@@ -211,15 +212,13 @@ pub fn build_harness_app(
 
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());
+    app.insert_resource(PendingKnowledgeWriteHooks::default());
 
-    // Shared Knowledge Upgrade Queue
-    let upgrade_service =
-        crate::infrastructure::memory::SharedKnowledgeUpgradeService::default_path();
-    let upgrade_queue = upgrade_service.load().unwrap_or_default();
-    app.insert_resource(upgrade_service);
-    app.insert_resource(upgrade_queue);
+    // Skill 加载器
+    app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
 
-    // Startup: Load persistent agents before any systems run
+    // Startup: 先加载插件注册表（含 Tool 注册），再加载持久化 Agent（含插件贡献）
+    app.add_systems(Startup, crate::user_plugins::plugin_load_startup_system);
     app.add_systems(Startup, load_agents_system);
 
     // Configure SystemSets

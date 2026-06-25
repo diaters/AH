@@ -3,9 +3,35 @@ use tracing::{debug, warn};
 
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, LongTermMemory, SharedKnowledgeUpgradeQueue, TaskId,
+    ExperienceWritebackRequestMessage, LongTermMemory, TaskId,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
+
+fn build_incubated_agent_description(
+    store: &crate::domain::ExperienceStore,
+    proposal: &crate::domain::IncubationProposal,
+) -> String {
+    let titles: Vec<String> = proposal
+        .knowledge_candidate_ids
+        .iter()
+        .filter_map(|id| store.candidates.get(id).map(|c| c.title.clone()))
+        .collect();
+
+    match titles.len() {
+        0 => String::new(),
+        1 => titles[0].clone(),
+        n => format!(
+            "基于 {} 条经验孵化：{}",
+            n,
+            titles
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("；")
+        ),
+    }
+}
 
 /// 统一写回执行系统：根据治理决议执行正式写回。
 #[allow(clippy::too_many_arguments)]
@@ -16,8 +42,6 @@ pub(crate) fn experience_writeback_system(
     agents: Query<&Agent>,
     mut service: ResMut<LongTermMemoryService>,
     asset_service: Res<crate::infrastructure::assets::AgentAssetService>,
-    mut upgrade_queue: ResMut<SharedKnowledgeUpgradeQueue>,
-    upgrade_service: Res<crate::infrastructure::memory::SharedKnowledgeUpgradeService>,
     proposal_store: Res<crate::infrastructure::incubation::proposal_store::IncubationProposalStore>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
     settings: Res<crate::app::HarnessSettings>,
@@ -61,13 +85,6 @@ pub(crate) fn experience_writeback_system(
             ExperienceWritebackDestination::SkillPackage => {
                 writeback_to_skill_package(&candidate, &agents, &asset_service)
             }
-            ExperienceWritebackDestination::SharedKnowledgeUpgrade => {
-                writeback_to_shared_knowledge_upgrade(
-                    &candidate,
-                    &mut upgrade_queue,
-                    &upgrade_service,
-                )
-            }
             ExperienceWritebackDestination::IncubationProposal => {
                 // IncubationProposal 写回：执行孵化，创建新 Agent 记录
                 writeback_incubation_proposal(
@@ -75,6 +92,8 @@ pub(crate) fn experience_writeback_system(
                     &mut store,
                     &proposal_store,
                     &agent_registry,
+                    &mut service,
+                    &asset_service,
                     &settings.0.agents_config_path,
                 )
             }
@@ -160,24 +179,23 @@ fn writeback_to_skill_package(
         .find(|a| a.id == governing_agent_id)
         .ok_or_else(|| format!("agent {} not found", governing_agent_id))?;
 
-    let crate::domain::ExperienceCandidatePayload::Executable {
-        intent,
-        when_to_use,
-        asset_refs,
+    let crate::domain::ExperienceCandidatePayload::Skill {
+        name,
+        description,
+        instructions,
+        file_refs,
     } = &candidate.payload
     else {
-        return Err("candidate payload is not executable".to_string());
+        return Err("candidate payload is not skill".to_string());
     };
 
     let draft = crate::infrastructure::assets::SkillPackageDraft {
         skill_id: format!("{}", candidate.candidate_id),
         title: candidate.title.clone(),
-        problem: intent.clone(),
-        when_to_use: when_to_use.clone(),
-        steps: "参见 skill.md 与 scripts/ 目录".to_string(),
-        asset_refs: asset_refs.clone(),
-        dependency_refs: candidate.dependency_refs.clone(),
-        risks: candidate.risk_reason.clone(),
+        name: name.clone(),
+        description: description.clone(),
+        instructions: instructions.clone(),
+        file_refs: file_refs.clone(),
         source_task_id: Some(candidate.producer_task_id),
         source_candidate_id: Some(candidate.candidate_id),
     };
@@ -187,34 +205,13 @@ fn writeback_to_skill_package(
         .map_err(|e| e.to_string())
 }
 
-fn writeback_to_shared_knowledge_upgrade(
-    candidate: &crate::domain::ExperienceCandidate,
-    upgrade_queue: &mut SharedKnowledgeUpgradeQueue,
-    upgrade_service: &crate::infrastructure::memory::SharedKnowledgeUpgradeService,
-) -> Result<(), String> {
-    upgrade_queue
-        .candidates
-        .push(crate::domain::SharedKnowledgeUpgradeCandidate {
-            candidate_id: uuid::Uuid::new_v4(),
-            content: candidate.payload.content().unwrap_or_default(),
-            kind: crate::domain::LongTermMemoryKind::Fact,
-            scope_tags: Vec::new(),
-            source_candidate_id: candidate.candidate_id,
-            source_agent_id: candidate.producer_agent_id,
-            source_task_id: candidate.producer_task_id,
-            validation_status: crate::domain::KnowledgeValidationStatus::Candidate,
-            created_at: chrono::Utc::now(),
-        });
-    upgrade_service
-        .persist(upgrade_queue)
-        .map_err(|e| e.to_string())
-}
-
 fn writeback_incubation_proposal(
     task_id: TaskId,
     store: &mut ExperienceStore,
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
+    service: &mut crate::infrastructure::memory::LongTermMemoryService,
+    asset_service: &crate::infrastructure::assets::AgentAssetService,
     config_path: &str,
 ) -> Result<(), String> {
     // 按 task_id 查找任务级 proposal
@@ -225,7 +222,6 @@ fn writeback_incubation_proposal(
         .ok_or_else(|| format!("no IncubationProposal found for task {}", task_id))?;
 
     let profile = proposal.proposed_agent_profile.clone();
-    let rationale = proposal.incubation_rationale.clone();
 
     match proposal.status {
         crate::domain::IncubationProposalStatus::Executing => {
@@ -277,13 +273,78 @@ fn writeback_incubation_proposal(
         .persist(&proposal)
         .map_err(|e| e.to_string())?;
 
+    // 把知识候选写入目标 Agent 的 LTM
+    let candidate_entries: Vec<crate::domain::LongTermMemoryEntry> = proposal
+        .knowledge_candidate_ids
+        .iter()
+        .filter_map(|id| store.candidates.get(id))
+        .filter_map(|candidate| {
+            let mut entry = candidate.as_long_term_memory_entry()?;
+            entry.source_candidate_id = Some(candidate.candidate_id);
+            entry.source_task_id = Some(candidate.producer_task_id);
+            entry.agent_id = Some(candidate.producer_agent_id);
+            Some(entry)
+        })
+        .collect();
+
+    if !candidate_entries.is_empty() {
+        let mut memory = crate::domain::LongTermMemory::with_name(profile.name.clone());
+        memory.entries = service.load_entries(&profile.name);
+        for entry in candidate_entries {
+            service
+                .add_entry(&mut memory, entry)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // 处理 Skill 候选
+    let mut skill_paths: Vec<String> = Vec::new();
+    for skill_id in &proposal.skill_candidate_ids {
+        if let Some(candidate) = store.candidates.get(skill_id)
+            && let crate::domain::ExperienceCandidatePayload::Skill {
+                name,
+                description,
+                instructions,
+                file_refs,
+            } = &candidate.payload
+        {
+            let draft = crate::infrastructure::assets::SkillPackageDraft {
+                skill_id: format!("{}", candidate.candidate_id),
+                title: candidate.title.clone(),
+                name: name.clone(),
+                description: description.clone(),
+                instructions: instructions.clone(),
+                file_refs: file_refs.clone(),
+                source_task_id: Some(candidate.producer_task_id),
+                source_candidate_id: Some(candidate.candidate_id),
+            };
+            match asset_service.persist_skill_package(&profile.name, &draft) {
+                Ok(path) => skill_paths.push(path),
+                Err(e) => {
+                    tracing::warn!(
+                        event = "IncubationSkillPersistFailed",
+                        skill_id = %skill_id,
+                        error = %e,
+                        "failed to persist skill package during incubation"
+                    );
+                }
+            }
+        }
+    }
+
     // 创建新 Agent 记录
+    let description = build_incubated_agent_description(store, &proposal);
     let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
         name: profile.name.clone(),
         model: profile.model.clone(),
         tags: vec!["incubated".to_string()],
-        description: rationale,
+        description,
         tools: None,
+        skills: if skill_paths.is_empty() {
+            None
+        } else {
+            Some(skill_paths)
+        },
     };
     let result = agent_registry
         .append(config_path, &record)
@@ -315,5 +376,119 @@ fn writeback_incubation_proposal(
             );
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{
+        AgentProfile, ExperienceCandidate, ExperienceStore, IncubationProposalStatus,
+    };
+    use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
+    use crate::infrastructure::incubation::proposal_store::IncubationProposalStore;
+    use crate::infrastructure::memory::{
+        JsonFileMemoryStore, LongTermMemoryService, MemoryRepository,
+    };
+    use tempfile::TempDir;
+
+    fn make_memory_service(dir: &TempDir) -> LongTermMemoryService {
+        let store = JsonFileMemoryStore::new(dir.path().join("agents"));
+        LongTermMemoryService::new(MemoryRepository::new(Box::new(store)))
+    }
+
+    #[test]
+    fn description_builds_from_candidate_titles() {
+        let mut store = crate::domain::ExperienceStore::default();
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+
+        let c1 = crate::domain::ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "公式推导".to_string(),
+            "content1".to_string(),
+        );
+        let c2 = crate::domain::ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "数值验证".to_string(),
+            "content2".to_string(),
+        );
+        store.stage_root_candidate(c1.clone());
+        store.stage_root_candidate(c2.clone());
+
+        let profile = crate::domain::AgentProfile {
+            name: "incubated-test".to_string(),
+            model: "test".to_string(),
+        };
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &c1);
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &c2);
+        let proposal = store.proposals.get(&task_id).unwrap().clone();
+
+        let description = build_incubated_agent_description(&store, &proposal);
+        assert_eq!(description, "基于 2 条经验孵化：公式推导；数值验证");
+    }
+
+    #[test]
+    fn incubation_writeback_persists_knowledge_to_ltm_and_agents_toml() {
+        let memory_dir = TempDir::new().unwrap();
+        let proposal_dir = TempDir::new().unwrap();
+        let config_dir = TempDir::new().unwrap();
+        let asset_dir = TempDir::new().unwrap();
+        let config_path = config_dir.path().join("agents.toml");
+
+        let mut memory_service = make_memory_service(&memory_dir);
+        let proposal_store = IncubationProposalStore::new(proposal_dir.path().join("proposals"));
+        let registry = IncubatedAgentRegistry;
+        let asset_service =
+            crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
+
+        let mut store = ExperienceStore::default();
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+
+        let candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "天体表面重力加速度计算流程".to_string(),
+            "使用万有引力公式 g = G·M/R²".to_string(),
+        );
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate.clone());
+
+        let profile = AgentProfile {
+            name: "incubated-test-flow".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        };
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
+        store.proposals.get_mut(&task_id).unwrap().status = IncubationProposalStatus::Approved;
+
+        let result = writeback_incubation_proposal(
+            task_id,
+            &mut store,
+            &proposal_store,
+            &registry,
+            &mut memory_service,
+            &asset_service,
+            config_path.to_str().unwrap(),
+        );
+
+        assert!(result.is_ok(), "writeback failed: {:?}", result);
+
+        let loaded = memory_service.load_entries(&profile.name);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].content, "使用万有引力公式 g = G·M/R²");
+        assert_eq!(loaded[0].source_candidate_id, Some(candidate_id));
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: crate::domain::AgentConfig = toml::from_str(&content).unwrap();
+        assert_eq!(config.agent.len(), 1);
+        assert_eq!(config.agent[0].name, profile.name);
+        assert_eq!(config.agent[0].model, profile.model);
+        assert_eq!(config.agent[0].description, "天体表面重力加速度计算流程");
     }
 }

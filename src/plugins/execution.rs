@@ -7,9 +7,10 @@ use bevy::prelude::*;
 use crate::systems::{
     HarnessSet, agent_execution_system, experience_approval_result_system,
     experience_collection_completion_system, experience_collection_workitem_system,
-    experience_governance_system, experience_writeback_system, ingest_execution_results_system,
-    llm_response_system, task_terminated_experience_trigger_system,
-    tool_calling_orchestrator_system,
+    experience_consolidation_trigger_system, experience_governance_system,
+    experience_writeback_system, ingest_execution_results_system, llm_response_system,
+    on_experience_hook_system, on_llm_response_hook_system,
+    task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -24,6 +25,10 @@ impl Plugin for ExecutionPlugin {
             (
                 // 执行结果接收
                 ingest_execution_results_system.in_set(HarnessSet::Transform),
+                // on_llm_response 观察 hook companion 系统
+                on_llm_response_hook_system
+                    .in_set(HarnessSet::Transform)
+                    .after(ingest_execution_results_system),
                 // LLM 响应处理
                 llm_response_system
                     .in_set(HarnessSet::Transform)
@@ -45,6 +50,10 @@ impl Plugin for ExecutionPlugin {
                     .in_set(HarnessSet::Execution)
                     .after(crate::systems::llm_response_system)
                     .before(experience_governance_system),
+                // 经验合并：对同类候选去重合并
+                experience_consolidation_trigger_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_collection_completion_system),
                 // 经验治理：决定候选的持久化路径
                 experience_governance_system
                     .in_set(HarnessSet::Execution)
@@ -59,6 +68,10 @@ impl Plugin for ExecutionPlugin {
                     .after(crate::systems::tool_confirmation_result_system)
                     .after(experience_governance_system)
                     .before(experience_writeback_system),
+                // 经验候选相关 hook companion 系统
+                on_experience_hook_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_approval_result_system),
             ),
         );
     }

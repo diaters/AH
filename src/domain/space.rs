@@ -4,14 +4,13 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::Resource;
+use bevy::prelude::{Component, Resource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, ExperienceKindHint, ExperienceStore, LongTermMemoryKind, MemoryImportance,
-    SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest,
-    SubTaskDefinition, TaskId, ToolError,
+    AgentId, ExperienceStore, MemoryImportance, SessionHandleId, SessionInputRequest,
+    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
 };
 
 /// 共享知识审核状态。
@@ -35,7 +34,7 @@ pub enum KnowledgeSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SharedKnowledgeEntry {
     pub content: String,
-    pub kind: LongTermMemoryKind,
+    pub kind: String,
     pub scope_tags: Vec<String>,
     pub importance: MemoryImportance,
     pub created_at: DateTime<Utc>,
@@ -52,7 +51,7 @@ impl SharedKnowledgeEntry {
     pub fn approved_from_user_input(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            kind: LongTermMemoryKind::Fact,
+            kind: "fact".to_string(),
             scope_tags: Vec::new(),
             importance: MemoryImportance::High,
             created_at: Utc::now(),
@@ -66,10 +65,10 @@ impl SharedKnowledgeEntry {
     }
 
     /// 创建待审核的共享知识候选条目。
-    pub fn candidate(content: impl Into<String>, kind: LongTermMemoryKind) -> Self {
+    pub fn candidate(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            kind,
+            kind: "fact".to_string(),
             scope_tags: Vec::new(),
             importance: MemoryImportance::Medium,
             created_at: Utc::now(),
@@ -89,6 +88,14 @@ pub struct SharedKnowledgeBase {
     pub entries: Vec<SharedKnowledgeEntry>,
 }
 
+/// 待派发 `on_shared_knowledge_write` hook 的条目队列。
+///
+/// 由于 `SharedKnowledgeBase` 是 Resource 而非 Entity，无法附带 Component 标记，
+/// 因此使用此 scratch resource 作为写入事件队列。写入系统将条目推入此队列，
+/// companion 系统 `on_shared_knowledge_write_hook_system` 逐条派发 hook 后清空。
+#[derive(Resource, Default)]
+pub struct PendingKnowledgeWriteHooks(pub Vec<SharedKnowledgeEntry>);
+
 /// 全局工具注册表
 #[derive(Resource, Default)]
 pub struct SpaceToolRegistry {
@@ -104,6 +111,11 @@ impl SpaceToolRegistry {
     /// 获取工具定义。
     pub fn get(&self, name: &str) -> Option<&ToolDefinition> {
         self.tools.get(name)
+    }
+
+    /// 移除指定名称的工具，返回被移除的定义。
+    pub fn remove(&mut self, name: &str) -> Option<ToolDefinition> {
+        self.tools.remove(name)
     }
 
     /// 遍历所有工具定义。
@@ -210,12 +222,11 @@ pub enum ToolAction {
 #[derive(Debug, Clone)]
 pub struct ExperienceCandidateSubmission {
     pub title: String,
-    pub kind_hint: ExperienceKindHint,
-    pub payload: serde_json::Value,
-    pub dependency_refs: Vec<String>,
-    pub risk_level: String,
-    pub risk_reason: String,
-    pub suggested_confirmation: Option<String>,
+    pub kind: crate::domain::ExperienceKindHint,
+    pub content: Option<String>,
+    pub skill_description: Option<String>,
+    pub instructions: Option<String>,
+    pub file_refs: Vec<crate::domain::SkillFileRef>,
 }
 
 impl ExperienceCandidateSubmission {
@@ -227,54 +238,77 @@ impl ExperienceCandidateSubmission {
         input: &serde_json::Value,
     ) -> Result<Self, ToolError> {
         let kind_str = input
-            .get("kind_hint")
+            .get("kind")
             .and_then(|v| v.as_str())
             .unwrap_or("knowledge");
-        let kind_hint = match kind_str {
-            "executable" => ExperienceKindHint::Executable,
-            "shared_knowledge" => ExperienceKindHint::SharedKnowledge,
-            "discard" => ExperienceKindHint::Discard,
-            _ => ExperienceKindHint::Knowledge,
+        let kind = match kind_str {
+            "skill" => crate::domain::ExperienceKindHint::Skill,
+            _ => crate::domain::ExperienceKindHint::Knowledge,
         };
-        let payload = input
-            .get("payload")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
-        let dependency_refs = input
-            .get("dependency_refs")
+
+        let content = input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let skill_description = input
+            .get("skill_description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let instructions = input
+            .get("instructions")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let file_refs = input
+            .get("file_refs")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .filter_map(|item| {
+                        let path = item.get("path")?.as_str()?.to_string();
+                        let role_str = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                        let role = match role_str {
+                            "script" => crate::domain::SkillFileRole::Script,
+                            "reference" => crate::domain::SkillFileRole::Reference,
+                            "asset" => crate::domain::SkillFileRole::Asset,
+                            _ => {
+                                // 根据扩展名推断
+                                if path.ends_with(".sh") || path.ends_with(".py") {
+                                    crate::domain::SkillFileRole::Script
+                                } else if path.ends_with(".md") || path.ends_with(".txt") {
+                                    crate::domain::SkillFileRole::Reference
+                                } else {
+                                    crate::domain::SkillFileRole::Asset
+                                }
+                            }
+                        };
+                        Some(crate::domain::SkillFileRef { path, role })
+                    })
                     .collect()
             })
             .unwrap_or_default();
 
-        let risk_level = input
-            .get("risk_level")
-            .and_then(|v| v.as_str())
-            .unwrap_or("low")
-            .to_string();
-        let risk_reason = input
-            .get("risk_reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let suggested_confirmation = input
-            .get("suggested_confirmation")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
         Ok(Self {
             title: title.to_string(),
-            kind_hint,
-            payload,
-            dependency_refs,
-            risk_level,
-            risk_reason,
-            suggested_confirmation,
+            kind,
+            content,
+            skill_description,
+            instructions,
+            file_refs,
         })
     }
+}
+
+/// 经验合并请求消息：触发 LLM 对多个相似候选做去重合并。
+#[derive(Debug, Clone, Component)]
+pub struct ExperienceConsolidationRequestMessage {
+    pub task_id: TaskId,
+    pub parent_task_id: TaskId,
+    pub governing_agent_id: AgentId,
+    pub candidate_kind: crate::domain::ExperienceKindHint,
+    pub candidate_ids: Vec<uuid::Uuid>,
 }
 
 /// 内置 Tool 执行上下文
@@ -324,6 +358,16 @@ impl BuiltinToolExecutors {
     pub fn get(&self, name: &str) -> Option<&dyn BuiltinTool> {
         self.executors.get(name).map(|e| e.as_ref())
     }
+
+    /// 移除指定名称的执行器，返回被移除的实例。
+    pub fn remove(&mut self, name: &str) -> Option<Box<dyn BuiltinTool>> {
+        self.executors.remove(name)
+    }
+
+    /// 遍历所有已注册执行器的名称。
+    pub fn iter_names(&self) -> impl Iterator<Item = &str> {
+        self.executors.keys().map(|s| s.as_str())
+    }
 }
 
 /// Agent 的 Tool 配置（来自 agents.toml）
@@ -348,10 +392,66 @@ mod tests {
         assert_eq!(entry.validation_status, KnowledgeValidationStatus::Approved);
         assert_eq!(entry.source, KnowledgeSource::UserCommand);
     }
-}
 
-/// 共享知识升级入口队列：已被顶层治理判定具备公共价值的候选缓冲。
-#[derive(Resource, Default, Serialize, Deserialize)]
-pub struct SharedKnowledgeUpgradeQueue {
-    pub candidates: Vec<super::SharedKnowledgeUpgradeCandidate>,
+    #[test]
+    fn space_tool_registry_add_then_remove() {
+        let mut registry = SpaceToolRegistry::default();
+        let tool = ToolDefinition {
+            name: "test_tool".to_string(),
+            description: "a test tool".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: ToolPermission::Allow,
+            executor: ToolExecutorKind::Builtin("test_tool".to_string()),
+            required_tag: None,
+        };
+        registry.register(tool.clone());
+        assert!(registry.get("test_tool").is_some());
+
+        let removed = registry.remove("test_tool");
+        assert_eq!(removed.as_ref(), Some(&tool));
+        assert!(registry.get("test_tool").is_none());
+    }
+
+    #[test]
+    fn space_tool_registry_remove_nonexistent_returns_none() {
+        let mut registry = SpaceToolRegistry::default();
+        assert!(registry.remove("no_such_tool").is_none());
+    }
+
+    #[test]
+    fn builtin_tool_executors_remove_and_iter_names() {
+        struct FakeTool;
+        impl BuiltinTool for FakeTool {
+            fn name(&self) -> &str {
+                "fake"
+            }
+            fn execute(
+                &self,
+                _input: &serde_json::Value,
+                _ctx: &ToolContext,
+            ) -> Result<ToolAction, ToolError> {
+                Err(ToolError::ExecutionFailed("not implemented".to_string()))
+            }
+        }
+
+        let mut execs = BuiltinToolExecutors::default();
+        execs.register(Box::new(FakeTool));
+        assert!(execs.get("fake").is_some());
+
+        let names: Vec<&str> = execs.iter_names().collect();
+        assert!(names.contains(&"fake"));
+
+        let removed = execs.remove("fake");
+        assert!(removed.is_some());
+        assert!(execs.get("fake").is_none());
+
+        let names: Vec<&str> = execs.iter_names().collect();
+        assert!(!names.contains(&"fake"));
+    }
+
+    #[test]
+    fn builtin_tool_executors_remove_nonexistent_returns_none() {
+        let mut execs = BuiltinToolExecutors::default();
+        assert!(execs.remove("no_such").is_none());
+    }
 }

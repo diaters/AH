@@ -6,9 +6,7 @@
 pub mod json_file_store;
 pub mod repository;
 pub mod service;
-pub mod upgrade_service;
 
 pub use json_file_store::JsonFileMemoryStore;
 pub use repository::MemoryRepository;
 pub use service::LongTermMemoryService;
-pub use upgrade_service::SharedKnowledgeUpgradeService;

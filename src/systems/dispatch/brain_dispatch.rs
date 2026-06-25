@@ -15,9 +15,9 @@ use crate::{
     contracts::{AgentCapabilitySummary, BrainSelectionPolicy, FirstBrainPolicy},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory, ShortTermMemory,
-        SpaceToolRegistry, SubTaskBatchState, SubTaskConfig, Task, TaskStatus, ToolPermission,
-        WaitingReason,
+        AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory,
+        MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, SubTaskBatchState,
+        SubTaskConfig, Task, TaskStatus, ToolPermission, WaitingReason,
     },
     llm::brain_system_prompt,
 };
@@ -341,7 +341,10 @@ pub fn brain_dispatch_system(
         };
 
         task.mark_waiting_for_agent(brain_agent.id, clock.0);
-        commands.spawn(AgentExecutionRequestMessage { request });
+        commands.spawn((
+            AgentExecutionRequestMessage { request },
+            MessageDispatchedHookPending,
+        ));
     }
 }
 

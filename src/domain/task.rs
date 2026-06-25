@@ -57,6 +57,32 @@ pub struct Task {
     pub last_evaluated_turn: Option<u32>,
 }
 
+/// 标记刚创建、尚未派发 `on_task_created` hook 的 Task entity。
+///
+/// 由 `user_message_to_task_system` 在创建 Task 时附带，由 companion 系统
+/// `on_task_created_hook_system` 派发 hook 后移除。用户插件 hook 在创建后即可执行，
+/// hook 内可通过 `get_task_ids()` / `get_task(id)` 查询刚创建的 Task。
+#[derive(Component, Debug, Clone, Default)]
+pub struct NewlyCreatedTask;
+
+/// 标记刚生成、尚未派发 `on_tool_called` 前置 hook 的 `ToolExecutionRequestMessage`。
+///
+/// 由 `ToolExecutionRequestMessage` 的所有 spawn 点附带，由 companion 系统
+/// `on_tool_called_hook_system` 派发 hook 后移除。若插件调用 `tool_deny` 拒绝调用，
+/// companion 系统会替换请求为 `PermissionDenied` 错误结果并销毁请求 entity，
+/// 不流转到 `tool_dispatch_system`。`task_input` / `pending_*` 等字段决策不受标记影响。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ToolCalledHookPending;
+
+/// 标记刚生成、尚未派发 `on_tool_returned` 观察 hook 的 `ToolExecutionResultMessage`。
+///
+/// 由 `ToolExecutionResultMessage` 的所有 spawn 点附带，由 companion 系统
+/// `on_tool_returned_hook_system` 派发 hook 后移除。若插件调用 `tool_set_result`，
+/// companion 系统会用插件提供的值替换 `tool_output`，原始输出保留在
+/// `original_tool_output` 审计字段中。`deny` 在后 hook 上无语义，若调用仅记录警告。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ToolReturnedHookPending;
+
 /// Task 等待其他任务完成的状态信息
 /// 此组件添加到发起等待的 Task Entity 上
 #[derive(Component, Debug, Clone)]

@@ -3,19 +3,25 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 mod approval;
+mod approval_hook;
 pub mod backend;
 mod builtin;
 mod confirmation;
 mod dispatch;
 mod orchestrator;
 mod result;
+mod tool_called_hook;
+mod tool_returned_hook;
 mod waiting;
 
 pub use approval::{approval_dispatch_system, approval_result_system};
+pub use approval_hook::{on_approval_requested_hook_system, on_approval_resolved_hook_system};
 pub use backend::NativeProcessBackend;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
 pub use result::tool_result_system;
+pub use tool_called_hook::on_tool_called_hook_system;
+pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
 
 use crate::domain::{
@@ -286,31 +292,53 @@ pub fn register_builtin_tools(
     // Experience candidate tools
     registry.register(ToolDefinition {
         name: "submit_experience_candidate".to_string(),
-        description: "Submit an experience candidate for governance review. Use this when you discover reusable knowledge, patterns, or behaviors during task execution that should be preserved for future use.".to_string(),
+        description: "提交经验候选。knowledge 类提交可复用知识，skill 类提交可复用技能包（对齐 Agent Skills 规范）。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "Short descriptive title for the experience candidate"
+                        "description": "简明标题，概括此经验的核心要点"
                     },
-                    "kind_hint": {
+                    "kind": {
                         "type": "string",
-                        "enum": ["knowledge", "executable", "shared_knowledge", "discard"],
-                        "description": "Type hint: knowledge, executable, shared_knowledge, or discard"
+                        "enum": ["knowledge", "skill"],
+                        "description": "经验类型：knowledge=可复用知识，skill=可复用技能包"
                     },
-                    "payload": {
-                        "type": "object",
-                        "description": "The experience payload content"
+                    "content": {
+                        "type": "string",
+                        "description": "knowledge 类的经验正文"
                     },
-                    "dependency_refs": {
+                    "skill_description": {
+                        "type": "string",
+                        "description": "skill 类的简要描述，说明做什么+何时触发"
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "skill 类的分步指令正文"
+                    },
+                    "file_refs": {
                         "type": "array",
-                        "items": { "type": "string" },
-                        "description": "References to dependencies (e.g., asset file paths)"
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "文件路径（绝对路径或相对于项目根目录的相对路径）"
+                                },
+                                "role": {
+                                    "type": "string",
+                                    "enum": ["script", "reference", "asset"],
+                                    "description": "文件角色，默认根据扩展名自动推断"
+                                }
+                            },
+                            "required": ["path"]
+                        },
+                        "description": "skill 关联的资源文件列表"
                     }
                 },
-                "required": ["title"]
+                "required": ["title", "kind"]
             }),
         },
         default_permission: ToolPermission::Allow,
@@ -334,6 +362,94 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ListExperienceCandidatesTool));
+}
+
+/// 注册插件贡献的 Tool
+///
+/// 扫描 PluginRegistry 中所有已加载插件的 tools 声明，
+/// 以 `plugin_id:tool_id` 命名空间注册到 SpaceToolRegistry 和 BuiltinToolExecutors。
+/// Schema 文件无法解析或校验不通过的工具会被跳过并记录警告日志。
+pub fn register_plugin_tools(
+    registry: &mut SpaceToolRegistry,
+    executors: &mut BuiltinToolExecutors,
+    plugin_registry: &crate::user_plugins::registry::PluginRegistry,
+) {
+    use crate::user_plugins::tool_executor::RhaiToolExecutor;
+    use tracing::warn;
+
+    for plugin in plugin_registry.plugins() {
+        for tool_def in &plugin.manifest.tools {
+            let namespaced = format!("{}:{}", plugin.manifest.id, tool_def.id);
+
+            // 读取 schema 文件
+            let schema_path = plugin.root_dir.join(&tool_def.schema);
+            let schema_str = match std::fs::read_to_string(&schema_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        event = "PluginToolSchemaReadFailed",
+                        plugin_id = %plugin.manifest.id,
+                        tool_id = %tool_def.id,
+                        error = %e,
+                        "skipping plugin tool: cannot read schema file"
+                    );
+                    continue;
+                }
+            };
+
+            let schema_value: serde_json::Value = match serde_json::from_str(&schema_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        event = "PluginToolSchemaParseFailed",
+                        plugin_id = %plugin.manifest.id,
+                        tool_id = %tool_def.id,
+                        error = %e,
+                        "skipping plugin tool: schema is not valid JSON"
+                    );
+                    continue;
+                }
+            };
+
+            // 校验 schema 是否为合法 JSON Schema
+            if let Err(e) = jsonschema::validator_for(&schema_value) {
+                warn!(
+                    event = "PluginToolSchemaInvalid",
+                    plugin_id = %plugin.manifest.id,
+                    tool_id = %tool_def.id,
+                    error = %e,
+                    "skipping plugin tool: schema validation failed"
+                );
+                continue;
+            }
+
+            let default_permission = tool_def
+                .default_permission
+                .unwrap_or(ToolPermission::Confirm);
+
+            registry.register(ToolDefinition {
+                name: namespaced.clone(),
+                description: tool_def.description.clone(),
+                parameters: ToolSchema {
+                    schema: schema_value,
+                },
+                default_permission,
+                executor: ToolExecutorKind::Builtin(namespaced.clone()),
+                required_tag: None,
+            });
+
+            executors.register(Box::new(RhaiToolExecutor::new(
+                &plugin.manifest.id,
+                &tool_def.id,
+            )));
+
+            tracing::info!(
+                event = "PluginToolRegistered",
+                namespaced = %namespaced,
+                "plugin tool registered"
+            );
+        }
+    }
 }
 
 // Re-export tests module for backward compatibility

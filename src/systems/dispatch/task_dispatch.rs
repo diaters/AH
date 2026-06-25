@@ -9,7 +9,8 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        LongTermMemory, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolPermission,
+        LongTermMemory, MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task,
+        TaskStatus, ToolPermission,
     },
 };
 
@@ -106,6 +107,8 @@ pub fn task_dispatch_system(
     mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
+    skill_loader: Res<crate::infrastructure::skills::SkillLoader>,
+    plugin_skills: Res<crate::infrastructure::skills::PluginSkillContributions>,
 ) {
     for (mut task, short_term) in &mut tasks {
         // 子任务由 Brain 分发，普通 dispatch 不处理
@@ -183,17 +186,6 @@ pub fn task_dispatch_system(
             "agent selected for task"
         );
 
-        debug!(
-            event = "PromptBuilt",
-            task_id = %task.id,
-            agent_id = %agent.id,
-            agent_name = %agent.profile.name,
-            prompt_len = prompt.len(),
-            prompt = %prompt,
-            system_prompt = ?None::<String>,
-            "execution request ready"
-        );
-
         // 构建 tools 列表：从 registry 中筛选 Agent 有权限的工具（非 Deny）
         let tools: Vec<_> = registry
             .iter()
@@ -206,19 +198,44 @@ pub fn task_dispatch_system(
             .cloned()
             .collect();
 
+        // 构建 skills 系统提示（内置 + 插件贡献）
+        let mut skills = skill_loader.load_skills(&agent.profile.name);
+        skills.extend(skill_loader.load_plugin_skills(&plugin_skills, &agent.profile.name));
+        let skills_prompt =
+            crate::infrastructure::skills::SkillLoader::format_skills_prompt(&skills);
+        let system_prompt = if skills_prompt.is_empty() {
+            None
+        } else {
+            Some(skills_prompt)
+        };
+
+        debug!(
+            event = "PromptBuilt",
+            task_id = %task.id,
+            agent_id = %agent.id,
+            agent_name = %agent.profile.name,
+            prompt_len = prompt.len(),
+            prompt = %prompt,
+            system_prompt = %system_prompt.as_deref().unwrap_or(""),
+            "execution request ready"
+        );
+
         let request = AgentExecutionRequest {
             task_id: task.id,
             agent_id: agent.id,
             request_kind: AgentRequestKind::LlmCompletion,
             prompt,
-            system_prompt: None,
+            system_prompt,
             tools,
             conversation: None,
             work_item_id: None,
         };
 
         task.mark_waiting_for_agent(agent.id, clock.0);
-        commands.spawn(AgentExecutionRequestMessage { request });
+        commands.spawn((
+            AgentExecutionRequestMessage { request },
+            MessageDispatchedHookPending,
+        ));
     }
 }
 
@@ -227,8 +244,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, EntryMetadata, EntryRole,
-        FrontendKind, LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind, MemoryImportance,
-        ShortTermMemory,
+        FrontendKind, LongTermMemory, LongTermMemoryEntry, MemoryImportance, ShortTermMemory,
     };
     use uuid::Uuid;
 
@@ -237,6 +253,8 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(Clock::default());
         app.insert_resource(SpaceToolRegistry::default());
+        app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
+        app.insert_resource(crate::infrastructure::skills::PluginSkillContributions::default());
         app.add_systems(Update, task_dispatch_system);
         app
     }
@@ -319,7 +337,6 @@ mod tests {
             entries: vec![
                 LongTermMemoryEntry {
                     content: "Always keep shell tools truthful".to_string(),
-                    kind: LongTermMemoryKind::Constraint,
                     scope_tags: vec!["shell".to_string()],
                     importance: MemoryImportance::Critical,
                     pin: true,
@@ -335,7 +352,6 @@ mod tests {
                 },
                 LongTermMemoryEntry {
                     content: "Use bounded timeout handling for shell commands".to_string(),
-                    kind: LongTermMemoryKind::Strategy,
                     scope_tags: vec!["shell".to_string()],
                     importance: MemoryImportance::High,
                     pin: false,
@@ -351,7 +367,6 @@ mod tests {
                 },
                 LongTermMemoryEntry {
                     content: "Unrelated frontend palette note".to_string(),
-                    kind: LongTermMemoryKind::Preference,
                     scope_tags: vec!["ui".to_string()],
                     importance: MemoryImportance::Low,
                     pin: false,

@@ -42,9 +42,7 @@ impl crate::domain::BuiltinTool for KnowledgeSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        BuiltinTool, ExperienceStore, LongTermMemoryKind, SharedKnowledgeBase, SharedKnowledgeEntry,
-    };
+    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase, SharedKnowledgeEntry};
 
     fn test_knowledge() -> SharedKnowledgeBase {
         let mut knowledge = SharedKnowledgeBase::default();
@@ -131,10 +129,9 @@ mod tests {
     #[test]
     fn knowledge_search_ignores_non_approved_entries() {
         let mut knowledge = SharedKnowledgeBase::default();
-        knowledge.entries.push(SharedKnowledgeEntry::candidate(
-            "Unreviewed shell note",
-            LongTermMemoryKind::Fact,
-        ));
+        knowledge
+            .entries
+            .push(SharedKnowledgeEntry::candidate("Unreviewed shell note"));
 
         let experience_store = ExperienceStore::default();
         let ctx = ToolContext {

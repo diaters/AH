@@ -5,6 +5,9 @@ Cargo.lock
 # IDE
 .idea/
 .vscode/
+.agents/
+.superpowers/
+.trae/
 .qoder/
 *.swp
 *.swo
@@ -43,3 +46,4 @@ docs/wiki/
 # Logs (not tracked)
 logs/
 .harness/
+skills-lock.json

@@ -112,7 +112,6 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         uuid::Uuid::new_v4(),
         "test knowledge".to_string(),
         "test content".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     app.world_mut()
         .resource_mut::<harness::ExperienceStore>()
@@ -209,7 +208,6 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
         collector_id,
         "top-level fact".to_string(),
         "content".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     let candidate_id = candidate.candidate_id;
     app.world_mut()
@@ -252,7 +250,6 @@ fn child_task_experience_still_aggregates_into_parent_inbox() {
         uuid::Uuid::new_v4(),
         "child fact".to_string(),
         "content".to_string(),
-        harness::LongTermMemoryKind::Fact,
     );
     store.queue_for_parent(parent_task_id, parent_agent_id, child_candidate);
 

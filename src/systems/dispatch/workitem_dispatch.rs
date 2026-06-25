@@ -6,9 +6,11 @@ use bevy::prelude::*;
 use tracing::{debug, warn};
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind, Task,
-    TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
+    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
+    MessageDispatchedHookPending, Task, TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem,
+    WorkItemLifecycleHookPending, WorkItemStatus, WorkItemType,
 };
+use crate::user_plugins::hook_point::HookPoint;
 
 /// WorkItem 调度系统
 ///
@@ -61,6 +63,11 @@ pub(crate) fn workitem_dispatch_system(
             );
             work_item.fail();
 
+            // 标记 WorkItem 已失败，等待 companion 系统派发 on_workitem_failed hook
+            commands
+                .entity(_entity)
+                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+
             // 恢复关联任务的状态，避免任务死锁
             // 经验收集 WorkItem 失败不应回滚原任务状态
             if work_item.work_type != WorkItemType::ExperienceCollection
@@ -104,6 +111,11 @@ pub(crate) fn workitem_dispatch_system(
         work_item.assign(agent.id);
         work_item.start();
 
+        // 标记 WorkItem 已启动，等待 companion 系统派发 on_workitem_started hook
+        commands
+            .entity(_entity)
+            .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted));
+
         // 根据工作项类型确定请求类型
         let request_kind = match work_item.work_type {
             WorkItemType::Evaluation => AgentRequestKind::Evaluation,
@@ -113,18 +125,21 @@ pub(crate) fn workitem_dispatch_system(
         };
 
         // 创建执行请求
-        commands.spawn(AgentExecutionRequestMessage {
-            request: AgentExecutionRequest {
-                task_id: work_item.task_id,
-                agent_id: agent.id,
-                request_kind,
-                prompt: work_item.input.prompt.clone(),
-                system_prompt: work_item.input.context.system_prompt.clone(),
-                tools: work_item.input.context.tools.clone(),
-                conversation: work_item.input.context.conversation.clone(),
-                work_item_id: Some(work_item.id),
+        commands.spawn((
+            AgentExecutionRequestMessage {
+                request: AgentExecutionRequest {
+                    task_id: work_item.task_id,
+                    agent_id: agent.id,
+                    request_kind,
+                    prompt: work_item.input.prompt.clone(),
+                    system_prompt: work_item.input.context.system_prompt.clone(),
+                    tools: work_item.input.context.tools.clone(),
+                    conversation: work_item.input.context.conversation.clone(),
+                    work_item_id: Some(work_item.id),
+                },
             },
-        });
+            MessageDispatchedHookPending,
+        ));
 
         debug!(
             event = "WorkItemDispatched",

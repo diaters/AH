@@ -11,10 +11,12 @@ use crate::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
         EntryRole, ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
-        OffTrackPolicy, OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
-        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
+        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ShortTermMemory,
+        SystemOutputMessage, Task, TaskStatus, ToolCalledHookPending, ToolCallingState,
+        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, UserOutputMessage,
+        WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
+    user_plugins::hook_point::HookPoint,
 };
 
 /// 从子任务输出中提取 <<<RESULT>>>...<<</RESULT>>> 标记对内容。
@@ -587,8 +589,16 @@ pub fn llm_response_system(
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 if had_submission {
                                     wi.1.complete();
+                                    commands.entity(work_item_entity).insert(
+                                        WorkItemLifecycleHookPending(
+                                            HookPoint::OnWorkItemCompleted,
+                                        ),
+                                    );
                                 } else {
                                     wi.1.fail();
+                                    commands.entity(work_item_entity).insert(
+                                        WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
+                                    );
                                 }
                             }
 
@@ -606,6 +616,9 @@ pub fn llm_response_system(
                         Err(_) => {
                             if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                 wi.1.fail();
+                                commands.entity(work_item_entity).insert(
+                                    WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
+                                );
                             }
                             commands.entity(work_item_entity).despawn();
                             commands.entity(entity).despawn();
@@ -824,25 +837,28 @@ pub fn llm_response_system(
                     for call in calls {
                         let tool_input: serde_json::Value = serde_json::from_str(&call.arguments)
                             .unwrap_or(serde_json::Value::Null);
-                        commands.spawn(ToolExecutionRequestMessage {
-                            request: AgentExecutionRequest {
-                                task_id: task.id,
-                                agent_id: result.agent_id,
-                                request_kind: AgentRequestKind::ToolExecution {
-                                    tool_name: call.name.clone(),
+                        commands.spawn((
+                            ToolCalledHookPending,
+                            ToolExecutionRequestMessage {
+                                request: AgentExecutionRequest {
+                                    task_id: task.id,
+                                    agent_id: result.agent_id,
+                                    request_kind: AgentRequestKind::ToolExecution {
+                                        tool_name: call.name.clone(),
+                                    },
+                                    prompt: String::new(),
+                                    system_prompt: None,
+                                    tools: vec![],
+                                    conversation: None,
+                                    work_item_id: None,
                                 },
-                                prompt: String::new(),
-                                system_prompt: None,
-                                tools: vec![],
-                                conversation: None,
-                                work_item_id: None,
+                                tool_name: call.name.clone(),
+                                tool_input,
+                                pending_confirmation_id: None,
+                                tool_call_id: Some(call.id.clone()),
+                                pending_confirmation_options: None,
                             },
-                            tool_name: call.name.clone(),
-                            tool_input,
-                            pending_confirmation_id: None,
-                            tool_call_id: Some(call.id.clone()),
-                            pending_confirmation_options: None,
-                        });
+                        ));
                     }
 
                     // Set task to Waiting(ToolExecution) — but not for ExperienceCollection WorkItems
@@ -1081,7 +1097,10 @@ pub fn tool_calling_orchestrator_system(
             "spawning follow-up LLM request with tool results"
         );
 
-        commands.spawn(AgentExecutionRequestMessage { request });
+        commands.spawn((
+            AgentExecutionRequestMessage { request },
+            MessageDispatchedHookPending,
+        ));
 
         // Set task back to Waiting(Agent) — 但不修改 ExperienceCollection 关联的原任务状态
         if state.work_item_id.is_none()

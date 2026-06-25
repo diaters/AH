@@ -4,8 +4,9 @@ use tracing::debug;
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
-    ToolConfirmationResponseMessage,
+    PendingExperienceHooks, ToolConfirmationResponseMessage,
 };
+use crate::user_plugins::hook_point::HookPoint;
 
 /// 经验确认结果系统：处理用户对经验候选的确认，触发统一写回。
 ///
@@ -14,6 +15,7 @@ use crate::domain::{
 pub(crate) fn experience_approval_result_system(
     mut commands: Commands,
     mut store: ResMut<ExperienceStore>,
+    mut pending_hooks: ResMut<PendingExperienceHooks>,
     pending_decisions: Query<(Entity, &ExperienceGovernanceDecision)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
 ) {
@@ -40,6 +42,11 @@ pub(crate) fn experience_approval_result_system(
         );
 
         if approved {
+            // 推入待派发队列，由 companion 系统触发 on_experience_candidate_approved hook。
+            pending_hooks
+                .0
+                .push((HookPoint::OnExperienceCandidateApproved, candidate_id));
+
             // 查找暂存的治理决议
             let decision = pending_decisions
                 .iter()
@@ -134,6 +141,12 @@ pub(crate) fn experience_approval_result_system(
             if let Some(c) = store.candidates.get_mut(&candidate_id) {
                 c.status = ExperienceCandidateStatus::Rejected;
             }
+
+            // 推入待派发队列，由 companion 系统触发 on_experience_candidate_rejected hook。
+            pending_hooks
+                .0
+                .push((HookPoint::OnExperienceCandidateRejected, candidate_id));
+
             // 清理暂存的决议
             if let Some((decision_entity, _)) = pending_decisions
                 .iter()
@@ -168,11 +181,11 @@ pub(crate) fn experience_approval_result_system(
 mod tests {
     use crate::domain::{
         ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-        ExperienceConfirmationPolicy, ExperienceKindHint, ExperienceStore,
+        ExperienceKindHint, ExperienceStore,
     };
 
     #[test]
-    fn approved_executable_becomes_persisted() {
+    fn approved_skill_becomes_persisted() {
         let mut store = ExperienceStore::default();
         let request_id = uuid::Uuid::new_v4();
         let candidate = ExperienceCandidate {
@@ -180,18 +193,16 @@ mod tests {
             producer_task_id: uuid::Uuid::new_v4(),
             producer_agent_id: uuid::Uuid::new_v4(),
             title: "test skill".to_string(),
-            kind_hint: ExperienceKindHint::Executable,
-            payload: ExperienceCandidatePayload::Executable {
-                intent: "run smoke test".to_string(),
-                when_to_use: "after changes".to_string(),
-                asset_refs: vec![],
+            kind_hint: ExperienceKindHint::Skill,
+            payload: ExperienceCandidatePayload::Skill {
+                name: "test-skill".to_string(),
+                description: "run smoke test".to_string(),
+                instructions: "1. Run test".to_string(),
+                file_refs: vec![],
             },
             dependency_refs: vec![],
             status: ExperienceCandidateStatus::NeedsUserApproval,
             governing_agent_id: None,
-            risk_level: crate::domain::ExperienceRiskLevel::default(),
-            risk_reason: String::new(),
-            suggested_confirmation: ExperienceConfirmationPolicy::default(),
             derived_from_candidate_ids: vec![],
         };
         let candidate_id = candidate.candidate_id;
@@ -202,7 +213,7 @@ mod tests {
         assert_eq!(
             store.candidates.get(&candidate_id).unwrap().status,
             ExperienceCandidateStatus::Approved,
-            "approved executable should be marked Approved"
+            "approved skill should be marked Approved"
         );
     }
 }

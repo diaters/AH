@@ -8,7 +8,7 @@ use crate::infrastructure::assets::AgentAssetService;
 use crate::infrastructure::memory::LongTermMemoryService;
 use crate::systems::{
     HarnessSet, init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
-    summarization_dispatch_system,
+    on_ltm_evicted_hook_system, on_ltm_write_hook_system, summarization_dispatch_system,
 };
 
 /// 记忆 Plugin
@@ -35,8 +35,16 @@ impl Plugin for MemoryPlugin {
                 memory_compression_system.in_set(HarnessSet::Maintenance),
                 // Agent 记忆初始化
                 init_agent_memory_system.in_set(HarnessSet::Maintenance),
+                // on_long_term_memory_write 观察 hook companion 系统
+                on_ltm_write_hook_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(init_agent_memory_system),
                 // 长期记忆衰退治理
                 long_term_memory_decay_system.in_set(HarnessSet::Maintenance),
+                // on_long_term_memory_evicted 观察 hook companion 系统
+                on_ltm_evicted_hook_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(long_term_memory_decay_system),
                 // 摘要派发
                 summarization_dispatch_system
                     .in_set(HarnessSet::Maintenance)

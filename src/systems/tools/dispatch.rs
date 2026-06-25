@@ -9,10 +9,10 @@ use uuid::Uuid;
 use crate::{
     app::HarnessSettings,
     domain::{
-        Agent, ApprovalRequestMessage, BuiltinToolExecutors, ConfirmationOption,
-        ConfirmationSource, ExperienceStore, SharedKnowledgeBase, SpaceToolRegistry, Task,
-        TaskStatus, ToolConfirmationRequestMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolPermission, WaitingReason,
+        Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
+        ConfirmationOption, ConfirmationSource, ExperienceStore, PendingExperienceHooks,
+        SharedKnowledgeBase, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -31,6 +31,7 @@ pub fn tool_dispatch_system(
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
+    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     agents: Query<&Agent>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
@@ -130,7 +131,10 @@ pub fn tool_dispatch_system(
                         &mut commands,
                         entity,
                         &request,
-                        ToolError::NotFound(format!("executor for {}", tool_name)),
+                        ToolError::NotFound(format!(
+                            "no executor for '{}' — this tool is not available, do not retry",
+                            tool_name
+                        )),
                     );
                     continue;
                 };
@@ -169,6 +173,7 @@ pub fn tool_dispatch_system(
                         &mut tasks,
                         &*backend,
                         &mut experience_store,
+                        &mut pending_experience_hooks,
                         parent_agent_id,
                     );
                 }
@@ -200,16 +205,19 @@ pub fn tool_dispatch_system(
 
                     // 生成父 Agent 审批请求消息
                     let request_id = Uuid::new_v4();
-                    commands.spawn(ApprovalRequestMessage {
-                        request_id,
-                        tool_name: tool_name.clone(),
-                        source_task_id: request.request.task_id,
-                        parent_agent_id: parent.id,
-                        child_agent_id: agent.id,
-                        tool_input: request.tool_input.clone(),
-                        approval_task_id: Uuid::new_v4(),
-                        context: String::new(),
-                    });
+                    commands.spawn((
+                        ApprovalRequestMessage {
+                            request_id,
+                            tool_name: tool_name.clone(),
+                            source_task_id: request.request.task_id,
+                            parent_agent_id: parent.id,
+                            child_agent_id: agent.id,
+                            tool_input: request.tool_input.clone(),
+                            approval_task_id: Uuid::new_v4(),
+                            context: String::new(),
+                        },
+                        ApprovalRequestedHookPending,
+                    ));
 
                     request.pending_confirmation_id = Some(request_id);
                     continue;

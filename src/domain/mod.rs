@@ -36,7 +36,10 @@ pub type ExecutorFuture =
 // ============ 从子模块导出 ============
 
 // agent
-pub use agent::{Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
+pub use agent::{
+    Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
+    AgentToolPermissions,
+};
 
 // brain
 pub use brain::{BrainDecisionError, BrainDecisionOutput};
@@ -51,10 +54,10 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 pub use contribution::{
     ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
     ExperienceCandidateStatus as ExperienceStatus, ExperienceCollectionRequestMessage,
-    ExperienceConfirmationPolicy, ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage,
-    ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint, ExperienceRiskLevel,
-    ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
-    IncubationProposal, IncubationProposalStatus, SharedKnowledgeUpgradeCandidate,
+    ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage, ExperienceInbox,
+    ExperienceInboxStatus, ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
+    ExperienceWritebackRequestMessage, IncubationProposal, IncubationProposalStatus,
+    PendingExperienceHooks, SkillFileRef, SkillFileRole,
 };
 
 // error
@@ -81,16 +84,18 @@ pub use frontend::{
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
-    LongTermMemoryKind, MemoryEntry, MemoryImportance, MemorySnapshot, ShortTermMemory, ToolCall,
-    estimate_tokens,
+    LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, MemorySnapshot,
+    ShortTermMemory, ToolCall, estimate_tokens,
 };
 
 // message
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
-    ApprovalRequestMessage, ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, OutputKind,
-    OutputMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
+    ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
+    ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
+    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, LlmResponseHookPending,
+    MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind, OutputMessage,
+    ReloadPluginsMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
     SessionStartedMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
     SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
     TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
@@ -108,16 +113,19 @@ pub use session::{
 // space
 pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
-    KnowledgeSource, KnowledgeValidationStatus, SharedKnowledgeBase, SharedKnowledgeEntry,
-    SharedKnowledgeUpgradeQueue, SpaceToolRegistry, ToolAction, ToolContext, ToolDefinition,
-    ToolExecutorKind, ToolPermission, ToolSchema,
+    ExperienceConsolidationRequestMessage, KnowledgeSource, KnowledgeValidationStatus,
+    PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
+    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 
 // summarization
 pub use summarization::SummarizationTrigger;
 
 // task
-pub use task::{Task, TaskStatus, WaitingForSessionInfo, WaitingForTasksInfo};
+pub use task::{
+    NewlyCreatedTask, Task, TaskStatus, ToolCalledHookPending, ToolReturnedHookPending,
+    WaitingForSessionInfo, WaitingForTasksInfo,
+};
 
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
@@ -125,7 +133,8 @@ pub use tool_runtime::ToolCallingState;
 // work_item
 pub use work_item::{
     WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage, WorkItemInput,
-    WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
+    WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
+    WorkItemWritebackTarget,
 };
 
 // workflow
@@ -155,6 +164,9 @@ pub struct AgentEntry {
     pub description: String,
     /// Tool 权限配置
     pub tools: Option<AgentToolsConfig>,
+    /// Skill 路径列表
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
 }
 
 // ============ 测试 ============

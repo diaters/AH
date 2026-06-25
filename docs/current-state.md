@@ -47,28 +47,50 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `LongTermMemory` 采用 `Core + Relevant` 的受控注入策略，避免全量拼接 prompt
 - 共享知识写入默认仅允许用户显式命令或主控审核链路，不允许普通 Agent 直写
 - 长期记忆已具备基础衰退治理能力，会结合访问时间、重要度与复用次数更新分数
+- 长期记忆已实现淘汰机制：`decay_score < 0.1` 且非 `pin` 非 `Critical` 的条目被移除并归档到 `<agent-name>/archive.jsonl`
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
+
+#### 插件系统
+
+- 插件系统已实现完整的 Rhai 脚本扩展层，支持通过 `HARNESS_PLUGINS_DIR` 环境变量加载
+- 插件清单格式为 `manifest.toml`，声明 `id`、`api_version`、`hooks`、`tools`、`skills`、`agents` 贡献
+- 20 个 hook 点已全部接入，覆盖任务、工作项、Agent、工具、消息、记忆、知识、经验、审批全生命周期
+- 前置 hook（`on_tool_called`）支持 `tool_deny` 拒绝能力，观察 hook（`on_tool_returned`）支持 `tool_set_result` 替换结果
+- 插件工具通过 `RhaiToolExecutor` 注册为命名空间化工具（`plugin_id:tool_name`），支持 JSON Schema 输入校验
+- 插件技能通过 `SkillLoader` 注入 `PluginSkillContributions`，命名空间化为 `plugin_id:skill_id`
+- 插件 Agent 通过 `PluginAgentEntry` 合并到 `load_agents_system`，复用 Agent 启动链路
+- 支持 `/plugins` 列出已加载插件、`/reload-plugins` 热重载、`/plugin_id:command` 调用插件命令
+- 重载时自动清除旧插件的工具、技能、Agent 贡献，重新扫描磁盘并注册新贡献
+- host API 提供 `WorldSnapshot`（只读快照）+ `WorldWriter`（写命令攒批回放）的隔离访问模型
+- hook 脚本执行受 1 秒超时保护，按插件字母序顺序派发
+- 所有关键操作具备结构化审计日志（`PluginToolDeniedByHook`、`PluginToolResultSetByHook` 等）
 
 #### 经验候选治理
 
 - 经验治理已收敛为两层分层模型：非顶层 `TaskScoped Agent` 只产生、汇聚、向上贡献；顶层 `Persistent Agent` 做最终治理与落盘
 - `ExperienceCandidate` 是经验治理唯一中间态，具备完整状态机：
-  `Submitted / InInbox / Aggregated / GovernancePending / NeedsUserApproval / Approved / Rejected / Persisted`
+  `Submitted / InInbox / Aggregated / Superseded / GovernancePending / NeedsUserApproval / Approved / Rejected / Persisted`
 - 非顶层候选通过父任务 `ExperienceInbox` 上送，顶层候选进入 root 后触发 `ExperienceGovernanceRequestMessage`
-- 顶层治理后四类最终去向全部可达：
+- 经验类型简化为两类：`Knowledge`（可复用知识）和 `Skill`（可复用技能包，对齐 Agent Skills 规范）
+- 顶层治理后三类最终去向全部可达：
   - `Knowledge` → 普通持久型 Agent 的 `LongTermMemory`
-  - `Executable` → 用户确认后生成 Agent 私有 `Skill Package`
-  - `SharedKnowledge` → `SharedKnowledgeUpgradeQueue` 升级入口（已持久化到 `.harness/memory/shared_knowledge/upgrades.json`）
-  - `default Agent` 的私有 `Knowledge / Executable` → `IncubationProposal`
+  - `Skill` → 用户确认后生成 Agent 私有 `Skill Package`（SKILL.md 目录结构，对齐 agentskills.io 规范）
+  - `default Agent` 的 `Knowledge / Skill` → `IncubationProposal`
 - `default Agent` 通过 `tags` 中的 `default` 识别，不直接沉淀私有长期身份资产
 - `LongTermMemoryEntry` 已具备最小来源追溯字段：`source_candidate_id`、`source_task_id`、`agent_id`
 - `IncubationProposal` 已扩展为正式治理输出结构，包含 `proposal_id`、`proposed_agent_profile`、按类型分列的候选 ID、`status`、`created_at`
 - 写回失败时保留 `warn` 级审计日志，候选状态不推进到 `Persisted`
+- Skill 候选提交时验证 `file_refs` 文件存在性，缺失文件拒绝提交
+- 非顶层候选汇聚后，同类候选数 > 1 时触发 LLM 合并（`ExperienceConsolidationRequestMessage`），原始候选标记为 `Superseded`
+- Skill Package 写回后，Agent 启动时通过 `SkillLoader` 扫描 `skills/` 目录，将 SKILL.md 内容注入系统提示
+- `IncubationProposal` 执行时同时处理 `skill_candidate_ids`，将 Skill 写入新 Agent 的 Skill Package 目录
 
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查
+- 插件 host API 部分 `WorldCommand` 变体（`SpawnAgent`、`CreateWorkItem`、`SetApprovalDecision`、`ExperienceSetPinned`）尚未实现回放
+- 插件 `v1` 不追踪 `tool_deny` 的 per-plugin attribution，推迟到后续 host API 升级
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
 

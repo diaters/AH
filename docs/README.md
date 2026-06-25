@@ -8,7 +8,8 @@
 |------|------|
 | [current-state.md](current-state.md) | 当前能力、架构结论与已知限制的唯一真相源 |
 | [TODO.md](TODO.md) | 当前待办事项与近期关注方向 |
-| [configuration.md](configuration.md) | 配置项说明 |
+| [configuration.md](configuration.md) | 配置项说明（含插件系统配置） |
+| [plugin-development.md](plugin-development.md) | 插件开发指南 |
 | [logs.md](logs.md) | 结构化日志规范 |
 
 ## 文档地图
@@ -18,7 +19,8 @@ docs/
 ├── README.md              ← 本文件：统一索引
 ├── current-state.md       ← 当前状态唯一真相源
 ├── TODO.md                ← 待办事项
-├── configuration.md       ← 配置说明
+├── configuration.md       ← 配置说明（含插件系统）
+├── plugin-development.md  ← 插件开发指南
 ├── logs.md                ← 日志规范（从 AGENTS.md 拆出）
 ├── adr/                   ← 架构决策记录（ADR），决策后追加，不修改
 ├── design/                ← 当前有效的设计文档，过期即归档
@@ -30,6 +32,16 @@ docs/
     ├── design/            ← 已被取代的设计文档
     └── superpowers/       ← 已完成的计划和过期规格
 ```
+
+## 插件系统
+
+Harness 支持通过 Rhai 脚本插件扩展行为。详见 [plugin-development.md](plugin-development.md) 开发指南和  
+[configuration.md](configuration.md) 的配置章节。
+
+- 插件通过 `HARNESS_PLUGINS_DIR` 环境变量加载
+- 支持 20 个 hook 点覆盖全生命周期
+- 支持贡献工具、技能、Agent 和命令
+- 支持 `/plugins`、`/reload-plugins` 和插件命名空间命令
 
 ## 目录职责与维护规则
 

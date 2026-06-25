@@ -8,18 +8,22 @@ use crate::{
     app::{Clock, HarnessSettings},
     domain::{
         Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
-        AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions, FailureReason,
-        SpaceToolRegistry, Task, TaskId, TaskTerminatedMessage, ToolPermission,
+        AgentProfile, AgentSpawnRequestMessage, AgentStoppingHookPending, AgentToolPermissions,
+        FailureReason, MessageDispatchedHookPending, SpaceToolRegistry, Task, TaskId,
+        TaskTerminatedMessage, ToolPermission,
     },
 };
 
 /// Startup 系统：加载持久化 Agent
+///
+/// 先从配置文件加载，再合并插件贡献的 Agent。
 pub(crate) fn load_agents_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
     agents: Query<(Entity, &Agent)>,
+    registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
 ) {
-    load_persistent_agents(&mut commands, &settings, &agents);
+    load_persistent_agents(&mut commands, &settings, &agents, registry.as_deref());
 }
 
 /// 运行时系统：处理 Agent 创建和销毁
@@ -55,6 +59,7 @@ fn load_persistent_agents(
     commands: &mut Commands,
     settings: &HarnessSettings,
     agents: &Query<(Entity, &Agent)>,
+    plugin_registry: Option<&crate::user_plugins::registry::PluginRegistry>,
 ) {
     let config_path = &settings.0.agents_config_path;
 
@@ -90,12 +95,25 @@ fn load_persistent_agents(
         }
     }
 
+    // 收集插件贡献的 Agent 名称，一并检查重复
+    let plugin_agent_entries = collect_plugin_agent_entries(plugin_registry);
+    for (namespaced_name, _) in &plugin_agent_entries {
+        if !seen_names.insert(namespaced_name.clone()) {
+            panic!("duplicate agent name '{}' from plugin", namespaced_name);
+        }
+    }
+
     let existing_names: std::collections::HashSet<String> =
         agents.iter().map(|(_, a)| a.profile.name.clone()).collect();
 
     for entry in &config.agent {
         if existing_names.contains(&entry.name) {
             panic!("agent name '{}' already exists", entry.name);
+        }
+    }
+    for (namespaced_name, _) in &plugin_agent_entries {
+        if existing_names.contains(namespaced_name) {
+            panic!("agent name '{}' already exists", namespaced_name);
         }
     }
 
@@ -107,39 +125,103 @@ fn load_persistent_agents(
         "persistent agents loaded from config"
     );
 
+    // 从配置文件加载
     for entry in &config.agent {
-        let id = Uuid::new_v4();
-        debug!(
-            event = "PersistentAgentSpawned",
-            agent_id = %id,
-            agent_name = %entry.name,
-            agent_model = %entry.model,
-            agent_tags = ?entry.tags,
-            "spawning persistent agent"
-        );
-
-        let tool_permissions = entry
-            .tools
-            .clone()
-            .map(AgentToolPermissions::from)
-            .unwrap_or_default();
-
-        commands.spawn(Agent {
-            id,
-            profile: AgentProfile {
-                name: entry.name.clone(),
-                model: entry.model.clone(),
-            },
-            capabilities: AgentCapabilities {
-                tags: entry.tags.clone(),
-                description: entry.description.clone(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions,
-        });
+        spawn_agent_entry(commands, entry);
     }
+
+    // 合并插件贡献的 Agent
+    for (_, entry) in &plugin_agent_entries {
+        debug!(
+            event = "PluginAgentSpawned",
+            agent_name = %entry.name,
+            "spawning plugin-contributed persistent agent"
+        );
+        spawn_agent_entry(commands, entry);
+    }
+
+    if !plugin_agent_entries.is_empty() {
+        debug!(
+            event = "PluginAgentsMerged",
+            count = plugin_agent_entries.len(),
+            "plugin agents merged into persistent agent spawn"
+        );
+    }
+}
+
+/// 从配置条目生成持久化 Agent
+fn spawn_agent_entry(commands: &mut Commands, entry: &crate::domain::AgentEntry) {
+    let id = Uuid::new_v4();
+    debug!(
+        event = "PersistentAgentSpawned",
+        agent_id = %id,
+        agent_name = %entry.name,
+        agent_model = %entry.model,
+        agent_tags = ?entry.tags,
+        "spawning persistent agent"
+    );
+
+    let tool_permissions = entry
+        .tools
+        .clone()
+        .map(AgentToolPermissions::from)
+        .unwrap_or_default();
+
+    commands.spawn(Agent {
+        id,
+        profile: AgentProfile {
+            name: entry.name.clone(),
+            model: entry.model.clone(),
+        },
+        capabilities: AgentCapabilities {
+            tags: entry.tags.clone(),
+            description: entry.description.clone(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions,
+    });
+}
+
+/// 从 PluginRegistry 收集所有插件贡献的 AgentEntry，
+/// 将 name 命名空间化为 `plugin_id:agent_name`。
+fn collect_plugin_agent_entries(
+    registry: Option<&crate::user_plugins::registry::PluginRegistry>,
+) -> Vec<(String, crate::domain::AgentEntry)> {
+    let Some(registry) = registry else {
+        return Vec::new();
+    };
+
+    let mut entries = Vec::new();
+    for plugin in registry.plugins() {
+        for agent_contrib in &plugin.manifest.agents {
+            let path = plugin.root_dir.join(&agent_contrib.profile);
+            let Ok(content) = fs::read_to_string(&path) else {
+                warn!(
+                    event = "PluginAgentProfileNotFound",
+                    plugin_id = %plugin.manifest.id,
+                    path = %path.display(),
+                    "plugin agent profile file not found, skipping"
+                );
+                continue;
+            };
+            let Ok(mut entry): Result<crate::domain::AgentEntry, _> = toml::from_str(&content)
+            else {
+                warn!(
+                    event = "PluginAgentProfileParseError",
+                    plugin_id = %plugin.manifest.id,
+                    path = %path.display(),
+                    "failed to parse plugin agent profile, skipping"
+                );
+                continue;
+            };
+            let namespaced_name = plugin.namespaced_agent_id(&entry.name);
+            entry.name = namespaced_name.clone();
+            entries.push((namespaced_name, entry));
+        }
+    }
+    entries
 }
 
 fn handle_spawn_request(
@@ -269,9 +351,12 @@ fn handle_spawn_request(
         work_item_id: None,
     };
 
-    commands.spawn(AgentExecutionRequestMessage {
-        request: execution_request,
-    });
+    commands.spawn((
+        AgentExecutionRequestMessage {
+            request: execution_request,
+        },
+        MessageDispatchedHookPending,
+    ));
 }
 
 fn handle_termination(
@@ -293,13 +378,15 @@ fn handle_termination(
             .is_some_and(|task| task.status.is_terminal());
         if is_terminal {
             debug!(
-                event = "TaskScopedAgentDespawned",
+                event = "TaskScopedAgentStopping",
                 agent_id = %agent.id,
                 agent_name = %agent.profile.name,
                 task_id = %bound_task_id,
-                "despawning task-scoped agent after task termination"
+                "marking task-scoped agent for stopping after task termination"
             );
-            commands.entity(entity).despawn();
+            // 不直接 despawn，而是插入标记，由 agent_stopped_hook_system
+            // 派发 OnAgentStopped hook 后再 despawn。
+            commands.entity(entity).insert(AgentStoppingHookPending);
         }
     }
 }

@@ -11,11 +11,11 @@ use crate::contracts::SessionBackend;
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
     ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceKindHint, ExperienceStore, FrontendKind, LongTermMemoryKind, OutputContent,
+    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingExperienceHooks,
     SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
     TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, WaitingForTasksInfo, WaitingReason,
+    ToolExecutionResultMessage, ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -61,28 +61,32 @@ pub fn spawn_spawn_agent_messages(
         task_system_prompt: None,
     });
 
-    commands.spawn(ToolExecutionResultMessage {
-        result: AgentExecutionResult {
-            task_id,
-            agent_id,
-            request_kind,
-            result: Ok(AgentExecutionOutput {
-                content: OutputContent::Text("spawn_agent request submitted".to_string()),
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result: AgentExecutionResult {
+                task_id,
+                agent_id,
+                request_kind,
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text("spawn_agent request submitted".to_string()),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
                 reasoning_content: None,
-            }),
-            prompt: String::new(),
-            system_prompt: None,
-            tools: vec![],
-            reasoning_content: None,
-            work_item_id: None,
+                work_item_id: None,
+            },
+            tool_name: "spawn_agent".to_string(),
+            tool_output: Ok(serde_json::json!({
+                "status": "spawn_request_created"
+            })),
+            tool_call_id,
+            processed: false,
+            original_tool_output: None,
         },
-        tool_name: "spawn_agent".to_string(),
-        tool_output: Ok(serde_json::json!({
-            "status": "spawn_request_created"
-        })),
-        tool_call_id,
-        processed: false,
-    });
+        ToolReturnedHookPending,
+    ));
 
     commands.entity(request_entity).despawn();
 }
@@ -206,36 +210,40 @@ pub fn spawn_create_tasks_messages(
         })
         .collect();
 
-    commands.spawn(ToolExecutionResultMessage {
-        result: AgentExecutionResult {
-            task_id,
-            agent_id,
-            request_kind,
-            result: Ok(AgentExecutionOutput {
-                content: OutputContent::Text(format!(
-                    "created {} sub-tasks (batch {}): {}",
-                    total_count,
-                    batch_id,
-                    task_names.join(", ")
-                )),
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result: AgentExecutionResult {
+                task_id,
+                agent_id,
+                request_kind,
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!(
+                        "created {} sub-tasks (batch {}): {}",
+                        total_count,
+                        batch_id,
+                        task_names.join(", ")
+                    )),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
                 reasoning_content: None,
-            }),
-            prompt: String::new(),
-            system_prompt: None,
-            tools: vec![],
-            reasoning_content: None,
-            work_item_id: None,
+                work_item_id: None,
+            },
+            tool_name: "create_tasks".to_string(),
+            tool_output: Ok(serde_json::json!({
+                "status": "batch_created",
+                "batch_id": batch_id.to_string(),
+                "task_count": total_count,
+                "tasks": tasks_with_ids,
+            })),
+            tool_call_id,
+            processed: false,
+            original_tool_output: None,
         },
-        tool_name: "create_tasks".to_string(),
-        tool_output: Ok(serde_json::json!({
-            "status": "batch_created",
-            "batch_id": batch_id.to_string(),
-            "task_count": total_count,
-            "tasks": tasks_with_ids,
-        })),
-        tool_call_id,
-        processed: false,
-    });
+        ToolReturnedHookPending,
+    ));
 
     commands.entity(request_entity).despawn();
 }
@@ -352,26 +360,30 @@ pub fn spawn_wait_result_message(
     );
 
     // 生成工具执行结果消息
-    commands.spawn(ToolExecutionResultMessage {
-        result: AgentExecutionResult {
-            task_id,
-            agent_id: info.agent_id,
-            request_kind: crate::domain::AgentRequestKind::LlmCompletion,
-            result: Ok(AgentExecutionOutput {
-                content: OutputContent::Text("wait_tasks completed".to_string()),
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result: AgentExecutionResult {
+                task_id,
+                agent_id: info.agent_id,
+                request_kind: crate::domain::AgentRequestKind::LlmCompletion,
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text("wait_tasks completed".to_string()),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
                 reasoning_content: None,
-            }),
-            prompt: String::new(),
-            system_prompt: None,
-            tools: vec![],
-            reasoning_content: None,
-            work_item_id: None,
+                work_item_id: None,
+            },
+            tool_name: "wait_tasks".to_string(),
+            tool_output: Ok(output),
+            tool_call_id: Some(info.tool_call_id.clone()),
+            processed: false,
+            original_tool_output: None,
         },
-        tool_name: "wait_tasks".to_string(),
-        tool_output: Ok(output),
-        tool_call_id: Some(info.tool_call_id.clone()),
-        processed: false,
-    });
+        ToolReturnedHookPending,
+    ));
 }
 
 /// 统一处理 Tool 执行动作
@@ -385,6 +397,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     tasks: &mut Query<(Entity, &mut Task)>,
     backend: &B,
     experience_store: &mut ExperienceStore,
+    pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
 ) {
     match action {
@@ -404,13 +417,17 @@ pub fn handle_tool_action<B: SessionBackend>(
                 work_item_id: None,
             };
 
-            commands.spawn(ToolExecutionResultMessage {
-                result: execution_result,
-                tool_name: request.tool_name.clone(),
-                tool_output: Ok(value),
-                tool_call_id: request.tool_call_id.clone(),
-                processed: false,
-            });
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: request.tool_name.clone(),
+                    tool_output: Ok(value),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
 
             commands.entity(request_entity).despawn();
         }
@@ -646,6 +663,12 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             }
 
+            // 推入待派发队列，由 companion 系统触发 on_experience_candidate_submitted hook。
+            pending_experience_hooks.0.push((
+                crate::user_plugins::hook_point::HookPoint::OnExperienceCandidateSubmitted,
+                candidate.candidate_id,
+            ));
+
             spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }
         Err(e) => {
@@ -656,98 +679,29 @@ pub fn handle_tool_action<B: SessionBackend>(
 
 /// 将 ExperienceCandidateSubmission 转换为 ExperienceCandidate。
 ///
-/// 将工具层的提交数据转换为领域模型，载荷根据 kind_hint 进行解析。
+/// 将工具层的提交数据转换为领域模型，载荷根据 kind 进行解析。
 fn submission_to_candidate(
     submission: &ExperienceCandidateSubmission,
     agent_id: AgentId,
     task_id: TaskId,
 ) -> ExperienceCandidate {
-    let payload = match &submission.kind_hint {
+    let payload = match &submission.kind {
         ExperienceKindHint::Knowledge => {
-            let content = submission
-                .payload
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let memory_kind_str = submission
-                .payload
-                .get("memory_kind")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Fact");
-            let memory_kind = match memory_kind_str {
-                "Constraint" => LongTermMemoryKind::Constraint,
-                "Preference" => LongTermMemoryKind::Preference,
-                "Strategy" => LongTermMemoryKind::Strategy,
-                "AntiPattern" => LongTermMemoryKind::AntiPattern,
-                _ => LongTermMemoryKind::Fact,
-            };
-            ExperienceCandidatePayload::Knowledge {
-                content,
-                memory_kind,
+            let content = submission.content.clone().unwrap_or_default();
+            ExperienceCandidatePayload::Knowledge { content }
+        }
+        ExperienceKindHint::Skill => {
+            let name = submission.title.clone();
+            let description = submission.skill_description.clone().unwrap_or_default();
+            let instructions = submission.instructions.clone().unwrap_or_default();
+            let file_refs = submission.file_refs.clone();
+            ExperienceCandidatePayload::Skill {
+                name,
+                description,
+                instructions,
+                file_refs,
             }
         }
-        ExperienceKindHint::Executable => {
-            let intent = submission
-                .payload
-                .get("intent")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let when_to_use = submission
-                .payload
-                .get("when_to_use")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let asset_refs = submission
-                .payload
-                .get("asset_refs")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            ExperienceCandidatePayload::Executable {
-                intent,
-                when_to_use,
-                asset_refs,
-            }
-        }
-        ExperienceKindHint::SharedKnowledge => {
-            let content = submission
-                .payload
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            ExperienceCandidatePayload::Knowledge {
-                content,
-                memory_kind: LongTermMemoryKind::Fact,
-            }
-        }
-        ExperienceKindHint::Discard => ExperienceCandidatePayload::Knowledge {
-            content: String::new(),
-            memory_kind: LongTermMemoryKind::Fact,
-        },
-    };
-
-    let risk_level = match submission.risk_level.to_lowercase().as_str() {
-        "high" => crate::domain::ExperienceRiskLevel::High,
-        "medium" => crate::domain::ExperienceRiskLevel::Medium,
-        _ => crate::domain::ExperienceRiskLevel::Low,
-    };
-    let suggested_confirmation = match submission
-        .suggested_confirmation
-        .as_deref()
-        .unwrap_or("none")
-        .to_lowercase()
-        .as_str()
-    {
-        "user" => crate::domain::ExperienceConfirmationPolicy::User,
-        _ => crate::domain::ExperienceConfirmationPolicy::None,
     };
 
     ExperienceCandidate {
@@ -755,14 +709,11 @@ fn submission_to_candidate(
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: submission.title.clone(),
-        kind_hint: submission.kind_hint.clone(),
+        kind_hint: submission.kind.clone(),
         payload,
-        dependency_refs: submission.dependency_refs.clone(),
+        dependency_refs: Vec::new(),
         status: crate::domain::ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
-        risk_level,
-        risk_reason: submission.risk_reason.clone(),
-        suggested_confirmation,
         derived_from_candidate_ids: Vec::new(),
     }
 }
@@ -798,13 +749,17 @@ fn spawn_experience_candidate_result(
         work_item_id: None,
     };
 
-    commands.spawn(ToolExecutionResultMessage {
-        result: execution_result,
-        tool_name: "submit_experience_candidate".to_string(),
-        tool_output: Ok(output),
-        tool_call_id: request.tool_call_id.clone(),
-        processed: false,
-    });
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result: execution_result,
+            tool_name: "submit_experience_candidate".to_string(),
+            tool_output: Ok(output),
+            tool_call_id: request.tool_call_id.clone(),
+            processed: false,
+            original_tool_output: None,
+        },
+        ToolReturnedHookPending,
+    ));
 
     commands.entity(request_entity).despawn();
 }
@@ -847,13 +802,17 @@ pub fn spawn_tool_error(
         work_item_id: None,
     };
 
-    commands.spawn(ToolExecutionResultMessage {
-        result: execution_result,
-        tool_name: request.tool_name.clone(),
-        tool_output: Err(error),
-        tool_call_id: request.tool_call_id.clone(),
-        processed: false,
-    });
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result: execution_result,
+            tool_name: request.tool_name.clone(),
+            tool_output: Err(error),
+            tool_call_id: request.tool_call_id.clone(),
+            processed: false,
+            original_tool_output: None,
+        },
+        ToolReturnedHookPending,
+    ));
 
     commands.entity(request_entity).despawn();
 }
@@ -881,13 +840,17 @@ pub fn spawn_shell_result(
         work_item_id: None,
     };
 
-    commands.spawn(ToolExecutionResultMessage {
-        result: execution_result,
-        tool_name: tool_name.to_string(),
-        tool_output: Ok(tool_output),
-        tool_call_id: request.tool_call_id.clone(),
-        processed: false,
-    });
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result: execution_result,
+            tool_name: tool_name.to_string(),
+            tool_output: Ok(tool_output),
+            tool_call_id: request.tool_call_id.clone(),
+            processed: false,
+            original_tool_output: None,
+        },
+        ToolReturnedHookPending,
+    ));
 
     commands.entity(request_entity).despawn();
 }

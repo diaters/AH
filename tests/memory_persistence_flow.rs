@@ -5,7 +5,7 @@
 //! - Contribution absorption persists to disk
 
 use harness::{
-    LongTermMemory, LongTermMemoryEntry, LongTermMemoryKind,
+    LongTermMemory, LongTermMemoryEntry,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 
@@ -23,8 +23,7 @@ fn agent_restores_long_term_memory_from_disk_across_restarts() {
         let mut service = LongTermMemoryService::new(repo);
         let mut memory = LongTermMemory::with_name(agent_name);
 
-        let entry =
-            LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "persistent fact from session 1");
+        let entry = LongTermMemoryEntry::new("persistent fact from session 1");
         service.add_entry(&mut memory, entry).unwrap();
 
         assert_eq!(memory.entries.len(), 1);
@@ -55,22 +54,13 @@ fn multiple_entries_persist_and_restore_correctly() {
         let mut memory = LongTermMemory::with_name(agent_name);
 
         service
-            .add_entry(
-                &mut memory,
-                LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "fact 1"),
-            )
+            .add_entry(&mut memory, LongTermMemoryEntry::new("fact 1"))
             .unwrap();
         service
-            .add_entry(
-                &mut memory,
-                LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "strategy 1"),
-            )
+            .add_entry(&mut memory, LongTermMemoryEntry::new("strategy 1"))
             .unwrap();
         service
-            .add_entry(
-                &mut memory,
-                LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "fact 2"),
-            )
+            .add_entry(&mut memory, LongTermMemoryEntry::new("fact 2"))
             .unwrap();
 
         assert_eq!(memory.entries.len(), 3);
@@ -104,14 +94,14 @@ fn contribution_absorption_persists_to_disk() {
         service
             .add_entry(
                 &mut parent_memory,
-                LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "parent's own fact"),
+                LongTermMemoryEntry::new("parent's own fact"),
             )
             .unwrap();
 
         // 模拟子 Agent 贡献的记忆
         let child_memories = vec![
-            LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "child learned fact"),
-            LongTermMemoryEntry::new(LongTermMemoryKind::Strategy, "child learned strategy"),
+            LongTermMemoryEntry::new("child learned fact"),
+            LongTermMemoryEntry::new("child learned strategy"),
         ];
 
         service
@@ -160,10 +150,7 @@ fn clear_removes_all_entries_and_persists() {
         let mut memory = LongTermMemory::with_name(agent_name);
 
         service
-            .add_entry(
-                &mut memory,
-                LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "to be cleared"),
-            )
+            .add_entry(&mut memory, LongTermMemoryEntry::new("to be cleared"))
             .unwrap();
         service.clear(&mut memory).unwrap();
         assert!(memory.entries.is_empty());

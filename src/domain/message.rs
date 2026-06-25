@@ -100,6 +100,42 @@ pub struct RetryReadyMessage {
 
 // ============ 执行请求/响应 ============
 
+/// 标记刚派发、尚未触发 `on_message_dispatched` 观察 hook 的 `AgentExecutionRequestMessage`。
+///
+/// 由 `AgentExecutionRequestMessage` 的所有 spawn 点附带，由 companion 系统
+/// `on_message_dispatched_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct MessageDispatchedHookPending;
+
+/// 标记刚到达、尚未触发 `on_message_received` 观察 hook 的外部输入 entity。
+///
+/// 由 `input_ingress_system` 在 spawn `Signal::user_input` 或
+/// `ToolConfirmationResponseMessage` 时附带，由 companion 系统
+/// `on_message_received_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct MessageReceivedHookPending;
+
+/// 标记刚接收、尚未触发 `on_llm_response` 观察 hook 的 `AgentExecutionResultMessage`。
+///
+/// 由 `ingest_execution_results_system` 在 spawn `AgentExecutionResultMessage` 时附带，
+/// 由 companion 系统 `on_llm_response_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct LlmResponseHookPending;
+
+/// 标记刚创建、尚未触发 `on_approval_requested` 观察 hook 的 `ApprovalRequestMessage`。
+///
+/// 由 `tool_dispatch_system` 在 spawn `ApprovalRequestMessage` 时附带，
+/// 由 companion 系统 `on_approval_requested_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ApprovalRequestedHookPending;
+
+/// 标记刚产生、尚未触发 `on_approval_resolved` 观察 hook 的 `ApprovalResultMessage`。
+///
+/// 由 `approval_dispatch_system` 在 spawn `ApprovalResultMessage` 时附带，
+/// 由 companion 系统 `on_approval_resolved_hook_system` 派发 hook 后移除。
+#[derive(Component, Debug, Clone, Default)]
+pub struct ApprovalResolvedHookPending;
+
 /// Agent 执行请求消息
 #[derive(Debug, Clone, Component)]
 pub struct AgentExecutionRequestMessage {
@@ -183,6 +219,9 @@ pub struct ToolExecutionResultMessage {
     pub tool_call_id: Option<String>,
     /// 是否已被 tool_result_system 处理过，防止重复记录日志和 STM
     pub processed: bool,
+    /// 审计字段：插件通过 `tool_set_result` 替换 `tool_output` 时，
+    /// 原始输出值保留在此。仅当 `on_tool_returned` hook 触发过替换时为 `Some`。
+    pub original_tool_output: Option<serde_json::Value>,
 }
 
 // ============ Session 生命周期 ============
@@ -369,3 +408,10 @@ pub struct ExperienceCollectionCompletedMessage {
     /// 原任务治理者，由请求链路显式传递。
     pub governing_agent_id: AgentId,
 }
+
+/// /reload-plugins 触发的重载请求消息。
+///
+/// `command_parse_system` 使用 Commands 无法直接获取 `&mut World`，
+/// 因此 spawn 此消息实体，由 `reload_plugins_system` 消费后执行重载。
+#[derive(Debug, Clone, Component)]
+pub struct ReloadPluginsMessage;

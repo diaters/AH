@@ -3,10 +3,10 @@ use tracing::debug;
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentRequestKind, ConfirmationOption, ConfirmationSource,
-    ExperienceCandidate, ExperienceCandidateStatus, ExperienceConfirmationPolicy,
-    ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage, ExperienceKindHint,
-    ExperienceRiskLevel, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, ToolConfirmationRequestMessage, ToolExecutionRequestMessage,
+    ExperienceCandidate, ExperienceCandidateStatus, ExperienceGovernanceDecision,
+    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore,
+    ExperienceWritebackDestination, ExperienceWritebackRequestMessage, ToolCalledHookPending,
+    ToolConfirmationRequestMessage, ToolExecutionRequestMessage,
 };
 
 /// 经验治理系统：顶层唯一最终分流点。
@@ -62,83 +62,40 @@ pub(crate) fn experience_governance_system(
             };
 
             let decision = match candidate.kind_hint {
-                ExperienceKindHint::Discard => {
-                    if let Some(c) = store.candidates.get_mut(candidate_id) {
-                        c.status = ExperienceCandidateStatus::Rejected;
-                    }
-                    debug!(
-                        event = "ExperienceGovernanceRejected",
-                        candidate_id = %candidate_id,
-                        task_id = %request.task_id,
-                        "discarded candidate"
-                    );
-                    continue;
-                }
-                ExperienceKindHint::SharedKnowledge => {
-                    let confirmation_policy = if candidate.risk_level == ExperienceRiskLevel::High {
-                        ExperienceConfirmationPolicy::User
-                    } else {
-                        ExperienceConfirmationPolicy::None
-                    };
-                    ExperienceGovernanceDecision {
-                        candidate_id: *candidate_id,
-                        destination: ExperienceWritebackDestination::SharedKnowledgeUpgrade,
-                        confirmation_policy,
-                        final_risk_level: candidate.risk_level,
-                        risk_overridden: false,
-                        decision_rationale: "shared knowledge candidate".to_string(),
-                        source_task_id: request.task_id,
-                    }
-                }
-                ExperienceKindHint::Executable => {
+                ExperienceKindHint::Knowledge => {
                     if is_default {
                         ExperienceGovernanceDecision {
                             candidate_id: *candidate_id,
                             destination: ExperienceWritebackDestination::IncubationProposal,
-                            confirmation_policy: ExperienceConfirmationPolicy::User,
-                            final_risk_level: candidate.risk_level,
-                            risk_overridden: false,
-                            decision_rationale: "default agent executable -> incubation"
-                                .to_string(),
+                            requires_user_confirmation: true,
+                            decision_rationale: "default agent knowledge -> incubation".to_string(),
+                            source_task_id: request.task_id,
+                        }
+                    } else {
+                        ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::LongTermMemory,
+                            requires_user_confirmation: false,
+                            decision_rationale: "persistent agent private knowledge".to_string(),
+                            source_task_id: request.task_id,
+                        }
+                    }
+                }
+                ExperienceKindHint::Skill => {
+                    if is_default {
+                        ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::IncubationProposal,
+                            requires_user_confirmation: true,
+                            decision_rationale: "default agent skill -> incubation".to_string(),
                             source_task_id: request.task_id,
                         }
                     } else {
                         ExperienceGovernanceDecision {
                             candidate_id: *candidate_id,
                             destination: ExperienceWritebackDestination::SkillPackage,
-                            confirmation_policy: ExperienceConfirmationPolicy::User,
-                            final_risk_level: candidate.risk_level,
-                            risk_overridden: false,
-                            decision_rationale: "executable requires user confirmation".to_string(),
-                            source_task_id: request.task_id,
-                        }
-                    }
-                }
-                ExperienceKindHint::Knowledge => {
-                    if is_default {
-                        ExperienceGovernanceDecision {
-                            candidate_id: *candidate_id,
-                            destination: ExperienceWritebackDestination::IncubationProposal,
-                            confirmation_policy: ExperienceConfirmationPolicy::User,
-                            final_risk_level: candidate.risk_level,
-                            risk_overridden: false,
-                            decision_rationale: "default agent knowledge -> incubation".to_string(),
-                            source_task_id: request.task_id,
-                        }
-                    } else {
-                        let confirmation_policy =
-                            if candidate.risk_level == ExperienceRiskLevel::High {
-                                ExperienceConfirmationPolicy::User
-                            } else {
-                                ExperienceConfirmationPolicy::None
-                            };
-                        ExperienceGovernanceDecision {
-                            candidate_id: *candidate_id,
-                            destination: ExperienceWritebackDestination::LongTermMemory,
-                            confirmation_policy,
-                            final_risk_level: candidate.risk_level,
-                            risk_overridden: false,
-                            decision_rationale: "persistent agent private knowledge".to_string(),
+                            requires_user_confirmation: true,
+                            decision_rationale: "skill requires user confirmation".to_string(),
                             source_task_id: request.task_id,
                         }
                     }
@@ -155,46 +112,41 @@ pub(crate) fn experience_governance_system(
                 candidate_id = %candidate_id,
                 task_id = %request.task_id,
                 destination = ?decision.destination,
-                confirmation_policy = ?decision.confirmation_policy,
+                requires_user_confirmation = decision.requires_user_confirmation,
                 "governance decision made"
             );
 
-            match decision.confirmation_policy {
-                ExperienceConfirmationPolicy::None => {
-                    // 无需确认，直接进入 WritebackPending
-                    if let Some(c) = store.candidates.get_mut(candidate_id) {
-                        c.status = ExperienceCandidateStatus::WritebackPending;
-                    }
-                    commands.spawn(ExperienceWritebackRequestMessage {
-                        decision: decision.clone(),
-                    });
+            if decision.requires_user_confirmation {
+                // 需要用户确认
+                if let Some(c) = store.candidates.get_mut(candidate_id) {
+                    c.status = ExperienceCandidateStatus::NeedsUserApproval;
                 }
-                ExperienceConfirmationPolicy::User => {
-                    // 需要用户确认
-                    if let Some(c) = store.candidates.get_mut(candidate_id) {
-                        c.status = ExperienceCandidateStatus::NeedsUserApproval;
-                    }
-                    // 对于 IncubationProposal 目标，生成 proposal
-                    if decision.destination == ExperienceWritebackDestination::IncubationProposal {
-                        spawn_incubation_confirmation(
-                            &mut commands,
-                            &mut store,
-                            request,
-                            agent,
-                            candidate_id,
-                        );
-                    } else {
-                        spawn_experience_confirmation(
-                            &mut commands,
-                            &mut store,
-                            request,
-                            candidate_id,
-                            &candidate,
-                        );
-                    }
-                    // 暂存决策，等确认后使用
-                    commands.spawn(decision);
+                if decision.destination == ExperienceWritebackDestination::IncubationProposal {
+                    spawn_incubation_confirmation(
+                        &mut commands,
+                        &mut store,
+                        request,
+                        agent,
+                        candidate_id,
+                    );
+                } else {
+                    spawn_experience_confirmation(
+                        &mut commands,
+                        &mut store,
+                        request,
+                        candidate_id,
+                        &candidate,
+                    );
                 }
+                commands.spawn(decision);
+            } else {
+                // 无需确认，直接进入 WritebackPending
+                if let Some(c) = store.candidates.get_mut(candidate_id) {
+                    c.status = ExperienceCandidateStatus::WritebackPending;
+                }
+                commands.spawn(ExperienceWritebackRequestMessage {
+                    decision: decision.clone(),
+                });
             }
         }
 
@@ -239,27 +191,32 @@ fn spawn_experience_confirmation(
 
     // 配对 ToolExecutionRequestMessage 占位实体，使 tool_confirmation_result_system
     // 能通过 pending_confirmation_id 找到匹配，不提前销毁 ToolConfirmationResponseMessage。
-    commands.spawn(ToolExecutionRequestMessage {
-        request: AgentExecutionRequest {
-            task_id: request.task_id,
-            agent_id: request.agent_id,
-            request_kind: AgentRequestKind::ToolExecution {
-                tool_name: "experience_governance".to_string(),
+    // 附带 ToolCalledHookPending 标记以对称参与 on_tool_called hook 派发；companion
+    // 系统仅在不被拒绝时移除标记，横切到所有工具请求 spawn 点。
+    commands.spawn((
+        ToolCalledHookPending,
+        ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id: request.task_id,
+                agent_id: request.agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "experience_governance".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
             },
-            prompt: String::new(),
-            system_prompt: None,
-            tools: vec![],
-            conversation: None,
-            work_item_id: None,
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({
+                "candidate_id": candidate_id.to_string(),
+            }),
+            pending_confirmation_id: Some(request_id),
+            tool_call_id: None,
+            pending_confirmation_options: Some(ConfirmationOption::default_options()),
         },
-        tool_name: "experience_governance".to_string(),
-        tool_input: serde_json::json!({
-            "candidate_id": candidate_id.to_string(),
-        }),
-        pending_confirmation_id: Some(request_id),
-        tool_call_id: None,
-        pending_confirmation_options: Some(ConfirmationOption::default_options()),
-    });
+    ));
 }
 
 fn spawn_incubation_confirmation(

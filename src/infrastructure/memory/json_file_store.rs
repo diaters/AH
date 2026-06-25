@@ -117,7 +117,7 @@ impl MemoryStore for JsonFileMemoryStore {
         self.ensure_dir()?;
 
         let path = self.snapshot_path(&snapshot.agent_name);
-        let tmp_path = path.with_extension("json.tmp");
+        let tmp_path = path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
 
         let mut updated = snapshot.clone();
         updated.updated_at = Utc::now();
@@ -173,7 +173,7 @@ impl MemoryStore for JsonFileMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{LongTermMemoryKind, MemoryImportance};
+    use crate::domain::MemoryImportance;
     use tempfile::TempDir;
 
     #[test]
@@ -222,10 +222,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = JsonFileMemoryStore::new(dir.path().join("agents"));
 
-        let mut entry = LongTermMemoryEntry::new(
-            LongTermMemoryKind::Strategy,
-            "Always keep summaries concise",
-        );
+        let mut entry = LongTermMemoryEntry::new("Always keep summaries concise");
         entry.importance = MemoryImportance::High;
         entry.confidence = 0.95;
         entry.scope_tags = vec!["summarization".to_string(), "memory".to_string()];
@@ -259,11 +256,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = JsonFileMemoryStore::new(dir.path().join("agents"));
 
-        let entry1 = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "first fact");
+        let entry1 = LongTermMemoryEntry::new("first fact");
         let snapshot1 = MemorySnapshot::new("updater", vec![entry1.clone()]);
         store.save_snapshot(&snapshot1).unwrap();
 
-        let entry2 = LongTermMemoryEntry::new(LongTermMemoryKind::Fact, "second fact");
+        let entry2 = LongTermMemoryEntry::new("second fact");
         let snapshot2 = MemorySnapshot::new("updater", vec![entry1, entry2]);
         store.save_snapshot(&snapshot2).unwrap();
 

@@ -9,9 +9,10 @@ use crate::{
     app::HarnessSettings,
     domain::{
         Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
-        GrantMode, SharedKnowledgeBase, Task, ToolCallingState, ToolConfirmationRequestMessage,
-        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolPermission,
+        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, Task, ToolCallingState,
+        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+        ToolReturnedHookPending,
     },
     systems::NativeProcessBackend,
 };
@@ -40,6 +41,7 @@ pub fn tool_confirmation_result_system(
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
+    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -115,13 +117,17 @@ pub fn tool_confirmation_result_system(
                     work_item_id: None,
                 };
 
-                commands.spawn(ToolExecutionResultMessage {
-                    result: execution_result,
-                    tool_name: tool_request.tool_name.clone(),
-                    tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
-                    tool_call_id: tool_request.tool_call_id.clone(),
-                    processed: false,
-                });
+                commands.spawn((
+                    ToolExecutionResultMessage {
+                        result: execution_result,
+                        tool_name: tool_request.tool_name.clone(),
+                        tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
+                        tool_call_id: tool_request.tool_call_id.clone(),
+                        processed: false,
+                        original_tool_output: None,
+                    },
+                    ToolReturnedHookPending,
+                ));
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
@@ -205,6 +211,7 @@ pub fn tool_confirmation_result_system(
                         &mut tasks,
                         &*backend,
                         &mut experience_store,
+                        &mut pending_experience_hooks,
                         None,
                     );
                 }
