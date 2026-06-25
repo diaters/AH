@@ -51,6 +51,21 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
 
+#### 插件系统
+
+- 插件系统已实现完整的 Rhai 脚本扩展层，支持通过 `HARNESS_PLUGINS_DIR` 环境变量加载
+- 插件清单格式为 `manifest.toml`，声明 `id`、`api_version`、`hooks`、`tools`、`skills`、`agents` 贡献
+- 20 个 hook 点已全部接入，覆盖任务、工作项、Agent、工具、消息、记忆、知识、经验、审批全生命周期
+- 前置 hook（`on_tool_called`）支持 `tool_deny` 拒绝能力，观察 hook（`on_tool_returned`）支持 `tool_set_result` 替换结果
+- 插件工具通过 `RhaiToolExecutor` 注册为命名空间化工具（`plugin_id:tool_name`），支持 JSON Schema 输入校验
+- 插件技能通过 `SkillLoader` 注入 `PluginSkillContributions`，命名空间化为 `plugin_id:skill_id`
+- 插件 Agent 通过 `PluginAgentEntry` 合并到 `load_agents_system`，复用 Agent 启动链路
+- 支持 `/plugins` 列出已加载插件、`/reload-plugins` 热重载、`/plugin_id:command` 调用插件命令
+- 重载时自动清除旧插件的工具、技能、Agent 贡献，重新扫描磁盘并注册新贡献
+- host API 提供 `WorldSnapshot`（只读快照）+ `WorldWriter`（写命令攒批回放）的隔离访问模型
+- hook 脚本执行受 1 秒超时保护，按插件字母序顺序派发
+- 所有关键操作具备结构化审计日志（`PluginToolDeniedByHook`、`PluginToolResultSetByHook` 等）
+
 #### 经验候选治理
 
 - 经验治理已收敛为两层分层模型：非顶层 `TaskScoped Agent` 只产生、汇聚、向上贡献；顶层 `Persistent Agent` 做最终治理与落盘
@@ -74,6 +89,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查
+- 插件 host API 部分 `WorldCommand` 变体（`SpawnAgent`、`CreateWorkItem`、`SetApprovalDecision`、`ExperienceSetPinned`）尚未实现回放
+- 插件 `v1` 不追踪 `tool_deny` 的 per-plugin attribution，推迟到后续 host API 升级
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
 
