@@ -131,7 +131,10 @@ pub fn tool_dispatch_system(
                         &mut commands,
                         entity,
                         &request,
-                        ToolError::NotFound(format!("executor for {}", tool_name)),
+                        ToolError::NotFound(format!(
+                            "no executor for '{}' — this tool is not available, do not retry",
+                            tool_name
+                        )),
                     );
                     continue;
                 };

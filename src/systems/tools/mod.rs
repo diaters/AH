@@ -438,10 +438,10 @@ pub fn register_plugin_tools(
                 required_tag: None,
             });
 
-            executors.register(Box::new(RhaiToolExecutor {
-                plugin_id: plugin.manifest.id.clone(),
-                tool_id: tool_def.id.clone(),
-            }));
+            executors.register(Box::new(RhaiToolExecutor::new(
+                &plugin.manifest.id,
+                &tool_def.id,
+            )));
 
             tracing::info!(
                 event = "PluginToolRegistered",

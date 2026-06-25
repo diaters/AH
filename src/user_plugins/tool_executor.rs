@@ -10,24 +10,21 @@ use crate::domain::{BuiltinTool, ToolAction, ToolContext, ToolError};
 /// 每个 RhaiToolExecutor 对应一个插件贡献的 tool，
 /// 以 `plugin_id:tool_id` 形式注册到 BuiltinToolExecutors。
 pub struct RhaiToolExecutor {
-    pub plugin_id: String,
-    pub tool_id: String,
+    /// 命名空间全名（`plugin_id:tool_id`），同时作为 BuiltinToolExecutors 的 key。
+    namespaced: String,
 }
 
 impl RhaiToolExecutor {
-    /// 生成命名空间全名，格式为 `plugin_id:tool_id`
-    pub fn namespaced_name(&self) -> String {
-        format!("{}:{}", self.plugin_id, self.tool_id)
+    pub fn new(plugin_id: &str, tool_id: &str) -> Self {
+        Self {
+            namespaced: format!("{}:{}", plugin_id, tool_id),
+        }
     }
 }
 
 impl BuiltinTool for RhaiToolExecutor {
     fn name(&self) -> &str {
-        // BuiltinTool::name 返回的是注册名，此处用固定字符串
-        // 实际 namespaced_name 在注册时作为 key 使用。
-        // 由于 BuiltinTool::name 需要返回 &str，我们无法返回动态字符串。
-        // 使用 tool_id 作为基准，注册时以 namespaced_name 为 key。
-        &self.tool_id
+        &self.namespaced
     }
 
     fn execute(
@@ -46,10 +43,7 @@ mod tests {
 
     #[test]
     fn namespaced_name_format() {
-        let executor = RhaiToolExecutor {
-            plugin_id: "alpha".to_string(),
-            tool_id: "search".to_string(),
-        };
-        assert_eq!(executor.namespaced_name(), "alpha:search");
+        let executor = RhaiToolExecutor::new("alpha", "search");
+        assert_eq!(executor.name(), "alpha:search");
     }
 }
