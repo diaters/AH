@@ -42,6 +42,10 @@ pub struct HarnessConfig {
     pub shell_default_stop_timeout_secs: u64,
     /// 每个 session stream 的最大缓存字节数
     pub shell_max_buffer_bytes_per_stream: usize,
+    /// TUI 主循环在活跃状态下的轮询间隔（毫秒）
+    pub active_poll_ms: u64,
+    /// TUI 主循环在空闲状态下的轮询间隔（毫秒）
+    pub idle_poll_ms: u64,
 }
 
 impl HarnessConfig {
@@ -102,6 +106,14 @@ impl HarnessConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(64 * 1024),
+            active_poll_ms: std::env::var("HARNESS_ACTIVE_POLL_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(16),
+            idle_poll_ms: std::env::var("HARNESS_IDLE_POLL_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(150),
         })
     }
 }
@@ -125,6 +137,8 @@ impl Default for HarnessConfig {
             shell_default_exec_timeout_secs: 300,
             shell_default_stop_timeout_secs: 10,
             shell_max_buffer_bytes_per_stream: 64 * 1024,
+            active_poll_ms: 16,
+            idle_poll_ms: 150,
         }
     }
 }
@@ -285,4 +299,16 @@ pub fn app_is_idle(world: &mut World) -> bool {
         && pending_spawn_requests == 0
         && pending_terminated == 0
         && pending_tool_calling == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_defaults_for_poll_intervals() {
+        let config = HarnessConfig::default();
+        assert_eq!(config.active_poll_ms, 16);
+        assert_eq!(config.idle_poll_ms, 150);
+    }
 }
