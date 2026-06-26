@@ -671,6 +671,21 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             spawn_experience_candidate_result(commands, request_entity, request, &candidate);
         }
+        Ok(ToolAction::SendChannelMessage {
+            channel,
+            target,
+            content,
+        }) => {
+            commands.spawn(crate::domain::PendingChannelSend {
+                channel,
+                recipient: target,
+                content,
+                tool_call_id: request.tool_call_id.clone(),
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_entity,
+            });
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }

@@ -216,6 +216,12 @@ pub enum ToolAction {
     StopSession(SessionHandleId),
     /// 提交经验候选
     SubmitExperienceCandidate(ExperienceCandidateSubmission),
+    /// 向 IM 通道发送消息
+    SendChannelMessage {
+        channel: String,
+        target: String,
+        content: String,
+    },
 }
 
 /// 经验候选提交数据

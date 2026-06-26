@@ -2,7 +2,7 @@
 //!
 //! 定义 ECS 中使用的各种消息组件。
 
-use bevy::prelude::Component;
+use bevy::prelude::{Component, Entity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -436,6 +436,18 @@ pub struct ExperienceCollectionCompletedMessage {
 /// 因此 spawn 此消息实体，由 `reload_plugins_system` 消费后执行重载。
 #[derive(Debug, Clone, Component)]
 pub struct ReloadPluginsMessage;
+
+/// 待发送的通道消息，由 channel_send_dispatch_system 消费。
+#[derive(Debug, Clone, Component)]
+pub struct PendingChannelSend {
+    pub channel: String,
+    pub recipient: String,
+    pub content: String,
+    pub tool_call_id: Option<String>,
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub request_entity: Entity,
+}
 
 #[cfg(test)]
 mod tests {

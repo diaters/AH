@@ -95,7 +95,7 @@ pub use message::{
     ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
     ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, LlmResponseHookPending,
     MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind, OutputMessage,
-    ReloadPluginsMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
+    PendingChannelSend, ReloadPluginsMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
     SessionStartedMessage, Signal, SignalPayload, SignalType, SubTaskBatchCreatedMessage,
     SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
     TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
