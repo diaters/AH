@@ -5,7 +5,7 @@ use tracing::{debug, trace};
 use crate::{
     app::{Clock, InputReceiver, ShutdownState},
     domain::{
-        ExternalInput, MessageReceivedHookPending, Signal, SignalPayload, Task, TaskStatus,
+        ExternalInput, MessageReceivedHookPending, Signal, Task, TaskStatus,
         ToolConfirmationResponseMessage, WaitingReason,
     },
 };
@@ -30,18 +30,17 @@ pub(crate) fn input_ingress_system(
 ) {
     while let Ok(input) = receiver.0.try_recv() {
         match input {
-            ExternalInput::TextWithChannel {
-                channel: _,
-                content,
-            } => {
+            ExternalInput::TextWithChannel { channel, content } => {
                 debug!(
                     event = "ExternalInputReceived",
                     kind = "TextWithChannel",
-                    content = %content,
                     content_len = content.len(),
                     "received external text input"
                 );
-                commands.spawn((Signal::user_input(content), MessageReceivedHookPending));
+                commands.spawn((
+                    Signal::user_input_with_channel(content, channel),
+                    MessageReceivedHookPending,
+                ));
             }
             ExternalInput::Shutdown => {
                 debug!(
@@ -91,10 +90,7 @@ pub(crate) fn retry_wakeup_system(clock: Res<Clock>, mut commands: Commands, tas
                 last_error = ?task.last_error,
                 "retry backoff elapsed, waking up task"
             );
-            commands.spawn(Signal {
-                kind: crate::domain::SignalType::RetryWakeup,
-                payload: SignalPayload::RetryWakeup(task.id),
-            });
+            commands.spawn(Signal::retry_wakeup(task.id));
         }
     }
 }

@@ -11,16 +11,13 @@ pub(crate) fn frontend_input_system(registry: Res<FrontendRegistry>, mut command
     for frontend in &registry.frontends {
         for action in frontend.poll_actions() {
             match action {
-                UserAction::Text {
-                    channel: _,
-                    content,
-                } => {
+                UserAction::Text { channel, content } => {
                     debug!(
                         event = "FrontendInputText",
                         content_len = content.len(),
                         "received text from frontend"
                     );
-                    commands.spawn(Signal::user_input(content));
+                    commands.spawn(Signal::user_input_with_channel(content, channel));
                 }
                 UserAction::Confirmation {
                     channel: _,
