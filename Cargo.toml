@@ -25,6 +25,8 @@ crossterm = "0.28"
 termimad = "0.31"
 rhai = { version = "1.19", default-features = false, features = ["sync"] }
 jsonschema = { version = "0.20", default-features = false, features = ["resolve-file"] }
+reqwest = { version = "0.12", features = ["json"] }
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
