@@ -94,6 +94,7 @@ fn user_input_continues_waiting_task() {
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
         content: "continue input".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..10 {
@@ -297,6 +298,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
     // 模拟用户输入
     app.world_mut().spawn(harness::UserInputMessage {
         content: "hello".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..10 {
@@ -362,6 +364,7 @@ fn finish_command_ends_multi_turn_conversation() {
     // 模拟用户输入 /finish
     app.world_mut().spawn(harness::UserInputMessage {
         content: "/finish".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..10 {

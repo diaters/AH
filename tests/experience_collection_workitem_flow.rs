@@ -304,6 +304,7 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
 
     app.world_mut().spawn(harness::UserInputMessage {
         content: "/finish".to_string(),
+        origin_channel: default_channel(),
     });
 
     // Run enough updates for the full chain:

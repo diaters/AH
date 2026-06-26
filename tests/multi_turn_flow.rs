@@ -77,6 +77,7 @@ fn multi_turn_task_lifecycle() {
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
         content: "continue with this input".to_string(),
+        origin_channel: default_channel(),
     });
 
     // Run several frames
@@ -405,6 +406,7 @@ fn multi_turn_memory_records_user_and_assistant() {
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
         content: "what is the weather?".to_string(),
+        origin_channel: default_channel(),
     });
 
     // 运行多个 frame 处理输入和响应
@@ -436,6 +438,7 @@ fn multi_turn_full_conversation_flow() {
     // 通过 CreateTaskMessage 创建任务，走完整系统流程
     app.world_mut().spawn(harness::CreateTaskMessage {
         content: "hello".to_string(),
+        origin_channel: default_channel(),
     });
 
     // 运行直到任务进入 Waiting(User)
@@ -472,6 +475,7 @@ fn multi_turn_full_conversation_flow() {
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
         content: "tell me more".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..5 {
@@ -605,6 +609,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
     // 通过 CreateTaskMessage 创建任务，走 user_message_to_task_system 流程
     app.world_mut().spawn(harness::CreateTaskMessage {
         content: "hello world".to_string(),
+        origin_channel: default_channel(),
     });
 
     // 运行直到任务进入 Waiting(User)
@@ -656,6 +661,7 @@ fn three_turn_conversation_maintains_correct_order() {
     // 第一轮：通过 CreateTaskMessage 创建任务
     app.world_mut().spawn(harness::CreateTaskMessage {
         content: "first question".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..5 {
@@ -684,6 +690,7 @@ fn three_turn_conversation_maintains_correct_order() {
     // 第二轮：继续对话
     app.world_mut().spawn(harness::UserInputMessage {
         content: "second question".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..5 {
@@ -704,6 +711,7 @@ fn three_turn_conversation_maintains_correct_order() {
     // 第三轮：继续对话
     app.world_mut().spawn(harness::UserInputMessage {
         content: "third question".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..5 {
@@ -803,6 +811,7 @@ fn second_dispatch_prompt_includes_correct_history() {
     // 模拟用户继续对话
     app.world_mut().spawn(harness::UserInputMessage {
         content: "follow-up question".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..10 {
@@ -887,6 +896,7 @@ fn task_content_updates_on_continue() {
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
         content: "new follow-up question".to_string(),
+        origin_channel: default_channel(),
     });
 
     for _ in 0..10 {
