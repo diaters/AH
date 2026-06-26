@@ -49,6 +49,7 @@ fn multi_agent_config() -> HarnessConfig {
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,
+        channels: Default::default(),
     }
 }
 
