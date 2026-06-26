@@ -80,6 +80,8 @@ fn brain_test_config() -> HarnessConfig {
         shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
+        active_poll_ms: 16,
+        idle_poll_ms: 150,
     }
 }
 

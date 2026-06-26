@@ -5,8 +5,8 @@ use crossbeam_channel::unbounded;
 use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
-    EngineEvent, ExternalInput, HarnessConfig, ShutdownState, UserAction, app_is_idle,
-    build_harness_app, create_executor_from_config,
+    EngineEvent, ExternalInput, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
+    app_is_idle, build_harness_app, create_executor_from_config,
 };
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
@@ -127,6 +127,7 @@ fn main() -> Result<()> {
         // 1. 处理 crossterm 事件
         let mut key_count = 0u32;
         let mut paste_count = 0u32;
+        let mut mouse_count = 0u32;
 
         // 用非致命方式读取事件，避免 IME 等场景下的错误导致整个程序退出
         match event::poll(Duration::ZERO) {
@@ -158,6 +159,7 @@ fn main() -> Result<()> {
                     }
                     Event::Mouse(mouse) => {
                         app_state.handle_mouse_event(mouse);
+                        mouse_count += 1;
                     }
                     Event::Paste(text) => {
                         app_state.handle_paste(&text);
@@ -200,6 +202,7 @@ fn main() -> Result<()> {
         }
 
         // 2. 从 channel 拉取 EngineEvent，更新 TUI 状态
+        let mut engine_event_count = 0u32;
         while let Ok(ev) = event_rx.try_recv() {
             debug!(
                 event = "EngineEventReceived",
@@ -207,6 +210,7 @@ fn main() -> Result<()> {
                 "received engine event from channel"
             );
             app_state.handle_engine_event(ev);
+            engine_event_count += 1;
         }
 
         // 3. 驱动 ECS
@@ -214,6 +218,15 @@ fn main() -> Result<()> {
 
         let shutdown_requested = app.world().resource::<ShutdownState>().requested;
         let idle = app_is_idle(app.world_mut());
+        let had_input = key_count > 0 || paste_count > 0 || mouse_count > 0;
+        let had_engine_events = engine_event_count > 0;
+        let settings = app.world().resource::<HarnessSettings>();
+        let sleep_ms = if idle && !had_input && !had_engine_events {
+            settings.0.idle_poll_ms
+        } else {
+            settings.0.active_poll_ms
+        };
+        let should_render = !idle || had_input || had_engine_events;
 
         if tick.is_multiple_of(300) {
             debug!(
@@ -221,6 +234,8 @@ fn main() -> Result<()> {
                 tick,
                 shutdown_requested,
                 idle,
+                sleep_ms,
+                should_render,
                 should_quit = app_state.should_quit,
                 messages = app_state.messages.len(),
                 agents = app_state.agents.len(),
@@ -244,16 +259,12 @@ fn main() -> Result<()> {
             break;
         }
 
-        // 5. 渲染 TUI
-        if let Err(e) = terminal.draw(|frame| app_state.render(frame)) {
-            warn!(
-                event = "RenderError",
-                error = %e,
-                "TUI render failed"
-            );
+        // 5. 渲染 TUI（空闲且无新事件时跳过无意义重绘）
+        if should_render && let Err(e) = terminal.draw(|frame| app_state.render(frame)) {
+            warn!(event = "RenderError", error = %e, "TUI render failed");
         }
 
-        thread::sleep(Duration::from_millis(16));
+        thread::sleep(Duration::from_millis(sleep_ms));
         tick += 1;
     }
 
