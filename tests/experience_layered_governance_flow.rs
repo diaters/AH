@@ -296,7 +296,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let request_id = uuid::Uuid::new_v4();
@@ -373,7 +373,7 @@ fn approved_candidate_spawns_writeback_request() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
@@ -496,7 +496,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         .to_str()
         .unwrap()
         .to_string();
-    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
@@ -607,7 +607,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
         .to_str()
         .unwrap()
         .to_string();
-    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
@@ -732,7 +732,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
         .to_str()
         .unwrap()
         .to_string();
-    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let parent_task_id = uuid::Uuid::new_v4();

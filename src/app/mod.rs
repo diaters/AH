@@ -222,6 +222,7 @@ pub fn build_harness_app(
     executor: Arc<dyn AgentExecutor>,
     input_rx: Receiver<crate::domain::ExternalInput>,
     frontends: Vec<Box<dyn Frontend>>,
+    channel_manager: crate::channels::ChannelManager,
 ) -> App {
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
@@ -236,6 +237,7 @@ pub fn build_harness_app(
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());
+    app.insert_resource(channel_manager);
 
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());

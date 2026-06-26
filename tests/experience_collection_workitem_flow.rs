@@ -37,7 +37,7 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
@@ -76,7 +76,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let task = Task::from_user_input_ready("test task", 3, default_channel());
@@ -179,7 +179,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
@@ -271,7 +271,7 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let governing_agent_id = uuid::Uuid::new_v4();

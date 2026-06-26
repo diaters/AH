@@ -112,7 +112,7 @@ fn allowed_tool_executes_directly() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();
@@ -184,7 +184,7 @@ fn app_only_inserts_minimal_space_resources() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     let world = app.world();
 
     assert!(world.contains_resource::<SharedKnowledgeBase>());
@@ -198,7 +198,7 @@ fn denied_tool_does_not_execute() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();
@@ -271,7 +271,7 @@ fn confirm_tool_requires_user_confirmation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();
@@ -356,7 +356,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();
@@ -459,7 +459,7 @@ fn user_denies_tool_confirmation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();
@@ -553,7 +553,7 @@ fn user_allows_tool_once() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();
@@ -667,7 +667,7 @@ fn spawn_agent_creates_child_agent() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     app.update();
 
@@ -783,7 +783,7 @@ fn spawn_agent_confirm_routes_to_user() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     app.update();
 
@@ -884,7 +884,7 @@ fn child_agent_confirm_routes_to_parent() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     app.update();
 
@@ -992,7 +992,7 @@ fn user_confirms_spawn_agent_creates_child() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     app.update();
 
@@ -1118,7 +1118,7 @@ fn confirmation_denied_rejects_tool() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     app.update();
 
@@ -1226,7 +1226,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     app.update();
 
@@ -1332,7 +1332,7 @@ fn user_allows_tool_always() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化
     app.update();

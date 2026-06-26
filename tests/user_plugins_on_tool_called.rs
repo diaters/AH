@@ -102,6 +102,7 @@ fn build_app(_dir: &tempfile::TempDir) -> App {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
     app.update();
     app

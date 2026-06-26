@@ -108,6 +108,7 @@ fn on_task_completed_dispatches_on_finish_command() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用（让 Startup 阶段加载插件）
@@ -177,6 +178,7 @@ fn on_task_failed_dispatches_on_direct_failure_mutation() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     app.update();

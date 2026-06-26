@@ -7,6 +7,7 @@ use harness::tui::{App, TuiFrontend};
 use harness::{
     EngineEvent, ExternalInput, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
     app_is_idle, build_harness_app, create_executor_from_config,
+    channels::{Channel, ChannelManager, TelegramChannel},
 };
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
@@ -92,8 +93,19 @@ fn main() -> Result<()> {
 
     let tui_frontend = TuiFrontend::new(event_tx, action_rx);
 
-    // 为 build_harness_app 提供空的 input_rx（输入已由 FrontendRegistry 接管）
-    let (_input_tx, input_rx) = unbounded::<ExternalInput>();
+    // 构建通道列表
+    let mut channel_list: Vec<Arc<dyn Channel>> = vec![];
+    if let Some(tg_cfg) = config.channels.telegram.clone() {
+        info!(event = "TelegramChannelEnabled", "enabling Telegram channel");
+        channel_list.push(Arc::new(TelegramChannel::new(tg_cfg)));
+    }
+
+    // 创建 input channel：IM 入向消息和 TUI 输入共用
+    let (input_tx, input_rx) = unbounded::<ExternalInput>();
+
+    // 启动 ChannelManager（无通道时为空操作）
+    let (channel_manager, channel_handle) = ChannelManager::new(channel_list, input_tx);
+    let runtime_clone = runtime.clone();
 
     // 构建 ECS app
     let mut app = build_harness_app(
@@ -102,6 +114,7 @@ fn main() -> Result<()> {
         executor,
         input_rx,
         vec![Box::new(tui_frontend)],
+        channel_manager,
     );
 
     info!(
@@ -273,6 +286,13 @@ fn main() -> Result<()> {
         total_ticks = tick,
         "AI Harness TUI exiting"
     );
+
+    // 优雅关闭 ChannelManager
+    {
+        let channel_manager = app.world().resource::<ChannelManager>();
+        channel_manager.shutdown();
+    }
+    let _ = runtime_clone.block_on(channel_handle);
 
     // TuiGuard drop 时会自动禁用 mouse capture / bracketed paste 并恢复终端
 

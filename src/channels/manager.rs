@@ -10,7 +10,7 @@ use crate::domain::ExternalInput;
 
 use super::traits::{Channel, ChannelInboundMessage, ChannelOutboundMessage};
 
-#[derive(Clone)]
+#[derive(Clone, bevy::prelude::Resource)]
 pub struct ChannelManager {
     channels: Vec<Arc<dyn Channel>>,
     outbound_tx: mpsc::UnboundedSender<(String, ChannelOutboundMessage)>,
@@ -18,6 +18,17 @@ pub struct ChannelManager {
 }
 
 impl ChannelManager {
+    /// 创建空 ChannelManager（不启动任何通道），用于测试和未配置通道的场景。
+    pub fn empty() -> Self {
+        let (outbound_tx, _) = mpsc::unbounded_channel::<(String, ChannelOutboundMessage)>();
+        let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        Self {
+            channels: vec![],
+            outbound_tx,
+            shutdown_tx,
+        }
+    }
+
     pub fn new(
         channels: Vec<Arc<dyn Channel>>,
         external_input_tx: Sender<ExternalInput>,

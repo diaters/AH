@@ -75,6 +75,7 @@ fn on_shared_knowledge_write_drains_pending_queue() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用（让 Startup 阶段加载插件）
@@ -152,6 +153,7 @@ fn on_experience_hook_drains_pending_queue() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用
@@ -226,6 +228,7 @@ fn on_approval_requested_removes_marker() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用
@@ -303,6 +306,7 @@ log_info("on_approval_resolved: task count = " + ids.len());
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用

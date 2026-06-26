@@ -80,7 +80,7 @@ fn turn_limit_creates_evaluation_workitem() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
 
     // 初始化应用
     app.update();
@@ -189,7 +189,7 @@ fn setup_eval_test_app(
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
@@ -253,6 +253,7 @@ fn setup_manual_eval_scenario(
         executor,
         input_rx,
         vec![Box::new(mock_frontend.clone())],
+        harness::channels::ChannelManager::empty(),
     );
     app.update();
 
