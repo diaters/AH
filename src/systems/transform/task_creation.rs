@@ -11,7 +11,7 @@ use tracing::debug;
 use crate::{
     app::HarnessSettings,
     domain::{
-        ChannelId, CreateTaskMessage, EntryMetadata, EntryRole, FrontendKind, NewlyCreatedTask,
+        CreateTaskMessage, EntryMetadata, EntryRole, NewlyCreatedTask,
         ShortTermMemory, Task,
     },
     user_plugins::{
@@ -51,10 +51,7 @@ pub fn user_message_to_task_system(
         let task = Task::from_user_input(
             message.content.clone(),
             settings.0.max_retries,
-            ChannelId {
-                frontend: FrontendKind::Tui,
-                user_id: "default".to_string(),
-            },
+            message.origin_channel.clone(),
         );
         debug!(
             event = "TaskCreated",
