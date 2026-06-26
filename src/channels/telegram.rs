@@ -44,15 +44,15 @@ impl TelegramChannel {
             return false;
         }
         self.config.allowed_users.iter().any(|allowed| {
-            if let Some(username) = &user.username {
-                if username.eq_ignore_ascii_case(allowed) {
-                    return true;
-                }
+            if let Some(username) = &user.username
+                && username.eq_ignore_ascii_case(allowed)
+            {
+                return true;
             }
-            if let Ok(id) = allowed.parse::<i64>() {
-                if user.id == id {
-                    return true;
-                }
+            if let Ok(id) = allowed.parse::<i64>()
+                && user.id == id
+            {
+                return true;
             }
             false
         })
@@ -72,15 +72,18 @@ impl Channel for TelegramChannel {
                 "chat_id": message.recipient,
                 "text": chunk,
             });
-            if let Some(thread_id) = &message.thread_id {
-                if let Ok(id) = thread_id.parse::<i64>() {
-                    payload["message_thread_id"] = json!(id);
-                }
+            if let Some(thread_id) = &message.thread_id
+                && let Ok(id) = thread_id.parse::<i64>()
+            {
+                payload["message_thread_id"] = json!(id);
             }
             let resp = self.client.post(&url).json(&payload).send().await?;
             if !resp.status().is_success() {
                 let text = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::Api { code: 0, message: text });
+                return Err(ChannelError::Api {
+                    code: 0,
+                    message: text,
+                });
             }
         }
         Ok(())
@@ -93,22 +96,23 @@ impl Channel for TelegramChannel {
             let resp = self
                 .client
                 .get(&url)
-                .query(&[
-                    ("offset", offset.to_string()),
-                    ("limit", "100".to_string()),
-                ])
+                .query(&[("offset", offset.to_string()), ("limit", "100".to_string())])
                 .send()
                 .await?;
 
             if !resp.status().is_success() {
                 let text = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::Api { code: 0, message: text });
+                return Err(ChannelError::Api {
+                    code: 0,
+                    message: text,
+                });
             }
 
             let data: TelegramGetUpdatesResponse = resp.json().await?;
             for update in data.result {
                 if let Some(msg) = update.message {
-                    self.last_update_id.store(update.update_id, Ordering::SeqCst);
+                    self.last_update_id
+                        .store(update.update_id, Ordering::SeqCst);
 
                     if !self.is_allowed(&msg.from) {
                         warn!(

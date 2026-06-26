@@ -38,7 +38,14 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
-- shell 输出语义已收敛为“最新快照”，不再对 LLM 暴露伪增量游标协议
+- shell 输出语义已收敛为”最新快照”，不再对 LLM 暴露伪增量游标协议
+
+#### IM 通道
+
+- 统一 `Channel` 抽象与 `ChannelManager`（含 listen 重启退避与 shutdown）
+- Telegram 通道接入（长轮询、白名单、文本分块发送）
+- `channel_send` 工具主动推送
+- `origin_channel` 从入向消息透传到 `Task`
 
 #### 记忆治理
 
@@ -93,6 +100,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 插件 `v1` 不追踪 `tool_deny` 的 per-plugin attribution，推迟到后续 host API 升级
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
+- IM 出向-自动（按来源通道自动回复）尚未实现，当前仅支持 `channel_send` 主动推送
+- QQ 与飞书通道仅有占位模块，尚未接入实际 API
+- IM 通道暂不支持媒体附件（图片、文件等），仅支持文本消息
+- Telegram 通道暂不支持 webhook 模式、inline keyboard 等增强功能
 
 ### 已收敛或已废弃
 

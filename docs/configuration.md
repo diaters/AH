@@ -209,6 +209,39 @@ system_prompt = "You are a helper." # 系统提示
 | `/reload-plugins` | 热重载插件（清除旧贡献，重新扫描磁盘） |
 | `/<plugin_id>:<command> [args]` | 调用插件贡献的命令 |
 
+## IM 通道配置
+
+### 核心变量
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HARNESS_CHANNELS_CONFIG` | 无（不启用通道） | IM 通道配置文件路径（TOML 格式） |
+
+当 `HARNESS_CHANNELS_CONFIG` 未设置时，IM 通道不启用，`ChannelManager` 以空实例运行。
+
+### 配置文件格式
+
+配置文件为 TOML 格式，当前仅支持 Telegram 通道：
+
+```toml
+[telegram]
+bot_token = "123456:ABC-DEF"
+allowed_users = ["alice", "123456789"]
+```
+
+### Telegram 通道字段
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `bot_token` | 是 | Telegram Bot API Token |
+| `allowed_users` | 否 | 允许的用户列表，支持用户名（大小写不敏感）和数字 user_id；空列表拒绝所有用户 |
+
+### 通道行为
+
+- 入向：长轮询 `getUpdates`，白名单过滤，匹配的用户消息触发 Task 创建
+- 出向：`channel_send` 工具主动推送，超过 4096 字符自动分块发送
+- 监听异常自动重启：指数退避（1s → 60s）
+
 ## 已废弃的旧配置语义
 
 以下旧语义已经不再作为当前对外能力存在：
