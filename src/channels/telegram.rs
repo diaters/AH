@@ -6,10 +6,13 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::channels::config::TelegramConfig;
 
-use super::traits::{Channel, ChannelError, ChannelInboundMessage, ChannelOutboundMessage};
+use super::traits::{
+    Channel, ChannelError, ChannelInboundMessage, ChannelOutboundMessage, InboundConfirmation,
+};
 
 pub struct TelegramChannel {
     config: TelegramConfig,
@@ -35,6 +38,19 @@ impl TelegramChannel {
 
     fn api_url(&self, method: &str) -> String {
         format!("{}/bot{}/{}", self.base_url, self.config.bot_token, method)
+    }
+
+    async fn post(&self, method: &str, payload: &serde_json::Value) -> Result<(), ChannelError> {
+        let url = self.api_url(method);
+        let resp = self.client.post(&url).json(payload).send().await?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: 0,
+                message: text,
+            });
+        }
+        Ok(())
     }
 
     /// 白名单匹配：username（忽略大小写）、user_id，或通配符 `"*"`。
@@ -119,6 +135,49 @@ impl Channel for TelegramChannel {
 
             let data: TelegramGetUpdatesResponse = resp.json().await?;
             for update in data.result {
+                if let Some(callback_query) = update.callback_query {
+                    self.last_update_id
+                        .store(update.update_id, Ordering::SeqCst);
+
+                    if let Some(data) = callback_query.data
+                        && let Some((request_id, option)) = parse_callback_data(&data)
+                    {
+                        // Answer callback query to stop client loading spinner
+                        let answer_payload = json!({
+                            "callback_query_id": callback_query.id,
+                        });
+                        let _ = self.post("answerCallbackQuery", &answer_payload).await;
+
+                        // Optionally reply with a confirmation note
+                        if let Some(ref message) = callback_query.message {
+                            let note = format!("已选择：{}", option);
+                            let note_payload = json!({
+                                "chat_id": message.chat.id,
+                                "text": note,
+                                "message_thread_id": message.message_thread_id,
+                            });
+                            let _ = self.post("sendMessage", &note_payload).await;
+                        }
+
+                        if let Some(ref message) = callback_query.message {
+                            let inbound = ChannelInboundMessage {
+                                channel_name: self.name().to_string(),
+                                sender_id: callback_query.from.id.to_string(),
+                                chat_id: message.chat.id.to_string(),
+                                thread_id: message.message_thread_id.map(|id| id.to_string()),
+                                content: String::new(),
+                                timestamp_secs: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0),
+                                confirmation: Some(InboundConfirmation { request_id, option }),
+                            };
+                            let _ = tx.send(inbound);
+                        }
+                    }
+                    continue;
+                }
+
                 if let Some(msg) = update.message {
                     self.last_update_id
                         .store(update.update_id, Ordering::SeqCst);
@@ -164,6 +223,12 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
+fn parse_callback_data(data: &str) -> Option<(Uuid, String)> {
+    let (uuid_part, option_part) = data.split_once(':')?;
+    let request_id = Uuid::parse_str(uuid_part).ok()?;
+    Some((request_id, option_part.to_string()))
+}
+
 #[derive(Debug, Deserialize)]
 struct TelegramGetUpdatesResponse {
     result: Vec<TelegramUpdate>,
@@ -173,6 +238,7 @@ struct TelegramGetUpdatesResponse {
 struct TelegramUpdate {
     update_id: i64,
     message: Option<TelegramMessage>,
+    callback_query: Option<TelegramCallbackQuery>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +247,22 @@ struct TelegramMessage {
     chat: TelegramChat,
     date: i64,
     text: Option<String>,
+    message_thread_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramCallbackQuery {
+    id: String,
+    from: TelegramUser,
+    message: Option<TelegramCallbackMessage>,
+    data: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct TelegramCallbackMessage {
+    message_id: i64,
+    chat: TelegramChat,
     message_thread_id: Option<i64>,
 }
 
@@ -252,5 +334,16 @@ mod tests {
         let chunks = split_text(&s, 4096);
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].len(), 4096);
+    }
+
+    #[test]
+    fn parse_callback_query_data() {
+        let data = "01912345-6789-7abc-8def-0123456789ab:allow_once";
+        let (request_id, option) = parse_callback_data(data).unwrap();
+        assert_eq!(
+            request_id.to_string(),
+            "01912345-6789-7abc-8def-0123456789ab"
+        );
+        assert_eq!(option, "allow_once");
     }
 }
