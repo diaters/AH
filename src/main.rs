@@ -108,8 +108,11 @@ fn main() -> Result<()> {
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
 
     // 启动 ChannelManager（无通道时为空操作）
-    let (channel_manager, channel_handle, channel_frontends) =
-        ChannelManager::new(channel_list, input_tx);
+    // 必须在 Tokio runtime 上下文中 spawn supervisor 任务。
+    let (channel_manager, channel_handle, channel_frontends) = {
+        let _guard = runtime.enter();
+        ChannelManager::new(channel_list, input_tx)
+    };
     let runtime_clone = runtime.clone();
 
     // 构建 frontends：TUI + 所有 IM 通道前端
