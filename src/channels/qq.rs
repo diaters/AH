@@ -72,6 +72,8 @@ fn infer_attachment_marker(content_type: &str, filename: &str) -> &'static str {
     "DOCUMENT"
 }
 
+const DEDUP_CAPACITY: usize = 10_000;
+
 /// QQ 通道实现
 #[allow(dead_code)]
 pub struct QqChannel {
@@ -80,6 +82,7 @@ pub struct QqChannel {
     runtime_allowed_users: Arc<RwLock<HashSet<String>>>,
     client: Client,
     token_cache: Arc<RwLock<Option<(String, u64)>>>,
+    dedup: Arc<RwLock<HashSet<String>>>,
     workspace_dir: Option<PathBuf>,
     api_base: String,
     auth_url: String,
@@ -97,6 +100,7 @@ impl QqChannel {
             runtime_allowed_users: Arc::new(RwLock::new(HashSet::new())),
             client: Client::new(),
             token_cache: Arc::new(RwLock::new(None)),
+            dedup: Arc::new(RwLock::new(HashSet::new())),
             workspace_dir: None,
             api_base: QQ_API_BASE.to_string(),
             auth_url: QQ_AUTH_URL.to_string(),
@@ -106,6 +110,59 @@ impl QqChannel {
     pub fn with_workspace_dir(mut self, dir: PathBuf) -> Self {
         self.workspace_dir = Some(dir);
         self
+    }
+
+    /// 白名单匹配：runtime_allowed_users 优先，然后按 allowed_users 通配符 `*` 或精确 openid 匹配。
+    #[allow(dead_code)]
+    async fn is_user_allowed(&self, user_openid: &str) -> bool {
+        if self
+            .runtime_allowed_users
+            .read()
+            .await
+            .contains(user_openid)
+        {
+            return true;
+        }
+        if self.config.allowed_users.iter().any(|u| u == "*") {
+            return true;
+        }
+        if self.config.allowed_users.is_empty() {
+            return false;
+        }
+        self.config
+            .allowed_users
+            .iter()
+            .any(|allowed| allowed == user_openid)
+    }
+
+    /// 加入运行时白名单（/bind 配对通过时调用）。
+    #[allow(dead_code)]
+    async fn runtime_allow(&self, user_openid: &str) {
+        self.runtime_allowed_users
+            .write()
+            .await
+            .insert(user_openid.to_string());
+    }
+
+    /// 消息去重检查：msg_id 已存在返回 true，否则插入并返回 false。
+    /// 容量达上限时淘汰一半旧条目。
+    #[allow(dead_code)]
+    async fn is_duplicate(&self, msg_id: &str) -> bool {
+        if msg_id.is_empty() {
+            return false;
+        }
+        let mut dedup = self.dedup.write().await;
+        if dedup.contains(msg_id) {
+            return true;
+        }
+        if dedup.len() >= DEDUP_CAPACITY {
+            let to_remove: Vec<String> = dedup.iter().take(DEDUP_CAPACITY / 2).cloned().collect();
+            for key in to_remove {
+                dedup.remove(&key);
+            }
+        }
+        dedup.insert(msg_id.to_string());
+        false
     }
 
     /// 下载附件到本地工作目录，文件名加 UUID 后缀避免冲突。
@@ -669,5 +726,68 @@ mod tests {
         let result = ch.compose_message_content(&payload).await.unwrap();
         assert!(result.contains("<VOICE_TRANSCRIPTION_0>第一段</VOICE_TRANSCRIPTION_0>"));
         assert!(result.contains("<VOICE_TRANSCRIPTION_1>第二段</VOICE_TRANSCRIPTION_1>"));
+    }
+
+    // --- Allowlist matching tests ---
+
+    #[tokio::test]
+    async fn user_allowed_by_wildcard() {
+        let mut cfg = make_config();
+        cfg.allowed_users = vec!["*".to_string()];
+        let ch = QqChannel::new(cfg);
+        assert!(ch.is_user_allowed("anyone").await);
+    }
+
+    #[tokio::test]
+    async fn user_allowed_by_specific_openid() {
+        let mut cfg = make_config();
+        cfg.allowed_users = vec!["user123".to_string()];
+        let ch = QqChannel::new(cfg);
+        assert!(ch.is_user_allowed("user123").await);
+        assert!(!ch.is_user_allowed("other").await);
+    }
+
+    #[tokio::test]
+    async fn empty_allowlist_denies_all() {
+        let ch = QqChannel::new(make_config());
+        assert!(!ch.is_user_allowed("anyone").await);
+    }
+
+    #[tokio::test]
+    async fn runtime_allow_overrides_empty_config() {
+        let ch = QqChannel::new(make_config());
+        ch.runtime_allow("runtime_user").await;
+        assert!(ch.is_user_allowed("runtime_user").await);
+        assert!(!ch.is_user_allowed("other").await);
+    }
+
+    // --- Message dedup tests ---
+
+    #[tokio::test]
+    async fn dedup_first_occurrence_returns_false() {
+        let ch = QqChannel::new(make_config());
+        assert!(!ch.is_duplicate("msg1").await);
+    }
+
+    #[tokio::test]
+    async fn dedup_second_occurrence_returns_true() {
+        let ch = QqChannel::new(make_config());
+        assert!(!ch.is_duplicate("msg1").await);
+        assert!(ch.is_duplicate("msg1").await);
+    }
+
+    #[tokio::test]
+    async fn dedup_empty_msg_id_returns_false() {
+        let ch = QqChannel::new(make_config());
+        assert!(!ch.is_duplicate("").await);
+        assert!(!ch.is_duplicate("").await);
+    }
+
+    #[tokio::test]
+    async fn dedup_independent_msg_ids() {
+        let ch = QqChannel::new(make_config());
+        assert!(!ch.is_duplicate("msg_a").await);
+        assert!(!ch.is_duplicate("msg_b").await);
+        assert!(ch.is_duplicate("msg_a").await);
     }
 }
