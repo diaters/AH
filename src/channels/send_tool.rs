@@ -3,13 +3,20 @@ use serde_json::{Value, json};
 
 use crate::domain::{ToolAction, ToolError, ToolPermission, ToolSchema};
 
+const ATTACHMENT_HINT: &str = r#"
+You can include attachments using markers like [IMAGE:/path/to/file.png], [DOCUMENT:/path/to/file.pdf], [VIDEO:...], [AUDIO:...], [VOICE:...]. The target path may be relative or absolute, a file:// URL, or an HTTP(S) URL. Unsupported attachment types will be sent as plain text links by the channel implementation.
+"#;
+
 pub struct ChannelSendTool;
 
 impl ChannelSendTool {
     pub fn definition() -> crate::domain::ToolDefinition {
         crate::domain::ToolDefinition {
             name: "channel_send".to_string(),
-            description: "向指定 IM 通道（telegram/qq/feishu）发送消息".to_string(),
+            description: format!(
+                "向指定 IM 通道（telegram/qq/feishu）发送消息。{}",
+                ATTACHMENT_HINT
+            ),
             parameters: ToolSchema {
                 schema: json!({
                     "type": "object",

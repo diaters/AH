@@ -49,6 +49,7 @@ async fn telegram_listen_receives_update() {
             "result": [{
                 "update_id": 42,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,
@@ -56,6 +57,15 @@ async fn telegram_listen_receives_update() {
                 }
             }]
         })))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/setMessageReaction"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": true})),
+        )
         .mount(&mock_server)
         .await;
 
@@ -101,6 +111,7 @@ async fn telegram_bind_allows_user_and_replies() {
             "result": [{
                 "update_id": 1,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,
@@ -121,6 +132,7 @@ async fn telegram_bind_allows_user_and_replies() {
             "result": [{
                 "update_id": 2,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,
@@ -152,6 +164,15 @@ async fn telegram_bind_allows_user_and_replies() {
                 .set_body_json(serde_json::json!({"ok": true, "result": {"message_id": 1}})),
         )
         .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/setMessageReaction"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": true})),
+        )
         .mount(&mock_server)
         .await;
 
@@ -195,6 +216,7 @@ async fn telegram_bind_wrong_code_replies_error() {
             "result": [{
                 "update_id": 1,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,
@@ -256,6 +278,7 @@ async fn telegram_bind_empty_pairing_code_replies_error() {
             "result": [{
                 "update_id": 1,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,
@@ -317,6 +340,7 @@ async fn telegram_bind_ignored_when_pairing_disabled() {
             "result": [{
                 "update_id": 1,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,
@@ -365,6 +389,7 @@ async fn telegram_bind_ignored_when_allowlist_not_empty() {
             "result": [{
                 "update_id": 1,
                 "message": {
+                    "message_id": 1,
                     "from": {"id": 123, "username": "alice"},
                     "chat": {"id": 456, "type": "private"},
                     "date": 0,

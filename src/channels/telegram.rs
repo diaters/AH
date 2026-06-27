@@ -260,6 +260,19 @@ impl TelegramChannel {
         Ok(())
     }
 
+    async fn send_ack_reaction(&self, chat_id: i64, message_id: i64) -> Result<(), ChannelError> {
+        let reactions = ["👍", "👌", "✅", "🆗"];
+        let reaction = reactions[message_id as usize % reactions.len()];
+        let payload = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reaction": [{"type": "emoji", "emoji": reaction}],
+            "is_big": false,
+        });
+        self.post("setMessageReaction", &payload).await?;
+        Ok(())
+    }
+
     async fn extract_incoming_attachment(
         &self,
         msg: &TelegramMessage,
@@ -717,18 +730,53 @@ impl Channel for TelegramChannel {
                             confirmation: None,
                         };
                         let _ = tx.send(inbound);
+                        if let Err(e) = self.send_ack_reaction(msg.chat.id, msg.message_id).await {
+                            warn!(
+                                event = "TelegramAckReactionFailed",
+                                chat_id = %msg.chat.id,
+                                message_id = %msg.message_id,
+                                error = %e,
+                                "failed to send ack reaction"
+                            );
+                        }
                         continue;
                     }
 
-                    let _ = tx.send(ChannelInboundMessage {
-                        channel_name: self.name().to_string(),
-                        sender_id: msg.from.id.to_string(),
-                        chat_id: msg.chat.id.to_string(),
-                        thread_id: msg.message_thread_id.map(|id| id.to_string()),
-                        content: msg.text.unwrap_or_default(),
-                        timestamp_secs: msg.date as u64,
-                        confirmation: None,
+                    if let Some(text) = msg.text {
+                        let _ = tx.send(ChannelInboundMessage {
+                            channel_name: self.name().to_string(),
+                            sender_id: msg.from.id.to_string(),
+                            chat_id: msg.chat.id.to_string(),
+                            thread_id: msg.message_thread_id.map(|id| id.to_string()),
+                            content: text,
+                            timestamp_secs: msg.date as u64,
+                            confirmation: None,
+                        });
+                        if let Err(e) = self.send_ack_reaction(msg.chat.id, msg.message_id).await {
+                            warn!(
+                                event = "TelegramAckReactionFailed",
+                                chat_id = %msg.chat.id,
+                                message_id = %msg.message_id,
+                                error = %e,
+                                "failed to send ack reaction"
+                            );
+                        }
+                        continue;
+                    }
+
+                    let payload = json!({
+                        "chat_id": msg.chat.id,
+                        "text": "暂不支持该消息类型。",
+                        "message_thread_id": msg.message_thread_id,
                     });
+                    if let Err(e) = self.post("sendMessage", &payload).await {
+                        warn!(
+                            event = "TelegramUnsupportedTypeReplyFailed",
+                            chat_id = %msg.chat.id,
+                            error = %e,
+                            "failed to reply to unsupported message type"
+                        );
+                    }
                 }
             }
 
@@ -1200,6 +1248,7 @@ struct TelegramUpdate {
 
 #[derive(Debug, Deserialize)]
 struct TelegramMessage {
+    message_id: i64,
     from: TelegramUser,
     chat: TelegramChat,
     date: i64,
@@ -1843,5 +1892,191 @@ allowed_users = ["123"]
             })
             .await
             .expect("send");
+    }
+
+    #[tokio::test]
+    async fn send_ack_reaction_uses_message_id_modulo() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/setMessageReaction"))
+            .and(body_json(serde_json::json!({
+                "chat_id": 123,
+                "message_id": 3,
+                "reaction": [{"type": "emoji", "emoji": "🆗"}],
+                "is_big": false,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": true
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        channel
+            .send_ack_reaction(123, 3)
+            .await
+            .expect("ack reaction");
+    }
+
+    #[tokio::test]
+    async fn listen_sends_ack_reaction_for_text_message() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Default empty response for subsequent getUpdates calls.
+        Mock::given(method("GET"))
+            .and(path("/botTOKEN/getUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": []
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let update = serde_json::json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 7,
+                "from": {"id": 42, "username": "alice"},
+                "chat": {"id": 123},
+                "date": 1700000000,
+                "text": "hello"
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/botTOKEN/getUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": [update]
+            })))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/setMessageReaction"))
+            .and(body_json(serde_json::json!({
+                "chat_id": 123,
+                "message_id": 7,
+                "reaction": [{"type": "emoji", "emoji": "🆗"}],
+                "is_big": false,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": true
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec!["alice".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        let (tx, rx) = crossbeam_channel::bounded(1);
+
+        let handle = tokio::spawn(async move {
+            let _ = channel.listen(tx).await;
+        });
+
+        let inbound = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Ok(msg) = rx.try_recv() {
+                    return msg;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("inbound message");
+        assert_eq!(inbound.content, "hello");
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn listen_replies_to_unsupported_message_type() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/botTOKEN/getUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": []
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let update = serde_json::json!({
+            "update_id": 1,
+            "message": {
+                "message_id": 8,
+                "from": {"id": 42, "username": "alice"},
+                "chat": {"id": 123},
+                "date": 1700000000
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/botTOKEN/getUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": [update]
+            })))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendMessage"))
+            .and(body_json(serde_json::json!({
+                "chat_id": 123,
+                "text": "暂不支持该消息类型。",
+                "message_thread_id": null,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 9}
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec!["alice".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        let (tx, _rx) = crossbeam_channel::bounded(1);
+
+        let handle = tokio::spawn(async move {
+            let _ = channel.listen(tx).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        handle.abort();
     }
 }
