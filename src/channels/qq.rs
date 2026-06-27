@@ -1178,6 +1178,12 @@ impl Channel for QqChannel {
                 code: 0,
                 message: e.to_string(),
             })?;
+        if hello_data.get("op").and_then(serde_json::Value::as_u64) != Some(10) {
+            return Err(ChannelError::Api {
+                code: 0,
+                message: format!("expected Hello op=10, got: {hello_data}"),
+            });
+        }
         let heartbeat_interval = hello_data
             .get("d")
             .and_then(|d| d.get("heartbeat_interval"))
