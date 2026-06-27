@@ -1,4 +1,4 @@
-use std::{sync::Arc, thread, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
@@ -88,7 +88,7 @@ fn auto_channel_reply() {
         // 驱动 ECS 若干帧，让 Agent 执行、结果回传、出向消息发送到 mock
         for _ in 0..100 {
             app.update();
-            thread::sleep(Duration::from_millis(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         mock_server.verify().await;
