@@ -33,6 +33,16 @@ fn build_tools_for_agent(
         .collect()
 }
 
+/// 在 Brain 生成的 delegate prompt 前追加当前通道上下文，
+/// 确保被委派 Agent 知道通过哪个 IM 通道回发文件/消息。
+fn augment_delegate_prompt(
+    delegate_prompt: &str,
+    origin_channel: &crate::domain::ChannelId,
+) -> String {
+    let context = origin_channel.to_prompt_context();
+    format!("{context}\n\n{delegate_prompt}")
+}
+
 /// Brain 决策 System
 ///
 /// 处理 Brain Agent 的决策结果，选择合适的 Agent 执行任务。
@@ -93,11 +103,15 @@ pub fn brain_decision_system(
                         };
 
                         let tools = build_tools_for_agent(&registry, fallback);
+                        let prompt = augment_delegate_prompt(
+                            &decision.delegate_prompt,
+                            &task.origin_channel,
+                        );
                         let request = AgentExecutionRequest {
                             task_id: task.id,
                             agent_id: fallback.id,
                             request_kind: AgentRequestKind::LlmCompletion,
-                            prompt: decision.delegate_prompt,
+                            prompt,
                             system_prompt: None,
                             tools,
                             conversation: None,
@@ -116,11 +130,13 @@ pub fn brain_decision_system(
                     };
 
                     let tools = build_tools_for_agent(&registry, selected_agent);
+                    let prompt =
+                        augment_delegate_prompt(&decision.delegate_prompt, &task.origin_channel);
                     let request = AgentExecutionRequest {
                         task_id: task.id,
                         agent_id: selected_agent.id,
                         request_kind: AgentRequestKind::LlmCompletion,
-                        prompt: decision.delegate_prompt,
+                        prompt,
                         system_prompt: None,
                         tools,
                         conversation: None,

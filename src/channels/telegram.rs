@@ -10,15 +10,15 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::channels::config::TelegramConfig;
 
-#[allow(unused_imports)]
 use super::traits::{
     AttachmentKind, Channel, ChannelAttachment, ChannelError, ChannelInboundMessage,
     ChannelOutboundMessage, ChannelParseMode, InboundConfirmation, ReplyMarkup,
+    extract_attachments,
 };
 
 pub struct TelegramChannel {
@@ -168,6 +168,15 @@ impl TelegramChannel {
         base: &ChannelOutboundMessage,
         attachment: &ChannelAttachment,
     ) -> Result<(), ChannelError> {
+        debug!(
+            event = "TelegramSendAttachment",
+            chat_id = %base.recipient,
+            thread_id = ?base.thread_id,
+            kind = ?attachment.kind,
+            target = %attachment.target,
+            "telegram channel sending attachment"
+        );
+
         if !self.supported_attachment_kinds().contains(&attachment.kind) {
             // Unsupported by this channel, send as text fallback
             let fallback = json!({
@@ -497,46 +506,6 @@ fn sanitize_telegram_filename(name: &str) -> String {
         .collect()
 }
 
-fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
-    let mut attachments = vec![];
-    let mut text = String::new();
-    let mut last_end = 0;
-    let bytes = content.as_bytes();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'['
-            && let Some(close) = content[i + 1..].find(']')
-        {
-            let close = close + i + 1;
-            let inner = &content[i + 1..close];
-            if let Some((kind_str, target)) = inner.split_once(':') {
-                let kind = match kind_str.to_uppercase().as_str() {
-                    "IMAGE" => Some(AttachmentKind::Image),
-                    "DOCUMENT" => Some(AttachmentKind::Document),
-                    "VIDEO" => Some(AttachmentKind::Video),
-                    "AUDIO" => Some(AttachmentKind::Audio),
-                    "VOICE" => Some(AttachmentKind::Voice),
-                    _ => None,
-                };
-                if let Some(kind) = kind {
-                    text.push_str(&content[last_end..i]);
-                    attachments.push(ChannelAttachment {
-                        kind,
-                        target: target.trim().to_string(),
-                    });
-                    last_end = close + 1;
-                    i = close + 1;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-    text.push_str(&content[last_end..]);
-    (text, attachments)
-}
-
 #[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
@@ -544,24 +513,49 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: &ChannelOutboundMessage) -> Result<(), ChannelError> {
-        let (text_without_markers, inline_attachments) = extract_attachments(&message.content);
-        let all_attachments: Vec<_> = message
-            .attachments
-            .iter()
-            .cloned()
-            .chain(inline_attachments)
-            .filter(|a| !a.target.trim().is_empty())
-            .collect();
+        // 审批请求消息只展示文本与内联键盘，不应解析或发送附件标记。
+        let (text_without_markers, all_attachments) = if message.reply_markup.is_some() {
+            (message.content.clone(), vec![])
+        } else {
+            let (text, inline_attachments) = extract_attachments(&message.content);
+            let attachments: Vec<_> = message
+                .attachments
+                .iter()
+                .cloned()
+                .chain(inline_attachments)
+                .filter(|a| !a.target.trim().is_empty())
+                .collect();
+            (text, attachments)
+        };
 
         let text_parts = prepare_text_parts(&text_without_markers, message.parse_mode.as_ref());
 
-        for part in text_parts {
+        debug!(
+            event = "TelegramSendStart",
+            chat_id = %message.recipient,
+            thread_id = ?message.thread_id,
+            text_part_count = text_parts.len(),
+            attachment_count = all_attachments.len(),
+            has_reply_markup = message.reply_markup.is_some(),
+            parse_mode = ?message.parse_mode,
+            "telegram channel preparing outbound message"
+        );
+
+        let part_count = text_parts.len();
+        for (idx, part) in text_parts.into_iter().enumerate() {
+            // reply_markup 只应附加到最后一条消息，避免一条长内容产生多个可交互仪表盘。
+            let reply_markup = if idx + 1 == part_count {
+                message.reply_markup.as_ref()
+            } else {
+                None
+            };
+
             let payload = build_send_payload(
                 &message.recipient,
                 message.thread_id.as_deref(),
                 &part,
                 message.parse_mode.as_ref(),
-                message.reply_markup.as_ref(),
+                reply_markup,
             );
 
             let result = self.post("sendMessage", &payload).await;
@@ -571,7 +565,7 @@ impl Channel for TelegramChannel {
                         &message.recipient,
                         message.thread_id.as_deref(),
                         &part,
-                        message.reply_markup.as_ref(),
+                        reply_markup,
                     );
                     self.post("sendMessage", &fallback).await?;
                 } else {
@@ -665,6 +659,31 @@ impl Channel for TelegramChannel {
                                 error = %e,
                                 "failed to answer callback query"
                             );
+                        }
+
+                        // Remove inline keyboard from the original message to prevent
+                        // accidental duplicate confirmations.
+                        if let Some(ref message) = callback_query.message {
+                            let remove_keyboard_payload = json!({
+                                "chat_id": message.chat.id,
+                                "message_id": message.message_id,
+                                "reply_markup": {
+                                    "inline_keyboard": []
+                                },
+                            });
+                            if let Err(e) = self
+                                .post("editMessageReplyMarkup", &remove_keyboard_payload)
+                                .await
+                            {
+                                warn!(
+                                    event = "TelegramRemoveKeyboardFailed",
+                                    callback_query_id = %callback_query.id,
+                                    chat_id = %message.chat.id,
+                                    message_id = %message.message_id,
+                                    error = %e,
+                                    "failed to remove inline keyboard after confirmation"
+                                );
+                            }
                         }
 
                         // Optionally reply with a confirmation note
@@ -1112,7 +1131,12 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
 
 fn prepare_text_parts(content: &str, parse_mode: Option<&ChannelParseMode>) -> Vec<String> {
     match parse_mode {
-        Some(ChannelParseMode::Html) | None => {
+        Some(ChannelParseMode::Html) => {
+            // 内容已经是合法 HTML，直接安全分片即可，避免把 <pre> 等标签二次转义。
+            split_html_safely(content, TELEGRAM_MAX_TEXT_LENGTH)
+        }
+        None => {
+            // 默认按 Markdown 处理，再转成 Telegram HTML。
             let chunks = split_markdown_semantic(content);
             chunks
                 .into_iter()
@@ -1777,6 +1801,14 @@ allowed_users = ["123"]
     }
 
     #[test]
+    fn prepare_text_parts_preserves_html_in_html_mode() {
+        let html = "🔒 需要你的确认\n\n工具：channel_send\n输入：<pre>{\n  &quot;channel&quot;: &quot;telegram&quot;\n}</pre>";
+        let parts = prepare_text_parts(html, Some(&ChannelParseMode::Html));
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], html);
+    }
+
+    #[test]
     fn decode_html_entities_decodes_basic_entities() {
         assert_eq!(decode_html_entities("&lt;&gt;&amp;&quot;&#39;"), "<>&\"'");
     }
@@ -1939,6 +1971,58 @@ allowed_users = ["123"]
             })
             .await
             .expect("send");
+    }
+
+    #[tokio::test]
+    async fn approval_request_does_not_send_inline_attachments() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendMessage"))
+            .and(body_json(serde_json::json!({
+                "chat_id": "123",
+                "text": "confirm [DOCUMENT:/tmp/video.mp4]",
+                "parse_mode": "HTML",
+                "reply_markup": {
+                    "inline_keyboard": [[{
+                        "text": "允许",
+                        "callback_data": "req:allow"
+                    }]]
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 1}
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec!["u".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        channel
+            .send(&ChannelOutboundMessage {
+                recipient: "123".to_string(),
+                thread_id: None,
+                content: "confirm [DOCUMENT:/tmp/video.mp4]".to_string(),
+                parse_mode: Some(ChannelParseMode::Html),
+                reply_markup: Some(ReplyMarkup::InlineKeyboard(vec![vec![
+                    InlineKeyboardButton {
+                        text: "允许".to_string(),
+                        callback_data: "req:allow".to_string(),
+                    },
+                ]])),
+                attachments: vec![],
+            })
+            .await
+            .expect("send approval request without attachments");
     }
 
     #[tokio::test]

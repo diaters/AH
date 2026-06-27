@@ -5,6 +5,7 @@ use genai::{
     chat::{ChatMessage, ChatRequest, ChatResponse, ContentPart, Tool, ToolCall, ToolResponse},
     resolver::{AuthData, Endpoint, ServiceTargetResolver},
 };
+use tokio::time::Instant;
 use tracing::debug;
 
 use crate::domain::{
@@ -73,8 +74,10 @@ impl AgentExecutor for GenaiExecutor {
 
         Box::pin(async move {
             debug!(
+                event = "LlmRequestStart",
                 task_id = %request.task_id,
                 agent_id = %request.agent_id,
+                model = %model,
                 kind = ?request.request_kind,
                 prompt_len = request.prompt.len(),
                 has_system_prompt = request.system_prompt.is_some(),
@@ -84,6 +87,7 @@ impl AgentExecutor for GenaiExecutor {
             );
 
             let chat_request = build_chat_request(&request)?;
+            let start = Instant::now();
 
             let response = client
                 .exec_chat(&model, chat_request, None)
@@ -92,6 +96,17 @@ impl AgentExecutor for GenaiExecutor {
                     debug!(error = %error, "genai API error");
                     classify_genai_error(error)
                 })?;
+
+            let duration_ms = start.elapsed().as_millis();
+            debug!(
+                event = "LlmRequestCompleted",
+                task_id = %request.task_id,
+                agent_id = %request.agent_id,
+                model = %model,
+                duration_ms = duration_ms,
+                response_len = response.first_text().map(|c| c.len()).unwrap_or(0),
+                "genai request completed"
+            );
 
             parse_response(&request.task_id, response)
         })

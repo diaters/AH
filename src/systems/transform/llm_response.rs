@@ -1078,13 +1078,19 @@ pub fn tool_calling_orchestrator_system(
             continue;
         }
 
+        // 在 follow-up 中保留当前通道上下文，避免多轮 tool calling 后丢失来源信息。
+        let system_prompt = tasks
+            .iter()
+            .find(|task| task.id == state.task_id)
+            .map(|task| task.origin_channel.to_prompt_context());
+
         // Spawn follow-up LLM request with conversation
         let request = AgentExecutionRequest {
             task_id: state.task_id,
             agent_id: state.agent_id,
             request_kind: state.request_kind.clone(),
             prompt: String::new(),
-            system_prompt: None,
+            system_prompt,
             tools: state.tools.clone(),
             conversation: Some(state.conversation.clone()),
             work_item_id: state.work_item_id,

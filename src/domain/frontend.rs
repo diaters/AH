@@ -21,6 +21,28 @@ pub struct ChannelId {
     pub thread_id: Option<String>,
 }
 
+impl ChannelId {
+    /// 返回用于注入 LLM prompt 的通道上下文字符串。
+    pub fn to_prompt_context(&self) -> String {
+        let channel_name = match self.frontend {
+            FrontendKind::Tui => "tui",
+            FrontendKind::Telegram => "telegram",
+            FrontendKind::Web => "web",
+            FrontendKind::QQ => "qq",
+            FrontendKind::Feishu => "feishu",
+        };
+        let thread_hint = self
+            .thread_id
+            .as_deref()
+            .map(|t| format!(", thread_id={t}"))
+            .unwrap_or_default();
+        format!(
+            "[Current channel]\nchannel={channel_name}, chat_id={user_id}{thread_hint}\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='{channel_name}' and omit the target; include the file as [DOCUMENT:path] or [IMAGE:path] or [VIDEO:path].",
+            user_id = self.user_id
+        )
+    }
+}
+
 /// 事件路由目标
 #[derive(Debug, Clone)]
 pub enum EventTarget {

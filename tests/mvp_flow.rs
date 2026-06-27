@@ -89,5 +89,8 @@ fn completes_single_turn_conversation_flow() {
 
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].status, TaskStatus::Done);
-    assert_eq!(tasks[0].result_summary, "echo: 你好，Harness");
+    assert_eq!(
+        tasks[0].result_summary,
+        "echo: [Current channel]\nchannel=tui, chat_id=default\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='tui' and omit the target; include the file as [DOCUMENT:path] or [IMAGE:path] or [VIDEO:path].\n\n[Current request]\n你好，Harness"
+    );
 }

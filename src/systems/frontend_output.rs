@@ -118,6 +118,16 @@ pub(crate) fn frontend_output_system(
             .map(|t| EventTarget::Directed(vec![t.origin_channel.clone()]))
             .unwrap_or(EventTarget::Broadcast);
 
+        debug!(
+            event = "FrontendOutputApprovalRequest",
+            task_id = %confirmation.task_id,
+            agent_id = %confirmation.agent_id,
+            request_id = %confirmation.request_id,
+            tool_name = %confirmation.tool_name,
+            option_count = confirmation.options.len(),
+            "pushing approval request to frontends"
+        );
+
         let options: Vec<crate::domain::ApprovalOption> = confirmation
             .options
             .iter()
