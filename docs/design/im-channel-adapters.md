@@ -1,17 +1,21 @@
 # IM 通道适配设计（Telegram / QQ / 飞书）
 
-> **状态：当前有效**
+> __状态：当前有效__
 
 ## 目标
 
-为 Harness 引入统一的即时通讯（IM）通道能力。本期交付：
+为 Harness 引入统一的即时通讯（IM）通道能力。
 
-1. **入向**：用户从 IM 发送消息，触发 Harness 的 Task。
-2. **出向-主动**：Agent 通过 `channel_send` 工具向任意已配置平台主动发送消息。
+### 本期交付
 
-下列能力**不在本期交付**，作为后续阶段推进：
+1. __入向__：用户从 IM 发送消息，触发 Harness 的 Task。
+2. __出向-主动__：Agent 通过 `channel_send` 工具向任意已配置平台主动发送消息。
 
-3. **出向-自动**：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台。
+### 后续阶段
+
+下列能力__不在本期交付__，作为后续阶段推进：
+
+1. __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台。
 
 > 拆分理由：出向-自动需要 `Channel` 持有出向发送句柄并作为 `Frontend` 真正发送消息，
 > 涉及 `Frontend` trait 能力扩展与独立 companion system 设计，与本期“建立抽象 + Telegram
@@ -59,9 +63,9 @@ pub trait Channel: Send + Sync + 'static {
 实施前需明确当前代码已有能力，避免重复设计：
 
 - `Task` 已有 `origin_channel: ChannelId` 字段（`src/domain/task.rs`），`Task::from_user_input`
-  已接收 channel 参数。**本期缺口在消息类型未透传 origin_channel，不在 Task 本身。**
-- `FrontendKind` 当前为 `Tui / Telegram / Web`（`src/domain/frontend.rs`）。本期**保留
-  `Web` 变体不动**，新增 `QQ` 与 `Feishu`，最终为 `Tui / Telegram / Web / QQ / Feishu`。
+  已接收 channel 参数。__本期缺口在消息类型未透传 origin_channel，不在 Task 本身。__
+- `FrontendKind` 当前为 `Tui / Telegram / Web`（`src/domain/frontend.rs`）。本期__保留
+  `Web` 变体不动__，新增 `QQ` 与 `Feishu`，最终为 `Tui / Telegram / Web / QQ / Feishu`。
 - `SystemOutputMessage` 已实现“按 `task_id` 查 `Task::origin_channel` 生成 `Directed` 事件”
   的路由模式（`src/systems/frontend_output.rs`）。本期 `UserOutputMessage` 复用同一模式。
 - `HarnessConfig` 位于 `src/app/mod.rs`，通过 `from_env()` 从环境变量加载；`agents.toml`
@@ -88,11 +92,11 @@ pub trait Channel: Send + Sync + 'static {
 
 新增 `channel_send` 工具，返回 `ToolAction::SendChannelMessage { channel, target, content }`。
 
-为与现有工具执行链路一致，`SendChannelMessage` **不绕过** `handle_tool_action`。处理方式：
+为与现有工具执行链路一致，`SendChannelMessage` __不绕过__ `handle_tool_action`。处理方式：
 
 - 在 `handle_tool_action` 中新增 `SendChannelMessage` 分支。
 - 由于 `handle_tool_action` 通过 `Commands` 写状态、无法直接读 `ChannelManager` Resource，
-  本期采用**独立 companion system** 模式：`handle_tool_action` 把待发送消息写入一个
+  本期采用__独立 companion system__ 模式：`handle_tool_action` 把待发送消息写入一个
   `PendingChannelSend` 组件 entity，由 `channel_send_dispatch_system`（持有
   `Res<ChannelManager>`）消费并调用 `ChannelManager::send()`，再回写 `ToolExecutionResultMessage`。
 - 该模式与项目中已有的 companion system（如 `on_message_dispatched_hook_system`）一致。
@@ -108,21 +112,21 @@ pub trait Channel: Send + Sync + 'static {
 
 ## 平台实现策略
 
-按 **Telegram → QQ → 飞书** 顺序接入。
+按 __Telegram → QQ → 飞书__ 顺序接入。
 
 ### Telegram（本期）
 
 - 长轮询 `getUpdates`。
 - 文本按 4096 字符分块发送。
-- 白名单支持 username / user_id；**空白名单表示拒绝所有用户**（语义：必须显式配置才放行）。
+- 白名单支持 username / user_id；__空白名单表示拒绝所有用户__（语义：必须显式配置才放行）。
 
-下列能力**不在本期交付**，作为后续阶段：
+下列能力__不在本期交付__，作为后续阶段：
 
 - `[IMAGE:path]`、`[VIDEO:path]`、`[DOCUMENT:path]`、`[VOICE:path]` 媒体标记。
 - `stream_mode` 下的 `editMessageText` 草稿更新。
 - `mention_only` 群组 @ 检测。
 
-> 上述能力未在本期实现，故对应配置项**本期不暴露**，避免引入伪精细控制面。
+> 上述能力未在本期实现，故对应配置项__本期不暴露__，避免引入伪精细控制面。
 
 ### QQ（后续阶段）
 
@@ -162,7 +166,7 @@ allowed_users = ["your_username"]
 
 - `ChannelManager::new()` 接收通道列表与 `InputReceiver` 的 sender，返回 `(manager, shutdown)`。
   `shutdown` 句柄用于应用退出时优雅停止所有 listen 任务。
-- 每个 `Channel::listen()` 任务在独立 tokio task 中运行；任务失败**不退出应用**，
+- 每个 `Channel::listen()` 任务在独立 tokio task 中运行；任务失败__不退出应用__，
   采用指数退避（起始 1s，上限 60s）后重启。
 - `ChannelManager::send(channel_name, message)` 为同步入队（`mpsc::UnboundedSender`），
   实际网络发送在后台 task 中执行，避免阻塞 ECS。
@@ -210,8 +214,8 @@ reqwest = { version = "0.12", features = ["json", "multipart"] }
 
 ## 后续阶段
 
-- **阶段 2：出向-自动**：`UserOutputMessage` 携带 `task_id`，`Channel` 实现 `Frontend` 并真正发送。
-- **阶段 3：QQ 通道**：OAuth2、WebSocket Gateway、markdown/富媒体发送。
-- **阶段 4：飞书/Lark 通道**：tenant token、WebSocket/Webhook、interactive card。
-- **阶段 5：媒体附件**：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
-- **阶段 6：Telegram 增强**：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。
+- __阶段 2：出向-自动__：`UserOutputMessage` 携带 `task_id`，`Channel` 实现 `Frontend` 并真正发送。
+- __阶段 3：QQ 通道__：OAuth2、WebSocket Gateway、markdown/富媒体发送。
+- __阶段 4：飞书/Lark 通道__：tenant token、WebSocket/Webhook、interactive card。
+- __阶段 5：媒体附件__：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
+- __阶段 6：Telegram 增强__：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。
