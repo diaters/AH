@@ -95,7 +95,6 @@ struct PendingApproval {
     created_at: u64,
 }
 
-#[allow(dead_code)]
 const PENDING_APPROVAL_TTL_SECS: u64 = 300;
 
 /// 根据 marker 字符串与目标路径扩展名映射到 QQMediaFileType。
