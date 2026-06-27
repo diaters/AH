@@ -28,11 +28,17 @@ pub(crate) fn frontend_output_system(
     for (entity, output) in &outputs {
         debug!(
             event = "FrontendOutputText",
+            task_id = %output.task_id,
             content_len = output.content.len(),
             "pushing text to frontends"
         );
+        let target = all_tasks
+            .iter()
+            .find(|t| t.id == output.task_id)
+            .map(|t| EventTarget::Directed(vec![t.origin_channel.clone()]))
+            .unwrap_or(EventTarget::Broadcast);
         let event = EngineEvent::Text {
-            target: EventTarget::Broadcast,
+            target,
             role: MessageRole::Agent,
             content: output.content.clone(),
         };
