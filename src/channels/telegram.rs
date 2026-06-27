@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -7,7 +6,9 @@ use crossbeam_channel::Sender;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use tracing::warn;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::channels::config::TelegramConfig;
@@ -109,7 +110,15 @@ impl TelegramChannel {
                 "text": format!("Unsupported attachment: {}", attachment.target),
                 "message_thread_id": base.thread_id.as_ref().and_then(|t| t.parse::<i64>().ok()),
             });
-            let _ = self.post("sendMessage", &fallback).await;
+            if let Err(e) = self.post("sendMessage", &fallback).await {
+                warn!(
+                    event = "TelegramUnsupportedAttachmentFallbackFailed",
+                    chat_id = %base.recipient,
+                    target = %attachment.target,
+                    error = %e,
+                    "failed to send unsupported attachment fallback"
+                );
+            }
             return Ok(());
         }
 
@@ -124,7 +133,7 @@ impl TelegramChannel {
         if attachment.target.starts_with("http://") || attachment.target.starts_with("https://") {
             let mut payload = json!({
                 "chat_id": base.recipient,
-                file_field: &attachment.target,
+                (file_field): &attachment.target,
                 "caption": base.content,
             });
             if let Some(thread_id) = &base.thread_id
@@ -232,45 +241,125 @@ impl TelegramChannel {
         kind: AttachmentKind,
     ) -> Option<IncomingAttachment> {
         let get_file_payload = json!({ "file_id": file_id });
-        let resp = self
+        let resp = match self
             .client
             .post(self.api_url("getFile"))
             .json(&get_file_payload)
             .send()
             .await
-            .ok()?;
-        let data: serde_json::Value = resp.json().await.ok()?;
-        let file_path = data["result"]["file_path"].as_str()?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    event = "TelegramGetFileFailed",
+                    file_id = %file_id,
+                    operation = "getFile",
+                    error = %e,
+                    "failed to request getFile"
+                );
+                return None;
+            }
+        };
+        let data: serde_json::Value = match resp.json().await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(
+                    event = "TelegramGetFileParseFailed",
+                    file_id = %file_id,
+                    operation = "getFile",
+                    error = %e,
+                    "failed to parse getFile response"
+                );
+                return None;
+            }
+        };
+        let file_path = match data["result"]["file_path"].as_str() {
+            Some(p) => p,
+            None => {
+                warn!(
+                    event = "TelegramFilePathMissing",
+                    file_id = %file_id,
+                    operation = "getFile",
+                    response = %data,
+                    "getFile response missing file_path"
+                );
+                return None;
+            }
+        };
 
         let download_url = format!(
             "{}/file/bot{}/{}",
             self.base_url, self.config.bot_token, file_path
         );
-        let bytes = self
-            .client
-            .get(&download_url)
-            .send()
-            .await
-            .ok()?
-            .bytes()
-            .await
-            .ok()?;
+        let bytes = match self.client.get(&download_url).send().await {
+            Ok(r) => match r.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(
+                        event = "TelegramDownloadReadFailed",
+                        file_id = %file_id,
+                        operation = "download",
+                        error = %e,
+                        "failed to read downloaded file bytes"
+                    );
+                    return None;
+                }
+            },
+            Err(e) => {
+                warn!(
+                    event = "TelegramDownloadFailed",
+                    file_id = %file_id,
+                    operation = "download",
+                    error = %e,
+                    "failed to download file"
+                );
+                return None;
+            }
+        };
 
         if bytes.len() > 20 * 1024 * 1024 {
             warn!(event = "TelegramFileTooLarge", file_id = %file_id, "incoming file exceeds 20MB limit");
             return None;
         }
 
-        let local_name = file_name.map(|s| s.to_string()).unwrap_or_else(|| {
-            format!(
-                "{}_{}",
-                file_id,
-                file_path.rsplit('/').next().unwrap_or("file")
-            )
-        });
+        let local_name = file_name
+            .map(sanitize_telegram_filename)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                let safe =
+                    sanitize_telegram_filename(file_path.rsplit('/').next().unwrap_or("file"));
+                if safe.is_empty() || safe == "file" {
+                    file_id.to_string()
+                } else {
+                    format!("{}_{}", file_id, safe)
+                }
+            });
         let local_path = dir.join(&local_name);
-        let mut file = std::fs::File::create(&local_path).ok()?;
-        file.write_all(&bytes).ok()?;
+        let mut file = match File::create(&local_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                error!(
+                    event = "TelegramFileCreateFailed",
+                    file_id = %file_id,
+                    operation = "save",
+                    path = %local_path.display(),
+                    error = %e,
+                    "failed to create local file"
+                );
+                return None;
+            }
+        };
+        if let Err(e) = file.write_all(&bytes).await {
+            error!(
+                event = "TelegramFileWriteFailed",
+                file_id = %file_id,
+                operation = "save",
+                path = %local_path.display(),
+                error = %e,
+                "failed to write downloaded file"
+            );
+            return None;
+        }
 
         Some(IncomingAttachment {
             kind,
@@ -307,6 +396,23 @@ fn resolve_attachment_path(target: &str) -> PathBuf {
         return relative.canonicalize().unwrap_or(relative);
     }
     PathBuf::from(path)
+}
+
+/// 清理 Telegram 入向文件名，避免路径遍历。
+/// 仅保留最后一个路径分量，移除路径分隔符、空字符和 `..`，
+/// 若结果为空则回退到 `"file"`。
+fn sanitize_telegram_filename(name: &str) -> String {
+    let base = name
+        .replace('\\', "/")
+        .split('/')
+        .rfind(|s| !s.is_empty() && *s != "..")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "file".to_string());
+    // 进一步去除 NUL 与常见危险字符。
+    base.chars()
+        .filter(|c| *c != '\0' && !matches!(*c, ':' | '?' | '*' | '"' | '<' | '>' | '|'))
+        .collect()
 }
 
 fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
@@ -362,48 +468,29 @@ impl Channel for TelegramChannel {
             .iter()
             .cloned()
             .chain(inline_attachments)
+            .filter(|a| !a.target.trim().is_empty())
             .collect();
 
-        // Text sending logic remains the same as Task 4, but use `text_without_markers`
-        // in place of `message.content`.
-        let text_parts = match message.parse_mode {
-            Some(ChannelParseMode::Html) => {
-                let chunks = split_markdown_semantic(&text_without_markers);
-                chunks
-                    .into_iter()
-                    .map(|chunk| markdown_to_telegram_html(&chunk))
-                    .collect::<Vec<_>>()
-            }
-            _ => split_text(&text_without_markers, TELEGRAM_MAX_TEXT_LENGTH),
-        };
+        let text_parts = prepare_text_parts(&text_without_markers, message.parse_mode.as_ref());
 
         for part in text_parts {
-            let mut payload = json!({
-                "chat_id": message.recipient,
-                "text": part,
-                "parse_mode": "HTML",
-            });
-            if let Some(thread_id) = &message.thread_id
-                && let Ok(id) = thread_id.parse::<i64>()
-            {
-                payload["message_thread_id"] = json!(id);
-            }
-            if let Some(ref reply_markup) = message.reply_markup {
-                payload["reply_markup"] = json!(reply_markup);
-            }
+            let payload = build_send_payload(
+                &message.recipient,
+                message.thread_id.as_deref(),
+                &part,
+                message.parse_mode.as_ref(),
+                message.reply_markup.as_ref(),
+            );
 
             let result = self.post("sendMessage", &payload).await;
             if let Err(ref e) = result {
                 if is_parse_mode_error(e) {
-                    let mut fallback = json!({
-                        "chat_id": message.recipient,
-                        "text": strip_tags(&part),
-                    });
-                    if let Some(thread_id) = &message.thread_id
-                        && let Ok(id) = thread_id.parse::<i64>()
-                    {
-                        fallback["message_thread_id"] = json!(id);
-                    }
+                    let fallback = build_fallback_payload(
+                        &message.recipient,
+                        message.thread_id.as_deref(),
+                        &part,
+                        message.reply_markup.as_ref(),
+                    );
                     self.post("sendMessage", &fallback).await?;
                 } else {
                     result?;
@@ -795,7 +882,6 @@ fn strip_tags(html: &str) -> String {
     out
 }
 
-#[cfg(test)]
 fn decode_html_entities(text: &str) -> String {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
@@ -850,7 +936,20 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
-#[cfg(test)]
+fn prepare_text_parts(content: &str, parse_mode: Option<&ChannelParseMode>) -> Vec<String> {
+    match parse_mode {
+        Some(ChannelParseMode::Html) | None => {
+            let chunks = split_markdown_semantic(content);
+            chunks
+                .into_iter()
+                .map(|chunk| markdown_to_telegram_html(&chunk))
+                .flat_map(|html| split_html_safely(&html, TELEGRAM_MAX_TEXT_LENGTH))
+                .collect()
+        }
+        Some(ChannelParseMode::Markdown) => split_text(content, TELEGRAM_MAX_TEXT_LENGTH),
+    }
+}
+
 fn build_send_payload(
     recipient: &str,
     thread_id: Option<&str>,
@@ -876,7 +975,6 @@ fn build_send_payload(
     payload
 }
 
-#[cfg(test)]
 fn build_fallback_payload(
     recipient: &str,
     thread_id: Option<&str>,
@@ -898,7 +996,6 @@ fn build_fallback_payload(
     payload
 }
 
-#[cfg(test)]
 fn split_html_safely(html: &str, max_len: usize) -> Vec<String> {
     if html.len() <= max_len {
         return vec![html.to_string()];
@@ -931,7 +1028,6 @@ fn split_html_safely(html: &str, max_len: usize) -> Vec<String> {
     result
 }
 
-#[cfg(test)]
 fn find_safe_split(html: &str, start: usize, target_end: usize) -> usize {
     let target_end = target_end.min(html.len());
 
@@ -952,7 +1048,6 @@ fn find_safe_split(html: &str, start: usize, target_end: usize) -> usize {
     start
 }
 
-#[cfg(test)]
 fn find_best_split(
     html: &str,
     start: usize,
@@ -970,7 +1065,6 @@ fn find_best_split(
     best
 }
 
-#[cfg(test)]
 fn find_sentence_split(html: &str, start: usize, target_end: usize) -> Option<usize> {
     let mut best = None;
     for (idx, c) in html[start..target_end].char_indices() {
@@ -984,7 +1078,6 @@ fn find_sentence_split(html: &str, start: usize, target_end: usize) -> Option<us
     best
 }
 
-#[cfg(test)]
 fn is_outside_tag(html: &str, idx: usize) -> bool {
     let mut in_tag = false;
     for c in html[..idx.min(html.len())].chars() {
@@ -1437,5 +1530,106 @@ mod tests {
         assert_eq!(attachments.len(), 2);
         assert_eq!(attachments[0].kind, AttachmentKind::Image);
         assert_eq!(attachments[0].target, "/tmp/a.png");
+    }
+
+    #[test]
+    fn sanitize_filename_prevents_path_traversal() {
+        assert_eq!(sanitize_telegram_filename("../../../etc/passwd"), "passwd");
+        assert_eq!(
+            sanitize_telegram_filename("..\\..\\windows\\system.ini"),
+            "system.ini"
+        );
+        assert_eq!(
+            sanitize_telegram_filename("/tmp/../../secret.txt"),
+            "secret.txt"
+        );
+        assert_eq!(sanitize_telegram_filename(".."), "file");
+        assert_eq!(sanitize_telegram_filename(""), "file");
+        assert_eq!(sanitize_telegram_filename("normal.txt"), "normal.txt");
+    }
+
+    #[tokio::test]
+    async fn url_attachment_uses_correct_json_field() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendPhoto"))
+            .and(body_json(serde_json::json!({
+                "chat_id": "123",
+                "photo": "https://example.com/photo.jpg",
+                "caption": "caption"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 1}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec!["u".to_string()],
+        };
+        let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        let base = ChannelOutboundMessage {
+            recipient: "123".to_string(),
+            thread_id: None,
+            content: "caption".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+        };
+        let attachment = ChannelAttachment {
+            kind: AttachmentKind::Image,
+            target: "https://example.com/photo.jpg".to_string(),
+        };
+        channel
+            .send_attachment(&base, &attachment)
+            .await
+            .expect("send_attachment");
+    }
+
+    #[tokio::test]
+    async fn empty_attachment_target_is_skipped() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        // Text message and document attachment both need endpoints.
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 1}
+            })))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendDocument"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {"message_id": 2}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec!["u".to_string()],
+        };
+        let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        channel
+            .send(&ChannelOutboundMessage {
+                recipient: "123".to_string(),
+                thread_id: None,
+                content: "see [IMAGE:] and [DOCUMENT:https://example.com/x.pdf]".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+            })
+            .await
+            .expect("send");
     }
 }
