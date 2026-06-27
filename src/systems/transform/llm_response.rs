@@ -705,6 +705,7 @@ pub fn llm_response_system(
                             "multi_turn: task now waiting for user"
                         );
                         commands.spawn(UserOutputMessage {
+                            task_id: task.id,
                             content: content.clone(),
                         });
                     } else {
@@ -726,6 +727,7 @@ pub fn llm_response_system(
                         };
                         task.mark_done(result_summary, clock.0);
                         commands.spawn(UserOutputMessage {
+                            task_id: task.id,
                             content: content.clone(),
                         });
                     }
@@ -936,6 +938,7 @@ pub fn llm_response_system(
                     );
                     task.mark_failed(error, clock.0);
                     commands.spawn(UserOutputMessage {
+                        task_id: task.id,
                         content: format!(
                             "任务执行失败（{:?}）：{}",
                             task_status_failure_reason(&task).unwrap_or(FailureReason::Unknown),
