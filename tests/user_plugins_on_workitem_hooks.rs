@@ -134,6 +134,7 @@ fn on_workitem_started_dispatches_and_clears_marker() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用（让 Startup 阶段加载插件）
@@ -190,6 +191,7 @@ fn on_workitem_completed_dispatches_and_clears_marker() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     app.update();
@@ -242,6 +244,7 @@ fn on_workitem_failed_dispatches_and_clears_marker() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     app.update();

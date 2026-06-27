@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bevy::{app::App, prelude::*};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::Receiver;
@@ -46,6 +46,7 @@ pub struct HarnessConfig {
     pub active_poll_ms: u64,
     /// TUI 主循环在空闲状态下的轮询间隔（毫秒）
     pub idle_poll_ms: u64,
+    pub channels: crate::channels::config::ChannelConfigs,
 }
 
 impl HarnessConfig {
@@ -114,6 +115,17 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(150),
+            channels: {
+                let path = std::env::var("HARNESS_CHANNELS_CONFIG").ok();
+                match path {
+                    Some(p) if !p.is_empty() => {
+                        let text = std::fs::read_to_string(&p)
+                            .with_context(|| format!("read channels config: {p}"))?;
+                        toml::from_str(&text).context("parse channels config")?
+                    }
+                    _ => crate::channels::config::ChannelConfigs::default(),
+                }
+            },
         })
     }
 }
@@ -139,6 +151,7 @@ impl Default for HarnessConfig {
             shell_max_buffer_bytes_per_stream: 64 * 1024,
             active_poll_ms: 16,
             idle_poll_ms: 150,
+            channels: crate::channels::config::ChannelConfigs::default(),
         }
     }
 }
@@ -209,6 +222,7 @@ pub fn build_harness_app(
     executor: Arc<dyn AgentExecutor>,
     input_rx: Receiver<crate::domain::ExternalInput>,
     frontends: Vec<Box<dyn Frontend>>,
+    channel_manager: crate::channels::ChannelManager,
 ) -> App {
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
@@ -223,6 +237,7 @@ pub fn build_harness_app(
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());
+    app.insert_resource(channel_manager);
 
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());

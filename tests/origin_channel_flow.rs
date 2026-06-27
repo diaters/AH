@@ -3,15 +3,8 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, Task, TaskStatus, build_harness_app,
+    ExternalInput, FrontendKind, HarnessConfig, Task, build_harness_app,
 };
-
-fn default_channel() -> ChannelId {
-    ChannelId {
-        frontend: FrontendKind::Tui,
-        user_id: "default".to_string(),
-    }
-}
 use tokio::runtime::Runtime;
 
 struct EchoExecutor;
@@ -51,12 +44,12 @@ fn test_config() -> HarnessConfig {
     }
 }
 
-/// 验证单轮输入可以沿着 MVP 主链路完成闭环。
+/// 验证通过 TUI 入口的 ExternalInput 正确保留 origin_channel。
 #[test]
-fn completes_single_turn_conversation_flow() {
+fn tui_input_preserves_origin_channel() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-    let (_input_tx, input_rx) = unbounded();
+    let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
@@ -66,15 +59,20 @@ fn completes_single_turn_conversation_flow() {
         harness::channels::ChannelManager::empty(),
     );
 
-    // 初始化应用
     app.update();
 
-    // 创建一个 Ready 状态的任务（单轮场景）
-    let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
-    app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+    let tui_channel = ChannelId {
+        frontend: FrontendKind::Tui,
+        user_id: "default".to_string(),
+    };
+    input_tx
+        .send(ExternalInput::TextWithChannel {
+            channel: tui_channel.clone(),
+            content: "hello from TUI".to_string(),
+        })
+        .expect("send");
 
-    for _ in 0..8 {
+    for _ in 0..10 {
         app.update();
         thread::sleep(Duration::from_millis(20));
     }
@@ -86,6 +84,48 @@ fn completes_single_turn_conversation_flow() {
     };
 
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, TaskStatus::Done);
-    assert_eq!(tasks[0].result_summary, "echo: 你好，Harness");
+    assert_eq!(tasks[0].origin_channel, tui_channel);
+}
+
+/// 验证通过 Telegram 入口的 ExternalInput 正确保留 origin_channel。
+#[test]
+fn telegram_input_preserves_origin_channel() {
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
+
+    app.update();
+
+    let tg_channel = ChannelId {
+        frontend: FrontendKind::Telegram,
+        user_id: "123456".to_string(),
+    };
+    input_tx
+        .send(ExternalInput::TextWithChannel {
+            channel: tg_channel.clone(),
+            content: "hello from Telegram".to_string(),
+        })
+        .expect("send");
+
+    for _ in 0..10 {
+        app.update();
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let tasks: Vec<Task> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&Task>();
+        query.iter(world).cloned().collect()
+    };
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].origin_channel, tg_channel);
 }

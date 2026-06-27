@@ -10,7 +10,6 @@
 |------|------|------|
 | `plans/2026-06-06-workitem-unified-execution.md` | WorkItem 统一执行 | 活跃 |
 | `plans/2026-06-07-continue-existing-delegate.md` | 委托任务续接 | 活跃 |
-| `plans/2026-06-07-shell-tool-phase1.md` | Shell 工具第一阶段 | 活跃 |
 | `plans/2026-06-09-space-module-convergence.md` | Space 模块收敛 | 活跃 |
 | `plans/2026-06-10-memory-convergence-implementation.md` | 记忆系统收敛 | 活跃 |
 | `plans/2026-06-11-experience-candidate-governance.md` | 经验候选治理与可执行记忆实施 | 活跃 |

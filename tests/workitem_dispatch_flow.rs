@@ -45,6 +45,7 @@ fn test_config() -> HarnessConfig {
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,
+        channels: Default::default(),
     }
 }
 
@@ -54,7 +55,14 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize and load agents from agents.toml (includes "evaluator" agent)
     app.update();
@@ -93,7 +101,14 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize and load agents from agents.toml (includes "summarizer" agent)
     app.update();
@@ -140,7 +155,14 @@ fn workitem_without_matching_agent_is_marked_failed() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize
     app.update();
@@ -189,7 +211,14 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -234,7 +263,14 @@ fn experience_collection_workitem_without_collector_is_failed() {
     let (_input_tx, input_rx) = unbounded();
     let mut cfg = test_config();
     cfg.agents_config_path = "/nonexistent_agents.toml".to_string();
-    let mut app = build_harness_app(cfg, runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        cfg,
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 

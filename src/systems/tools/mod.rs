@@ -6,6 +6,7 @@ mod approval;
 mod approval_hook;
 pub mod backend;
 mod builtin;
+mod channel_send_dispatch;
 mod confirmation;
 mod dispatch;
 mod orchestrator;
@@ -17,6 +18,7 @@ mod waiting;
 pub use approval::{approval_dispatch_system, approval_result_system};
 pub use approval_hook::{on_approval_requested_hook_system, on_approval_resolved_hook_system};
 pub use backend::NativeProcessBackend;
+pub use channel_send_dispatch::channel_send_dispatch_system;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
 pub use result::tool_result_system;
@@ -34,6 +36,7 @@ use self::builtin::{
     ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, SpawnAgentTool,
     SubmitExperienceCandidateTool, WaitTasksTool,
 };
+use crate::channels::send_tool::ChannelSendTool;
 
 /// 注册内置 Tool
 pub fn register_builtin_tools(
@@ -362,6 +365,10 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ListExperienceCandidatesTool));
+
+    // Channel send tool
+    registry.register(ChannelSendTool::definition());
+    executors.register(Box::new(ChannelSendTool));
 }
 
 /// 注册插件贡献的 Tool

@@ -82,6 +82,7 @@ fn brain_test_config() -> HarnessConfig {
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,
+        channels: Default::default(),
     }
 }
 
@@ -91,7 +92,14 @@ fn completes_brain_dispatch_flow() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(brain_test_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        brain_test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // 初始化应用
     app.update();
@@ -125,7 +133,14 @@ fn mvp_flow_unchanged_when_brain_disabled() {
 
     let mut no_brain_config = brain_test_config();
     no_brain_config.brain = None;
-    let mut app = build_harness_app(no_brain_config, runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        no_brain_config,
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // 初始化应用
     app.update();

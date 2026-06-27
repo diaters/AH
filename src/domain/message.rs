@@ -2,7 +2,7 @@
 //!
 //! 定义 ECS 中使用的各种消息组件。
 
-use bevy::prelude::Component;
+use bevy::prelude::{Component, Entity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ pub enum WaitingReason {
     SubTaskBatch {
         batch_id: Uuid,
     },
-    /// 等待 shell 会话完成（shell.wait 工具调用后）
+    /// 等待 shell 会话完成
     Session {
         handle_id: Uuid,
     },
@@ -51,22 +51,41 @@ pub enum SignalPayload {
 pub struct Signal {
     pub kind: SignalType,
     pub payload: SignalPayload,
+    pub origin_channel: super::ChannelId,
 }
 
 impl Signal {
-    /// 构造用户输入信号。
+    /// 构造用户输入信号（默认 Tui 通道）。
     pub fn user_input(content: impl Into<String>) -> Self {
+        Self::user_input_with_channel(
+            content,
+            super::ChannelId {
+                frontend: super::FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
+        )
+    }
+
+    pub fn user_input_with_channel(
+        content: impl Into<String>,
+        origin_channel: super::ChannelId,
+    ) -> Self {
         Self {
             kind: SignalType::UserInput,
             payload: SignalPayload::UserInput(content.into()),
+            origin_channel,
         }
     }
 
-    /// 构造重试唤醒信号。
+    /// 构造重试唤醒信号（origin_channel 使用 Tui 默认）。
     pub fn retry_wakeup(task_id: TaskId) -> Self {
         Self {
             kind: SignalType::RetryWakeup,
             payload: SignalPayload::RetryWakeup(task_id),
+            origin_channel: super::ChannelId {
+                frontend: super::FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
         }
     }
 }
@@ -90,6 +109,7 @@ pub enum ExternalInput {
 #[derive(Debug, Clone, Component)]
 pub struct UserInputMessage {
     pub content: String,
+    pub origin_channel: super::ChannelId,
 }
 
 /// 重试就绪消息
@@ -172,6 +192,7 @@ pub struct SystemOutputMessage {
 #[derive(Debug, Clone, Component)]
 pub struct CreateTaskMessage {
     pub content: String,
+    pub origin_channel: super::ChannelId,
 }
 
 /// 继续现有任务消息
@@ -415,3 +436,37 @@ pub struct ExperienceCollectionCompletedMessage {
 /// 因此 spawn 此消息实体，由 `reload_plugins_system` 消费后执行重载。
 #[derive(Debug, Clone, Component)]
 pub struct ReloadPluginsMessage;
+
+/// 待发送的通道消息，由 channel_send_dispatch_system 消费。
+#[derive(Debug, Clone, Component)]
+pub struct PendingChannelSend {
+    pub channel: String,
+    pub recipient: String,
+    pub content: String,
+    pub tool_call_id: Option<String>,
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub request_entity: Entity,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{ChannelId, FrontendKind};
+
+    #[test]
+    fn signal_user_input_carries_default_channel() {
+        let signal = Signal::user_input("hi");
+        assert_eq!(signal.origin_channel.frontend, FrontendKind::Tui);
+    }
+
+    #[test]
+    fn signal_user_input_with_channel_preserves_channel() {
+        let channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+        };
+        let signal = Signal::user_input_with_channel("hi", channel.clone());
+        assert_eq!(signal.origin_channel, channel);
+    }
+}

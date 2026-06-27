@@ -69,6 +69,10 @@ pub(crate) fn command_parse_system(
                     // 没有父任务，创建普通任务
                     commands.spawn(CreateTaskMessage {
                         content: input.content.clone(),
+                        origin_channel: crate::domain::ChannelId {
+                            frontend: crate::domain::FrontendKind::Tui,
+                            user_id: "default".to_string(),
+                        },
                     });
                 }
                 commands.entity(entity).despawn();
@@ -366,6 +370,10 @@ mod tests {
         app.add_systems(Update, command_parse_system);
         app.world_mut().spawn(UserInputMessage {
             content: "/remember Docs should stay in Chinese".to_string(),
+            origin_channel: crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "default".to_string(),
+            },
         });
 
         app.update();

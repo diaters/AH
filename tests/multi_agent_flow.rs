@@ -49,6 +49,7 @@ fn multi_agent_config() -> HarnessConfig {
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,
+        channels: Default::default(),
     }
 }
 
@@ -58,7 +59,14 @@ fn loads_persistent_agents_from_config() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        multi_agent_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -93,7 +101,14 @@ fn selects_agent_by_tags_match() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        multi_agent_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     input_tx
         .send(ExternalInput::TextWithChannel {
@@ -127,7 +142,14 @@ fn task_scoped_agent_lifecycle() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(multi_agent_config(), runtime, executor, input_rx, vec![]);
+    let mut app = build_harness_app(
+        multi_agent_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 

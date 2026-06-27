@@ -94,6 +94,7 @@ fn on_ltm_evicted_removes_marker() {
         executor,
         input_rx,
         vec![],
+        harness::channels::ChannelManager::empty(),
     );
 
     // 初始化应用（让 Startup 阶段加载插件）

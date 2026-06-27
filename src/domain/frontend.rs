@@ -9,6 +9,8 @@ pub enum FrontendKind {
     Tui,
     Telegram,
     Web,
+    QQ,
+    Feishu,
 }
 
 /// 标识一个前端通道中的具体用户
