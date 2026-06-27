@@ -10,6 +10,7 @@ pub mod traits;
 pub use config::{ChannelConfigs, QqConfig, TelegramConfig};
 pub use frontend::ChannelFrontend;
 pub use manager::ChannelManager;
+pub use qq::QqChannel;
 pub use send_tool::ChannelSendTool;
 pub use telegram::TelegramChannel;
 pub use traits::{
