@@ -1,5 +1,5 @@
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::domain::{ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, UserAction};
 
@@ -29,6 +29,27 @@ impl ChannelFrontend {
     fn matches(&self, channel_id: &ChannelId) -> bool {
         channel_id.frontend == self.kind
     }
+
+    fn send_message(&self, msg: ChannelOutboundMessage) {
+        if let Err(e) = self.outbound_tx.send((self.channel_name.clone(), msg)) {
+            error!(event = "ChannelFrontendSendFailed", error = %e, channel = %self.channel_name);
+        }
+    }
+}
+
+fn html_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 impl Frontend for ChannelFrontend {
@@ -67,7 +88,7 @@ impl Frontend for ChannelFrontend {
                         reply_markup: None,
                         attachments: vec![],
                     };
-                    let _ = self.outbound_tx.send((self.channel_name.clone(), msg));
+                    self.send_message(msg);
                 }
             }
             EngineEvent::ApprovalRequest {
@@ -92,9 +113,10 @@ impl Frontend for ChannelFrontend {
 
                 let tool_input_str = serde_json::to_string_pretty(&tool_input)
                     .unwrap_or_else(|_| tool_input.to_string());
+                let tool_input_escaped = html_escape(&tool_input_str);
                 let content = format!(
-                    "🔒 需要你的确认\n\n工具：{}\n输入：{}\n\n请选择一个选项：",
-                    tool_name, tool_input_str
+                    "🔒 需要你的确认\n\n工具：{}\n输入：<pre>{}</pre>\n\n请选择一个选项：",
+                    tool_name, tool_input_escaped
                 );
                 let buttons: Vec<Vec<InlineKeyboardButton>> = options
                     .chunks(2)
@@ -118,7 +140,7 @@ impl Frontend for ChannelFrontend {
                         reply_markup: Some(ReplyMarkup::InlineKeyboard(buttons.clone())),
                         attachments: vec![],
                     };
-                    let _ = self.outbound_tx.send((self.channel_name.clone(), msg));
+                    self.send_message(msg);
                 }
             }
             _ => {}
@@ -184,5 +206,54 @@ mod tests {
         assert_eq!(msg.recipient, "u1");
         assert_eq!(msg.content, "hello");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn approval_request_escapes_html_in_tool_input() {
+        use crate::domain::ApprovalOption;
+        use uuid::Uuid;
+
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let tool_input = serde_json::json!({"value": "<script> & text"});
+        let event = EngineEvent::ApprovalRequest {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            request_id: Uuid::nil(),
+            agent_name: "agent".to_string(),
+            tool_name: "test_tool".to_string(),
+            tool_input,
+            options: vec![
+                ApprovalOption {
+                    id: "allow".to_string(),
+                    label: "允许".to_string(),
+                    description: String::new(),
+                },
+                ApprovalOption {
+                    id: "deny".to_string(),
+                    label: "拒绝".to_string(),
+                    description: String::new(),
+                },
+            ],
+        };
+        fe.push_event(event);
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert!(matches!(msg.parse_mode, Some(ChannelParseMode::Html)));
+        assert!(
+            msg.content.contains("&lt;script&gt; &amp; text"),
+            "HTML special chars should be escaped: {}",
+            msg.content
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn html_escape_works() {
+        assert_eq!(
+            html_escape("<script> & \"quotes\" 'single'"),
+            "&lt;script&gt; &amp; &quot;quotes&quot; &#39;single&#39;"
+        );
     }
 }
