@@ -44,9 +44,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 - 统一 `Channel` 抽象与 `ChannelManager`（含 listen 重启退避与 shutdown）
 - Telegram 通道接入（长轮询、白名单、文本分块发送）
+- QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
-- IM 出向-自动回执：Agent 文本回复按 `origin_channel` 自动推回 Telegram
+- IM 出向-自动回执：Agent 文本回复按 `origin_channel` 自动推回来源 IM 通道
 
 #### 记忆治理
 
@@ -101,8 +102,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 插件 `v1` 不追踪 `tool_deny` 的 per-plugin attribution，推迟到后续 host API 升级
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
-- QQ 与飞书通道仅有占位模块，尚未接入实际 API
-- Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 与飞书仍为占位模块
+- 飞书通道仅有占位模块，尚未接入实际 API
+- Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 通道已支持收发媒体附件与审批文本回复匹配；飞书仍为占位模块
 - Telegram webhook 模式仍由轮询替代，尚未切换
 
 ### 已收敛或已废弃

@@ -129,17 +129,17 @@ impl TelegramChannel {
     }
 
     async fn persist_allowed_user(&self, user_id: &str, path: &Path) -> Result<(), ChannelError> {
-        let mut config: TelegramConfig = tokio::fs::read_to_string(path)
+        use crate::channels::config::ChannelConfigs;
+        let mut configs: ChannelConfigs = tokio::fs::read_to_string(path)
             .await
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_else(|| self.config.clone());
-
-        if !config.allowed_users.iter().any(|u| u == user_id) {
-            config.allowed_users.push(user_id.to_string());
+            .unwrap_or_default();
+        let tg = configs.telegram.get_or_insert_with(|| self.config.clone());
+        if !tg.allowed_users.iter().any(|u| u == user_id) {
+            tg.allowed_users.push(user_id.to_string());
         }
-
-        let content = toml::to_string_pretty(&config).map_err(|e| ChannelError::Api {
+        let content = toml::to_string_pretty(&configs).map_err(|e| ChannelError::Api {
             code: 0,
             message: e.to_string(),
         })?;
@@ -1371,6 +1371,7 @@ struct TelegramChat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::config::ChannelConfigs;
     use crate::channels::traits::InlineKeyboardButton;
     use tempfile::NamedTempFile;
 
@@ -1492,7 +1493,8 @@ mod tests {
         let file = NamedTempFile::with_suffix(".toml").unwrap();
         tokio::fs::write(
             file.path(),
-            r#"bot_token = "x"
+            r#"[telegram]
+bot_token = "x"
 allowed_users = ["alice"]
 "#,
         )
@@ -1514,8 +1516,11 @@ allowed_users = ["alice"]
             .unwrap();
 
         let content = tokio::fs::read_to_string(file.path()).await.unwrap();
-        let parsed: TelegramConfig = toml::from_str(&content).unwrap();
-        assert_eq!(parsed.allowed_users, vec!["alice", "123"]);
+        let parsed: ChannelConfigs = toml::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.telegram.unwrap().allowed_users,
+            vec!["alice".to_string(), "123".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -1523,7 +1528,8 @@ allowed_users = ["alice"]
         let file = NamedTempFile::with_suffix(".toml").unwrap();
         tokio::fs::write(
             file.path(),
-            r#"bot_token = "x"
+            r#"[telegram]
+bot_token = "x"
 allowed_users = ["123"]
 "#,
         )
@@ -1545,8 +1551,54 @@ allowed_users = ["123"]
             .unwrap();
 
         let content = tokio::fs::read_to_string(file.path()).await.unwrap();
-        let parsed: TelegramConfig = toml::from_str(&content).unwrap();
-        assert_eq!(parsed.allowed_users, vec!["123"]);
+        let parsed: ChannelConfigs = toml::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.telegram.unwrap().allowed_users,
+            vec!["123".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_allowed_user_preserves_qq_section() {
+        let file = NamedTempFile::with_suffix(".toml").unwrap();
+        tokio::fs::write(
+            file.path(),
+            r#"[telegram]
+bot_token = "tg_token"
+allowed_users = ["alice"]
+
+[qq]
+app_id = "qq_id"
+app_secret = "qq_secret"
+allowed_users = ["qq_user"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let channel = TelegramChannel::new_with_path(
+            TelegramConfig {
+                bot_token: "tg_token".to_string(),
+                allowed_users: vec![],
+                pairing_enabled: false,
+                pairing_code: None,
+            },
+            Some(file.path().to_path_buf()),
+        );
+        channel
+            .persist_allowed_user("new_user", file.path())
+            .await
+            .unwrap();
+
+        let content = tokio::fs::read_to_string(file.path()).await.unwrap();
+        let parsed: ChannelConfigs = toml::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.telegram.unwrap().allowed_users,
+            vec!["alice".to_string(), "new_user".to_string()]
+        );
+        let qq = parsed.qq.unwrap();
+        assert_eq!(qq.app_id, "qq_id");
+        assert_eq!(qq.allowed_users, vec!["qq_user".to_string()]);
     }
 
     #[test]

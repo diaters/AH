@@ -28,6 +28,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，用于�
 - 面向 LLM 的精简 shell 工具集：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - `tracing` 结构化日志、CI、集成测试与回归测试
+- QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 
 ### 待继续完善
 

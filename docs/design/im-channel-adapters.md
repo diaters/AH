@@ -126,12 +126,16 @@ pub trait Channel: Send + Sync + 'static {
 - `stream_mode` 下的 `editMessageText` 草稿更新。
 - `mention_only` 群组 @ 检测。
 
-### QQ（后续阶段）
+### QQ（已实现）
 
 - OAuth2 app token，WebSocket Gateway 接收事件。
 - `msg_type=2` markdown 文本；`msg_type=7` 富媒体。
-- 小文件 base64 上传 + 缓存；大文件分片上传。
-- 被动回复限速（每 msg_id 每小时 4 条）。
+- 小文件 base64 上传；大文件分片上传。
+- 审批选项以编号列表呈现，用户回复编号完成审批（QQ 无 Inline Keyboard）。
+- ChannelId 编码：`user:<openid>` 私聊，`group:<openid>` 群聊。
+- 支持收发媒体附件（图片、文档、音频等），非原生格式自动降级为文件发送。
+- 入向附件下载到 `qq_files/` 工作目录。
+- 监听异常自动重启：指数退避（1s → 60s）。
 
 ### 飞书 / Lark（后续阶段）
 
@@ -209,7 +213,7 @@ pairing_enabled = false
 pairing_code = ""
 ```
 
-> 本期仅 `telegram` 段生效；`qq` 与 `feishu` 段在对应阶段接入前为占位，不解析。
+> 本期仅 `telegram` 段生效；`qq` 段已接入，`feishu` 段在对应阶段接入前为占位，不解析。
 
 ## ChannelManager 生命周期
 
@@ -262,7 +266,7 @@ bytes = "1"
 
 ## 后续阶段
 
-- __阶段 2：QQ 通道__：OAuth2、WebSocket Gateway、markdown/富媒体发送。
+- __阶段 2：QQ 通道__：已实现。OAuth2、WebSocket Gateway、markdown/富媒体发送、审批文本回复匹配。
 - __阶段 3：飞书/Lark 通道__：tenant token、WebSocket/Webhook、interactive card。
 - __阶段 4：媒体附件__：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
 - __阶段 5：Telegram 增强__：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。

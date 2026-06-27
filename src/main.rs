@@ -7,7 +7,7 @@ use harness::tui::{App, TuiFrontend};
 use harness::{
     EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState,
     UserAction, app_is_idle, build_harness_app,
-    channels::{Channel, ChannelManager, TelegramChannel},
+    channels::{Channel, ChannelManager, QqChannel, TelegramChannel},
     create_executor_from_config,
 };
 use tokio::runtime::Runtime;
@@ -106,6 +106,11 @@ fn main() -> Result<()> {
             tg_cfg,
             config_path,
         )));
+    }
+    if let Some(qq_cfg) = config.channels.qq.clone() {
+        info!(event = "QqChannelEnabled", "enabling QQ channel");
+        let config_path = config.channels_config_path.as_ref().map(PathBuf::from);
+        channel_list.push(Arc::new(QqChannel::new_with_path(qq_cfg, config_path)));
     }
 
     // 创建 input channel：IM 入向消息和 TUI 输入共用
