@@ -157,8 +157,9 @@ allowed_users = ["your_username"]
 
 ## ChannelManager 生命周期
 
-- `ChannelManager::new()` 接收通道列表与 `InputReceiver` 的 sender，返回 `(manager, shutdown)`。
-  `shutdown` 句柄用于应用退出时优雅停止所有 listen 任务。
+- `ChannelManager::new()` 接收通道列表与 `InputReceiver` 的 sender，返回
+  `(Self, JoinHandle<()>, Vec<Box<dyn Frontend>>)`。返回的 `JoinHandle` 用于应用退出时
+  优雅停止所有 listen 任务，返回的 `Frontend` 列表注册到 ECS 以接收出向事件。
 - 每个 `Channel::listen()` 任务在独立 tokio task 中运行；任务失败__不退出应用__，
   采用指数退避（起始 1s，上限 60s）后重启。
 - `ChannelManager::send(channel_name, message)` 为同步入队（`mpsc::UnboundedSender`），
