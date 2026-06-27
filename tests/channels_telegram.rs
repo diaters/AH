@@ -158,7 +158,7 @@ async fn telegram_bind_allows_user_and_replies() {
 
     Mock::given(method("POST"))
         .and(path("/botTOKEN/sendMessage"))
-        .and(body_string_contains("已授权"))
+        .and(body_string_contains("已授权（本次运行有效）"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"ok": true, "result": {"message_id": 1}})),
@@ -202,6 +202,78 @@ async fn telegram_bind_allows_user_and_replies() {
     assert_eq!(msg.sender_id, "123");
     assert_eq!(msg.content, "hi");
 
+    listen_handle.abort();
+}
+
+#[tokio::test]
+async fn telegram_bind_success_does_not_send_ack_reaction() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "message_id": 1,
+                    "from": {"id": 123, "username": "alice"},
+                    "chat": {"id": 456, "type": "private"},
+                    "date": 0,
+                    "text": "/bind secret"
+                }
+            }]
+        })))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": []
+        })))
+        .with_priority(2)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/sendMessage"))
+        .and(body_string_contains("已授权"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": {"message_id": 1}})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/setMessageReaction"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": true})),
+        )
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let cfg = TelegramConfig {
+        bot_token: "TOKEN".to_string(),
+        allowed_users: vec![],
+        pairing_enabled: true,
+        pairing_code: Some("secret".to_string()),
+    };
+    let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+
+    let (tx, _rx) = unbounded::<ChannelInboundMessage>();
+    let listen_handle = tokio::spawn(async move {
+        let _ = channel.listen(tx).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
     listen_handle.abort();
 }
 

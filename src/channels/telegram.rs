@@ -690,14 +690,22 @@ impl Channel for TelegramChannel {
                     {
                         let code = content[6..].trim();
                         let expected = self.expected_pairing_code();
+                        let mut persisted = false;
                         let reply = if !expected.is_empty() && code == expected {
                             self.runtime_allow(&msg.from.id.to_string());
                             if let Some(ref path) = self.config_path
                                 && Self::is_writable_toml(path)
+                                && self
+                                    .persist_allowed_user(&msg.from.id.to_string(), path)
+                                    .is_ok()
                             {
-                                let _ = self.persist_allowed_user(&msg.from.id.to_string(), path);
+                                persisted = true;
                             }
-                            "已授权（本次运行有效，重启后需运维手动添加）。"
+                            if persisted {
+                                "已授权并已保存到配置。"
+                            } else {
+                                "已授权（本次运行有效）。"
+                            }
                         } else {
                             "配对码错误。"
                         };
@@ -743,6 +751,7 @@ impl Channel for TelegramChannel {
                     }
 
                     if let Some(text) = msg.text {
+                        let should_ack = !text.starts_with("/bind ");
                         let _ = tx.send(ChannelInboundMessage {
                             channel_name: self.name().to_string(),
                             sender_id: msg.from.id.to_string(),
@@ -752,7 +761,10 @@ impl Channel for TelegramChannel {
                             timestamp_secs: msg.date as u64,
                             confirmation: None,
                         });
-                        if let Err(e) = self.send_ack_reaction(msg.chat.id, msg.message_id).await {
+                        if should_ack
+                            && let Err(e) =
+                                self.send_ack_reaction(msg.chat.id, msg.message_id).await
+                        {
                             warn!(
                                 event = "TelegramAckReactionFailed",
                                 chat_id = %msg.chat.id,
