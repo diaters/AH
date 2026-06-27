@@ -121,7 +121,10 @@ impl HarnessConfig {
                     Some(p) if !p.is_empty() => {
                         let text = std::fs::read_to_string(&p)
                             .with_context(|| format!("read channels config: {p}"))?;
-                        toml::from_str(&text).context("parse channels config")?
+                        let mut cfg: crate::channels::config::ChannelConfigs =
+                            toml::from_str(&text).context("parse channels config")?;
+                        cfg.expand_env_vars();
+                        cfg
                     }
                     _ => crate::channels::config::ChannelConfigs::default(),
                 }

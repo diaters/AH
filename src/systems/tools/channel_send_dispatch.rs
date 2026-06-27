@@ -34,6 +34,7 @@ pub fn channel_send_dispatch_system(
         };
 
         commands.entity(entity).despawn();
+        commands.entity(send.request_entity).despawn();
 
         commands.spawn((
             ToolExecutionResultMessage {
