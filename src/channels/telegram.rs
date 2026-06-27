@@ -139,6 +139,27 @@ impl Channel for TelegramChannel {
                     self.last_update_id
                         .store(update.update_id, Ordering::SeqCst);
 
+                    if !self.is_allowed(&callback_query.from) {
+                        warn!(
+                            event = "TelegramCallbackUserDenied",
+                            user_id = %callback_query.from.id,
+                            "callback query from user not in allowed list"
+                        );
+                        let answer_payload = json!({
+                            "callback_query_id": callback_query.id,
+                            "text": "无权限",
+                        });
+                        if let Err(e) = self.post("answerCallbackQuery", &answer_payload).await {
+                            warn!(
+                                event = "TelegramAnswerCallbackFailed",
+                                callback_query_id = %callback_query.id,
+                                error = %e,
+                                "failed to answer callback query for denied user"
+                            );
+                        }
+                        continue;
+                    }
+
                     if let Some(data) = callback_query.data
                         && let Some((request_id, option)) = parse_callback_data(&data)
                     {
@@ -146,7 +167,14 @@ impl Channel for TelegramChannel {
                         let answer_payload = json!({
                             "callback_query_id": callback_query.id,
                         });
-                        let _ = self.post("answerCallbackQuery", &answer_payload).await;
+                        if let Err(e) = self.post("answerCallbackQuery", &answer_payload).await {
+                            warn!(
+                                event = "TelegramAnswerCallbackFailed",
+                                callback_query_id = %callback_query.id,
+                                error = %e,
+                                "failed to answer callback query"
+                            );
+                        }
 
                         // Optionally reply with a confirmation note
                         if let Some(ref message) = callback_query.message {
@@ -156,7 +184,15 @@ impl Channel for TelegramChannel {
                                 "text": note,
                                 "message_thread_id": message.message_thread_id,
                             });
-                            let _ = self.post("sendMessage", &note_payload).await;
+                            if let Err(e) = self.post("sendMessage", &note_payload).await {
+                                warn!(
+                                    event = "TelegramSendMessageFailed",
+                                    callback_query_id = %callback_query.id,
+                                    chat_id = %message.chat.id,
+                                    error = %e,
+                                    "failed to send callback confirmation note"
+                                );
+                            }
                         }
 
                         if let Some(ref message) = callback_query.message {
@@ -225,6 +261,9 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
 
 fn parse_callback_data(data: &str) -> Option<(Uuid, String)> {
     let (uuid_part, option_part) = data.split_once(':')?;
+    if option_part.is_empty() {
+        return None;
+    }
     let request_id = Uuid::parse_str(uuid_part).ok()?;
     Some((request_id, option_part.to_string()))
 }
@@ -345,5 +384,30 @@ mod tests {
             "01912345-6789-7abc-8def-0123456789ab"
         );
         assert_eq!(option, "allow_once");
+    }
+
+    #[test]
+    fn parse_callback_query_data_rejects_invalid_uuid() {
+        assert!(parse_callback_data("not-a-uuid:allow_once").is_none());
+    }
+
+    #[test]
+    fn parse_callback_query_data_rejects_missing_separator() {
+        assert!(parse_callback_data("01912345-6789-7abc-8def-0123456789ab").is_none());
+    }
+
+    #[test]
+    fn parse_callback_query_data_rejects_empty_option() {
+        assert!(parse_callback_data("01912345-6789-7abc-8def-0123456789ab:").is_none());
+    }
+
+    #[test]
+    fn callback_user_allowlist_denied() {
+        let ch = TelegramChannel::new(cfg(vec!["alice".to_string()]));
+        let user = TelegramUser {
+            id: 999,
+            username: Some("mallory".to_string()),
+        };
+        assert!(!ch.is_allowed(&user));
     }
 }
