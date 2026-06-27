@@ -58,10 +58,11 @@ impl TelegramChannel {
     async fn post(&self, method: &str, payload: &serde_json::Value) -> Result<(), ChannelError> {
         let url = self.api_url(method);
         let resp = self.client.post(&url).json(payload).send().await?;
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(ChannelError::Api {
-                code: 0,
+                code: status.as_u16() as i32,
                 message: text,
             });
         }
@@ -119,15 +120,17 @@ impl TelegramChannel {
         self.config.pairing_code.clone().unwrap_or_default()
     }
 
-    fn is_writable_toml(path: &Path) -> bool {
+    async fn is_writable_toml(path: &Path) -> bool {
         path.extension().map(|e| e == "toml").unwrap_or(false)
-            && std::fs::metadata(path)
+            && tokio::fs::metadata(path)
+                .await
                 .map(|m| !m.permissions().readonly())
                 .unwrap_or(false)
     }
 
-    fn persist_allowed_user(&self, user_id: &str, path: &Path) -> Result<(), ChannelError> {
-        let mut config: TelegramConfig = std::fs::read_to_string(path)
+    async fn persist_allowed_user(&self, user_id: &str, path: &Path) -> Result<(), ChannelError> {
+        let mut config: TelegramConfig = tokio::fs::read_to_string(path)
+            .await
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
             .unwrap_or_else(|| self.config.clone());
@@ -140,10 +143,12 @@ impl TelegramChannel {
             code: 0,
             message: e.to_string(),
         })?;
-        std::fs::write(path, content).map_err(|e| ChannelError::Api {
-            code: 0,
-            message: e.to_string(),
-        })?;
+        tokio::fs::write(path, content)
+            .await
+            .map_err(|e| ChannelError::Api {
+                code: 0,
+                message: e.to_string(),
+            })?;
 
         Ok(())
     }
@@ -226,10 +231,12 @@ impl TelegramChannel {
         file_path: &Path,
         caption: &str,
     ) -> Result<(), ChannelError> {
-        let file_bytes = std::fs::read(file_path).map_err(|e| ChannelError::Api {
-            code: 0,
-            message: e.to_string(),
-        })?;
+        let file_bytes = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| ChannelError::Api {
+                code: 0,
+                message: e.to_string(),
+            })?;
         let part = reqwest::multipart::Part::bytes(file_bytes).file_name(
             file_path
                 .file_name()
@@ -250,10 +257,11 @@ impl TelegramChannel {
 
         let url = self.api_url(method);
         let resp = self.client.post(&url).multipart(form).send().await?;
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(ChannelError::Api {
-                code: 0,
+                code: status.as_u16() as i32,
                 message: text,
             });
         }
@@ -262,7 +270,8 @@ impl TelegramChannel {
 
     async fn send_ack_reaction(&self, chat_id: i64, message_id: i64) -> Result<(), ChannelError> {
         let reactions = ["👍", "👌", "✅", "🆗"];
-        let reaction = reactions[message_id as usize % reactions.len()];
+        let idx: usize = message_id.try_into().unwrap_or(0);
+        let reaction = reactions[idx % reactions.len()];
         let payload = json!({
             "chat_id": chat_id,
             "message_id": message_id,
@@ -278,7 +287,7 @@ impl TelegramChannel {
         msg: &TelegramMessage,
     ) -> Option<IncomingAttachment> {
         let dir = std::env::current_dir().ok()?.join("telegram_files");
-        std::fs::create_dir_all(&dir).ok()?;
+        tokio::fs::create_dir_all(&dir).await.ok()?;
 
         if let Some(doc) = &msg.document {
             return self
@@ -590,10 +599,11 @@ impl Channel for TelegramChannel {
                 .send()
                 .await?;
 
-            if !resp.status().is_success() {
+            let status = resp.status();
+            if !status.is_success() {
                 let text = resp.text().await.unwrap_or_default();
                 return Err(ChannelError::Api {
-                    code: 0,
+                    code: status.as_u16() as i32,
                     message: text,
                 });
             }
@@ -621,6 +631,22 @@ impl Channel for TelegramChannel {
                                 error = %e,
                                 "failed to answer callback query for denied user"
                             );
+                        }
+                        if let Some(ref message) = callback_query.message {
+                            let note_payload = json!({
+                                "chat_id": message.chat.id,
+                                "text": "你没有权限操作此审批请求。",
+                                "message_thread_id": message.message_thread_id,
+                            });
+                            if let Err(e) = self.post("sendMessage", &note_payload).await {
+                                warn!(
+                                    event = "TelegramDeniedCallbackNotifyFailed",
+                                    callback_query_id = %callback_query.id,
+                                    chat_id = %message.chat.id,
+                                    error = %e,
+                                    "failed to notify denied callback user"
+                                );
+                            }
                         }
                         continue;
                     }
@@ -694,9 +720,10 @@ impl Channel for TelegramChannel {
                         let reply = if !expected.is_empty() && code == expected {
                             self.runtime_allow(&msg.from.id.to_string());
                             if let Some(ref path) = self.config_path
-                                && Self::is_writable_toml(path)
+                                && Self::is_writable_toml(path).await
                                 && self
                                     .persist_allowed_user(&msg.from.id.to_string(), path)
+                                    .await
                                     .is_ok()
                             {
                                 persisted = true;
@@ -1424,27 +1451,28 @@ mod tests {
         assert_eq!(channel.expected_pairing_code(), "");
     }
 
-    #[test]
-    fn is_writable_toml_true_for_writable_toml() {
+    #[tokio::test]
+    async fn is_writable_toml_true_for_writable_toml() {
         let file = NamedTempFile::with_suffix(".toml").unwrap();
-        assert!(TelegramChannel::is_writable_toml(file.path()));
+        assert!(TelegramChannel::is_writable_toml(file.path()).await);
     }
 
-    #[test]
-    fn is_writable_toml_false_for_non_toml_extension() {
+    #[tokio::test]
+    async fn is_writable_toml_false_for_non_toml_extension() {
         let file = NamedTempFile::with_suffix(".txt").unwrap();
-        assert!(!TelegramChannel::is_writable_toml(file.path()));
+        assert!(!TelegramChannel::is_writable_toml(file.path()).await);
     }
 
-    #[test]
-    fn persist_allowed_user_appends_to_toml() {
+    #[tokio::test]
+    async fn persist_allowed_user_appends_to_toml() {
         let file = NamedTempFile::with_suffix(".toml").unwrap();
-        std::fs::write(
+        tokio::fs::write(
             file.path(),
             r#"bot_token = "x"
 allowed_users = ["alice"]
 "#,
         )
+        .await
         .unwrap();
 
         let channel = TelegramChannel::new_with_path(
@@ -1456,22 +1484,26 @@ allowed_users = ["alice"]
             },
             Some(file.path().to_path_buf()),
         );
-        channel.persist_allowed_user("123", file.path()).unwrap();
+        channel
+            .persist_allowed_user("123", file.path())
+            .await
+            .unwrap();
 
-        let content = std::fs::read_to_string(file.path()).unwrap();
+        let content = tokio::fs::read_to_string(file.path()).await.unwrap();
         let parsed: TelegramConfig = toml::from_str(&content).unwrap();
         assert_eq!(parsed.allowed_users, vec!["alice", "123"]);
     }
 
-    #[test]
-    fn persist_allowed_user_deduplicates() {
+    #[tokio::test]
+    async fn persist_allowed_user_deduplicates() {
         let file = NamedTempFile::with_suffix(".toml").unwrap();
-        std::fs::write(
+        tokio::fs::write(
             file.path(),
             r#"bot_token = "x"
 allowed_users = ["123"]
 "#,
         )
+        .await
         .unwrap();
 
         let channel = TelegramChannel::new_with_path(
@@ -1483,9 +1515,12 @@ allowed_users = ["123"]
             },
             Some(file.path().to_path_buf()),
         );
-        channel.persist_allowed_user("123", file.path()).unwrap();
+        channel
+            .persist_allowed_user("123", file.path())
+            .await
+            .unwrap();
 
-        let content = std::fs::read_to_string(file.path()).unwrap();
+        let content = tokio::fs::read_to_string(file.path()).await.unwrap();
         let parsed: TelegramConfig = toml::from_str(&content).unwrap();
         assert_eq!(parsed.allowed_users, vec!["123"]);
     }

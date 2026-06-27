@@ -498,3 +498,165 @@ async fn telegram_bind_ignored_when_allowlist_not_empty() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     listen_handle.abort();
 }
+
+#[tokio::test]
+async fn telegram_callback_query_sends_confirmation_and_inbound() {
+    let mock_server = MockServer::start().await;
+    let request_uuid = "01912345-6789-7abc-8def-0123456789ab";
+    let callback_data = format!("{}:allow_once", request_uuid);
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": [{
+                "update_id": 1,
+                "callback_query": {
+                    "id": "cq1",
+                    "from": {"id": 123, "username": "alice"},
+                    "message": {"message_id": 10, "chat": {"id": 456, "type": "private"}},
+                    "data": callback_data
+                }
+            }]
+        })))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": []
+        })))
+        .with_priority(2)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/answerCallbackQuery"))
+        .and(body_string_contains("cq1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": true})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/sendMessage"))
+        .and(body_string_contains("已选择：allow_once"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": {"message_id": 11}})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let cfg = TelegramConfig {
+        bot_token: "TOKEN".to_string(),
+        allowed_users: vec!["alice".to_string()],
+        pairing_enabled: false,
+        pairing_code: None,
+    };
+    let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+
+    let (tx, rx) = unbounded::<ChannelInboundMessage>();
+    let listen_handle = tokio::spawn(async move {
+        let _ = channel.listen(tx).await;
+    });
+
+    let msg = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(m) = rx.try_recv() {
+                return m;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("receive timeout");
+
+    let confirmation = msg.confirmation.expect("confirmation");
+    assert_eq!(confirmation.request_id.to_string(), request_uuid);
+    assert_eq!(confirmation.option, "allow_once");
+
+    listen_handle.abort();
+}
+
+#[tokio::test]
+async fn telegram_unauthorized_callback_query_notifies_user() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": [{
+                "update_id": 1,
+                "callback_query": {
+                    "id": "cq2",
+                    "from": {"id": 999, "username": "mallory"},
+                    "message": {"message_id": 20, "chat": {"id": 456, "type": "private"}},
+                    "data": "01912345-6789-7abc-8def-0123456789ab:deny"
+                }
+            }]
+        })))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": []
+        })))
+        .with_priority(2)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/answerCallbackQuery"))
+        .and(body_string_contains("cq2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": true})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/sendMessage"))
+        .and(body_string_contains("你没有权限操作此审批请求。"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": {"message_id": 21}})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let cfg = TelegramConfig {
+        bot_token: "TOKEN".to_string(),
+        allowed_users: vec!["alice".to_string()],
+        pairing_enabled: false,
+        pairing_code: None,
+    };
+    let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+
+    let (tx, rx) = unbounded::<ChannelInboundMessage>();
+    let listen_handle = tokio::spawn(async move {
+        let _ = channel.listen(tx).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(rx.try_recv().is_err());
+
+    listen_handle.abort();
+}
