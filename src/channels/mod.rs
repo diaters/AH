@@ -7,7 +7,7 @@ pub mod send_tool;
 pub mod telegram;
 pub mod traits;
 
-pub use config::{ChannelConfigs, TelegramConfig};
+pub use config::{ChannelConfigs, QqConfig, TelegramConfig};
 pub use frontend::ChannelFrontend;
 pub use manager::ChannelManager;
 pub use send_tool::ChannelSendTool;
