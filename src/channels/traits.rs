@@ -68,6 +68,7 @@ pub enum ChannelParseMode {
 
 #[derive(Clone, Debug, Serialize)]
 pub enum ReplyMarkup {
+    #[serde(rename = "inline_keyboard")]
     InlineKeyboard(Vec<Vec<InlineKeyboardButton>>),
 }
 
@@ -171,5 +172,23 @@ mod tests {
             }
             _ => panic!("unexpected variant"),
         }
+    }
+
+    #[test]
+    fn reply_markup_serializes_to_telegram_inline_keyboard() {
+        let markup = ReplyMarkup::InlineKeyboard(vec![vec![InlineKeyboardButton {
+            text: "允许".to_string(),
+            callback_data: "req-id:allow".to_string(),
+        }]]);
+        let json = serde_json::to_value(&markup).expect("serialize");
+        assert!(
+            json.get("inline_keyboard").is_some(),
+            "expected key 'inline_keyboard', got {}",
+            json
+        );
+        assert!(
+            json.get("InlineKeyboard").is_none(),
+            "must not use Rust variant name as key"
+        );
     }
 }
