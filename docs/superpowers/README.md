@@ -28,6 +28,7 @@
 | `specs/2026-06-14-experience-module-layered-governance-design.md` | 经验模块两层分层汇聚治理设计 | 活跃 |
 | `specs/2026-06-14-experience-persistence-fix-design.md` | 经验落盘链路完整修复设计 | 活跃 |
 | `specs/2026-06-15-experience-governance-writeback-design.md` | 经验治理统一写回与任务级孵化设计 | 活跃 |
+| `specs/2026-06-27-auto-channel-reply-design.md` | IM 出向-自动回执设计 | 活跃 |
 
 ## 生命周期规则
 

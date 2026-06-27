@@ -10,16 +10,8 @@
 
 1. __入向__：用户从 IM 发送消息，触发 Harness 的 Task。
 2. __出向-主动__：Agent 通过 `channel_send` 工具向任意已配置平台主动发送消息。
-
-### 后续阶段
-
-下列能力__不在本期交付__，作为后续阶段推进：
-
-1. __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台。
-
-> 拆分理由：出向-自动需要 `Channel` 持有出向发送句柄并作为 `Frontend` 真正发送消息，
-> 涉及 `Frontend` trait 能力扩展与独立 companion system 设计，与本期“建立抽象 + Telegram
-> 长轮询 + 主动工具”的最小闭环耦合度低，单独成阶段更易验证。
+3. __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台（当前实现见
+   [2026-06-27-auto-channel-reply-design.md](../superpowers/specs/2026-06-27-auto-channel-reply-design.md)）。
 
 ## 设计原则
 
@@ -101,14 +93,15 @@ pub trait Channel: Send + Sync + 'static {
   `Res<ChannelManager>`）消费并调用 `ChannelManager::send()`，再回写 `ToolExecutionResultMessage`。
 - 该模式与项目中已有的 companion system（如 `on_message_dispatched_hook_system`）一致。
 
-### 出向-自动（后续阶段，本期不交付）
+### 出向-自动
 
-后续阶段实现时：
+已实现，详见 [2026-06-27-auto-channel-reply-design.md](../superpowers/specs/2026-06-27-auto-channel-reply-design.md)。
+
+实现要点：
 
 - `UserOutputMessage` 新增 `task_id`，`frontend_output_system` 查找 `Task::origin_channel`
   生成 `EventTarget::Directed` 的 `EngineEvent::Text`（复用 `SystemOutputMessage` 已建立的模式）。
 - 每个 `Channel` 实现 `Frontend` trait 并持有出向发送句柄，`push_event` 中真正调用 `send()`。
-- 本期 `UserOutputMessage` 暂不新增 `task_id`，避免引入未使用字段。
 
 ## 平台实现策略
 
@@ -214,8 +207,7 @@ reqwest = { version = "0.12", features = ["json", "multipart"] }
 
 ## 后续阶段
 
-- __阶段 2：出向-自动__：`UserOutputMessage` 携带 `task_id`，`Channel` 实现 `Frontend` 并真正发送。
-- __阶段 3：QQ 通道__：OAuth2、WebSocket Gateway、markdown/富媒体发送。
-- __阶段 4：飞书/Lark 通道__：tenant token、WebSocket/Webhook、interactive card。
-- __阶段 5：媒体附件__：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
-- __阶段 6：Telegram 增强__：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。
+- __阶段 2：QQ 通道__：OAuth2、WebSocket Gateway、markdown/富媒体发送。
+- __阶段 3：飞书/Lark 通道__：tenant token、WebSocket/Webhook、interactive card。
+- __阶段 4：媒体附件__：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
+- __阶段 5：Telegram 增强__：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。
