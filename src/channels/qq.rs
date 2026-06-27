@@ -1,6 +1,6 @@
 //! QQ 官方 Bot API 通道实现
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,9 +8,10 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::channels::config::QqConfig;
-use crate::channels::traits::{Channel, ChannelError};
+use crate::channels::traits::{Channel, ChannelError, InboundConfirmation};
 
 const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
 const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
@@ -82,6 +83,20 @@ enum QqMediaFileType {
     Voice = 3,
     File = 4,
 }
+
+/// 待处理的审批请求记录。
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct PendingApproval {
+    request_id: Uuid,
+    #[allow(dead_code)]
+    recipient: String,
+    options: Vec<crate::domain::ApprovalOption>,
+    created_at: u64,
+}
+
+#[allow(dead_code)]
+const PENDING_APPROVAL_TTL_SECS: u64 = 300;
 
 /// 根据 marker 字符串与目标路径扩展名映射到 QQMediaFileType。
 /// AUDIO/VOICE 非原生格式（非 wav/mp3/silk）降级为 File。
@@ -245,14 +260,65 @@ fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, Channe
     })
 }
 
-/// 将 ReplyMarkup 转译为编号列表文本（Task 6 完整实现）。
+/// 将 ReplyMarkup::InlineKeyboard 转译为编号列表追加到 base_content 末尾。
 fn render_buttons_as_numbered_list(
     markup: &crate::channels::traits::ReplyMarkup,
     base_content: &str,
 ) -> String {
-    // 占位：Task 6 实现完整逻辑
-    let _ = markup;
-    base_content.to_string()
+    use crate::channels::traits::ReplyMarkup;
+    match markup {
+        ReplyMarkup::InlineKeyboard(rows) => {
+            let mut numbered: Vec<String> = Vec::new();
+            let mut idx = 1;
+            for row in rows {
+                for button in row {
+                    numbered.push(format!("{idx}. {}", button.text));
+                    idx += 1;
+                }
+            }
+            if numbered.is_empty() {
+                return base_content.to_string();
+            }
+            format!(
+                "{base_content}\n\n{}\n\n请回复数字或选项名称。",
+                numbered.join("\n")
+            )
+        }
+    }
+}
+
+/// 从 ReplyMarkup::InlineKeyboard 的 callback_data 中提取 request_id 与选项列表。
+/// callback_data 格式：`<request_id>:<option_id>`，由 ChannelFrontend 生成。
+fn extract_approval_info(
+    markup: &crate::channels::traits::ReplyMarkup,
+) -> Option<(Uuid, Vec<crate::domain::ApprovalOption>)> {
+    use crate::channels::traits::ReplyMarkup;
+    use crate::domain::ApprovalOption;
+    match markup {
+        ReplyMarkup::InlineKeyboard(rows) => {
+            let mut request_id: Option<Uuid> = None;
+            let mut options = Vec::new();
+            for row in rows {
+                for button in row {
+                    let Some((rid, opt_id)) = button.callback_data.split_once(':') else {
+                        continue;
+                    };
+                    // 第一个有效 button 解析出 request_id，后续 button 复用同一 request_id
+                    if request_id.is_none() {
+                        request_id = Uuid::parse_str(rid).ok();
+                    }
+                    if request_id.is_some() {
+                        options.push(ApprovalOption {
+                            id: opt_id.to_string(),
+                            label: button.text.clone(),
+                            description: String::new(),
+                        });
+                    }
+                }
+            }
+            request_id.map(|rid| (rid, options))
+        }
+    }
 }
 
 /// QQ 通道实现
@@ -267,6 +333,7 @@ pub struct QqChannel {
     workspace_dir: Option<PathBuf>,
     api_base: String,
     auth_url: String,
+    pending_approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
 }
 
 impl QqChannel {
@@ -285,6 +352,7 @@ impl QqChannel {
             workspace_dir: None,
             api_base: QQ_API_BASE.to_string(),
             auth_url: QQ_AUTH_URL.to_string(),
+            pending_approvals: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -504,6 +572,87 @@ impl QqChannel {
             return None;
         }
         Some(parts.join("\n"))
+    }
+
+    /// 记录待处理审批请求（同 recipient 覆盖旧的）。
+    async fn record_pending_approval(
+        &self,
+        recipient: &str,
+        request_id: Uuid,
+        options: Vec<crate::domain::ApprovalOption>,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut map = self.pending_approvals.write().await;
+        map.insert(
+            recipient.to_string(),
+            PendingApproval {
+                request_id,
+                recipient: recipient.to_string(),
+                options,
+                created_at: now,
+            },
+        );
+    }
+
+    /// 尝试将用户回复匹配到 pending approval。
+    /// 匹配优先级：数字 → option id → option label。
+    #[allow(dead_code)]
+    async fn try_match_approval_reply(
+        &self,
+        recipient: &str,
+        content: &str,
+    ) -> Option<InboundConfirmation> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let pending = {
+            let map = self.pending_approvals.read().await;
+            let p = map.get(recipient)?.clone();
+            // TTL 检查
+            if now - p.created_at > PENDING_APPROVAL_TTL_SECS {
+                drop(map);
+                let mut map = self.pending_approvals.write().await;
+                map.remove(recipient);
+                return None;
+            }
+            p
+        };
+
+        let normalized = content.trim();
+        let matched = if normalized.chars().all(|c| c.is_ascii_digit()) && !normalized.is_empty() {
+            // 数字匹配
+            normalized.parse::<usize>().ok().and_then(|n| {
+                if n >= 1 && n <= pending.options.len() {
+                    Some(&pending.options[n - 1])
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+        .or_else(|| pending.options.iter().find(|opt| opt.id == normalized))
+        .or_else(|| {
+            pending
+                .options
+                .iter()
+                .find(|opt| opt.label == normalized || opt.label.contains(normalized))
+        });
+
+        if let Some(opt) = matched {
+            let mut map = self.pending_approvals.write().await;
+            map.remove(recipient);
+            Some(InboundConfirmation {
+                request_id: pending.request_id,
+                option: opt.id.clone(),
+            })
+        } else {
+            None
+        }
     }
 
     /// 测试用：覆盖 API base URL。
@@ -813,6 +962,11 @@ impl Channel for QqChannel {
             .collect();
 
         let final_text = if let Some(ref markup) = message.reply_markup {
+            // 从 buttons 提取 request_id 与 options
+            if let Some((request_id, options)) = extract_approval_info(markup) {
+                self.record_pending_approval(&message.recipient, request_id, options)
+                    .await;
+            }
             render_buttons_as_numbered_list(markup, &text)
         } else {
             text.clone()
@@ -1499,5 +1653,152 @@ mod tests {
             err.to_string().contains("must be HTTPS"),
             "expected HTTPS error, got: {err}"
         );
+    }
+
+    // --- render_buttons_as_numbered_list tests ---
+
+    #[test]
+    fn render_buttons_single_option() {
+        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
+        let markup = ReplyMarkup::InlineKeyboard(vec![vec![InlineKeyboardButton {
+            text: "允许".to_string(),
+            callback_data: "req:allow".to_string(),
+        }]]);
+        let result = render_buttons_as_numbered_list(&markup, "请确认");
+        assert!(result.contains("请确认"));
+        assert!(result.contains("1. 允许"));
+        assert!(result.contains("请回复数字"));
+    }
+
+    #[test]
+    fn render_buttons_multiple_rows() {
+        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
+        let markup = ReplyMarkup::InlineKeyboard(vec![
+            vec![InlineKeyboardButton {
+                text: "允许".to_string(),
+                callback_data: "req:allow".to_string(),
+            }],
+            vec![InlineKeyboardButton {
+                text: "拒绝".to_string(),
+                callback_data: "req:deny".to_string(),
+            }],
+        ]);
+        let result = render_buttons_as_numbered_list(&markup, "确认");
+        assert!(result.contains("1. 允许"));
+        assert!(result.contains("2. 拒绝"));
+    }
+
+    #[test]
+    fn render_buttons_empty_returns_base() {
+        use crate::channels::traits::ReplyMarkup;
+        let markup = ReplyMarkup::InlineKeyboard(vec![]);
+        let result = render_buttons_as_numbered_list(&markup, "base");
+        assert_eq!(result, "base");
+    }
+
+    // --- extract_approval_info tests ---
+
+    #[test]
+    fn extract_approval_info_from_inline_keyboard() {
+        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
+        let markup = ReplyMarkup::InlineKeyboard(vec![
+            vec![InlineKeyboardButton {
+                text: "允许".to_string(),
+                callback_data: "01912345-6789-7abc-8def-0123456789ab:allow".to_string(),
+            }],
+            vec![InlineKeyboardButton {
+                text: "拒绝".to_string(),
+                callback_data: "01912345-6789-7abc-8def-0123456789ab:deny".to_string(),
+            }],
+        ]);
+        let (request_id, options) = extract_approval_info(&markup).expect("extract");
+        assert_eq!(
+            request_id.to_string(),
+            "01912345-6789-7abc-8def-0123456789ab"
+        );
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].id, "allow");
+        assert_eq!(options[0].label, "允许");
+        assert_eq!(options[1].id, "deny");
+    }
+
+    // --- approval matching tests ---
+
+    fn make_approval_options() -> Vec<crate::domain::ApprovalOption> {
+        vec![
+            crate::domain::ApprovalOption {
+                id: "allow".to_string(),
+                label: "允许".to_string(),
+                description: String::new(),
+            },
+            crate::domain::ApprovalOption {
+                id: "deny".to_string(),
+                label: "拒绝".to_string(),
+                description: String::new(),
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn approval_match_by_digit_one() {
+        let ch = QqChannel::new(make_config());
+        ch.record_pending_approval("user:u1", Uuid::nil(), make_approval_options())
+            .await;
+        let result = ch.try_match_approval_reply("user:u1", "1").await;
+        assert_eq!(result.unwrap().option, "allow");
+    }
+
+    #[tokio::test]
+    async fn approval_match_by_digit_two() {
+        let ch = QqChannel::new(make_config());
+        ch.record_pending_approval("user:u1", Uuid::nil(), make_approval_options())
+            .await;
+        let result = ch.try_match_approval_reply("user:u1", "2").await;
+        assert_eq!(result.unwrap().option, "deny");
+    }
+
+    #[tokio::test]
+    async fn approval_match_by_option_id() {
+        let ch = QqChannel::new(make_config());
+        ch.record_pending_approval("user:u1", Uuid::nil(), make_approval_options())
+            .await;
+        let result = ch.try_match_approval_reply("user:u1", "allow").await;
+        assert_eq!(result.unwrap().option, "allow");
+    }
+
+    #[tokio::test]
+    async fn approval_match_by_label() {
+        let ch = QqChannel::new(make_config());
+        ch.record_pending_approval("user:u1", Uuid::nil(), make_approval_options())
+            .await;
+        let result = ch.try_match_approval_reply("user:u1", "允许").await;
+        assert_eq!(result.unwrap().option, "allow");
+    }
+
+    #[tokio::test]
+    async fn approval_digit_out_of_range_returns_none() {
+        let ch = QqChannel::new(make_config());
+        ch.record_pending_approval("user:u1", Uuid::nil(), make_approval_options())
+            .await;
+        let result = ch.try_match_approval_reply("user:u1", "3").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn approval_no_pending_returns_none() {
+        let ch = QqChannel::new(make_config());
+        let result = ch.try_match_approval_reply("user:u1", "1").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn approval_match_removes_pending() {
+        let ch = QqChannel::new(make_config());
+        ch.record_pending_approval("user:u1", Uuid::nil(), make_approval_options())
+            .await;
+        let _ = ch.try_match_approval_reply("user:u1", "1").await;
+        // 再次匹配应返回 None
+        let result = ch.try_match_approval_reply("user:u1", "1").await;
+        assert!(result.is_none());
     }
 }
