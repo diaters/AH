@@ -38,6 +38,7 @@ fn auto_channel_reply() {
             .and(body_json(serde_json::json!({
                 "chat_id": "123456",
                 "text": "echo reply",
+                "parse_mode": "HTML",
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
