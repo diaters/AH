@@ -12,7 +12,7 @@ use crate::channels::config::TelegramConfig;
 
 use super::traits::{
     Channel, ChannelError, ChannelInboundMessage, ChannelOutboundMessage, ChannelParseMode,
-    InboundConfirmation,
+    InboundConfirmation, ReplyMarkup,
 };
 
 pub struct TelegramChannel {
@@ -92,47 +92,26 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: &ChannelOutboundMessage) -> Result<(), ChannelError> {
-        let text_parts = match message.parse_mode {
-            Some(ChannelParseMode::Html) | None => {
-                let chunks = split_markdown_semantic(&message.content);
-                chunks
-                    .into_iter()
-                    .map(|chunk| markdown_to_telegram_html(&chunk))
-                    .collect::<Vec<_>>()
-            }
-            Some(ChannelParseMode::Markdown) => {
-                split_text(&message.content, TELEGRAM_MAX_TEXT_LENGTH)
-            }
-        };
+        let text_parts = prepare_text_parts(&message.content, message.parse_mode.as_ref());
 
         for part in text_parts {
-            let mut payload = json!({
-                "chat_id": message.recipient,
-                "text": part,
-                "parse_mode": "HTML",
-            });
-            if let Some(thread_id) = &message.thread_id
-                && let Ok(id) = thread_id.parse::<i64>()
-            {
-                payload["message_thread_id"] = json!(id);
-            }
-            if let Some(ref reply_markup) = message.reply_markup {
-                payload["reply_markup"] = json!(reply_markup);
-            }
+            let payload = build_send_payload(
+                &message.recipient,
+                message.thread_id.as_deref(),
+                &part,
+                message.parse_mode.as_ref(),
+                message.reply_markup.as_ref(),
+            );
 
             let result = self.post("sendMessage", &payload).await;
             if let Err(ref e) = result {
                 if is_parse_mode_error(e) {
-                    // Fallback to plain text
-                    let mut fallback = json!({
-                        "chat_id": message.recipient,
-                        "text": strip_tags(&part),
-                    });
-                    if let Some(thread_id) = &message.thread_id
-                        && let Ok(id) = thread_id.parse::<i64>()
-                    {
-                        fallback["message_thread_id"] = json!(id);
-                    }
+                    let fallback = build_fallback_payload(
+                        &message.recipient,
+                        message.thread_id.as_deref(),
+                        &part,
+                        message.reply_markup.as_ref(),
+                    );
                     self.post("sendMessage", &fallback).await?;
                 } else {
                     result?;
@@ -478,7 +457,16 @@ fn split_markdown_semantic(text: &str) -> Vec<String> {
 fn is_parse_mode_error(err: &ChannelError) -> bool {
     match err {
         ChannelError::Api { message, .. } => {
-            message.to_lowercase().contains("parse") || message.to_lowercase().contains("can't")
+            let lower = message.to_lowercase();
+            [
+                "can't parse entities",
+                "unexpected",
+                "unclosed",
+                "tag",
+                "entity",
+            ]
+            .iter()
+            .any(|pattern| lower.contains(pattern))
         }
         _ => false,
     }
@@ -498,6 +486,45 @@ fn strip_tags(html: &str) -> String {
     out
 }
 
+fn decode_html_entities(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            let mut entity = String::new();
+            let mut terminated = false;
+            while let Some(&next) = chars.peek() {
+                if next == ';' {
+                    chars.next();
+                    terminated = true;
+                    break;
+                }
+                entity.push(chars.next().unwrap());
+            }
+            if terminated {
+                match entity.as_str() {
+                    "lt" => out.push('<'),
+                    "gt" => out.push('>'),
+                    "amp" => out.push('&'),
+                    "quot" => out.push('"'),
+                    "#39" => out.push('\''),
+                    _ => {
+                        out.push('&');
+                        out.push_str(&entity);
+                        out.push(';');
+                    }
+                }
+            } else {
+                out.push('&');
+                out.push_str(&entity);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn split_text(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
@@ -511,6 +538,160 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
         start = end;
     }
     chunks
+}
+
+fn prepare_text_parts(content: &str, parse_mode: Option<&ChannelParseMode>) -> Vec<String> {
+    match parse_mode {
+        Some(ChannelParseMode::Html) | None => {
+            let chunks = split_markdown_semantic(content);
+            chunks
+                .into_iter()
+                .map(|chunk| markdown_to_telegram_html(&chunk))
+                .flat_map(|html| split_html_safely(&html, TELEGRAM_MAX_TEXT_LENGTH))
+                .collect()
+        }
+        Some(ChannelParseMode::Markdown) => split_text(content, TELEGRAM_MAX_TEXT_LENGTH),
+    }
+}
+
+fn build_send_payload(
+    recipient: &str,
+    thread_id: Option<&str>,
+    text: &str,
+    parse_mode: Option<&ChannelParseMode>,
+    reply_markup: Option<&ReplyMarkup>,
+) -> serde_json::Value {
+    let mut payload = json!({
+        "chat_id": recipient,
+        "text": text,
+    });
+    if matches!(parse_mode, Some(ChannelParseMode::Html) | None) {
+        payload["parse_mode"] = "HTML".into();
+    }
+    if let Some(thread_id) = thread_id
+        && let Ok(id) = thread_id.parse::<i64>()
+    {
+        payload["message_thread_id"] = json!(id);
+    }
+    if let Some(reply_markup) = reply_markup {
+        payload["reply_markup"] = json!(reply_markup);
+    }
+    payload
+}
+
+fn build_fallback_payload(
+    recipient: &str,
+    thread_id: Option<&str>,
+    html: &str,
+    reply_markup: Option<&ReplyMarkup>,
+) -> serde_json::Value {
+    let mut payload = json!({
+        "chat_id": recipient,
+        "text": decode_html_entities(&strip_tags(html)),
+    });
+    if let Some(thread_id) = thread_id
+        && let Ok(id) = thread_id.parse::<i64>()
+    {
+        payload["message_thread_id"] = json!(id);
+    }
+    if let Some(reply_markup) = reply_markup {
+        payload["reply_markup"] = json!(reply_markup);
+    }
+    payload
+}
+
+fn split_html_safely(html: &str, max_len: usize) -> Vec<String> {
+    if html.len() <= max_len {
+        return vec![html.to_string()];
+    }
+
+    let mut result = Vec::new();
+    let mut start = 0;
+
+    while start < html.len() {
+        let remaining = html.len() - start;
+        if remaining <= max_len {
+            result.push(html[start..].to_string());
+            break;
+        }
+
+        let target_end = start + max_len;
+        let split_at = find_safe_split(html, start, target_end);
+
+        if split_at == start {
+            // Cannot find a safe split point; fall back to plain text splitting.
+            let end = html.floor_char_boundary(target_end.min(html.len()));
+            result.push(html[start..end].to_string());
+            start = end;
+        } else {
+            result.push(html[start..split_at].to_string());
+            start = split_at;
+        }
+    }
+
+    result
+}
+
+fn find_safe_split(html: &str, start: usize, target_end: usize) -> usize {
+    let target_end = target_end.min(html.len());
+
+    if let Some(idx) = find_best_split(html, start, target_end, "\n\n", 2) {
+        return idx;
+    }
+    if let Some(idx) = find_sentence_split(html, start, target_end) {
+        return idx;
+    }
+    if let Some(idx) = find_best_split(html, start, target_end, " ", 1) {
+        return idx;
+    }
+    for idx in (start + 1..=target_end).rev() {
+        if html.is_char_boundary(idx) && is_outside_tag(html, idx) {
+            return idx;
+        }
+    }
+    start
+}
+
+fn find_best_split(
+    html: &str,
+    start: usize,
+    target_end: usize,
+    pattern: &str,
+    offset: usize,
+) -> Option<usize> {
+    let mut best = None;
+    for (idx, _) in html[start..target_end].match_indices(pattern) {
+        let abs_idx = start + idx + offset;
+        if abs_idx <= target_end && is_outside_tag(html, abs_idx) {
+            best = Some(abs_idx);
+        }
+    }
+    best
+}
+
+fn find_sentence_split(html: &str, start: usize, target_end: usize) -> Option<usize> {
+    let mut best = None;
+    for (idx, c) in html[start..target_end].char_indices() {
+        if c == '.' || c == '!' || c == '?' {
+            let abs_idx = start + idx + c.len_utf8();
+            if abs_idx <= target_end && is_outside_tag(html, abs_idx) {
+                best = Some(abs_idx);
+            }
+        }
+    }
+    best
+}
+
+fn is_outside_tag(html: &str, idx: usize) -> bool {
+    let mut in_tag = false;
+    for c in html[..idx.min(html.len())].chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        }
+    }
+    !in_tag
 }
 
 fn parse_callback_data(data: &str) -> Option<(Uuid, String)> {
@@ -573,6 +754,7 @@ struct TelegramChat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::traits::InlineKeyboardButton;
 
     fn cfg(users: Vec<String>) -> TelegramConfig {
         TelegramConfig {
@@ -772,26 +954,153 @@ mod tests {
     }
 
     #[test]
-    fn is_parse_mode_error_detects_parse_error() {
+    fn is_parse_mode_error_detects_cant_parse_entities() {
         let err = ChannelError::Api {
             code: 400,
-            message: "can't parse message text".to_string(),
+            message: "Bad Request: can't parse entities: unexpected closing tag".to_string(),
         };
         assert!(is_parse_mode_error(&err));
     }
 
     #[test]
-    fn is_parse_mode_error_detects_parse_keyword() {
+    fn is_parse_mode_error_detects_unexpected() {
         let err = ChannelError::Api {
             code: 400,
-            message: "Parse error in HTML".to_string(),
+            message: "Bad Request: can't parse entities: unexpected character".to_string(),
         };
         assert!(is_parse_mode_error(&err));
+    }
+
+    #[test]
+    fn is_parse_mode_error_detects_unclosed() {
+        let err = ChannelError::Api {
+            code: 400,
+            message: "Bad Request: can't parse entities: unclosed tag".to_string(),
+        };
+        assert!(is_parse_mode_error(&err));
+    }
+
+    #[test]
+    fn is_parse_mode_error_detects_entity() {
+        let err = ChannelError::Api {
+            code: 400,
+            message: "Bad Request: can't parse entities: entity not found".to_string(),
+        };
+        assert!(is_parse_mode_error(&err));
+    }
+
+    #[test]
+    fn is_parse_mode_error_false_for_other_api_error() {
+        let err = ChannelError::Api {
+            code: 400,
+            message: "chat not found".to_string(),
+        };
+        assert!(!is_parse_mode_error(&err));
     }
 
     #[test]
     fn is_parse_mode_error_false_for_network() {
         let err = ChannelError::NotConfigured;
         assert!(!is_parse_mode_error(&err));
+    }
+
+    #[test]
+    fn markdown_parse_mode_sends_plain_text() {
+        let payload = build_send_payload(
+            "123",
+            None,
+            "hello **world**",
+            Some(&ChannelParseMode::Markdown),
+            None,
+        );
+        assert_eq!(payload["chat_id"], "123");
+        assert_eq!(payload["text"], "hello **world**");
+        assert!(payload.get("parse_mode").is_none());
+    }
+
+    #[test]
+    fn html_parse_mode_sets_html() {
+        let payload = build_send_payload(
+            "123",
+            None,
+            "<b>hello</b>",
+            Some(&ChannelParseMode::Html),
+            None,
+        );
+        assert_eq!(payload["parse_mode"], "HTML");
+    }
+
+    #[test]
+    fn none_parse_mode_sets_html() {
+        let payload = build_send_payload("123", None, "<b>hello</b>", None, None);
+        assert_eq!(payload["parse_mode"], "HTML");
+    }
+
+    #[test]
+    fn split_html_safely_respects_max_length() {
+        let inner = "word ".repeat(1500);
+        let html = format!("<p>{}</p>", inner);
+        let chunks = split_html_safely(&html, TELEGRAM_MAX_TEXT_LENGTH);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(chunk.len() <= TELEGRAM_MAX_TEXT_LENGTH);
+        }
+    }
+
+    #[test]
+    fn split_html_safely_keeps_short_html_intact() {
+        let html = "<b>hello</b> <i>world</i>";
+        let chunks = split_html_safely(html, TELEGRAM_MAX_TEXT_LENGTH);
+        assert_eq!(chunks, vec![html.to_string()]);
+    }
+
+    #[test]
+    fn decode_html_entities_decodes_basic_entities() {
+        assert_eq!(decode_html_entities("&lt;&gt;&amp;&quot;&#39;"), "<>&\"'");
+    }
+
+    #[test]
+    fn decode_html_entities_preserves_unknown_entities() {
+        assert_eq!(decode_html_entities("&unknown;"), "&unknown;");
+    }
+
+    #[test]
+    fn fallback_strips_tags_and_decodes_entities() {
+        let html = "<b>hello</b> &lt;world&gt; &amp; &quot;test&quot; &#39;x&#39;";
+        let payload = build_fallback_payload("123", None, html, None);
+        assert_eq!(payload["text"], "hello <world> & \"test\" 'x'");
+        assert!(payload.get("parse_mode").is_none());
+    }
+
+    #[test]
+    fn fallback_preserves_reply_markup() {
+        let reply_markup = ReplyMarkup::InlineKeyboard(vec![vec![InlineKeyboardButton {
+            text: "Yes".to_string(),
+            callback_data: "uuid:yes".to_string(),
+        }]]);
+        let payload = build_fallback_payload("123", None, "<b>hello</b>", Some(&reply_markup));
+        assert_eq!(payload["text"], "hello");
+        assert!(payload.get("reply_markup").is_some());
+        assert_eq!(payload["reply_markup"], json!(reply_markup));
+    }
+
+    #[test]
+    fn build_send_payload_preserves_reply_markup() {
+        let reply_markup = ReplyMarkup::InlineKeyboard(vec![vec![InlineKeyboardButton {
+            text: "No".to_string(),
+            callback_data: "uuid:no".to_string(),
+        }]]);
+        let payload = build_send_payload(
+            "123",
+            Some("42"),
+            "text",
+            Some(&ChannelParseMode::Html),
+            Some(&reply_markup),
+        );
+        assert_eq!(payload["chat_id"], "123");
+        assert_eq!(payload["text"], "text");
+        assert_eq!(payload["parse_mode"], "HTML");
+        assert_eq!(payload["message_thread_id"], 42);
+        assert_eq!(payload["reply_markup"], json!(reply_markup));
     }
 }
