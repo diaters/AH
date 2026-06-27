@@ -83,7 +83,7 @@ pub struct ChannelAttachment {
     pub target: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AttachmentKind {
     Image,
     Document,
