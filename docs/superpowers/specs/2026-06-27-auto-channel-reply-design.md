@@ -194,7 +194,7 @@ fn frontend_kind_for_name(name: &str) -> FrontendKind {
         "telegram" => FrontendKind::Telegram,
         "qq" => FrontendKind::QQ,
         "feishu" => FrontendKind::Feishu,
-        _ => FrontendKind::Tui,
+        _ => panic!("unknown channel name: {name}"),
     }
 }
 ```
