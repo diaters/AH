@@ -5,8 +5,8 @@ use crossbeam_channel::unbounded;
 use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
-    EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
-    app_is_idle, build_harness_app,
+    EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState,
+    UserAction, app_is_idle, build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel},
     create_executor_from_config,
 };

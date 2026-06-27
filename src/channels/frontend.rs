@@ -36,7 +36,10 @@ impl Frontend for ChannelFrontend {
     }
 
     fn push_event(&self, event: EngineEvent) {
-        let EngineEvent::Text { target, content, .. } = event else {
+        let EngineEvent::Text {
+            target, content, ..
+        } = event
+        else {
             return;
         };
         let targets = match target {
@@ -80,7 +83,12 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
-    fn make_frontend(kind: FrontendKind) -> (ChannelFrontend, mpsc::UnboundedReceiver<(String, ChannelOutboundMessage)>) {
+    fn make_frontend(
+        kind: FrontendKind,
+    ) -> (
+        ChannelFrontend,
+        mpsc::UnboundedReceiver<(String, ChannelOutboundMessage)>,
+    ) {
         let (tx, rx) = mpsc::unbounded_channel();
         (ChannelFrontend::new(kind, "test", tx), rx)
     }

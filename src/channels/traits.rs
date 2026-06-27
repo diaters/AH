@@ -23,9 +23,9 @@ impl ChannelInboundMessage {
                     "telegram" => FrontendKind::Telegram,
                     "qq" => FrontendKind::QQ,
                     "feishu" => FrontendKind::Feishu,
-                    _ => FrontendKind::Tui,
+                    _ => panic!("unknown channel name: {}", self.channel_name),
                 },
-                user_id: self.sender_id.clone(),
+                user_id: self.chat_id.clone(),
             },
             content: self.content.clone(),
         }
@@ -86,7 +86,7 @@ mod tests {
         match input {
             crate::domain::ExternalInput::TextWithChannel { channel, content } => {
                 assert_eq!(channel.frontend, FrontendKind::Telegram);
-                assert_eq!(channel.user_id, "123");
+                assert_eq!(channel.user_id, "456");
                 assert_eq!(content, "hello");
             }
             _ => panic!("unexpected variant"),

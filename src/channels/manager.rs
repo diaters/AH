@@ -15,7 +15,7 @@ fn frontend_kind_for_name(name: &str) -> FrontendKind {
         "telegram" => FrontendKind::Telegram,
         "qq" => FrontendKind::QQ,
         "feishu" => FrontendKind::Feishu,
-        _ => FrontendKind::Tui,
+        _ => panic!("unknown channel name: {name}"),
     }
 }
 
@@ -221,7 +221,7 @@ mod tests {
         let (input_tx, input_rx) = unbounded::<ExternalInput>();
         let send_count = Arc::new(AtomicUsize::new(0));
         let channel = Arc::new(DummyChannel {
-            name: "dummy".to_string(),
+            name: "telegram".to_string(),
             send_count: send_count.clone(),
         }) as Arc<dyn Channel>;
         let (manager, _handle, _frontends) = ChannelManager::new(vec![channel], input_tx);
@@ -244,7 +244,7 @@ mod tests {
 
         manager
             .send(
-                "dummy".to_string(),
+                "telegram".to_string(),
                 ChannelOutboundMessage {
                     recipient: "c1".to_string(),
                     thread_id: None,
