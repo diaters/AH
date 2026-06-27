@@ -736,15 +736,7 @@ impl QqChannel {
             AttachmentKind::Document => QqMediaFileType::File,
             AttachmentKind::Video => QqMediaFileType::Video,
             AttachmentKind::Audio | AttachmentKind::Voice => {
-                let ext = std::path::Path::new(target.split('?').next().unwrap_or(target))
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                if matches!(ext.to_ascii_lowercase().as_str(), "wav" | "mp3" | "silk") {
-                    QqMediaFileType::Voice
-                } else {
-                    QqMediaFileType::File
-                }
+                marker_kind_to_qq_file_type("VOICE", target).unwrap_or(QqMediaFileType::File)
             }
         };
 
