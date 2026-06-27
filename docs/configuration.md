@@ -122,6 +122,25 @@ export HARNESS_AGENTS_CONFIG=agents.toml
 export HARNESS_LOG_DIR=logs
 ```
 
+## Telegram 配置
+
+Telegram 通道配置位于 `HARNESS_CHANNELS_CONFIG` 指向的 TOML 文件（通常为 `channels.toml`）的 `[telegram]` 段。
+
+### 配置项
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `bot_token` | string | 无 | Bot Token，也可通过 `TELEGRAM_BOT_TOKEN` 环境变量提供 |
+| `allowed_users` | string array | `[]` | 允许访问的 username、数字 user_id 或 `"*"` |
+| `pairing_enabled` | bool | `false` | 是否启用 `/bind` 配对 |
+| `pairing_code` | string / null | `null` | 配对码；为空字符串或 null 时，即使启用配对也会拒绝 `/bind` |
+
+### 配对说明
+
+- 仅当 `allowed_users` 为空、`pairing_enabled = true` 且 `pairing_code` 非空时，`/bind <code>` 才会授权当前用户。
+- 配对成功后，用户会被加入本次运行的运行时白名单；若配置文件可写，还会追加到 `allowed_users` 并回写。
+- 当 `pairing_code` 为空字符串或 null 时，任何 `/bind` 请求都会收到 `配对码错误。`。
+
 ## 插件系统配置
 
 ### 核心变量

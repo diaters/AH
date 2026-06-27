@@ -84,6 +84,7 @@ fn brain_test_config() -> HarnessConfig {
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
+        channels_config_path: None,
     }
 }
 

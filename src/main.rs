@@ -1,4 +1,4 @@
-use std::{sync::Arc, thread, time::Duration};
+use std::{path::PathBuf, sync::Arc, thread, time::Duration};
 
 use anyhow::{Context, Result};
 use crossbeam_channel::unbounded;
@@ -101,7 +101,11 @@ fn main() -> Result<()> {
             event = "TelegramChannelEnabled",
             "enabling Telegram channel"
         );
-        channel_list.push(Arc::new(TelegramChannel::new(tg_cfg)));
+        let config_path = config.channels_config_path.as_ref().map(PathBuf::from);
+        channel_list.push(Arc::new(TelegramChannel::new_with_path(
+            tg_cfg,
+            config_path,
+        )));
     }
 
     // 创建 input channel：IM 入向消息和 TUI 输入共用

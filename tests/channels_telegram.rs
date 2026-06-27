@@ -246,6 +246,67 @@ async fn telegram_bind_wrong_code_replies_error() {
 }
 
 #[tokio::test]
+async fn telegram_bind_empty_pairing_code_replies_error() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "from": {"id": 123, "username": "alice"},
+                    "chat": {"id": 456, "type": "private"},
+                    "date": 0,
+                    "text": "/bind "
+                }
+            }]
+        })))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": []
+        })))
+        .with_priority(2)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/botTOKEN/sendMessage"))
+        .and(body_string_contains("配对码错误"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "result": {"message_id": 1}})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let cfg = TelegramConfig {
+        bot_token: "TOKEN".to_string(),
+        allowed_users: vec![],
+        pairing_enabled: true,
+        pairing_code: None,
+    };
+    let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+
+    let (tx, _rx) = unbounded::<ChannelInboundMessage>();
+    let listen_handle = tokio::spawn(async move {
+        let _ = channel.listen(tx).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    listen_handle.abort();
+}
+
+#[tokio::test]
 async fn telegram_bind_ignored_when_pairing_disabled() {
     let mock_server = MockServer::start().await;
 

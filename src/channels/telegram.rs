@@ -676,7 +676,8 @@ impl Channel for TelegramChannel {
                         && self.config.allowed_users.is_empty()
                     {
                         let code = content[6..].trim();
-                        let reply = if code == self.expected_pairing_code() {
+                        let expected = self.expected_pairing_code();
+                        let reply = if !expected.is_empty() && code == expected {
                             self.runtime_allow(&msg.from.id.to_string());
                             if let Some(ref path) = self.config_path
                                 && Self::is_writable_toml(path)
