@@ -101,8 +101,10 @@ impl QqChannel {
             .to_string();
         let expires_in = data
             .get("expires_in")
-            .and_then(|e| e.as_str())
-            .and_then(|s| s.parse::<u64>().ok())
+            .and_then(|e| {
+                e.as_u64()
+                    .or_else(|| e.as_str().and_then(|s| s.parse::<u64>().ok()))
+            })
             .unwrap_or(7200);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
