@@ -98,6 +98,7 @@ allowed_users = ["alice"]
     fn empty_config_is_default() {
         let cfg: ChannelConfigs = toml::from_str("").expect("parse empty");
         assert!(cfg.telegram.is_none());
+        assert!(cfg.qq.is_none());
     }
 
     #[test]
