@@ -68,7 +68,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -131,7 +131,7 @@ fn non_retryable_error_causes_immediate_failure() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -194,7 +194,7 @@ fn empty_user_input_creates_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -256,7 +256,7 @@ fn large_input_is_handled() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -324,7 +324,7 @@ fn multiple_concurrent_tasks_are_handled() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -390,7 +390,7 @@ fn waiting_task_waits_for_user_input() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -467,7 +467,7 @@ fn task_failure_sets_error_message() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize

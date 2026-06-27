@@ -122,7 +122,7 @@ fn on_agent_started_dispatches_on_new_agent() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）
@@ -164,7 +164,7 @@ fn on_agent_stopped_dispatches_before_despawn() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）

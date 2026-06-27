@@ -71,7 +71,7 @@ fn shell_registry_only_exposes_six_simplified_tools() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     let registry = app.world().resource::<harness::SpaceToolRegistry>();
@@ -113,7 +113,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -203,7 +203,7 @@ fn shell_list_returns_only_active_sessions() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -283,7 +283,7 @@ fn shell_exec_returns_result_message() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -358,7 +358,7 @@ fn shell_exec_passes_env_to_child_process() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -424,7 +424,7 @@ fn shell_start_returns_running_handle() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -492,7 +492,7 @@ fn shell_start_passes_env_to_child_process() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -601,7 +601,7 @@ fn shell_exec_with_exit_code_error() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -672,7 +672,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -809,7 +809,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -946,7 +946,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1020,7 +1020,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1084,7 +1084,7 @@ fn shell_read_returns_output_text() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1188,7 +1188,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1271,7 +1271,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1396,7 +1396,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1494,7 +1494,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1623,7 +1623,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1742,7 +1742,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1860,7 +1860,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1978,7 +1978,7 @@ fn task_termination_stops_owned_shell_sessions() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -2055,7 +2055,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();

@@ -56,7 +56,7 @@ fn tui_input_preserves_origin_channel() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -99,7 +99,7 @@ fn telegram_input_preserves_origin_channel() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();

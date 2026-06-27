@@ -94,7 +94,7 @@ fn task_completion_triggers_summarization() {
         executor.clone(),
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -170,7 +170,7 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -235,7 +235,7 @@ fn summarization_preserves_terminal_task_status() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -300,7 +300,7 @@ fn execution_populates_memory_and_triggers_summarization() {
         executor.clone(),
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -355,7 +355,7 @@ fn summarization_request_creates_workitem_instead_of_execution_request() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     let task =

@@ -63,7 +63,7 @@ fn completes_single_turn_conversation_flow() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用

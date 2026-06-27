@@ -98,7 +98,7 @@ fn completes_brain_dispatch_flow() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用
@@ -139,7 +139,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用

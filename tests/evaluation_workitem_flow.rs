@@ -86,7 +86,7 @@ fn turn_limit_creates_evaluation_workitem() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用
@@ -202,7 +202,7 @@ fn setup_eval_test_app(
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -267,7 +267,7 @@ fn setup_manual_eval_scenario(
         executor,
         input_rx,
         vec![Box::new(mock_frontend.clone())],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 

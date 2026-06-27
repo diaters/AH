@@ -65,7 +65,7 @@ fn loads_persistent_agents_from_config() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -107,7 +107,7 @@ fn selects_agent_by_tags_match() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     input_tx
@@ -148,7 +148,7 @@ fn task_scoped_agent_lifecycle() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();

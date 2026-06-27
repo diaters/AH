@@ -118,7 +118,7 @@ fn allowed_tool_executes_directly() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化
@@ -197,7 +197,7 @@ fn app_only_inserts_minimal_space_resources() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     let world = app.world();
 
@@ -218,7 +218,7 @@ fn denied_tool_does_not_execute() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化
@@ -298,7 +298,7 @@ fn confirm_tool_requires_user_confirmation() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化
@@ -390,7 +390,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化
@@ -500,7 +500,7 @@ fn user_denies_tool_confirmation() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化
@@ -601,7 +601,7 @@ fn user_allows_tool_once() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化
@@ -722,7 +722,7 @@ fn spawn_agent_creates_child_agent() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -845,7 +845,7 @@ fn spawn_agent_confirm_routes_to_user() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -953,7 +953,7 @@ fn child_agent_confirm_routes_to_parent() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1068,7 +1068,7 @@ fn user_confirms_spawn_agent_creates_child() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1201,7 +1201,7 @@ fn confirmation_denied_rejects_tool() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1316,7 +1316,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -1429,7 +1429,7 @@ fn user_allows_tool_always() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化

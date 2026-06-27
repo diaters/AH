@@ -45,7 +45,7 @@ fn multi_turn_task_lifecycle() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化 app
@@ -138,7 +138,7 @@ fn short_term_memory_tracks_turns() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -213,7 +213,7 @@ fn agent_has_long_term_memory() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Run one frame to initialize the app and load persistent agents from config
@@ -264,7 +264,7 @@ fn experience_collection_triggered_on_agent_termination() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize the app first
@@ -403,7 +403,7 @@ fn multi_turn_memory_records_user_and_assistant() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -472,7 +472,7 @@ fn multi_turn_full_conversation_flow() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -569,7 +569,7 @@ fn prompt_includes_conversation_history() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -657,7 +657,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -716,7 +716,7 @@ fn three_turn_conversation_maintains_correct_order() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -835,7 +835,7 @@ fn second_dispatch_prompt_includes_correct_history() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -935,7 +935,7 @@ fn task_content_updates_on_continue() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();

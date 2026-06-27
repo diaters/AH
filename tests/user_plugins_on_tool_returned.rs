@@ -172,7 +172,7 @@ fn tool_result_observed_without_modification() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）
@@ -221,7 +221,7 @@ fn tool_result_replaced_when_plugin_sets_result() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）

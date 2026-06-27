@@ -5,7 +5,7 @@ use crossbeam_channel::unbounded;
 use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
-    EngineEvent, ExternalInput, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
+    EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
     app_is_idle, build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel},
     create_executor_from_config,
@@ -108,8 +108,13 @@ fn main() -> Result<()> {
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
 
     // 启动 ChannelManager（无通道时为空操作）
-    let (channel_manager, channel_handle) = ChannelManager::new(channel_list, input_tx);
+    let (channel_manager, channel_handle, channel_frontends) =
+        ChannelManager::new(channel_list, input_tx);
     let runtime_clone = runtime.clone();
+
+    // 构建 frontends：TUI + 所有 IM 通道前端
+    let mut frontends: Vec<Box<dyn Frontend>> = vec![Box::new(tui_frontend)];
+    frontends.extend(channel_frontends);
 
     // 构建 ECS app
     let mut app = build_harness_app(
@@ -117,7 +122,7 @@ fn main() -> Result<()> {
         runtime,
         executor,
         input_rx,
-        vec![Box::new(tui_frontend)],
+        frontends,
         channel_manager,
     );
 
