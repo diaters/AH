@@ -62,6 +62,7 @@ impl Signal {
             super::ChannelId {
                 frontend: super::FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         )
     }
@@ -85,6 +86,7 @@ impl Signal {
             origin_channel: super::ChannelId {
                 frontend: super::FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         }
     }
@@ -466,6 +468,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
+            thread_id: None,
         };
         let signal = Signal::user_input_with_channel("hi", channel.clone());
         assert_eq!(signal.origin_channel, channel);

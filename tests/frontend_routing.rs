@@ -48,6 +48,7 @@ impl Frontend for SpyFrontend {
         let my_channels = [ChannelId {
             frontend: self.kind_val.clone(),
             user_id: self.user_id.clone(),
+            thread_id: None,
         }];
         let for_me = match event.target() {
             EventTarget::Broadcast => true,
@@ -72,6 +73,7 @@ fn directed_event_only_reaches_target_frontend() {
         target: EventTarget::Directed(vec![ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "default".to_string(),
+            thread_id: None,
         }]),
         role: MessageRole::Agent,
         content: "hello".to_string(),
@@ -116,10 +118,12 @@ fn multi_directed_event_reaches_specified_frontends() {
             ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
             ChannelId {
                 frontend: FrontendKind::Telegram,
                 user_id: "chat_123".to_string(),
+                thread_id: None,
             },
         ]),
         role: MessageRole::Agent,
@@ -141,6 +145,7 @@ fn poll_actions_returns_queued_actions() {
         channel: ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "default".to_string(),
+            thread_id: None,
         },
         content: "hello".to_string(),
     });

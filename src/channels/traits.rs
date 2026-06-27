@@ -1,6 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
+use serde::Serialize;
+use uuid::Uuid;
 
 use crate::domain::{ChannelId, FrontendKind};
 
@@ -13,10 +15,24 @@ pub struct ChannelInboundMessage {
     pub thread_id: Option<String>,
     pub content: String,
     pub timestamp_secs: u64,
+    pub confirmation: Option<InboundConfirmation>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InboundConfirmation {
+    pub request_id: Uuid,
+    pub option: String,
 }
 
 impl ChannelInboundMessage {
     pub fn to_external_input(&self) -> crate::domain::ExternalInput {
+        if let Some(ref confirmation) = self.confirmation {
+            return crate::domain::ExternalInput::Confirmation {
+                request_id: confirmation.request_id,
+                option: confirmation.option.clone(),
+            };
+        }
+
         crate::domain::ExternalInput::TextWithChannel {
             channel: ChannelId {
                 frontend: match self.channel_name.as_str() {
@@ -26,6 +42,7 @@ impl ChannelInboundMessage {
                     _ => panic!("unknown channel name: {}", self.channel_name),
                 },
                 user_id: self.chat_id.clone(),
+                thread_id: self.thread_id.clone(),
             },
             content: self.content.clone(),
         }
@@ -38,6 +55,41 @@ pub struct ChannelOutboundMessage {
     pub recipient: String,
     pub thread_id: Option<String>,
     pub content: String,
+    pub parse_mode: Option<ChannelParseMode>,
+    pub reply_markup: Option<ReplyMarkup>,
+    pub attachments: Vec<ChannelAttachment>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum ChannelParseMode {
+    Html,
+    Markdown,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum ReplyMarkup {
+    InlineKeyboard(Vec<Vec<InlineKeyboardButton>>),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InlineKeyboardButton {
+    pub text: String,
+    pub callback_data: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelAttachment {
+    pub kind: AttachmentKind,
+    pub target: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum AttachmentKind {
+    Image,
+    Document,
+    Video,
+    Audio,
+    Voice,
 }
 
 /// 通道错误
@@ -66,11 +118,38 @@ pub trait Channel: Send + Sync + 'static {
     async fn health_check(&self) -> bool {
         true
     }
+
+    fn supported_attachment_kinds(&self) -> Vec<AttachmentKind> {
+        vec![]
+    }
+
+    fn supports_html(&self) -> bool {
+        false
+    }
+
+    fn supports_inline_keyboard(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_id_with_thread_id_not_equal_to_without() {
+        let a = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let b = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: Some("t1".to_string()),
+        };
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn channel_inbound_to_external_input() {
@@ -81,6 +160,7 @@ mod tests {
             thread_id: None,
             content: "hello".to_string(),
             timestamp_secs: 0,
+            confirmation: None,
         };
         let input = msg.to_external_input();
         match input {

@@ -77,6 +77,7 @@ fn auto_channel_reply() {
         let origin = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "123456".to_string(),
+            thread_id: None,
         };
         input_tx
             .send(ExternalInput::TextWithChannel {

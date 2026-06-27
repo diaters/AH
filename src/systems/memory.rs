@@ -210,6 +210,7 @@ mod tests {
             ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         );
         // 内部恢复/测试夹具，不触发 on_task_created hook：此处仅为构造一个带 STM 的

@@ -213,6 +213,7 @@ mod tests {
                 crate::domain::ChannelId {
                     frontend: crate::domain::FrontendKind::Tui,
                     user_id: "test".to_string(),
+                    thread_id: None,
                 },
             )
         };
@@ -232,6 +233,7 @@ mod tests {
                 crate::domain::ChannelId {
                     frontend: crate::domain::FrontendKind::Tui,
                     user_id: "test".to_string(),
+                    thread_id: None,
                 },
             )
         };

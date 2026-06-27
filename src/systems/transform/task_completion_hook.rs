@@ -166,6 +166,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input("done-task", 0, channel);
         task.id = Uuid::new_v4();
@@ -178,6 +179,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input("failed-task", 0, channel);
         task.id = Uuid::new_v4();
@@ -232,6 +234,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
+            thread_id: None,
         };
         let task = Task::from_user_input("pending", 0, channel);
         let task_id = task.id;

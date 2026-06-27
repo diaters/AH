@@ -417,6 +417,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test-user".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input_ready("please do summarization", 0, channel);
         task.delegate = Some(delegate_agent_id);
@@ -473,6 +474,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test-user".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input("please do summarization", 0, channel);
         task.delegate = Some(delegate_agent_id);

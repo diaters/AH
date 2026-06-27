@@ -141,6 +141,7 @@ pub fn spawn_create_tasks_messages(
             origin_channel: ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
             last_evaluated_turn: None,
         };

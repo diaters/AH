@@ -318,6 +318,7 @@ mod tests {
             ChannelId {
                 frontend: crate::domain::FrontendKind::Tui,
                 user_id: "test".to_string(),
+                thread_id: None,
             },
         );
         assert!(task.last_evaluated_turn.is_none());
@@ -333,6 +334,7 @@ mod tests {
         let ch = ChannelId {
             frontend: crate::domain::FrontendKind::Tui,
             user_id: "test".to_string(),
+            thread_id: None,
         };
         let t1 = Task::from_user_input("a", 0, ch.clone());
         assert!(t1.last_evaluated_turn.is_none());

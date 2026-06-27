@@ -19,6 +19,9 @@ pub fn channel_send_dispatch_system(
                 recipient: send.recipient.clone(),
                 thread_id: None,
                 content: send.content.clone(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
             },
         );
 

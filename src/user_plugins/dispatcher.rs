@@ -209,6 +209,7 @@ fn apply_world_command(world: &mut World, cmd: WorldCommand) {
             let channel = ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "plugin".to_string(),
+                thread_id: None,
             };
             let task = Task::from_user_input(title, 0, channel);
             world.spawn((task, crate::domain::ShortTermMemory::default()));

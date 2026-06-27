@@ -118,6 +118,7 @@ mod tests {
             ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         )
     }

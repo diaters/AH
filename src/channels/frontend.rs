@@ -66,6 +66,9 @@ impl Frontend for ChannelFrontend {
                 recipient,
                 thread_id: None,
                 content: content.clone(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
             };
             if let Err(e) = self.outbound_tx.send((self.channel_name.clone(), msg)) {
                 error!(event = "ChannelFrontendSendFailed", error = %e, "failed to queue outbound message");
@@ -114,6 +117,7 @@ mod tests {
         fe.push_event(text_event(EventTarget::Directed(vec![ChannelId {
             frontend: FrontendKind::QQ,
             user_id: "u1".to_string(),
+            thread_id: None,
         }])));
         assert!(rx.try_recv().is_err());
     }
@@ -124,6 +128,7 @@ mod tests {
         fe.push_event(text_event(EventTarget::Directed(vec![ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
+            thread_id: None,
         }])));
         let (name, msg) = rx.try_recv().expect("one outbound message");
         assert_eq!(name, "test");

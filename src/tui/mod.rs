@@ -31,6 +31,7 @@ impl TuiFrontend {
         vec![ChannelId {
             frontend: FrontendKind::Tui,
             user_id: self.user_id.clone(),
+            thread_id: None,
         }]
     }
 }

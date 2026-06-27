@@ -57,6 +57,7 @@ pub(crate) fn command_parse_system(
                         ChannelId {
                             frontend: FrontendKind::Tui,
                             user_id: "default".to_string(),
+                            thread_id: None,
                         },
                     );
                     commands.spawn((child_task, ShortTermMemory::default(), NewlyCreatedTask));
@@ -72,6 +73,7 @@ pub(crate) fn command_parse_system(
                         origin_channel: crate::domain::ChannelId {
                             frontend: crate::domain::FrontendKind::Tui,
                             user_id: "default".to_string(),
+                            thread_id: None,
                         },
                     });
                 }
@@ -373,6 +375,7 @@ mod tests {
             origin_channel: crate::domain::ChannelId {
                 frontend: crate::domain::FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         });
 

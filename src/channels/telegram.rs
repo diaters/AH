@@ -139,6 +139,7 @@ impl Channel for TelegramChannel {
                         thread_id: msg.message_thread_id.map(|id| id.to_string()),
                         content: msg.text.unwrap_or_default(),
                         timestamp_secs: msg.date as u64,
+                        confirmation: None,
                     });
                 }
             }

@@ -211,6 +211,7 @@ mod tests {
                 thread_id: None,
                 content: "ping".to_string(),
                 timestamp_secs: 0,
+                confirmation: None,
             });
             Err(super::super::traits::ChannelError::NotConfigured)
         }
@@ -249,6 +250,9 @@ mod tests {
                     recipient: "c1".to_string(),
                     thread_id: None,
                     content: "pong".to_string(),
+                    parse_mode: None,
+                    reply_markup: None,
+                    attachments: vec![],
                 },
             )
             .expect("queue outbound");
@@ -275,6 +279,9 @@ mod tests {
                 recipient: "x".to_string(),
                 thread_id: None,
                 content: "x".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
             },
         );
         assert!(result.is_err());

@@ -29,6 +29,9 @@ async fn telegram_send_message() {
             recipient: "123".to_string(),
             thread_id: None,
             content: "hello".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
         })
         .await
         .expect("send");

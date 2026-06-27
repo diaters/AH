@@ -18,6 +18,7 @@ pub enum FrontendKind {
 pub struct ChannelId {
     pub frontend: FrontendKind,
     pub user_id: String,
+    pub thread_id: Option<String>,
 }
 
 /// 事件路由目标

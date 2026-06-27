@@ -64,6 +64,7 @@ fn tui_input_preserves_origin_channel() {
     let tui_channel = ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     };
     input_tx
         .send(ExternalInput::TextWithChannel {
@@ -107,6 +108,7 @@ fn telegram_input_preserves_origin_channel() {
     let tg_channel = ChannelId {
         frontend: FrontendKind::Telegram,
         user_id: "123456".to_string(),
+        thread_id: None,
     };
     input_tx
         .send(ExternalInput::TextWithChannel {

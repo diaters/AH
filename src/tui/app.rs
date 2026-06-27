@@ -207,6 +207,7 @@ impl App {
                     let channel = ChannelId {
                         frontend: FrontendKind::Tui,
                         user_id: "default".to_string(),
+                        thread_id: None,
                     };
                     let _ = self.action_tx.send(UserAction::Text {
                         channel,
@@ -314,6 +315,7 @@ impl App {
                     let channel = ChannelId {
                         frontend: FrontendKind::Tui,
                         user_id: "default".to_string(),
+                        thread_id: None,
                     };
                     let _ = self.action_tx.send(UserAction::Confirmation {
                         channel,

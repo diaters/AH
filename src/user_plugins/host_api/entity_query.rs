@@ -154,6 +154,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
+            thread_id: None,
         };
         let mut t = Task::from_user_input(content.to_string(), 0, channel);
         t.id = uuid::Uuid::new_v4();

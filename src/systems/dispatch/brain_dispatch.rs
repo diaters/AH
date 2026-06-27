@@ -395,6 +395,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test-user".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input_ready("do something", 0, channel);
         task.delegate = Some(Uuid::new_v4());
