@@ -53,6 +53,8 @@ fn auto_channel_reply() {
         let cfg = TelegramConfig {
             bot_token: bot_token.to_string(),
             allowed_users: vec!["123456".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
         };
         let channel = Arc::new(TelegramChannel::new(cfg).with_base_url(mock_server.uri()))
             as Arc<dyn Channel>;

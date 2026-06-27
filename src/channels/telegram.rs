@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
@@ -21,6 +23,8 @@ use super::traits::{
 
 pub struct TelegramChannel {
     config: TelegramConfig,
+    config_path: Option<PathBuf>,
+    runtime_allowed_users: Arc<RwLock<HashSet<String>>>,
     client: Client,
     base_url: String,
     last_update_id: AtomicI64,
@@ -28,8 +32,14 @@ pub struct TelegramChannel {
 
 impl TelegramChannel {
     pub fn new(config: TelegramConfig) -> Self {
+        Self::new_with_path(config, None)
+    }
+
+    pub fn new_with_path(config: TelegramConfig, config_path: Option<PathBuf>) -> Self {
         Self {
             config,
+            config_path,
+            runtime_allowed_users: Arc::new(RwLock::new(HashSet::new())),
             client: Client::new(),
             base_url: "https://api.telegram.org".to_string(),
             last_update_id: AtomicI64::new(0),
@@ -58,10 +68,20 @@ impl TelegramChannel {
         Ok(())
     }
 
-    /// 白名单匹配：username（忽略大小写）、user_id，或通配符 `"*"`。
-    /// 空白名单表示拒绝所有用户（必须显式配置才放行）。
+    /// 白名单匹配：运行时白名单优先，然后按配置匹配 username（忽略大小写）、
+    /// user_id，或通配符 `"*"`。空白名单表示拒绝所有用户（必须显式配置才放行）。
     /// 若列表中包含 `"*"`，则允许所有用户。
     fn is_allowed(&self, user: &TelegramUser) -> bool {
+        // Runtime allowlist from /bind takes precedence
+        if self
+            .runtime_allowed_users
+            .read()
+            .unwrap()
+            .contains(&user.id.to_string())
+        {
+            return true;
+        }
+
         if self
             .config
             .allowed_users
@@ -86,6 +106,46 @@ impl TelegramChannel {
             }
             false
         })
+    }
+
+    fn runtime_allow(&self, user_id: &str) {
+        self.runtime_allowed_users
+            .write()
+            .unwrap()
+            .insert(user_id.to_string());
+    }
+
+    fn expected_pairing_code(&self) -> String {
+        self.config.pairing_code.clone().unwrap_or_default()
+    }
+
+    fn is_writable_toml(path: &Path) -> bool {
+        path.extension().map(|e| e == "toml").unwrap_or(false)
+            && std::fs::metadata(path)
+                .map(|m| !m.permissions().readonly())
+                .unwrap_or(false)
+    }
+
+    fn persist_allowed_user(&self, user_id: &str, path: &Path) -> Result<(), ChannelError> {
+        let mut config: TelegramConfig = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_else(|| self.config.clone());
+
+        if !config.allowed_users.iter().any(|u| u == user_id) {
+            config.allowed_users.push(user_id.to_string());
+        }
+
+        let content = toml::to_string_pretty(&config).map_err(|e| ChannelError::Api {
+            code: 0,
+            message: e.to_string(),
+        })?;
+        std::fs::write(path, content).map_err(|e| ChannelError::Api {
+            code: 0,
+            message: e.to_string(),
+        })?;
+
+        Ok(())
     }
 
     fn supported_attachment_kinds(&self) -> Vec<AttachmentKind> {
@@ -609,6 +669,32 @@ impl Channel for TelegramChannel {
                 if let Some(msg) = update.message {
                     self.last_update_id
                         .store(update.update_id, Ordering::SeqCst);
+
+                    if let Some(ref content) = msg.text
+                        && content.starts_with("/bind ")
+                        && self.config.pairing_enabled
+                        && self.config.allowed_users.is_empty()
+                    {
+                        let code = content[6..].trim();
+                        let reply = if code == self.expected_pairing_code() {
+                            self.runtime_allow(&msg.from.id.to_string());
+                            if let Some(ref path) = self.config_path
+                                && Self::is_writable_toml(path)
+                            {
+                                let _ = self.persist_allowed_user(&msg.from.id.to_string(), path);
+                            }
+                            "已授权（本次运行有效，重启后需运维手动添加）。"
+                        } else {
+                            "配对码错误。"
+                        };
+                        let payload = json!({
+                            "chat_id": msg.chat.id,
+                            "text": reply,
+                            "message_thread_id": msg.message_thread_id,
+                        });
+                        self.post("sendMessage", &payload).await?;
+                        continue;
+                    }
 
                     if !self.is_allowed(&msg.from) {
                         warn!(
@@ -1173,11 +1259,14 @@ struct TelegramChat {
 mod tests {
     use super::*;
     use crate::channels::traits::InlineKeyboardButton;
+    use tempfile::NamedTempFile;
 
     fn cfg(users: Vec<String>) -> TelegramConfig {
         TelegramConfig {
             bot_token: "x".to_string(),
             allowed_users: users,
+            pairing_enabled: false,
+            pairing_code: None,
         }
     }
 
@@ -1219,6 +1308,124 @@ mod tests {
             username: Some("anyone".to_string()),
         };
         assert!(ch.is_allowed(&user));
+    }
+
+    #[test]
+    fn runtime_allowlist_overrides_config() {
+        let user = TelegramUser {
+            id: 1,
+            username: None,
+        };
+        let channel = TelegramChannel::new_with_path(
+            TelegramConfig {
+                bot_token: "x".to_string(),
+                allowed_users: vec![],
+                pairing_enabled: true,
+                pairing_code: None,
+            },
+            Some(PathBuf::from("/dev/null")),
+        );
+        channel.runtime_allow("1");
+        assert!(channel.is_allowed(&user));
+    }
+
+    #[test]
+    fn runtime_allowlist_does_not_affect_other_users() {
+        let allowed_user = TelegramUser {
+            id: 1,
+            username: None,
+        };
+        let other_user = TelegramUser {
+            id: 2,
+            username: None,
+        };
+        let channel = TelegramChannel::new(cfg(vec![]));
+        channel.runtime_allow("1");
+        assert!(channel.is_allowed(&allowed_user));
+        assert!(!channel.is_allowed(&other_user));
+    }
+
+    #[test]
+    fn expected_pairing_code_returns_configured_value() {
+        let channel = TelegramChannel::new(TelegramConfig {
+            bot_token: "x".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: true,
+            pairing_code: Some("secret".to_string()),
+        });
+        assert_eq!(channel.expected_pairing_code(), "secret");
+    }
+
+    #[test]
+    fn expected_pairing_code_defaults_to_empty() {
+        let channel = TelegramChannel::new(cfg(vec![]));
+        assert_eq!(channel.expected_pairing_code(), "");
+    }
+
+    #[test]
+    fn is_writable_toml_true_for_writable_toml() {
+        let file = NamedTempFile::with_suffix(".toml").unwrap();
+        assert!(TelegramChannel::is_writable_toml(file.path()));
+    }
+
+    #[test]
+    fn is_writable_toml_false_for_non_toml_extension() {
+        let file = NamedTempFile::with_suffix(".txt").unwrap();
+        assert!(!TelegramChannel::is_writable_toml(file.path()));
+    }
+
+    #[test]
+    fn persist_allowed_user_appends_to_toml() {
+        let file = NamedTempFile::with_suffix(".toml").unwrap();
+        std::fs::write(
+            file.path(),
+            r#"bot_token = "x"
+allowed_users = ["alice"]
+"#,
+        )
+        .unwrap();
+
+        let channel = TelegramChannel::new_with_path(
+            TelegramConfig {
+                bot_token: "x".to_string(),
+                allowed_users: vec![],
+                pairing_enabled: false,
+                pairing_code: None,
+            },
+            Some(file.path().to_path_buf()),
+        );
+        channel.persist_allowed_user("123", file.path()).unwrap();
+
+        let content = std::fs::read_to_string(file.path()).unwrap();
+        let parsed: TelegramConfig = toml::from_str(&content).unwrap();
+        assert_eq!(parsed.allowed_users, vec!["alice", "123"]);
+    }
+
+    #[test]
+    fn persist_allowed_user_deduplicates() {
+        let file = NamedTempFile::with_suffix(".toml").unwrap();
+        std::fs::write(
+            file.path(),
+            r#"bot_token = "x"
+allowed_users = ["123"]
+"#,
+        )
+        .unwrap();
+
+        let channel = TelegramChannel::new_with_path(
+            TelegramConfig {
+                bot_token: "x".to_string(),
+                allowed_users: vec![],
+                pairing_enabled: false,
+                pairing_code: None,
+            },
+            Some(file.path().to_path_buf()),
+        );
+        channel.persist_allowed_user("123", file.path()).unwrap();
+
+        let content = std::fs::read_to_string(file.path()).unwrap();
+        let parsed: TelegramConfig = toml::from_str(&content).unwrap();
+        assert_eq!(parsed.allowed_users, vec!["123"]);
     }
 
     #[test]
@@ -1571,6 +1778,8 @@ mod tests {
         let cfg = TelegramConfig {
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["u".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
         };
         let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
         let base = ChannelOutboundMessage {
@@ -1618,6 +1827,8 @@ mod tests {
         let cfg = TelegramConfig {
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["u".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
         };
         let channel = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
         channel

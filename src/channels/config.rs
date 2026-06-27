@@ -29,6 +29,9 @@ pub struct TelegramConfig {
     pub bot_token: String,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    #[serde(default)]
+    pub pairing_enabled: bool,
+    pub pairing_code: Option<String>,
 }
 
 /// 展开字符串中的 `${VAR}` 环境变量引用。
