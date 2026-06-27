@@ -102,8 +102,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
 - QQ 与飞书通道仅有占位模块，尚未接入实际 API
-- IM 通道暂不支持媒体附件（图片、文件等），仅支持文本消息
-- Telegram 通道暂不支持 webhook 模式、inline keyboard 等增强功能
+- Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 与飞书仍为占位模块
+- Telegram webhook 模式仍由轮询替代，尚未切换
 
 ### 已收敛或已废弃
 
