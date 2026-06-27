@@ -77,6 +77,13 @@
 | `HARNESS_AGENTS_CONFIG` | `agents.toml` | Agent 配置文件路径 |
 | `HARNESS_LOG_DIR` | `logs` | JSONL 日志输出目录 |
 
+### TUI 主循环
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HARNESS_ACTIVE_POLL_MS` | `16` | 有任务或事件时主循环的轮询间隔（毫秒） |
+| `HARNESS_IDLE_POLL_MS` | `150` | 完全空闲时主循环的轮询间隔（毫秒） |
+
 ### Shell Runtime
 
 | 环境变量 | 默认值 | 说明 |
