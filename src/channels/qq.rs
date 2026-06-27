@@ -214,11 +214,11 @@ impl QqChannel {
                         Ok(local_path) => local_path.display().to_string(),
                         Err(e) => {
                             tracing::warn!(event = "QqDownloadFailed", url = %download_url, error = %e, "failed to download attachment");
-                            url.clone()
+                            download_url.clone()
                         }
                     }
                 } else {
-                    url.clone()
+                    download_url.clone()
                 };
 
                 if is_voice {
@@ -621,5 +621,53 @@ mod tests {
         assert!(result.contains("[VOICE:"));
         assert!(result.contains("[VIDEO:"));
         assert!(result.contains("[DOCUMENT:"));
+    }
+
+    #[tokio::test]
+    async fn compose_voice_with_asr_transcription() {
+        let ch = QqChannel::new(make_config());
+        let payload = serde_json::json!({
+            "content": "语音消息",
+            "attachments": [{
+                "content_type": "voice",
+                "url": "https://cdn.example.com/v.silk",
+                "asr_refer_text": "你好世界"
+            }]
+        });
+        let result = ch.compose_message_content(&payload).await.unwrap();
+        assert!(result.contains("语音消息"));
+        assert!(result.contains("[VOICE:"));
+        assert!(result.contains("<VOICE_TRANSCRIPTION>你好世界</VOICE_TRANSCRIPTION>"));
+    }
+
+    #[tokio::test]
+    async fn compose_voice_prefers_wav_url() {
+        let ch = QqChannel::new(make_config());
+        let payload = serde_json::json!({
+            "content": "",
+            "attachments": [{
+                "content_type": "voice",
+                "url": "https://cdn.example.com/v.silk",
+                "voice_wav_url": "https://cdn.example.com/v.wav?sign=abc"
+            }]
+        });
+        let result = ch.compose_message_content(&payload).await.unwrap();
+        // WAV URL 应优先使用
+        assert!(result.contains("[VOICE:https://cdn.example.com/v.wav?sign=abc]"));
+    }
+
+    #[tokio::test]
+    async fn compose_multiple_voice_transcriptions() {
+        let ch = QqChannel::new(make_config());
+        let payload = serde_json::json!({
+            "content": "",
+            "attachments": [
+                { "content_type": "voice", "url": "https://cdn.example.com/v1.silk", "asr_refer_text": "第一段" },
+                { "content_type": "voice", "url": "https://cdn.example.com/v2.silk", "asr_refer_text": "第二段" }
+            ]
+        });
+        let result = ch.compose_message_content(&payload).await.unwrap();
+        assert!(result.contains("<VOICE_TRANSCRIPTION_0>第一段</VOICE_TRANSCRIPTION_0>"));
+        assert!(result.contains("<VOICE_TRANSCRIPTION_1>第二段</VOICE_TRANSCRIPTION_1>"));
     }
 }
