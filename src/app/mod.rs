@@ -47,6 +47,8 @@ pub struct HarnessConfig {
     /// TUI 主循环在空闲状态下的轮询间隔（毫秒）
     pub idle_poll_ms: u64,
     pub channels: crate::channels::config::ChannelConfigs,
+    /// IM 通道配置文件路径（用于 Telegram /bind 回写）
+    pub channels_config_path: Option<String>,
 }
 
 impl HarnessConfig {
@@ -118,14 +120,18 @@ impl HarnessConfig {
             channels: {
                 let path = std::env::var("HARNESS_CHANNELS_CONFIG").ok();
                 match path {
-                    Some(p) if !p.is_empty() => {
-                        let text = std::fs::read_to_string(&p)
+                    Some(ref p) if !p.is_empty() => {
+                        let text = std::fs::read_to_string(p)
                             .with_context(|| format!("read channels config: {p}"))?;
-                        toml::from_str(&text).context("parse channels config")?
+                        let mut cfg: crate::channels::config::ChannelConfigs =
+                            toml::from_str(&text).context("parse channels config")?;
+                        cfg.expand_env_vars();
+                        cfg
                     }
                     _ => crate::channels::config::ChannelConfigs::default(),
                 }
             },
+            channels_config_path: std::env::var("HARNESS_CHANNELS_CONFIG").ok(),
         })
     }
 }
@@ -152,6 +158,7 @@ impl Default for HarnessConfig {
             active_poll_ms: 16,
             idle_poll_ms: 150,
             channels: crate::channels::config::ChannelConfigs::default(),
+            channels_config_path: None,
         }
     }
 }

@@ -62,6 +62,7 @@ impl Signal {
             super::ChannelId {
                 frontend: super::FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         )
     }
@@ -85,6 +86,7 @@ impl Signal {
             origin_channel: super::ChannelId {
                 frontend: super::FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
         }
     }
@@ -171,6 +173,7 @@ pub struct AgentExecutionResultMessage {
 /// 用户输出消息
 #[derive(Debug, Clone, Component)]
 pub struct UserOutputMessage {
+    pub task_id: TaskId,
     pub content: String,
 }
 
@@ -441,8 +444,10 @@ pub struct ReloadPluginsMessage;
 #[derive(Debug, Clone, Component)]
 pub struct PendingChannelSend {
     pub channel: String,
-    pub recipient: String,
+    /// 显式指定的目标；为 None 时由 dispatch 系统回退到 task 的 origin_channel。
+    pub recipient: Option<String>,
     pub content: String,
+    pub attachments: Vec<crate::channels::ChannelAttachment>,
     pub tool_call_id: Option<String>,
     pub task_id: TaskId,
     pub agent_id: AgentId,
@@ -465,6 +470,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
+            thread_id: None,
         };
         let signal = Signal::user_input_with_channel("hi", channel.clone());
         assert_eq!(signal.origin_channel, channel);

@@ -8,7 +8,7 @@
 
 | 文件 | 状态 | 作用 | 备注 |
 |------|------|------|------|
-| `im-channel-adapters.md` | 当前有效 | Telegram/QQ/飞书通道抽象与 ECS 集成 | 本期交付入向与出向-主动，出向-自动为后续阶段 |
+| `im-channel-adapters.md` | 当前有效 | Telegram/QQ/飞书通道抽象与 ECS 集成 | 已实现入向、出向-主动与出向-自动 |
 | `2026-06-06-workitem-boundary-design.md` | 当前有效 | 定义 `Task`、`WorkItem` 与控制状态边界 | 当前架构收敛的核心依据 |
 | `2026-06-06-plan-evaluation-reassessment-design.md` | 当前有效 | 定义 `Plan` 收敛与 `Evaluation` 重新定位 | 与 WorkItem 边界文档配套阅读 |
 | `2026-05-24-genai-migration-design.md` | 当前有效（决策背景） | 记录 `genai` 替换方案与 provider 设计原因 | 适合理解当前 LLM 接入来源 |
@@ -46,6 +46,7 @@
 - [im-channel-adapters.md](im-channel-adapters.md)
 - [docs/configuration.md](../configuration.md) 的“IM 通道配置”章节
 - 实施计划：[docs/superpowers/plans/2026-06-26-im-channel-adapters.md](../superpowers/plans/2026-06-26-im-channel-adapters.md)
+- 出向-自动回执设计：[docs/superpowers/specs/2026-06-27-auto-channel-reply-design.md](../superpowers/specs/2026-06-27-auto-channel-reply-design.md)
 
 ## 已归档文档
 

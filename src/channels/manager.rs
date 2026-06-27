@@ -6,9 +6,18 @@ use crossbeam_channel::Sender;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{error, info, warn};
 
-use crate::domain::ExternalInput;
+use crate::domain::{ExternalInput, Frontend, FrontendKind};
 
 use super::traits::{Channel, ChannelInboundMessage, ChannelOutboundMessage};
+
+fn frontend_kind_for_name(name: &str) -> FrontendKind {
+    match name {
+        "telegram" => FrontendKind::Telegram,
+        "qq" => FrontendKind::QQ,
+        "feishu" => FrontendKind::Feishu,
+        _ => panic!("unknown channel name: {name}"),
+    }
+}
 
 #[derive(Clone, bevy::prelude::Resource)]
 pub struct ChannelManager {
@@ -19,23 +28,38 @@ pub struct ChannelManager {
 
 impl ChannelManager {
     /// 创建空 ChannelManager（不启动任何通道），用于测试和未配置通道的场景。
-    pub fn empty() -> Self {
+    pub fn empty() -> (Self, Vec<Box<dyn Frontend>>) {
         let (outbound_tx, _) = mpsc::unbounded_channel::<(String, ChannelOutboundMessage)>();
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
-        Self {
-            channels: vec![],
-            outbound_tx,
-            shutdown_tx,
-        }
+        (
+            Self {
+                channels: vec![],
+                outbound_tx,
+                shutdown_tx,
+            },
+            vec![],
+        )
     }
 
     pub fn new(
         channels: Vec<Arc<dyn Channel>>,
         external_input_tx: Sender<ExternalInput>,
-    ) -> (Self, tokio::task::JoinHandle<()>) {
+    ) -> (Self, tokio::task::JoinHandle<()>, Vec<Box<dyn Frontend>>) {
         let (outbound_tx, mut outbound_rx) =
             mpsc::unbounded_channel::<(String, ChannelOutboundMessage)>();
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
+
+        let frontends: Vec<Box<dyn Frontend>> = channels
+            .iter()
+            .map(|ch| {
+                let kind = frontend_kind_for_name(ch.name());
+                Box::new(super::ChannelFrontend::new(
+                    kind,
+                    ch.name().to_string(),
+                    outbound_tx.clone(),
+                )) as Box<dyn Frontend>
+            })
+            .collect();
 
         let supervisor_channels = channels.clone();
         let supervisor_shutdown = shutdown_tx.clone();
@@ -131,6 +155,7 @@ impl ChannelManager {
                 shutdown_tx,
             },
             handle,
+            frontends,
         )
     }
 
@@ -186,6 +211,7 @@ mod tests {
                 thread_id: None,
                 content: "ping".to_string(),
                 timestamp_secs: 0,
+                confirmation: None,
             });
             Err(super::super::traits::ChannelError::NotConfigured)
         }
@@ -196,10 +222,10 @@ mod tests {
         let (input_tx, input_rx) = unbounded::<ExternalInput>();
         let send_count = Arc::new(AtomicUsize::new(0));
         let channel = Arc::new(DummyChannel {
-            name: "dummy".to_string(),
+            name: "telegram".to_string(),
             send_count: send_count.clone(),
         }) as Arc<dyn Channel>;
-        let (manager, _handle) = ChannelManager::new(vec![channel], input_tx);
+        let (manager, _handle, _frontends) = ChannelManager::new(vec![channel], input_tx);
 
         // 等待入向消息到达（桥接任务需要从 spawn_blocking 转发）
         let input = tokio::time::timeout(Duration::from_secs(5), async {
@@ -219,11 +245,14 @@ mod tests {
 
         manager
             .send(
-                "dummy".to_string(),
+                "telegram".to_string(),
                 ChannelOutboundMessage {
                     recipient: "c1".to_string(),
                     thread_id: None,
                     content: "pong".to_string(),
+                    parse_mode: None,
+                    reply_markup: None,
+                    attachments: vec![],
                 },
             )
             .expect("queue outbound");
@@ -243,13 +272,16 @@ mod tests {
     #[tokio::test]
     async fn send_unknown_channel_errors() {
         let (input_tx, _input_rx) = unbounded::<ExternalInput>();
-        let (manager, _handle) = ChannelManager::new(vec![], input_tx);
+        let (manager, _handle, _frontends) = ChannelManager::new(vec![], input_tx);
         let result = manager.send(
             "nope".to_string(),
             ChannelOutboundMessage {
                 recipient: "x".to_string(),
                 thread_id: None,
                 content: "x".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
             },
         );
         assert!(result.is_err());

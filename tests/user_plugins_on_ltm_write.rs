@@ -94,7 +94,7 @@ fn on_ltm_write_removes_marker() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）

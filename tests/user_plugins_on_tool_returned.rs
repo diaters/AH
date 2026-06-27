@@ -104,6 +104,7 @@ fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> En
     let channel = ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "test".to_string(),
+        thread_id: None,
     };
     let mut task = harness::Task::from_user_input("test", 0, channel);
     task.id = task_id;
@@ -172,7 +173,7 @@ fn tool_result_observed_without_modification() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）
@@ -221,7 +222,7 @@ fn tool_result_replaced_when_plugin_sets_result() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）

@@ -705,6 +705,7 @@ pub fn llm_response_system(
                             "multi_turn: task now waiting for user"
                         );
                         commands.spawn(UserOutputMessage {
+                            task_id: task.id,
                             content: content.clone(),
                         });
                     } else {
@@ -726,6 +727,7 @@ pub fn llm_response_system(
                         };
                         task.mark_done(result_summary, clock.0);
                         commands.spawn(UserOutputMessage {
+                            task_id: task.id,
                             content: content.clone(),
                         });
                     }
@@ -936,6 +938,7 @@ pub fn llm_response_system(
                     );
                     task.mark_failed(error, clock.0);
                     commands.spawn(UserOutputMessage {
+                        task_id: task.id,
                         content: format!(
                             "任务执行失败（{:?}）：{}",
                             task_status_failure_reason(&task).unwrap_or(FailureReason::Unknown),
@@ -1075,13 +1078,19 @@ pub fn tool_calling_orchestrator_system(
             continue;
         }
 
+        // 在 follow-up 中保留当前通道上下文，避免多轮 tool calling 后丢失来源信息。
+        let system_prompt = tasks
+            .iter()
+            .find(|task| task.id == state.task_id)
+            .map(|task| task.origin_channel.to_prompt_context());
+
         // Spawn follow-up LLM request with conversation
         let request = AgentExecutionRequest {
             task_id: state.task_id,
             agent_id: state.agent_id,
             request_kind: state.request_kind.clone(),
             prompt: String::new(),
-            system_prompt: None,
+            system_prompt,
             tools: state.tools.clone(),
             conversation: Some(state.conversation.clone()),
             work_item_id: state.work_item_id,

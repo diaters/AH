@@ -23,6 +23,7 @@ fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     }
 }
 
@@ -107,7 +108,7 @@ fn on_task_created_hook_dispatches_without_panic_and_clears_marker() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用（让 Startup 阶段加载插件）

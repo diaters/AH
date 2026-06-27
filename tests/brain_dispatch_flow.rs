@@ -10,6 +10,7 @@ fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     }
 }
 use tokio::runtime::Runtime;
@@ -83,6 +84,7 @@ fn brain_test_config() -> HarnessConfig {
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
+        channels_config_path: None,
     }
 }
 
@@ -98,7 +100,7 @@ fn completes_brain_dispatch_flow() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用
@@ -139,7 +141,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用

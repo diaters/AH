@@ -219,8 +219,9 @@ pub enum ToolAction {
     /// 向 IM 通道发送消息
     SendChannelMessage {
         channel: String,
-        target: String,
+        target: Option<String>,
         content: String,
+        attachments: Vec<crate::channels::ChannelAttachment>,
     },
 }
 

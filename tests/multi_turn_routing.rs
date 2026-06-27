@@ -12,6 +12,7 @@ fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     }
 }
 use tokio::runtime::Runtime;
@@ -44,7 +45,7 @@ fn user_input_creates_new_task_when_no_waiting_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -76,7 +77,7 @@ fn user_input_continues_waiting_task() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -150,7 +151,7 @@ fn evaluation_triggered_on_turn_limit() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Configure evaluation with max_turns = 2
@@ -265,7 +266,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -364,7 +365,7 @@ fn finish_command_ends_multi_turn_conversation() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();

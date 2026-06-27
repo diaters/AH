@@ -55,6 +55,17 @@
   `Candidate` 状态条目缺少 LLM 自动审核
 - [x] 为长期记忆增加清理/淘汰机制（已实现：按 `decay_score` 阈值移除并归档到 `archive.jsonl`）
 
+### IM 通道后续阶段
+
+- [x] __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台
+  （需 `Channel` 实现 `Frontend` trait 并持有出向发送句柄）
+- [ ] __QQ 通道__：OAuth2 app token、WebSocket Gateway、markdown/富媒体发送
+- [ ] __飞书 / Lark 通道__：tenant_access_token、WebSocket/Webhook、interactive card
+- [ ] __媒体附件__：统一 `[IMAGE:path]`、`[VIDEO:path]`、`[DOCUMENT:path]`、`[VOICE:path]`
+  标记，支持三平台下载/上传
+- [ ] __Telegram 增强__：stream 模式 `editMessageText` 草稿更新、群组 `mention_only` @ 检测、
+  webhook 接收模式
+
 ### 低优先级
 
 - [ ] 评估配置热加载是否值得引入

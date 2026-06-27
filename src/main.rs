@@ -1,12 +1,12 @@
-use std::{sync::Arc, thread, time::Duration};
+use std::{path::PathBuf, sync::Arc, thread, time::Duration};
 
 use anyhow::{Context, Result};
 use crossbeam_channel::unbounded;
 use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
-    EngineEvent, ExternalInput, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
-    app_is_idle, build_harness_app,
+    EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState,
+    UserAction, app_is_idle, build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel},
     create_executor_from_config,
 };
@@ -101,15 +101,27 @@ fn main() -> Result<()> {
             event = "TelegramChannelEnabled",
             "enabling Telegram channel"
         );
-        channel_list.push(Arc::new(TelegramChannel::new(tg_cfg)));
+        let config_path = config.channels_config_path.as_ref().map(PathBuf::from);
+        channel_list.push(Arc::new(TelegramChannel::new_with_path(
+            tg_cfg,
+            config_path,
+        )));
     }
 
     // 创建 input channel：IM 入向消息和 TUI 输入共用
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
 
     // 启动 ChannelManager（无通道时为空操作）
-    let (channel_manager, channel_handle) = ChannelManager::new(channel_list, input_tx);
+    // 必须在 Tokio runtime 上下文中 spawn supervisor 任务。
+    let (channel_manager, channel_handle, channel_frontends) = {
+        let _guard = runtime.enter();
+        ChannelManager::new(channel_list, input_tx)
+    };
     let runtime_clone = runtime.clone();
+
+    // 构建 frontends：TUI + 所有 IM 通道前端
+    let mut frontends: Vec<Box<dyn Frontend>> = vec![Box::new(tui_frontend)];
+    frontends.extend(channel_frontends);
 
     // 构建 ECS app
     let mut app = build_harness_app(
@@ -117,7 +129,7 @@ fn main() -> Result<()> {
         runtime,
         executor,
         input_rx,
-        vec![Box::new(tui_frontend)],
+        frontends,
         channel_manager,
     );
 

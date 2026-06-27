@@ -121,7 +121,7 @@ impl ChannelInboundMessage {
                     "feishu" => FrontendKind::Feishu,
                     _ => FrontendKind::Tui,
                 },
-                user_id: self.sender_id.clone(),
+                user_id: self.chat_id.clone(),
             },
             content: self.content.clone(),
         }

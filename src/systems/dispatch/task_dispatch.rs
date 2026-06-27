@@ -9,8 +9,8 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        LongTermMemory, MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task,
-        TaskStatus, ToolPermission,
+        ChannelId, LongTermMemory, MessageDispatchedHookPending, ShortTermMemory,
+        SpaceToolRegistry, Task, TaskStatus, ToolPermission,
     },
 };
 
@@ -19,11 +19,12 @@ use super::{
     memory_selection::{MemorySelectionBudget, select_long_term_memories},
 };
 
-/// 构建带历史对话和长期记忆的 prompt
+/// 构建带历史对话、长期记忆与当前通道信息的 prompt
 fn build_prompt_with_context(
     task_content: &str,
     short_term: Option<&ShortTermMemory>,
     long_term: Option<&LongTermMemory>,
+    origin_channel: &ChannelId,
 ) -> String {
     let mut parts = Vec::new();
 
@@ -71,13 +72,12 @@ fn build_prompt_with_context(
         parts.push(history.trim_end().to_string());
     }
 
-    // 3. 当前请求（如果有上下文则添加前缀，否则直接返回）
-    if parts.is_empty() {
-        task_content.to_string()
-    } else {
-        parts.push(format!("[Current request]\n{}", task_content));
-        parts.join("\n\n")
-    }
+    // 3. 当前通道上下文，帮助 LLM 正确路由文件/消息到来源会话
+    parts.push(origin_channel.to_prompt_context());
+
+    // 4. 当前请求
+    parts.push(format!("[Current request]\n{}", task_content));
+    parts.join("\n\n")
 }
 
 /// 将选中的长期记忆格式化为 prompt 分段并追加到结果中。
@@ -164,8 +164,9 @@ pub fn task_dispatch_system(
             continue;
         };
 
-        // 构建带历史对话和长期记忆的 prompt
-        let prompt = build_prompt_with_context(&task.content, short_term, long_term);
+        // 构建带历史对话、长期记忆和当前通道信息的 prompt
+        let prompt =
+            build_prompt_with_context(&task.content, short_term, long_term, &task.origin_channel);
         let stm_entries = short_term.map(|s| s.entries.len()).unwrap_or(0);
         let stm_tokens = short_term.map(|s| s.estimated_tokens).unwrap_or(0);
         let ltm_entries = long_term.map(|l| l.entries.len()).unwrap_or(0);
@@ -259,6 +260,15 @@ mod tests {
         app
     }
 
+    /// 创建一个测试用的 ChannelId。
+    fn make_channel() -> ChannelId {
+        ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "12345".to_string(),
+            thread_id: None,
+        }
+    }
+
     /// 创建一个 Persistent Agent（用于测试 task dispatch 复用 delegate 行为）。
     fn make_persistent_agent(id: Uuid, name: &str, tags: Vec<&str>) -> Agent {
         Agent {
@@ -302,7 +312,7 @@ mod tests {
             metadata,
         );
 
-        let prompt = build_prompt_with_context("do the task", Some(&stm), None);
+        let prompt = build_prompt_with_context("do the task", Some(&stm), None, &make_channel());
 
         assert!(
             prompt.contains("System note: [Evaluation AutoCorrect] refocus on original goal"),
@@ -321,7 +331,7 @@ mod tests {
             EntryMetadata::default(),
         );
 
-        let prompt = build_prompt_with_context("do the task", Some(&stm), None);
+        let prompt = build_prompt_with_context("do the task", Some(&stm), None, &make_channel());
 
         assert!(
             !prompt.contains("archived content"),
@@ -387,6 +397,7 @@ mod tests {
             "please improve shell timeout behavior",
             None,
             Some(&long_term),
+            &make_channel(),
         );
 
         assert!(prompt.contains("[Core agent memory]"));
@@ -417,6 +428,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test-user".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input_ready("please do summarization", 0, channel);
         task.delegate = Some(delegate_agent_id);
@@ -473,6 +485,7 @@ mod tests {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test-user".to_string(),
+            thread_id: None,
         };
         let mut task = Task::from_user_input("please do summarization", 0, channel);
         task.delegate = Some(delegate_agent_id);

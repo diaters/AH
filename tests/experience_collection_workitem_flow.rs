@@ -12,6 +12,7 @@ fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     }
 }
 
@@ -43,7 +44,7 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -89,7 +90,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -199,7 +200,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -298,7 +299,7 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 

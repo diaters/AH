@@ -141,6 +141,7 @@ pub fn spawn_create_tasks_messages(
             origin_channel: ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
+                thread_id: None,
             },
             last_evaluated_turn: None,
         };
@@ -675,11 +676,13 @@ pub fn handle_tool_action<B: SessionBackend>(
             channel,
             target,
             content,
+            attachments,
         }) => {
             commands.spawn(crate::domain::PendingChannelSend {
                 channel,
                 recipient: target,
                 content,
+                attachments,
                 tool_call_id: request.tool_call_id.clone(),
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,

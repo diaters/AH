@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use crate::{
     domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
     systems::{
-        HarnessSet, NativeProcessBackend, check_waiting_tasks_system,
+        HarnessSet, NativeProcessBackend, channel_send_dispatch_system, check_waiting_tasks_system,
         on_subtask_completed_check_waiting, on_tool_called_hook_system,
         on_tool_returned_hook_system, register_builtin_tools, tool_dispatch_system,
         tool_result_system,
@@ -58,6 +58,10 @@ impl Plugin for ToolRuntimePlugin {
                 on_subtask_completed_check_waiting
                     .in_set(HarnessSet::Transform)
                     .after(crate::systems::sub_task_completion_system),
+                // channel_send 工具出向消息派发 companion 系统
+                channel_send_dispatch_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(tool_dispatch_system),
             ),
         );
     }

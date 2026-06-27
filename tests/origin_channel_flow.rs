@@ -41,6 +41,7 @@ fn test_config() -> HarnessConfig {
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
+        channels_config_path: None,
     }
 }
 
@@ -56,7 +57,7 @@ fn tui_input_preserves_origin_channel() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -64,6 +65,7 @@ fn tui_input_preserves_origin_channel() {
     let tui_channel = ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     };
     input_tx
         .send(ExternalInput::TextWithChannel {
@@ -99,7 +101,7 @@ fn telegram_input_preserves_origin_channel() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -107,6 +109,7 @@ fn telegram_input_preserves_origin_channel() {
     let tg_channel = ChannelId {
         frontend: FrontendKind::Telegram,
         user_id: "123456".to_string(),
+        thread_id: None,
     };
     input_tx
         .send(ExternalInput::TextWithChannel {

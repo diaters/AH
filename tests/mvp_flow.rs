@@ -10,6 +10,7 @@ fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
+        thread_id: None,
     }
 }
 use tokio::runtime::Runtime;
@@ -48,6 +49,7 @@ fn test_config() -> HarnessConfig {
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
+        channels_config_path: None,
     }
 }
 
@@ -63,7 +65,7 @@ fn completes_single_turn_conversation_flow() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // 初始化应用
@@ -87,5 +89,8 @@ fn completes_single_turn_conversation_flow() {
 
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].status, TaskStatus::Done);
-    assert_eq!(tasks[0].result_summary, "echo: 你好，Harness");
+    assert_eq!(
+        tasks[0].result_summary,
+        "echo: [Current channel]\nchannel=tui, chat_id=default\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='tui' and omit the target; include the file as [DOCUMENT:path] or [IMAGE:path] or [VIDEO:path].\n\n[Current request]\n你好，Harness"
+    );
 }

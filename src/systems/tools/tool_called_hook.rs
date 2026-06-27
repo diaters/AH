@@ -229,6 +229,7 @@ mod tests {
             let channel = ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "test".to_string(),
+                thread_id: None,
             };
             let task = Task::from_user_input("test", 0, channel);
             let id = task.id;
@@ -257,6 +258,7 @@ mod tests {
             let channel = ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "test".to_string(),
+                thread_id: None,
             };
             let task = Task::from_user_input("test", 0, channel);
             let id = task.id;

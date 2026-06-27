@@ -1,4 +1,5 @@
 pub mod config;
+pub mod frontend;
 pub mod lark;
 pub mod manager;
 pub mod qq;
@@ -7,7 +8,11 @@ pub mod telegram;
 pub mod traits;
 
 pub use config::{ChannelConfigs, TelegramConfig};
+pub use frontend::ChannelFrontend;
 pub use manager::ChannelManager;
 pub use send_tool::ChannelSendTool;
 pub use telegram::TelegramChannel;
-pub use traits::{Channel, ChannelError, ChannelInboundMessage, ChannelOutboundMessage};
+pub use traits::{
+    AttachmentKind, Channel, ChannelAttachment, ChannelError, ChannelInboundMessage,
+    ChannelOutboundMessage,
+};

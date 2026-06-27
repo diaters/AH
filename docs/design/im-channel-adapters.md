@@ -10,16 +10,8 @@
 
 1. __入向__：用户从 IM 发送消息，触发 Harness 的 Task。
 2. __出向-主动__：Agent 通过 `channel_send` 工具向任意已配置平台主动发送消息。
-
-### 后续阶段
-
-下列能力__不在本期交付__，作为后续阶段推进：
-
-1. __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台。
-
-> 拆分理由：出向-自动需要 `Channel` 持有出向发送句柄并作为 `Frontend` 真正发送消息，
-> 涉及 `Frontend` trait 能力扩展与独立 companion system 设计，与本期“建立抽象 + Telegram
-> 长轮询 + 主动工具”的最小闭环耦合度低，单独成阶段更易验证。
+3. __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台（当前实现见
+   [2026-06-27-auto-channel-reply-design.md](../superpowers/specs/2026-06-27-auto-channel-reply-design.md)）。
 
 ## 设计原则
 
@@ -101,14 +93,15 @@ pub trait Channel: Send + Sync + 'static {
   `Res<ChannelManager>`）消费并调用 `ChannelManager::send()`，再回写 `ToolExecutionResultMessage`。
 - 该模式与项目中已有的 companion system（如 `on_message_dispatched_hook_system`）一致。
 
-### 出向-自动（后续阶段，本期不交付）
+### 出向-自动
 
-后续阶段实现时：
+已实现，详见 [2026-06-27-auto-channel-reply-design.md](../superpowers/specs/2026-06-27-auto-channel-reply-design.md)。
+
+实现要点：
 
 - `UserOutputMessage` 新增 `task_id`，`frontend_output_system` 查找 `Task::origin_channel`
   生成 `EventTarget::Directed` 的 `EngineEvent::Text`（复用 `SystemOutputMessage` 已建立的模式）。
 - 每个 `Channel` 实现 `Frontend` trait 并持有出向发送句柄，`push_event` 中真正调用 `send()`。
-- 本期 `UserOutputMessage` 暂不新增 `task_id`，避免引入未使用字段。
 
 ## 平台实现策略
 
@@ -118,15 +111,20 @@ pub trait Channel: Send + Sync + 'static {
 
 - 长轮询 `getUpdates`。
 - 文本按 4096 字符分块发送。
-- 白名单支持 username / user_id；__空白名单表示拒绝所有用户__（语义：必须显式配置才放行）。
+- 白名单支持 username / user_id，或 `"*"` 表示允许所有人；__空白名单表示拒绝所有用户__（语义：必须显式配置才放行）。
+- 入向支持文本、图片、文件、语音；其他类型回复 `暂不支持该消息类型。`。
+- 出向支持 `[IMAGE:path]`、`[DOCUMENT:path]`、`[VIDEO:path]`、`[AUDIO:path]`、
+  `[VOICE:path]` 媒体标记，路径可以是相对/绝对路径、`file://` 或 HTTP(S) URL。
+- 文本与附件消息处理完成后向用户发送 ACK 表情反应（`setMessageReaction`）。
+- 支持 Inline Keyboard 作为审批选项 UI，用户点击后通过 `callback_query` 回传审批结果。
+- 支持 `/bind <code>` 运行时配对：在 `allowed_users` 为空、`pairing_enabled = true`
+  且 `pairing_code` 非空时，验证通过的用户进入运行时白名单；若 `HARNESS_CHANNELS_CONFIG`
+  指向的 TOML 文件可写，则同时追加到 `allowed_users` 并回写配置。
 
 下列能力__不在本期交付__，作为后续阶段：
 
-- `[IMAGE:path]`、`[VIDEO:path]`、`[DOCUMENT:path]`、`[VOICE:path]` 媒体标记。
 - `stream_mode` 下的 `editMessageText` 草稿更新。
 - `mention_only` 群组 @ 检测。
-
-> 上述能力未在本期实现，故对应配置项__本期不暴露__，避免引入伪精细控制面。
 
 ### QQ（后续阶段）
 
@@ -141,6 +139,55 @@ pub trait Channel: Send + Sync + 'static {
 - interactive card 发送 Markdown。
 - 图片 base64 内联。
 - 区分 Lark 与 Feishu endpoint。
+
+## Telegram 消息与交互格式
+
+### 入向消息
+
+`listen()` 从 `getUpdates` 解析以下消息类型并转发给 ECS：
+
+| 消息内容 | 解析方式 | 进入 ECS 的内容 |
+|---------|---------|----------------|
+| 文本 | `message.text` | 原始文本 |
+| 图片 | `message.photo` 最后一个尺寸 | `[IMAGE:<本地路径>]` |
+| 文件 | `message.document` | `[DOCUMENT:<本地路径>]` |
+| 语音 | `message.voice` | `[VOICE:<本地路径>]` |
+| 其他 | 以上皆无 | 回复 `暂不支持该消息类型。` |
+
+下载的入向附件保存在工作目录下的 `telegram_files/` 中，文件名会清理路径遍历字符。
+
+### 出向消息与附件标记
+
+Agent 可通过 `channel_send` 的 `content` 嵌入附件标记，或在 `ChannelOutboundMessage.attachments` 中携带附件。支持的标记：
+
+```text
+[IMAGE:/path/to/image.png]
+[DOCUMENT:/path/to/file.pdf]
+[VIDEO:/path/to/video.mp4]
+[AUDIO:/path/to/audio.mp3]
+[VOICE:/path/to/voice.ogg]
+```
+
+目标路径支持：
+
+- 相对路径或绝对路径
+- `file://` URL
+- HTTP(S) URL
+
+解析时会从 `content` 中移除标记，把附件作为独立消息发送；不支持的类型会按文本降级发送。
+
+### 审批 Inline Keyboard
+
+当 `ReplyMarkup::InlineKeyboard` 出现在出向消息时，Telegram 通道将其序列化为
+Inline Keyboard。用户点击按钮后，Bot API 通过 `callback_query` 回传 `callback_data`，
+格式为 `<request_id>:<option>`。`listen()` 解析后生成带 `confirmation` 的
+`ChannelInboundMessage`，注入 ECS 完成审批收敛。
+
+### ACK 反应
+
+对来自白名单用户的文本和附件消息，转发到 ECS 后调用 `setMessageReaction`
+发送一个表情反应。反应从 `["👍", "👌", "✅", "🆗"]` 中按 `message_id % 4` 选取。
+`callback_query` 确认和 `/bind` 响应不发送 ACK。
 
 ## 配置
 
@@ -158,14 +205,17 @@ pub trait Channel: Send + Sync + 'static {
 [telegram]
 bot_token = "${TELEGRAM_BOT_TOKEN}"
 allowed_users = ["your_username"]
+pairing_enabled = false
+pairing_code = ""
 ```
 
 > 本期仅 `telegram` 段生效；`qq` 与 `feishu` 段在对应阶段接入前为占位，不解析。
 
 ## ChannelManager 生命周期
 
-- `ChannelManager::new()` 接收通道列表与 `InputReceiver` 的 sender，返回 `(manager, shutdown)`。
-  `shutdown` 句柄用于应用退出时优雅停止所有 listen 任务。
+- `ChannelManager::new()` 接收通道列表与 `InputReceiver` 的 sender，返回
+  `(Self, JoinHandle<()>, Vec<Box<dyn Frontend>>)`。返回的 `JoinHandle` 用于应用退出时
+  优雅停止所有 listen 任务，返回的 `Frontend` 列表注册到 ECS 以接收出向事件。
 - 每个 `Channel::listen()` 任务在独立 tokio task 中运行；任务失败__不退出应用__，
   采用指数退避（起始 1s，上限 60s）后重启。
 - `ChannelManager::send(channel_name, message)` 为同步入队（`mpsc::UnboundedSender`），
@@ -190,7 +240,7 @@ allowed_users = ["your_username"]
 本期新增 crate（符合项目依赖原则，按需引入）：
 
 ```toml
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "multipart"] }
 async-trait = "0.1"
 ```
 
@@ -201,8 +251,6 @@ async-trait = "0.1"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 prost = "0.13"
 bytes = "1"
-# Telegram 媒体阶段
-reqwest = { version = "0.12", features = ["json", "multipart"] }
 ```
 
 ## 文档同步
@@ -214,8 +262,7 @@ reqwest = { version = "0.12", features = ["json", "multipart"] }
 
 ## 后续阶段
 
-- __阶段 2：出向-自动__：`UserOutputMessage` 携带 `task_id`，`Channel` 实现 `Frontend` 并真正发送。
-- __阶段 3：QQ 通道__：OAuth2、WebSocket Gateway、markdown/富媒体发送。
-- __阶段 4：飞书/Lark 通道__：tenant token、WebSocket/Webhook、interactive card。
-- __阶段 5：媒体附件__：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
-- __阶段 6：Telegram 增强__：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。
+- __阶段 2：QQ 通道__：OAuth2、WebSocket Gateway、markdown/富媒体发送。
+- __阶段 3：飞书/Lark 通道__：tenant token、WebSocket/Webhook、interactive card。
+- __阶段 4：媒体附件__：统一 `[IMAGE:path]` 等标记，支持三平台下载/上传。
+- __阶段 5：Telegram 增强__：媒体标记、`stream_mode` 草稿更新、`mention_only` 群组检测。

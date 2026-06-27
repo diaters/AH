@@ -302,7 +302,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -386,7 +386,7 @@ fn approved_candidate_spawns_writeback_request() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -516,7 +516,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -634,7 +634,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 
@@ -766,7 +766,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
     app.update();
 

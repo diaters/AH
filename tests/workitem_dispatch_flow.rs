@@ -46,6 +46,7 @@ fn test_config() -> HarnessConfig {
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
+        channels_config_path: None,
     }
 }
 
@@ -61,7 +62,7 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize and load agents from agents.toml (includes "evaluator" agent)
@@ -107,7 +108,7 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize and load agents from agents.toml (includes "summarizer" agent)
@@ -161,7 +162,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     // Initialize
@@ -217,7 +218,7 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
@@ -269,7 +270,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
         executor,
         input_rx,
         vec![],
-        harness::channels::ChannelManager::empty(),
+        harness::channels::ChannelManager::empty().0,
     );
 
     app.update();

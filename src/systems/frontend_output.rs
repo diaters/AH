@@ -28,11 +28,17 @@ pub(crate) fn frontend_output_system(
     for (entity, output) in &outputs {
         debug!(
             event = "FrontendOutputText",
+            task_id = %output.task_id,
             content_len = output.content.len(),
             "pushing text to frontends"
         );
+        let target = all_tasks
+            .iter()
+            .find(|t| t.id == output.task_id)
+            .map(|t| EventTarget::Directed(vec![t.origin_channel.clone()]))
+            .unwrap_or(EventTarget::Broadcast);
         let event = EngineEvent::Text {
-            target: EventTarget::Broadcast,
+            target,
             role: MessageRole::Agent,
             content: output.content.clone(),
         };
@@ -106,6 +112,22 @@ pub(crate) fn frontend_output_system(
 
     // 审批请求
     for (entity, confirmation) in &confirmations {
+        let target = all_tasks
+            .iter()
+            .find(|t| t.id == confirmation.task_id)
+            .map(|t| EventTarget::Directed(vec![t.origin_channel.clone()]))
+            .unwrap_or(EventTarget::Broadcast);
+
+        debug!(
+            event = "FrontendOutputApprovalRequest",
+            task_id = %confirmation.task_id,
+            agent_id = %confirmation.agent_id,
+            request_id = %confirmation.request_id,
+            tool_name = %confirmation.tool_name,
+            option_count = confirmation.options.len(),
+            "pushing approval request to frontends"
+        );
+
         let options: Vec<crate::domain::ApprovalOption> = confirmation
             .options
             .iter()
@@ -124,7 +146,7 @@ pub(crate) fn frontend_output_system(
             .collect();
 
         let event = EngineEvent::ApprovalRequest {
-            target: EventTarget::Broadcast,
+            target,
             request_id: confirmation.request_id,
             agent_name: String::new(),
             tool_name: confirmation.tool_name.clone(),
@@ -135,7 +157,6 @@ pub(crate) fn frontend_output_system(
             frontend.push_event(event.clone());
         }
 
-        // 审批请求已推送给前端，清理 entity
         commands.entity(entity).despawn();
     }
 }
@@ -148,5 +169,92 @@ fn task_status_to_kind(status: &crate::domain::TaskStatus) -> TaskStatusKind {
         crate::domain::TaskStatus::Waiting(_) => TaskStatusKind::Waiting,
         crate::domain::TaskStatus::Done => TaskStatusKind::Done,
         crate::domain::TaskStatus::Failed(_) => TaskStatusKind::Failed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use bevy::prelude::*;
+    use uuid::Uuid;
+
+    use crate::app::FrontendRegistry;
+    use crate::domain::{
+        ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend,
+        FrontendKind, Task, ToolConfirmationRequestMessage, UserAction,
+    };
+
+    use super::frontend_output_system;
+
+    struct MockFrontend {
+        kind: FrontendKind,
+        events: Arc<Mutex<Vec<EngineEvent>>>,
+    }
+
+    impl Frontend for MockFrontend {
+        fn kind(&self) -> FrontendKind {
+            self.kind.clone()
+        }
+
+        fn push_event(&self, event: EngineEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn poll_actions(&self) -> Vec<UserAction> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn approval_request_targeted_to_task_origin_channel() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: Some("t1".to_string()),
+        };
+        let task = Task::from_user_input("test", 3, origin_channel.clone());
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        app.world_mut().spawn(ToolConfirmationRequestMessage {
+            request_id: Uuid::new_v4(),
+            task_id,
+            agent_id: Uuid::nil(),
+            tool_name: "shell_exec".to_string(),
+            tool_input: serde_json::Value::Null,
+            options: ConfirmationOption::default_options(),
+            source: ConfirmationSource::User,
+            parent_agent_id: None,
+        });
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        let approval = events
+            .iter()
+            .find_map(|e| match e {
+                EngineEvent::ApprovalRequest { target, .. } => Some(target.clone()),
+                _ => None,
+            })
+            .expect("should emit ApprovalRequest");
+
+        match approval {
+            EventTarget::Directed(channels) => {
+                assert_eq!(channels, vec![origin_channel]);
+            }
+            EventTarget::Broadcast => panic!("approval should be routed to task origin channel"),
+        }
     }
 }
