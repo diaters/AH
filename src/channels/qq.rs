@@ -573,6 +573,138 @@ impl QqChannel {
         Some(parts.join("\n"))
     }
 
+    /// 获取 WebSocket Gateway URL。
+    async fn get_gateway_url(&self, token: &str) -> Result<String, ChannelError> {
+        let url = format!("{}/gateway", self.api_base);
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        let data: serde_json::Value = resp.json().await?;
+        let gw_url = data
+            .get("url")
+            .and_then(|u| u.as_str())
+            .ok_or(ChannelError::Auth)?
+            .to_string();
+        Ok(gw_url)
+    }
+
+    /// 发送入向 ACK 文本给用户。
+    async fn send_ack_text(&self, recipient: &str, content: &str) {
+        let ack_text = if content.starts_with('[') {
+            // 附件消息
+            format!("收到附件：{}", content.lines().next().unwrap_or(""))
+        } else {
+            let preview: String = content.chars().take(50).collect();
+            format!(
+                "收到：{preview}{}",
+                if content.chars().count() > 50 {
+                    "..."
+                } else {
+                    ""
+                }
+            )
+        };
+        if let Err(e) = self.send_text_markdown(recipient, &ack_text).await {
+            tracing::warn!(
+                event = "QqAckFailed",
+                recipient = %recipient,
+                error = %e,
+                "failed to send ACK"
+            );
+        }
+    }
+
+    /// 处理 /bind 配对命令。
+    async fn handle_bind_command(
+        &self,
+        recipient: &str,
+        user_openid: &str,
+        content: &str,
+    ) -> Option<()> {
+        if !content.starts_with("/bind ") {
+            return None;
+        }
+        if !self.config.pairing_enabled || !self.config.allowed_users.is_empty() {
+            return None;
+        }
+        let code = content[6..].trim();
+        let expected = self.config.pairing_code.clone().unwrap_or_default();
+        let reply = if !expected.is_empty() && code == expected {
+            self.runtime_allow(user_openid).await;
+            if let Some(ref path) = self.config_path {
+                if Self::is_writable_toml(path).await {
+                    if self.persist_allowed_user(user_openid, path).await.is_ok() {
+                        "已授权并已保存到配置。"
+                    } else {
+                        "已授权（本次运行有效）。"
+                    }
+                } else {
+                    "已授权（本次运行有效）。"
+                }
+            } else {
+                "已授权（本次运行有效）。"
+            }
+        } else {
+            "配对码错误。"
+        };
+        if let Err(e) = self.send_text_markdown(recipient, reply).await {
+            tracing::warn!(
+                event = "QqBindReplyFailed",
+                error = %e,
+                "failed to send bind reply"
+            );
+        }
+        Some(())
+    }
+
+    async fn is_writable_toml(path: &std::path::Path) -> bool {
+        path.extension().map(|e| e == "toml").unwrap_or(false)
+            && tokio::fs::metadata(path)
+                .await
+                .map(|m| !m.permissions().readonly())
+                .unwrap_or(false)
+    }
+
+    async fn persist_allowed_user(
+        &self,
+        user_openid: &str,
+        path: &std::path::Path,
+    ) -> Result<(), ChannelError> {
+        use crate::channels::config::ChannelConfigs;
+        // 关键：必须解析为 ChannelConfigs 而非 QqConfig，否则会丢失 [telegram] 等其他段。
+        let mut configs: ChannelConfigs = tokio::fs::read_to_string(path)
+            .await
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
+        let qq = configs.qq.get_or_insert_with(|| self.config.clone());
+        if !qq.allowed_users.iter().any(|u| u == user_openid) {
+            qq.allowed_users.push(user_openid.to_string());
+        }
+        let content = toml::to_string_pretty(&configs).map_err(|e| ChannelError::Api {
+            code: 0,
+            message: e.to_string(),
+        })?;
+        tokio::fs::write(path, content)
+            .await
+            .map_err(|e| ChannelError::Api {
+                code: 0,
+                message: e.to_string(),
+            })?;
+        Ok(())
+    }
+
     /// 记录待处理审批请求（同 recipient 覆盖旧的）。
     async fn record_pending_approval(
         &self,
@@ -1011,10 +1143,246 @@ impl Channel for QqChannel {
 
     async fn listen(
         &self,
-        _tx: crossbeam_channel::Sender<crate::channels::traits::ChannelInboundMessage>,
+        tx: crossbeam_channel::Sender<crate::channels::traits::ChannelInboundMessage>,
     ) -> Result<(), ChannelError> {
-        // 占位实现，后续 Task 填充
-        Ok(())
+        use crate::channels::traits::ChannelInboundMessage;
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        tracing::info!(event = "QqListenStart", "QQ authenticating...");
+        let token = self.get_token().await?;
+
+        tracing::info!(event = "QqGatewayFetch", "fetching gateway URL...");
+        let gw_url = self.get_gateway_url(&token).await?;
+
+        tracing::info!(event = "QqWsConnect", url = %gw_url, "connecting to gateway WebSocket...");
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&gw_url)
+            .await
+            .map_err(|e| ChannelError::Api {
+                code: 0,
+                message: format!("WebSocket connect failed: {e}"),
+            })?;
+        let (mut write, mut read) = ws_stream.split();
+
+        // 接收 Hello (op=10)
+        let hello =
+            read.next()
+                .await
+                .ok_or(ChannelError::Auth)?
+                .map_err(|e| ChannelError::Api {
+                    code: 0,
+                    message: format!("WebSocket hello read failed: {e}"),
+                })?;
+        let hello_data: serde_json::Value =
+            serde_json::from_str(&hello.to_string()).map_err(|e| ChannelError::Api {
+                code: 0,
+                message: e.to_string(),
+            })?;
+        let heartbeat_interval = hello_data
+            .get("d")
+            .and_then(|d| d.get("heartbeat_interval"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(41250);
+
+        // 发送 Identify (op=2)
+        let intents: u64 = (1 << 25) | (1 << 30);
+        let identify = json!({
+            "op": 2,
+            "d": {
+                "token": format!("QQBot {token}"),
+                "intents": intents,
+                "properties": {
+                    "os": "linux",
+                    "browser": "harness",
+                    "device": "harness",
+                }
+            }
+        });
+        write
+            .send(Message::Text(identify.to_string()))
+            .await
+            .map_err(|e| ChannelError::Api {
+                code: 0,
+                message: format!("WebSocket identify send failed: {e}"),
+            })?;
+        tracing::info!(event = "QqIdentified", "QQ connected and identified");
+
+        let mut sequence: i64 = -1;
+        let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let hb_interval = heartbeat_interval;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(hb_interval));
+            loop {
+                interval.tick().await;
+                if hb_tx.send(()).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        loop {
+            tokio::select! {
+                _ = hb_rx.recv() => {
+                    let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
+                    let hb = json!({"op": 1, "d": d});
+                    if write
+                        .send(Message::Text(hb.to_string()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                msg = read.next() => {
+                    let msg = match msg {
+                        Some(Ok(Message::Text(t))) => t,
+                        Some(Ok(Message::Ping(payload))) => {
+                            if write.send(Message::Pong(payload)).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => continue,
+                    };
+
+                    let event: serde_json::Value = match serde_json::from_str(msg.as_ref()) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+
+                    if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
+                        sequence = s;
+                    }
+                    let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                    match op {
+                        1 => {
+                            let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
+                            let hb = json!({"op": 1, "d": d});
+                            if write.send(Message::Text(hb.to_string())).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                        7 => {
+                            tracing::warn!(event = "QqReconnect", "received Reconnect (op 7)");
+                            break;
+                        }
+                        9 => {
+                            tracing::warn!(event = "QqInvalidSession", "received Invalid Session (op 9)");
+                            break;
+                        }
+                        _ => {}
+                    }
+                    if op != 0 {
+                        continue;
+                    }
+
+                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
+                    let d = match event.get("d") {
+                        Some(d) => d,
+                        None => continue,
+                    };
+
+                    match event_type {
+                        "C2C_MESSAGE_CREATE" | "GROUP_AT_MESSAGE_CREATE" => {
+                            let is_group = event_type == "GROUP_AT_MESSAGE_CREATE";
+                            let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                            if self.is_duplicate(msg_id).await {
+                                continue;
+                            }
+
+                            let content = match self.compose_message_content(d).await {
+                                Some(c) => c,
+                                None => continue,
+                            };
+
+                            let (user_openid, recipient) = if is_group {
+                                let group_openid = d
+                                    .get("group_openid")
+                                    .and_then(|g| g.as_str())
+                                    .unwrap_or("unknown");
+                                let member_openid = d
+                                    .get("author")
+                                    .and_then(|a| a.get("member_openid"))
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown");
+                                (member_openid.to_string(), format!("group:{group_openid}"))
+                            } else {
+                                let user_openid = d
+                                    .get("author")
+                                    .and_then(|a| a.get("user_openid"))
+                                    .and_then(|u| u.as_str())
+                                    .or_else(|| {
+                                        d.get("author")
+                                            .and_then(|a| a.get("id"))
+                                            .and_then(|i| i.as_str())
+                                    })
+                                    .unwrap_or("unknown");
+                                (user_openid.to_string(), format!("user:{user_openid}"))
+                            };
+
+                            if !self.is_user_allowed(&user_openid).await {
+                                tracing::warn!(
+                                    event = "QqUserDenied",
+                                    user_openid = %user_openid,
+                                    "user not in allowed list"
+                                );
+                                continue;
+                            }
+
+                            // /bind 优先匹配
+                            if self.handle_bind_command(&recipient, &user_openid, &content).await.is_some() {
+                                continue;
+                            }
+
+                            // 审批回复匹配
+                            if let Some(confirmation) = self.try_match_approval_reply(&recipient, &content).await {
+                                let note = format!("已选择：{content}");
+                                let _ = self.send_text_markdown(&recipient, &note).await;
+                                let inbound = ChannelInboundMessage {
+                                    channel_name: self.name().to_string(),
+                                    sender_id: user_openid.clone(),
+                                    chat_id: recipient.clone(),
+                                    thread_id: None,
+                                    content: String::new(),
+                                    timestamp_secs: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0),
+                                    confirmation: Some(confirmation),
+                                };
+                                let _ = tx.send(inbound);
+                                continue;
+                            }
+
+                            // 常规消息
+                            let inbound = ChannelInboundMessage {
+                                channel_name: self.name().to_string(),
+                                sender_id: user_openid.clone(),
+                                chat_id: recipient.clone(),
+                                thread_id: None,
+                                content: content.clone(),
+                                timestamp_secs: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0),
+                                confirmation: None,
+                            };
+                            let _ = tx.send(inbound);
+                            // 发送 ACK
+                            self.send_ack_text(&recipient, &content).await;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Err(ChannelError::Api {
+            code: 0,
+            message: "WebSocket disconnected".to_string(),
+        })
     }
 
     async fn health_check(&self) -> bool {
@@ -1799,5 +2167,92 @@ mod tests {
         // 再次匹配应返回 None
         let result = ch.try_match_approval_reply("user:u1", "1").await;
         assert!(result.is_none());
+    }
+
+    // --- persist_allowed_user tests ---
+
+    #[tokio::test]
+    async fn persist_allowed_user_preserves_telegram_section() {
+        use crate::channels::config::ChannelConfigs;
+        use tempfile::NamedTempFile;
+
+        let file = NamedTempFile::with_suffix(".toml").unwrap();
+        tokio::fs::write(
+            file.path(),
+            r#"[telegram]
+bot_token = "tg_token_x"
+allowed_users = ["alice"]
+
+[qq]
+app_id = "qq_id"
+app_secret = "qq_secret"
+allowed_users = []
+"#,
+        )
+        .await
+        .unwrap();
+
+        let ch = QqChannel::new_with_path(
+            QqConfig {
+                app_id: "qq_id".to_string(),
+                app_secret: "qq_secret".to_string(),
+                allowed_users: vec![],
+                pairing_enabled: false,
+                pairing_code: None,
+            },
+            Some(file.path().to_path_buf()),
+        );
+        ch.persist_allowed_user("user_xyz", file.path())
+            .await
+            .expect("persist");
+
+        let content = tokio::fs::read_to_string(file.path()).await.unwrap();
+        let parsed: ChannelConfigs = toml::from_str(&content).expect("reparse");
+        // [telegram] 段必须保留
+        assert_eq!(parsed.telegram.unwrap().bot_token, "tg_token_x");
+        // [qq] 段 allowed_users 应追加新用户
+        let qq = parsed.qq.unwrap();
+        assert_eq!(qq.allowed_users, vec!["user_xyz".to_string()]);
+        // 不应有重复
+        assert_eq!(qq.allowed_users.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn persist_allowed_user_deduplicates() {
+        use crate::channels::config::ChannelConfigs;
+        use tempfile::NamedTempFile;
+
+        let file = NamedTempFile::with_suffix(".toml").unwrap();
+        tokio::fs::write(
+            file.path(),
+            r#"[qq]
+app_id = "id"
+app_secret = "secret"
+allowed_users = ["existing_user"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let ch = QqChannel::new_with_path(
+            QqConfig {
+                app_id: "id".to_string(),
+                app_secret: "secret".to_string(),
+                allowed_users: vec!["existing_user".to_string()],
+                pairing_enabled: false,
+                pairing_code: None,
+            },
+            Some(file.path().to_path_buf()),
+        );
+        ch.persist_allowed_user("existing_user", file.path())
+            .await
+            .expect("persist");
+
+        let content = tokio::fs::read_to_string(file.path()).await.unwrap();
+        let parsed: ChannelConfigs = toml::from_str(&content).expect("reparse");
+        assert_eq!(
+            parsed.qq.unwrap().allowed_users,
+            vec!["existing_user".to_string()]
+        );
     }
 }
