@@ -716,7 +716,11 @@ impl Channel for TelegramChannel {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_secs())
                                     .unwrap_or(0),
-                                confirmation: Some(InboundConfirmation { request_id, option }),
+                                confirmation: Some(InboundConfirmation {
+                                    request_id,
+                                    option,
+                                    label: None,
+                                }),
                             };
                             let _ = tx.send(inbound);
                         }

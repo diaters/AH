@@ -780,6 +780,7 @@ impl QqChannel {
             Some(InboundConfirmation {
                 request_id: pending.request_id,
                 option: opt.id.clone(),
+                label: Some(opt.label.clone()),
             })
         } else {
             None
@@ -1344,7 +1345,8 @@ impl Channel for QqChannel {
 
                             // 审批回复匹配
                             if let Some(confirmation) = self.try_match_approval_reply(&recipient, &content).await {
-                                let note = format!("已选择：{content}");
+                                let display = confirmation.label.as_deref().unwrap_or(&content);
+                                let note = format!("已选择：{display}");
                                 let _ = self.send_text_markdown(&recipient, &note).await;
                                 let inbound = ChannelInboundMessage {
                                     channel_name: self.name().to_string(),

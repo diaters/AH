@@ -22,6 +22,7 @@ pub struct ChannelInboundMessage {
 pub struct InboundConfirmation {
     pub request_id: Uuid,
     pub option: String,
+    pub label: Option<String>,
 }
 
 impl ChannelInboundMessage {

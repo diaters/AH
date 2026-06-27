@@ -130,7 +130,7 @@ pub trait Channel: Send + Sync + 'static {
 
 - OAuth2 app token，WebSocket Gateway 接收事件。
 - `msg_type=2` markdown 文本；`msg_type=7` 富媒体。
-- 小文件 base64 上传；大文件分片上传。
+- 小文件 base64 上传；大文件分片上传（后续扩展）。
 - 审批选项以编号列表呈现，用户回复编号完成审批（QQ 无 Inline Keyboard）。
 - ChannelId 编码：`user:<openid>` 私聊，`group:<openid>` 群聊。
 - 支持收发媒体附件（图片、文档、音频等），非原生格式自动降级为文件发送。

@@ -110,7 +110,15 @@ fn main() -> Result<()> {
     if let Some(qq_cfg) = config.channels.qq.clone() {
         info!(event = "QqChannelEnabled", "enabling QQ channel");
         let config_path = config.channels_config_path.as_ref().map(PathBuf::from);
-        channel_list.push(Arc::new(QqChannel::new_with_path(qq_cfg, config_path)));
+        let workspace_dir = config_path
+            .as_ref()
+            .and_then(|p| p.parent().map(PathBuf::from))
+            .or_else(|| std::env::current_dir().ok());
+        let mut qq = QqChannel::new_with_path(qq_cfg, config_path);
+        if let Some(ws) = workspace_dir {
+            qq = qq.with_workspace_dir(ws);
+        }
+        channel_list.push(Arc::new(qq));
     }
 
     // 创建 input channel：IM 入向消息和 TUI 输入共用
