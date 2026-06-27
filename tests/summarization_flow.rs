@@ -88,7 +88,14 @@ fn task_completion_triggers_summarization() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor.clone(), input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor.clone(),
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize
     app.update();
@@ -157,7 +164,14 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize
     app.update();
@@ -215,7 +229,14 @@ fn summarization_preserves_terminal_task_status() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize
     app.update();
@@ -273,7 +294,14 @@ fn execution_populates_memory_and_triggers_summarization() {
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor.clone(), input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor.clone(),
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize
     app.update();
@@ -321,7 +349,14 @@ fn summarization_request_creates_workitem_instead_of_execution_request() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     let task =
         harness::domain::Task::from_user_input_ready("complete this task", 3, default_channel());

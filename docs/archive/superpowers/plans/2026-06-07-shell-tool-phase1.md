@@ -1,3 +1,11 @@
+> **状态：已归档**
+>
+> 归档原因：shell 工具后续已在 2026-06-08 的简化设计中收敛为六个意图化工具
+>（`shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`），
+> 本计划中的旧 8 工具集合（含 `shell_status`、`shell_read_output`、`shell_wait`、`shell_send_signal`）已不再作为当前对外契约。
+> 当前实现说明参见 `docs/current-state.md` 与
+> `docs/archive/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`。
+
 # Shell Tool Phase 1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

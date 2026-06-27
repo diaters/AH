@@ -55,6 +55,7 @@ pub(crate) fn user_input_routing_system(
             // 创建新任务
             commands.spawn(CreateTaskMessage {
                 content: input.content.clone(),
+                origin_channel: input.origin_channel.clone(),
             });
         }
 

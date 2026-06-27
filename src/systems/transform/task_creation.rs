@@ -11,8 +11,7 @@ use tracing::debug;
 use crate::{
     app::HarnessSettings,
     domain::{
-        CreateTaskMessage, EntryMetadata, EntryRole, NewlyCreatedTask,
-        ShortTermMemory, Task,
+        CreateTaskMessage, EntryMetadata, EntryRole, NewlyCreatedTask, ShortTermMemory, Task,
     },
     user_plugins::{
         dispatcher::{

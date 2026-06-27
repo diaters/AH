@@ -39,7 +39,14 @@ fn multi_turn_task_lifecycle() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // 初始化 app
     app.update();
@@ -125,7 +132,14 @@ fn short_term_memory_tracks_turns() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -193,7 +207,14 @@ fn agent_has_long_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Run one frame to initialize the app and load persistent agents from config
     app.update();
@@ -237,7 +258,14 @@ fn experience_collection_triggered_on_agent_termination() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // Initialize the app first
     app.update();
@@ -369,7 +397,14 @@ fn multi_turn_memory_records_user_and_assistant() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -431,7 +466,14 @@ fn multi_turn_full_conversation_flow() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -521,7 +563,14 @@ fn prompt_includes_conversation_history() {
     });
 
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -602,7 +651,14 @@ fn initial_user_input_recorded_in_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -654,7 +710,14 @@ fn three_turn_conversation_maintains_correct_order() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -766,7 +829,14 @@ fn second_dispatch_prompt_includes_correct_history() {
         captured: captured.clone(),
     });
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -859,7 +929,14 @@ fn task_content_updates_on_continue() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 

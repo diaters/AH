@@ -24,6 +24,7 @@ pub fn signal_ingest_system(mut commands: Commands, signals: Query<(Entity, &Sig
                 );
                 commands.spawn(UserInputMessage {
                     content: content.clone(),
+                    origin_channel: signal.origin_channel.clone(),
                 });
             }
             SignalPayload::RetryWakeup(task_id) => {

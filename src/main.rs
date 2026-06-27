@@ -6,8 +6,9 @@ use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
     EngineEvent, ExternalInput, HarnessConfig, HarnessSettings, ShutdownState, UserAction,
-    app_is_idle, build_harness_app, create_executor_from_config,
+    app_is_idle, build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel},
+    create_executor_from_config,
 };
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
@@ -96,7 +97,10 @@ fn main() -> Result<()> {
     // 构建通道列表
     let mut channel_list: Vec<Arc<dyn Channel>> = vec![];
     if let Some(tg_cfg) = config.channels.telegram.clone() {
-        info!(event = "TelegramChannelEnabled", "enabling Telegram channel");
+        info!(
+            event = "TelegramChannelEnabled",
+            "enabling Telegram channel"
+        );
         channel_list.push(Arc::new(TelegramChannel::new(tg_cfg)));
     }
 

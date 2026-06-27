@@ -57,7 +57,14 @@ fn completes_single_turn_conversation_flow() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     // 初始化应用
     app.update();

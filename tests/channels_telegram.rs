@@ -1,7 +1,6 @@
 use crossbeam_channel::unbounded;
 use harness::channels::{
-    Channel, ChannelInboundMessage, ChannelOutboundMessage, TelegramChannel,
-    config::TelegramConfig,
+    Channel, ChannelInboundMessage, ChannelOutboundMessage, TelegramChannel, config::TelegramConfig,
 };
 use std::time::Duration;
 use wiremock::matchers::{method, path};

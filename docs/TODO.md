@@ -29,21 +29,21 @@
 - [ ] 将 `approval_dispatch_system` 的 MVP 自动通过逻辑替换为真实父 Agent LLM 审查
 - [ ] 为审批链路补齐更明确的策略语义：
   `Approved`、`Rejected`、`GrantMode::Once`、`GrantMode::Permanent`
-- [ ] 持续清理仍引用旧 shell 语义的历史注释、文档和过程文稿
+- [x] 持续清理仍引用旧 shell 语义的历史注释、文档和过程文稿
 - [x] 为长期记忆实现持久化存储（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - [x] 实现跨会话记忆加载，Agent 启动时可从持久层恢复 `LongTermMemory`
 - [ ] `knowledge_search` 工具抽象为 trait，支持多种搜索策略（关键词、向量等），
   当前仅为单一实现，不利于扩展替换
 - [ ] 新增「知识库管理员」Agent 角色，负责响应其他 Agent 的搜索知识库请求，
   将知识查询职责从调用方解耦到专职 Agent
-- [ ] 增加 Agent 级别的 Skill 功能：可执行经验经治理后落盘为 Agent 私有 Skill Package
+- [x] 增加 Agent 级别的 Skill 功能：可执行经验经治理后落盘为 Agent 私有 Skill Package
 - [x] 重新设计经验贡献系统架构
 - [x] 实现经验模块两层分层汇聚治理（非顶层贡献 / 顶层治理 / 四类去向）
 - [x] 为 `SharedKnowledgeUpgradeQueue` 增加文件持久化
-- [ ] 为 `IncubationProposal` 增加用户审批后的持久型 Agent 创建执行链路
+- [x] 为 `IncubationProposal` 增加用户审批后的持久型 Agent 创建执行链路
 - [ ] 清理旧经验直写链路：`memory_contribution_system` / `memory_absorption_system`（当前为过渡态保留）
 - [ ] 实现顶层治理对候选 `kind_hint` 的修正能力
-- [ ] 实现非顶层基于多个子候选整理组合候选的主动重写
+- [x] 实现非顶层基于多个子候选整理组合候选的主动重写
 
 ### 中优先级
 
@@ -53,8 +53,7 @@
 - [ ] 继续强化复杂任务场景下的调度、评估与恢复策略验证
 - [ ] 为共享知识候选条目增加自动 LLM 审核链路，当前仅用户确认和 `IncubationProposal` 流程，
   `Candidate` 状态条目缺少 LLM 自动审核
-- [ ] 为长期记忆增加清理/淘汰机制，当前衰退分数只降不删，
-  低价值条目会持续累积，需要引入阈值淘汰或归档策略
+- [x] 为长期记忆增加清理/淘汰机制（已实现：按 `decay_score` 阈值移除并归档到 `archive.jsonl`）
 
 ### 低优先级
 
@@ -87,7 +86,7 @@
 - 经验候选治理已实现两层分层汇聚：非顶层向上贡献 → 顶层统一治理 → 四类最终去向落盘
 - 共享知识升级入口已实现文件持久化（`.harness/memory/shared_knowledge/upgrades.json`）
 - 共享知识候选条目缺少自动 LLM 审核，当前通过用户确认和孵化提案流程
-- 衰退分数只降不删，低价值条目无淘汰机制，长期运行会持续累积
+- 衰退分数低于阈值且非 `pin` 非 `Critical` 的条目会被移除并归档到 `<agent-name>/archive.jsonl`
 - 相关性匹配仅使用轻量关键词，未引入向量或语义检索
 
 ## 近期建议顺序

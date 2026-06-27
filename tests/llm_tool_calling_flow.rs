@@ -142,7 +142,14 @@ fn llm_tool_calling_complete_loop() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(ToolCallingMockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -201,7 +208,14 @@ fn tool_calling_exceeds_max_iterations() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(InfiniteToolCallExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 
@@ -257,7 +271,14 @@ fn tool_calling_records_to_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(ToolCallingMockExecutor);
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(test_config(), runtime, executor, input_rx, vec![], harness::channels::ChannelManager::empty());
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty(),
+    );
 
     app.update();
 

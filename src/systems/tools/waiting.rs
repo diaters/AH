@@ -1,6 +1,6 @@
 //! 等待任务 System
 //!
-//! 处理 wait_tasks 工具和 shell.wait 的等待逻辑。
+//! 处理 wait_tasks 工具的等待逻辑。
 
 use bevy::prelude::*;
 
