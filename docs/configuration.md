@@ -234,7 +234,7 @@ allowed_users = ["alice", "123456789"]
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `bot_token` | 是 | Telegram Bot API Token |
-| `allowed_users` | 否 | 允许的用户列表，支持用户名（大小写不敏感）和数字 user_id；空列表拒绝所有用户 |
+| `allowed_users` | 否 | 允许的用户列表，支持用户名（大小写不敏感）、数字 user_id，或 `"*"` 表示允许所有人；空列表拒绝所有用户 |
 
 ### 通道行为
 

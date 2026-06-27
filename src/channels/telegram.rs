@@ -37,9 +37,18 @@ impl TelegramChannel {
         format!("{}/bot{}/{}", self.base_url, self.config.bot_token, method)
     }
 
-    /// 白名单匹配：username（忽略大小写）或 user_id。
+    /// 白名单匹配：username（忽略大小写）、user_id，或通配符 `"*"`。
     /// 空白名单表示拒绝所有用户（必须显式配置才放行）。
+    /// 若列表中包含 `"*"`，则允许所有用户。
     fn is_allowed(&self, user: &TelegramUser) -> bool {
+        if self
+            .config
+            .allowed_users
+            .iter()
+            .any(|allowed| allowed == "*")
+        {
+            return true;
+        }
         if self.config.allowed_users.is_empty() {
             return false;
         }
@@ -224,6 +233,16 @@ mod tests {
             username: Some("anyone".to_string()),
         };
         assert!(!ch.is_allowed(&user));
+    }
+
+    #[test]
+    fn wildcard_allows_all() {
+        let ch = TelegramChannel::new(cfg(vec!["*".to_string()]));
+        let user = TelegramUser {
+            id: 1,
+            username: Some("anyone".to_string()),
+        };
+        assert!(ch.is_allowed(&user));
     }
 
     #[test]
