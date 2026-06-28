@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::contracts::SessionBackend;
@@ -92,6 +92,7 @@ pub fn spawn_spawn_agent_messages(
 }
 
 /// 为 create_tasks 生成子 Task 实体、SubTaskBatchState 和消息
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_create_tasks_messages(
     commands: &mut Commands,
     request_entity: Entity,
@@ -100,6 +101,7 @@ pub fn spawn_create_tasks_messages(
     request_kind: crate::domain::AgentRequestKind,
     definitions: Vec<SubTaskDefinition>,
     tool_call_id: Option<String>,
+    parent_origin_channel: ChannelId,
 ) {
     let batch_id = Uuid::new_v4();
     let total_count = definitions.len();
@@ -138,11 +140,7 @@ pub fn spawn_create_tasks_messages(
             multi_turn: false,
             parent_task_id: Some(task_id),
             batch_id: Some(batch_id),
-            origin_channel: ChannelId {
-                frontend: FrontendKind::Tui,
-                user_id: "default".to_string(),
-                thread_id: None,
-            },
+            origin_channel: parent_origin_channel.clone(),
             last_evaluated_turn: None,
         };
 
@@ -449,6 +447,22 @@ pub fn handle_tool_action<B: SessionBackend>(
             );
         }
         Ok(ToolAction::CreateBatch(definitions)) => {
+            let parent_origin_channel = tasks
+                .get(task_entity)
+                .map(|(_, t)| t.origin_channel.clone())
+                .unwrap_or_else(|_| {
+                    warn!(
+                        event = "ParentTaskNotFoundForSubTaskChannel",
+                        task_entity = ?task_entity,
+                        task_id = %request.request.task_id,
+                        "parent task entity not found, falling back to Tui/default for sub-task origin_channel"
+                    );
+                    ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "default".to_string(),
+                        thread_id: None,
+                    }
+                });
             spawn_create_tasks_messages(
                 commands,
                 request_entity,
@@ -457,6 +471,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request.request.request_kind.clone(),
                 definitions,
                 request.tool_call_id.clone(),
+                parent_origin_channel,
             );
         }
         Ok(ToolAction::WaitForTasks {
