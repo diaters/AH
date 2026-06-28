@@ -139,7 +139,8 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
 
     app.update();
 
-    // QQ 通道的活跃任务
+    // QQ 通道的活跃任务（Waiting(User) 状态，避免被 task_dispatch 自动派发并完成，
+    // 否则任务进入终态后 /btw 会无条件走回退分支，无法区分是通道过滤生效还是终态回退）。
     let now = chrono::Utc::now();
     app.world_mut().spawn((
         Task {
@@ -147,7 +148,7 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
             content: "qq active".to_string(),
             creator: uuid::Uuid::nil(),
             delegate: None,
-            status: TaskStatus::Ready,
+            status: TaskStatus::Waiting(WaitingReason::User),
             input_summary: "qq".to_string(),
             result_summary: String::new(),
             priority: 0,
@@ -157,7 +158,7 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
             max_retries: 3,
             next_retry_at: None,
             last_error: None,
-            multi_turn: false,
+            multi_turn: true,
             parent_task_id: None,
             batch_id: None,
             origin_channel: qq_channel(),
@@ -192,8 +193,9 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
     // 关键断言是 Telegram 通道有新建任务，证明 /btw 没有选 QQ 通道的父任务。
     let tg_new_task = tg_tasks
         .iter()
-        .find(|t| t.content.contains("topic"))
-        .expect("Telegram task content should reflect the /btw input");
+        .find(|t| t.content == "/btw new topic")
+        .expect("Telegram /btw task should use the original input as content");
+    assert_eq!(tg_new_task.content, "/btw new topic");
     assert_eq!(tg_new_task.origin_channel, telegram_channel());
 }
 
