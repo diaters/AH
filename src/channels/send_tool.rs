@@ -5,9 +5,11 @@ use crate::channels::traits::extract_attachments;
 use crate::domain::{ToolAction, ToolError, ToolPermission, ToolSchema};
 
 const ATTACHMENT_HINT: &str = r#"
-Use this tool when the user asks to send a file/message back through the current IM channel. The `target` can be omitted; the system will route to the source conversation of the current task.
+Prefer plain text responses over this tool: the system automatically routes your text replies back to the source IM channel of the current task. Only use this tool when:
+1. The user explicitly asks you to send files, images, videos, audio, or other attachments. Use markers like [IMAGE:/path/to/file.png], [DOCUMENT:/path/to/file.pdf], [VIDEO:...], [AUDIO:...], [VOICE:...]. The target path may be relative or absolute, a file:// URL, or an HTTP(S) URL. Unsupported attachment types will be sent as plain text links by the channel implementation.
+2. You need to send a message to a different channel than the current task's source channel.
 
-You can include attachments using markers like [IMAGE:/path/to/file.png], [DOCUMENT:/path/to/file.pdf], [VIDEO:...], [AUDIO:...], [VOICE:...]. The target path may be relative or absolute, a file:// URL, or an HTTP(S) URL. Unsupported attachment types will be sent as plain text links by the channel implementation.
+The `target` can be omitted; the system will route to the source conversation of the current task.
 "#;
 
 pub struct ChannelSendTool;

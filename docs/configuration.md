@@ -240,12 +240,19 @@ system_prompt = "You are a helper." # 系统提示
 
 ### 配置文件格式
 
-配置文件为 TOML 格式，当前仅支持 Telegram 通道：
+配置文件为 TOML 格式，当前支持 Telegram 和 QQ 通道：
 
 ```toml
 [telegram]
 bot_token = "123456:ABC-DEF"
 allowed_users = ["alice", "123456789"]
+pairing_enabled = false
+pairing_code = ""
+
+[qq]
+app_id = "1234567890"
+app_secret = "your_app_secret"
+allowed_users = ["user1"]
 pairing_enabled = false
 pairing_code = ""
 ```
@@ -270,6 +277,31 @@ pairing_code = ""
 - 入向：长轮询 `getUpdates`，白名单过滤，匹配的用户消息触发 Task 创建
 - 出向：`channel_send` 工具主动推送，支持 `[IMAGE:path]`、`[DOCUMENT:path]`、
   `[VIDEO:path]`、`[AUDIO:path]`、`[VOICE:path]` 附件标记，超过 4096 字符自动分块发送
+- 监听异常自动重启：指数退避（1s → 60s）
+
+### QQ 通道字段
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `app_id` | 是 | QQ Bot 应用 ID（appId），也可通过 `QQ_APP_ID` 环境变量提供 |
+| `app_secret` | 是 | QQ Bot 应用密钥（appSecret），也可通过 `QQ_APP_SECRET` 环境变量提供 |
+| `allowed_users` | 否 | 允许的用户 openid 列表，或 `"*"` 表示允许所有人；空列表拒绝所有用户 |
+| `pairing_enabled` | 否 | 是否启用 `/bind` 配对 |
+| `pairing_code` | 否 | 配对码；为空字符串或 null 时，即使启用配对也会拒绝 `/bind` |
+
+### QQ 配对说明
+
+- 仅当 `allowed_users` 为空、`pairing_enabled = true` 且 `pairing_code` 非空时，`/bind <code>` 才会授权当前用户。
+- 配对成功后，用户会被加入本次运行的运行时白名单；若配置文件可写，还会追加到 `allowed_users` 并回写。
+- 当 `pairing_code` 为空字符串或 null 时，任何 `/bind` 请求都会收到 `配对码错误。`。
+
+### QQ 通道行为
+
+- 入向：WebSocket Gateway 接收事件（OAuth2 app token），白名单过滤，匹配的用户消息触发 Task 创建
+- 出向：`channel_send` 工具主动推送，支持 `msg_type=2` markdown 文本与 `msg_type=7` 富媒体
+- 附件标记：支持 `[IMAGE:path]`、`[DOCUMENT:path]`、`[VIDEO:path]`、`[AUDIO:path]`、`[VOICE:path]`
+- 审批交互：QQ 不支持 Inline Keyboard，审批选项以编号列表呈现，用户回复编号即可完成审批
+- ChannelId 编码：`user:<openid>` 表示私聊，`group:<openid>` 表示群聊
 - 监听异常自动重启：指数退避（1s → 60s）
 
 ## 已废弃的旧配置语义
