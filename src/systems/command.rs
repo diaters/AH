@@ -75,7 +75,9 @@ pub(crate) fn command_parse_system(
             }
             UserCommand::FinishCurrentTask => {
                 // /finish - 结束当前任务
-                let current_task = tasks.iter().find(|(t, _)| !t.status.is_terminal());
+                let current_task = tasks.iter().find(|(t, _)| {
+                    !t.status.is_terminal() && t.origin_channel == input.origin_channel
+                });
 
                 if let Some((task, _)) = current_task {
                     debug!(
@@ -93,7 +95,9 @@ pub(crate) fn command_parse_system(
             }
             UserCommand::Summarize => {
                 // /summarize - 触发总结
-                let active_task = tasks.iter().find(|(t, _)| !t.status.is_terminal());
+                let active_task = tasks.iter().find(|(t, _)| {
+                    !t.status.is_terminal() && t.origin_channel == input.origin_channel
+                });
 
                 if let Some((task, memory)) = active_task
                     && let Some(stm) = memory
@@ -592,6 +596,139 @@ mod tests {
             child_task.unwrap().origin_channel,
             qq_channel,
             "child task should inherit input origin_channel"
+        );
+    }
+
+    #[test]
+    fn finish_does_not_finish_other_channel_task() {
+        use crate::domain::{FinishTaskMessage, FrontendKind, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq-user".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        app.world_mut().spawn((
+            Task {
+                id: uuid::Uuid::new_v4(),
+                content: "qq active task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Ready,
+                input_summary: "qq".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: qq_channel,
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        let tg_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "tg-user".to_string(),
+            thread_id: None,
+        };
+        app.world_mut().spawn(UserInputMessage {
+            content: "/finish".to_string(),
+            origin_channel: tg_channel,
+        });
+
+        app.update();
+
+        // 断言：未生成 FinishTaskMessage
+        let finish_count = app
+            .world_mut()
+            .query::<&FinishTaskMessage>()
+            .iter(app.world())
+            .count();
+        assert_eq!(finish_count, 0, "Telegram /finish should not touch QQ task");
+    }
+
+    #[test]
+    fn summarize_does_not_summarize_other_channel_task() {
+        use crate::domain::{FrontendKind, SummarizationRequestMessage, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq-user".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(
+            crate::domain::EntryRole::User,
+            "some content long enough",
+            crate::domain::EntryMetadata::default(),
+        );
+        app.world_mut().spawn((
+            Task {
+                id: uuid::Uuid::new_v4(),
+                content: "qq active task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Ready,
+                input_summary: "qq".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: qq_channel,
+                last_evaluated_turn: None,
+            },
+            stm,
+        ));
+
+        let tg_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "tg-user".to_string(),
+            thread_id: None,
+        };
+        app.world_mut().spawn(UserInputMessage {
+            content: "/summarize".to_string(),
+            origin_channel: tg_channel,
+        });
+
+        app.update();
+
+        // 断言：未生成 SummarizationRequestMessage
+        let summarize_count = app
+            .world_mut()
+            .query::<&SummarizationRequestMessage>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            summarize_count, 0,
+            "Telegram /summarize should not touch QQ task"
         );
     }
 }
