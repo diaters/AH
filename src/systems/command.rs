@@ -3,10 +3,10 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    ChannelId, CreateTaskMessage, FinishTaskMessage, FrontendKind, NewlyCreatedTask,
-    PendingKnowledgeWriteHooks, ReloadPluginsMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
-    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
-    UserCommand, UserInputMessage,
+    CreateTaskMessage, FinishTaskMessage, NewlyCreatedTask, PendingKnowledgeWriteHooks,
+    ReloadPluginsMessage, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
+    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, UserCommand,
+    UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -34,9 +34,11 @@ pub(crate) fn command_parse_system(
             UserCommand::NewTask { topic } => {
                 // /btw - 创建子任务承接新话题
                 // 查找当前活跃的任务作为父任务
-                let parent_task = tasks
-                    .iter()
-                    .find(|(t, _)| !t.status.is_terminal() && t.status != TaskStatus::Pending);
+                let parent_task = tasks.iter().find(|(t, _)| {
+                    !t.status.is_terminal()
+                        && t.status != TaskStatus::Pending
+                        && t.origin_channel == input.origin_channel
+                });
 
                 if let Some((parent, _)) = parent_task {
                     debug!(
@@ -54,11 +56,7 @@ pub(crate) fn command_parse_system(
                             &topic
                         },
                         parent.max_retries,
-                        ChannelId {
-                            frontend: FrontendKind::Tui,
-                            user_id: "default".to_string(),
-                            thread_id: None,
-                        },
+                        input.origin_channel.clone(),
                     );
                     commands.spawn((child_task, ShortTermMemory::default(), NewlyCreatedTask));
                 } else {
@@ -70,11 +68,7 @@ pub(crate) fn command_parse_system(
                     // 没有父任务，创建普通任务
                     commands.spawn(CreateTaskMessage {
                         content: input.content.clone(),
-                        origin_channel: crate::domain::ChannelId {
-                            frontend: crate::domain::FrontendKind::Tui,
-                            user_id: "default".to_string(),
-                            thread_id: None,
-                        },
+                        origin_channel: input.origin_channel.clone(),
                     });
                 }
                 commands.entity(entity).despawn();
@@ -286,8 +280,9 @@ mod tests {
     use crate::{
         app::MemoryConfig,
         domain::{
-            KnowledgeValidationStatus, PendingKnowledgeWriteHooks, SharedKnowledgeBase,
-            UserCommand, UserCommand::Remember, UserInputMessage,
+            ChannelId, CreateTaskMessage, KnowledgeValidationStatus, PendingKnowledgeWriteHooks,
+            SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus, UserCommand,
+            UserCommand::Remember, UserInputMessage,
         },
     };
 
@@ -463,5 +458,140 @@ mod tests {
         let cmd = UserCommand::parse("/reload-plugins");
         assert_eq!(cmd, UserCommand::ReloadPlugins);
         assert!(cmd.is_command());
+    }
+
+    #[test]
+    fn btw_picks_parent_only_in_same_channel() {
+        use crate::domain::FrontendKind;
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        // QQ 通道的活跃任务
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq-user".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        app.world_mut().spawn((
+            Task {
+                id: uuid::Uuid::new_v4(),
+                content: "qq active task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Ready,
+                input_summary: "qq".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: qq_channel.clone(),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        // Telegram 通道发起 /btw
+        let tg_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "tg-user".to_string(),
+            thread_id: None,
+        };
+        app.world_mut().spawn(UserInputMessage {
+            content: "/btw new topic".to_string(),
+            origin_channel: tg_channel.clone(),
+        });
+
+        app.update();
+
+        // 断言：无父任务，走 CreateTaskMessage 分支
+        let create_msgs: Vec<&CreateTaskMessage> = app
+            .world_mut()
+            .query::<&CreateTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(
+            create_msgs.len(),
+            1,
+            "Telegram /btw with no Telegram parent should fall back to CreateTaskMessage"
+        );
+        assert_eq!(create_msgs[0].origin_channel, tg_channel);
+    }
+
+    #[test]
+    fn btw_subtask_inherits_input_origin_channel() {
+        use crate::domain::FrontendKind;
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        // QQ 通道的活跃父任务
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq-user".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        app.world_mut().spawn((
+            Task {
+                id: uuid::Uuid::new_v4(),
+                content: "qq parent".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Ready,
+                input_summary: "qq".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: qq_channel.clone(),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "/btw child topic".to_string(),
+            origin_channel: qq_channel.clone(),
+        });
+
+        app.update();
+
+        // /btw 子任务使用 topic 作为 content（若 topic 为空则使用 input.content）
+        let child_task = app
+            .world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .find(|t| t.content == "child topic");
+        assert!(
+            child_task.is_some(),
+            "should spawn child task with topic as content"
+        );
+        assert_eq!(
+            child_task.unwrap().origin_channel,
+            qq_channel,
+            "child task should inherit input origin_channel"
+        );
     }
 }
