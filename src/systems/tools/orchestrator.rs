@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::contracts::SessionBackend;
@@ -92,6 +92,7 @@ pub fn spawn_spawn_agent_messages(
 }
 
 /// 为 create_tasks 生成子 Task 实体、SubTaskBatchState 和消息
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_create_tasks_messages(
     commands: &mut Commands,
     request_entity: Entity,
@@ -100,6 +101,7 @@ pub fn spawn_create_tasks_messages(
     request_kind: crate::domain::AgentRequestKind,
     definitions: Vec<SubTaskDefinition>,
     tool_call_id: Option<String>,
+    parent_origin_channel: ChannelId,
 ) {
     let batch_id = Uuid::new_v4();
     let total_count = definitions.len();
@@ -138,11 +140,7 @@ pub fn spawn_create_tasks_messages(
             multi_turn: false,
             parent_task_id: Some(task_id),
             batch_id: Some(batch_id),
-            origin_channel: ChannelId {
-                frontend: FrontendKind::Tui,
-                user_id: "default".to_string(),
-                thread_id: None,
-            },
+            origin_channel: parent_origin_channel.clone(),
             last_evaluated_turn: None,
         };
 
@@ -449,6 +447,22 @@ pub fn handle_tool_action<B: SessionBackend>(
             );
         }
         Ok(ToolAction::CreateBatch(definitions)) => {
+            let parent_origin_channel = tasks
+                .get(task_entity)
+                .map(|(_, t)| t.origin_channel.clone())
+                .unwrap_or_else(|_| {
+                    warn!(
+                        event = "ParentTaskNotFoundForSubTaskChannel",
+                        task_entity = ?task_entity,
+                        task_id = %request.request.task_id,
+                        "parent task entity not found, falling back to Tui/default for sub-task origin_channel"
+                    );
+                    ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "default".to_string(),
+                        thread_id: None,
+                    }
+                });
             spawn_create_tasks_messages(
                 commands,
                 request_entity,
@@ -457,6 +471,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request.request.request_kind.clone(),
                 definitions,
                 request.tool_call_id.clone(),
+                parent_origin_channel,
             );
         }
         Ok(ToolAction::WaitForTasks {
@@ -871,4 +886,117 @@ pub fn spawn_shell_result(
     ));
 
     commands.entity(request_entity).despawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::AgentRequestKind;
+
+    /// 测试系统：从世界中的父 Task 读取 origin_channel，调用 spawn_create_tasks_messages。
+    ///
+    /// 通过系统而非直接调用 `world.commands()`，确保 `app.update()` 能正确刷新 Commands。
+    fn spawn_subtasks_for_inheritance_test(mut commands: Commands, tasks: Query<&Task>) {
+        let parent_task = tasks
+            .iter()
+            .find(|t| t.content == "parent")
+            .expect("parent task should exist");
+        let parent_task_id = parent_task.id;
+        let parent_origin_channel = parent_task.origin_channel.clone();
+
+        // spawn_create_tasks_messages 会在结束时 despawn request_entity，
+        // 因此需要一个真实存在的 entity。
+        let request_entity = commands.spawn(()).id();
+
+        spawn_create_tasks_messages(
+            &mut commands,
+            request_entity,
+            uuid::Uuid::nil(),
+            parent_task_id,
+            AgentRequestKind::LlmCompletion,
+            vec![SubTaskDefinition {
+                name: "child-agent".to_string(),
+                content: "do something".to_string(),
+                tools: vec![],
+                depends_on: vec![],
+                model: None,
+            }],
+            None,
+            parent_origin_channel,
+        );
+    }
+
+    /// 验证 `spawn_create_tasks_messages` 生成的子 Task 继承父 Task 的非默认 origin_channel。
+    ///
+    /// 回归保护：曾出现过子任务硬编码 `Tui/default` 的回归。所有现有集成测试的父任务均使用
+    /// `default_channel()` (Tui/default)，因此继承与硬编码无法区分。本测试使用 Telegram 通道
+    /// 作为父通道，确保子任务的 `origin_channel == telegram_channel`，而非 `Tui/default`。
+    #[test]
+    fn create_tasks_subtask_inherits_parent_origin_channel() {
+        let mut app = App::new();
+
+        let telegram_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "tg-user".to_string(),
+            thread_id: None,
+        };
+
+        // 生成父 Task，使用非默认的 Telegram 通道
+        let parent_task_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let parent_task = Task {
+            id: parent_task_id,
+            content: "parent".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Pending,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: telegram_channel.clone(),
+            last_evaluated_turn: None,
+        };
+        app.world_mut()
+            .spawn((parent_task, ShortTermMemory::default()));
+
+        app.add_systems(Update, spawn_subtasks_for_inheritance_test);
+        app.update();
+
+        // 查询生成的子 Task（通过 parent_task_id 过滤）
+        let child_tasks: Vec<_> = app
+            .world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .filter(|t| t.parent_task_id == Some(parent_task_id))
+            .collect();
+
+        assert_eq!(
+            child_tasks.len(),
+            1,
+            "exactly one child task should be spawned"
+        );
+        assert_eq!(
+            child_tasks[0].origin_channel, telegram_channel,
+            "subtask should inherit parent's Telegram channel, not Tui/default"
+        );
+        // 显式断言：不得回退到硬编码的 Tui/default
+        assert_ne!(
+            child_tasks[0].origin_channel,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+                thread_id: None,
+            },
+            "subtask channel must NOT be the hardcoded Tui/default"
+        );
+    }
 }

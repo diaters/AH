@@ -204,8 +204,9 @@ pub fn flush_world_commands(world: &mut World, rx: &Receiver<WorldCommand>) {
 fn apply_world_command(world: &mut World, cmd: WorldCommand) {
     match cmd {
         WorldCommand::CreateTask { title, parent: _ } => {
-            // Task 无 metadata 字段，Task::new 也不存在，使用 from_user_input
-            // 走与用户消息相同的多轮 Pending 路径，origin_channel 标记为 plugin 来源。
+            // 插件创建的任务不属于任何 IM 通道，使用 Tui/plugin 标识其来源。
+            // 这是有意为之：插件通过 host API 创建的任务不绑定到具体用户会话，
+            // 因此不参与通道隔离过滤（与 Tui/default 通道也不冲突）。
             let channel = ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "plugin".to_string(),
