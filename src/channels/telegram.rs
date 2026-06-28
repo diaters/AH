@@ -278,7 +278,9 @@ impl TelegramChannel {
     }
 
     async fn send_ack_reaction(&self, chat_id: i64, message_id: i64) -> Result<(), ChannelError> {
-        let reactions = ["👍", "👌", "✅", "🆗"];
+        // Only emoji from Telegram's setMessageReaction allow-list are valid.
+        // "✅" is not supported and causes REACTION_INVALID.
+        let reactions = ["👍", "👌", "🎉", "🆗"];
         let idx: usize = message_id.try_into().unwrap_or(0);
         let reaction = reactions[idx % reactions.len()];
         let payload = json!({
