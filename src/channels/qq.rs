@@ -1329,17 +1329,18 @@ impl Channel for QqChannel {
                                 (user_openid.to_string(), format!("user:{user_openid}"))
                             };
 
+                            // /bind 优先匹配（配对命令必须在白名单检查前处理，
+                            // 否则未授权用户永远无法到达配对逻辑）
+                            if self.handle_bind_command(&recipient, &user_openid, &content).await.is_some() {
+                                continue;
+                            }
+
                             if !self.is_user_allowed(&user_openid).await {
                                 tracing::warn!(
                                     event = "QqUserDenied",
                                     user_openid = %user_openid,
                                     "user not in allowed list"
                                 );
-                                continue;
-                            }
-
-                            // /bind 优先匹配
-                            if self.handle_bind_command(&recipient, &user_openid, &content).await.is_some() {
                                 continue;
                             }
 
