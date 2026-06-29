@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::contracts::SessionBackend;
 use crate::domain::{
-    AgentExecutionOutput, AgentExecutionResult, AgentId, AgentSpawnRequestMessage, BatchTaskState,
-    ChannelId, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
+    AgentExecutionOutput, AgentExecutionResult, AgentId, BatchTaskState, ChannelId,
+    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
     ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingExperienceHooks,
     SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
     SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
@@ -25,70 +25,6 @@ pub struct TaskWaitResult {
     pub status: TaskStatus,
     pub result: Option<String>,
     pub error: Option<String>,
-}
-
-/// 为 spawn_agent 生成 AgentSpawnRequestMessage 和 ToolExecutionResultMessage，并清理请求 entity
-pub fn spawn_spawn_agent_messages(
-    commands: &mut Commands,
-    request_entity: Entity,
-    agent_id: AgentId,
-    task_id: TaskId,
-    request_kind: crate::domain::AgentRequestKind,
-    params: (String, Option<String>, String, Vec<String>),
-    tool_call_id: Option<String>,
-) {
-    let (name, model, description, tools) = params;
-    debug!(
-        event = "SpawnAgentRequestCreated",
-        %agent_id,
-        %task_id,
-        %name,
-        ?model,
-        %description,
-        ?tools,
-        ?tool_call_id,
-        "spawn_agent request submitted"
-    );
-
-    commands.spawn(AgentSpawnRequestMessage {
-        parent_agent_id: agent_id,
-        task_id,
-        name,
-        model,
-        description,
-        tools,
-        task_prompt: String::new(),
-        task_system_prompt: None,
-    });
-
-    commands.spawn((
-        ToolExecutionResultMessage {
-            result: AgentExecutionResult {
-                task_id,
-                agent_id,
-                request_kind,
-                result: Ok(AgentExecutionOutput {
-                    content: OutputContent::Text("spawn_agent request submitted".to_string()),
-                    reasoning_content: None,
-                }),
-                prompt: String::new(),
-                system_prompt: None,
-                tools: vec![],
-                reasoning_content: None,
-                work_item_id: None,
-            },
-            tool_name: "spawn_agent".to_string(),
-            tool_output: Ok(serde_json::json!({
-                "status": "spawn_request_created"
-            })),
-            tool_call_id,
-            processed: false,
-            original_tool_output: None,
-        },
-        ToolReturnedHookPending,
-    ));
-
-    commands.entity(request_entity).despawn();
 }
 
 /// 为 create_tasks 生成子 Task 实体、SubTaskBatchState 和消息
@@ -429,22 +365,6 @@ pub fn handle_tool_action<B: SessionBackend>(
             ));
 
             commands.entity(request_entity).despawn();
-        }
-        Ok(ToolAction::SpawnAgent {
-            name,
-            model,
-            description,
-            tools,
-        }) => {
-            spawn_spawn_agent_messages(
-                commands,
-                request_entity,
-                request.request.agent_id,
-                request.request.task_id,
-                request.request.request_kind.clone(),
-                (name, model, description, tools),
-                request.tool_call_id.clone(),
-            );
         }
         Ok(ToolAction::CreateBatch(definitions)) => {
             let parent_origin_channel = tasks

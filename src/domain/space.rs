@@ -188,13 +188,6 @@ pub enum ToolPermission {
 pub enum ToolAction {
     /// 直接返回结果
     Direct(serde_json::Value),
-    /// 创建子 Agent 请求
-    SpawnAgent {
-        name: String,
-        model: Option<String>,
-        description: String,
-        tools: Vec<String>,
-    },
     /// 创建子任务批次
     CreateBatch(Vec<SubTaskDefinition>),
     /// 等待子任务完成

@@ -127,7 +127,7 @@ fn load_persistent_agents(
 
     // 从配置文件加载
     for entry in &config.agent {
-        spawn_agent_entry(commands, entry);
+        spawn_persistent_agent_from_entry(commands, entry);
     }
 
     // 合并插件贡献的 Agent
@@ -137,7 +137,7 @@ fn load_persistent_agents(
             agent_name = %entry.name,
             "spawning plugin-contributed persistent agent"
         );
-        spawn_agent_entry(commands, entry);
+        spawn_persistent_agent_from_entry(commands, entry);
     }
 
     if !plugin_agent_entries.is_empty() {
@@ -150,7 +150,7 @@ fn load_persistent_agents(
 }
 
 /// 从配置条目生成持久化 Agent
-fn spawn_agent_entry(commands: &mut Commands, entry: &crate::domain::AgentEntry) {
+fn spawn_persistent_agent_from_entry(commands: &mut Commands, entry: &crate::domain::AgentEntry) {
     let id = Uuid::new_v4();
     debug!(
         event = "PersistentAgentSpawned",

@@ -37,7 +37,7 @@ fn test_config() -> HarnessConfig {
     HarnessConfig::default()
 }
 
-fn spawn_agent(world: &mut bevy::prelude::World) -> Uuid {
+fn spawn_shell_agent(world: &mut bevy::prelude::World) -> Uuid {
     let id = Uuid::new_v4();
     world.spawn(Agent {
         id,
@@ -118,7 +118,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
     );
 
     app.update();
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -208,7 +208,7 @@ fn shell_list_returns_only_active_sessions() {
     );
 
     app.update();
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -289,7 +289,7 @@ fn shell_exec_returns_result_message() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -364,7 +364,7 @@ fn shell_exec_passes_env_to_child_process() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -430,7 +430,7 @@ fn shell_start_returns_running_handle() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -498,7 +498,7 @@ fn shell_start_passes_env_to_child_process() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -607,7 +607,7 @@ fn shell_exec_with_exit_code_error() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -678,7 +678,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -815,7 +815,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let mut task = Task::from_user_input_ready("shell input missing stdin", 3, default_channel());
     task.status = harness::TaskStatus::Waiting(harness::WaitingReason::ToolExecution);
     let task_entity = app
@@ -952,7 +952,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1026,7 +1026,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1090,7 +1090,7 @@ fn shell_read_returns_output_text() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1194,7 +1194,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1276,7 +1276,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
     );
 
     app.update();
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1402,7 +1402,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
     let task_a_entity = app
@@ -1500,7 +1500,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1629,7 +1629,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
     let task_a_entity = app
@@ -1748,7 +1748,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
     let task_a_entity = app
@@ -1866,7 +1866,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
     let task_a_entity = app
@@ -1984,7 +1984,7 @@ fn task_termination_stops_owned_shell_sessions() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
 
     // Create a task and start a long-running session
     let task_entity = app
@@ -2061,7 +2061,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
 
     app.update();
 
-    let agent_id = spawn_agent(app.world_mut());
+    let agent_id = spawn_shell_agent(app.world_mut());
 
     // Create a task and start a long-running session
     let task_entity = app

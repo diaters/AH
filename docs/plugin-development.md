@@ -569,7 +569,7 @@ Hook 执行错误以 `HookScriptError` 记录，包含插件 ID、hook 点和错
 - `create_task` 创建的 Task 使用 `plugin` 用户 ID 标记来源
 - `task_set_metadata` / `task_set_tag` 在 v1 中仅记录日志，不实际写回
 - `emit_message` 在 v1 中仅记录日志，消息不会路由到其他插件
-- `SpawnAgent` / `CreateWorkItem` / `SetApprovalDecision` / `ExperienceSetPinned` 等
+- `CreateWorkItem` / `SetApprovalDecision` / `ExperienceSetPinned` 等
   WorldCommand 在 v1 中尚未实现回放
 - 超时线程不会强制终止，可能在后台继续运行（v1 接受此潜在泄漏）
 - 单个插件的 `[[commands]]` 中 `display` 不允许重复
