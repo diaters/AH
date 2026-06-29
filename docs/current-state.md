@@ -98,7 +98,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查
-- 插件 host API 部分 `WorldCommand` 变体（`SpawnAgent`、`CreateWorkItem`、`SetApprovalDecision`、`ExperienceSetPinned`）尚未实现回放
+- 插件 host API 部分 `WorldCommand` 变体（`CreateWorkItem`、`SetApprovalDecision`、`ExperienceSetPinned`）尚未实现回放
 - 插件 `v1` 不追踪 `tool_deny` 的 per-plugin attribution，推迟到后续 host API 升级
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
@@ -113,6 +113,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
 - `ExperienceCollectionTracker` 与 task-scoped agent 保活逻辑已移除，经验收集改为独立 WorkItem
+- `spawn_agent` Tool 已废弃并从 LLM 可调工具集中移除；子 Agent 创建统一收敛到
+  `create_tasks` + Brain 调度内部生成的 `AgentSpawnRequestMessage`
+- 插件 Host API 的 `spawn_agent` 函数与 `WorldCommand::SpawnAgent` 已移除
 
 ## 当前架构结论
 

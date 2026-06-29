@@ -252,7 +252,7 @@ v1 hook 点清单
 - 同一 hook 点的多个订阅者按插件 id 字母序依次派发；同一插件内部多个 hook 订阅同一
   点时按 manifest 中 `[[hooks]]` 出现顺序派发
 - 派发在线程内同步执行；前一个 hook 完成才下一个，不并行
-- 脚本若需要触发异步动作（如 `spawn_agent`），通过 host API 发指令，不阻塞 hook 返回
+- 脚本若需要触发异步动作（如 `create_work_item`），通过 host API 发指令，不阻塞 hook 返回
 - hook 脚本固定超时 1 秒（v1 保守值），超时视为失败，log warn，下次同类事件继续派
   发。超时是挂墙时间，包含 host API 调用时间
 - v1 host API 所有函数均为进程内同步、快速返回；**不包含** LLM 调用、网络 IO、
@@ -312,14 +312,13 @@ get_agent_ids()                  -> [AgentId]
 
 [写 - 创建]
 create_task(title)               -> TaskId        # 触发 on_task_created
-spawn_agent(profile_id, task_id, input)  -> AgentId  # 相对于 task 派生 Agent
 create_work_item(task_id, kind, payload)  -> WorkItemId
 
-# v1 占位句柄约定：以上三类创建 API 通过 channel 异步下发指令，调用即返回 `Uuid::nil()`
+# v1 占位句柄约定：以上两类创建 API 通过 channel 异步下发指令，调用即返回 `Uuid::nil()`
 # 的字符串化占位 id，不作为错误通道（成功返回占位、失败通过 hook 不会派发暴露）。真实
-# id 由对应后 hook（`on_task_created` / `on_agent_started` / `on_workitem_started`）向
-# 插件暴露。这是 v1 的明示约定，不是失败模式的破坏——未来若引入同步返回真实 id 的变体
-# 算 Host API 签名变更（破坏性，按 §API 表面演进规则处理）
+# id 由对应后 hook（`on_task_created` / `on_workitem_started`）向插件暴露。这是 v1 的明示
+# 约定，不是失败模式的破坏——未来若引入同步返回真实 id 的变体算 Host API 签名变更（破坏
+# 性，按 §API 表面演进规则处理）
 
 [写 - 修改 component]
 task_set_tag(task_id, key, val)

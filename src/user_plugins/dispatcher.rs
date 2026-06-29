@@ -199,8 +199,8 @@ pub fn flush_world_commands(world: &mut World, rx: &Receiver<WorldCommand>) {
 /// 应用单条 `WorldCommand`。
 ///
 /// v1 仅实现 `CreateTask` 与 `SetTaskMetadata`/`SetTaskTag`；
-/// 其余变体（`SpawnAgent` / `CreateWorkItem` / `SetApprovalDecision` /
-/// `ExperienceSetPinned`）留作后续任务接入，先以 `debug!` 记录跳过。
+/// 其余变体（`CreateWorkItem` / `SetApprovalDecision` / `ExperienceSetPinned`）
+/// 留作后续任务接入，先以 `debug!` 记录跳过。
 fn apply_world_command(world: &mut World, cmd: WorldCommand) {
     match cmd {
         WorldCommand::CreateTask { title, parent: _ } => {
@@ -244,8 +244,7 @@ fn apply_world_command(world: &mut World, cmd: WorldCommand) {
                 "SetTaskTag deferred: Task.tags 字段尚未添加"
             );
         }
-        WorldCommand::SpawnAgent { .. }
-        | WorldCommand::CreateWorkItem { .. }
+        WorldCommand::CreateWorkItem { .. }
         | WorldCommand::SetApprovalDecision { .. }
         | WorldCommand::ExperienceSetPinned { .. } => {
             // 后续任务接入

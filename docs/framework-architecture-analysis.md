@@ -309,7 +309,6 @@ graph TB
     E5 -->|"ToolExecutionResultMessage"| E4
 
     F3 -->|"内置 Tool 执行"| E5
-    F3 -->|"spawn_agent"| I2
     F3 -->|"create_tasks"| E8
 
     E6 -->|"TaskTerminatedMessage"| I1
@@ -433,7 +432,6 @@ graph LR
 | 工具名 | 功能 | 所需 Tag | 权限默认值 |
 |--------|------|----------|----------|
 | `knowledge_search` | 搜索全局知识库 | 无 | Allow |
-| `spawn_agent` | 创建子 Agent | brain | Allow |
 | `create_tasks` | 创建子任务批次（支持 DAG 依赖） | 无 | Allow |
 | `wait_tasks` | 等待子任务完成并收集结果 | 无 | Allow |
 
@@ -444,7 +442,6 @@ graph LR
 | ToolAction | 后续路径 |
 |------------|--------|
 | `Direct(value)` | 直接生成 `ToolExecutionResultMessage`，回到 Tool 调用循环 |
-| `SpawnAgent{..}` | 生成 `AgentSpawnRequestMessage` → `agent_factory_system` 创建 TaskScoped Agent |
 | `CreateBatch(defs)` | 生成 `SubTaskBatchCreatedMessage` → `sub_task_batch_block_system` 创建子任务 + 批次状态 |
 | `WaitForTasks{..}` | 生成 `WaitingForTasksInfo` 组件附加到父 Task，父 Task 进入 `Waiting(SubTaskBatch)` |
 

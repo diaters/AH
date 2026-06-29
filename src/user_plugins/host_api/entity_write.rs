@@ -1,8 +1,8 @@
 //! 插件对 World 的写指令。dispatcher 在 hook 完成后 replay。
 //!
-//! 注意：本枚举在 Task 13 等后续任务会继续扩展（SpawnAgent、CreateWorkItem、
-//! SetApprovalDecision、ExperienceSetPinned、SetTaskTag 等）。每个新增变体
-//! 都要同步追加到 `replay` 函数匹配分支。
+//! 注意：本枚举在后续任务会继续扩展（CreateWorkItem、SetApprovalDecision、
+//! ExperienceSetPinned、SetTaskTag 等）。每个新增变体都要同步追加到 `replay`
+//! 函数匹配分支。
 
 use crossbeam_channel::Sender;
 use rhai::Engine;
@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 /// 插件对 World 的写指令。dispatcher 在 hook 完成后 replay。
 ///
-/// 注意：本枚举在 Task 13 等后续任务会继续扩展（SpawnAgent、CreateWorkItem、
-/// SetApprovalDecision、ExperienceSetPinned、SetTaskTag 等）。每个新增变体
-/// 都要同步追加到 `replay` 函数匹配分支。
+/// 注意：本枚举在后续任务会继续扩展（CreateWorkItem、SetApprovalDecision、
+/// ExperienceSetPinned、SetTaskTag 等）。每个新增变体都要同步追加到 `replay`
+/// 函数匹配分支。
 #[derive(Debug)]
 pub enum WorldCommand {
     CreateTask {
@@ -28,11 +28,6 @@ pub enum WorldCommand {
         task_id: Uuid,
         key: String,
         value: String,
-    },
-    SpawnAgent {
-        profile_id: String,
-        task_id: Uuid,
-        input: String,
     },
     CreateWorkItem {
         task_id: Uuid,
@@ -99,21 +94,6 @@ pub fn register(engine: &mut Engine, writer: WorldWriter) {
                     value: value.to_string(),
                 });
             }
-        },
-    );
-
-    let w = writer.clone();
-    engine.register_fn(
-        "spawn_agent",
-        move |profile_id: &str, task_id: &str, input: &str| -> String {
-            if let Ok(tid) = Uuid::parse_str(task_id) {
-                let _ = w.tx.send(WorldCommand::SpawnAgent {
-                    profile_id: profile_id.to_string(),
-                    task_id: tid,
-                    input: input.to_string(),
-                });
-            }
-            uuid::Uuid::nil().to_string()
         },
     );
 
@@ -214,29 +194,6 @@ mod tests {
                 assert_eq!(task_id, id);
                 assert_eq!(key, "env");
                 assert_eq!(value, "ci");
-            }
-            _ => panic!("wrong cmd"),
-        }
-    }
-
-    #[test]
-    fn spawn_agent_returns_placeholder_and_sends_command() {
-        let (tx, rx) = unbounded();
-        let mut e = Engine::new();
-        register(&mut e, WorldWriter::new(tx));
-        let tid = uuid::Uuid::new_v4();
-        let script = format!(r#"spawn_agent("researcher", "{}", "find x")"#, tid);
-        let ret: String = e.eval(&script).unwrap();
-        assert_eq!(ret, uuid::Uuid::nil().to_string());
-        match rx.recv().unwrap() {
-            WorldCommand::SpawnAgent {
-                profile_id,
-                task_id,
-                input,
-            } => {
-                assert_eq!(profile_id, "researcher");
-                assert_eq!(task_id, tid);
-                assert_eq!(input, "find x");
             }
             _ => panic!("wrong cmd"),
         }

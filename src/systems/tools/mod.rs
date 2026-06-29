@@ -33,7 +33,7 @@ use crate::domain::{
 
 use self::builtin::{
     CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool, ShellExecTool,
-    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, SpawnAgentTool,
+    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SubmitExperienceCandidateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
@@ -68,40 +68,6 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(KnowledgeSearchTool));
-
-    registry.register(ToolDefinition {
-        name: "spawn_agent".to_string(),
-        description: "Create a child agent with specified tools and capabilities. The child agent will be bound to the current task and automatically terminated when the task completes.".to_string(),
-        parameters: ToolSchema {
-            schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Name for the child agent"
-                    },
-                    "model": {
-                        "type": "string",
-                        "description": "Optional model to use. Defaults to parent agent's model."
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Description of the child agent's capabilities"
-                    },
-                    "tools": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "List of tool names the child agent can use"
-                    }
-                },
-                "required": ["name", "description", "tools"]
-            }),
-        },
-        default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("spawn_agent".to_string()),
-        required_tag: Some("brain".to_string()),
-    });
-    executors.register(Box::new(SpawnAgentTool));
 
     registry.register(ToolDefinition {
         name: "create_tasks".to_string(),
