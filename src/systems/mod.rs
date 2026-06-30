@@ -54,7 +54,8 @@ pub(crate) use tools::{
 };
 pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{
-    brain_decision_system, finish_task_system, ingest_execution_results_system,
+    brain_decision_system, chat_round_block_system, chat_round_completion_system,
+    chat_session_cleanup_system, finish_task_system, ingest_execution_results_system,
     llm_response_system, on_llm_response_hook_system, on_task_created_hook_system,
     retry_ready_system, signal_ingest_system, sub_task_batch_block_system,
     sub_task_completion_system, task_completion_hook_system, task_termination_system,
