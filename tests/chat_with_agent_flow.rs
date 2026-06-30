@@ -207,3 +207,177 @@ fn chat_with_agent_creates_chat_subtask() {
         "chat subtask should have multi_turn=true"
     );
 }
+
+/// 验证 chat_with_agent 可以通过 handle 继续已有对话。
+#[test]
+fn chat_with_agent_multi_round_via_handle() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty().0,
+    );
+
+    // 创建 Persistent Agent 作为 chat target
+    let reviewer_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Agent {
+            id: reviewer_id,
+            profile: AgentProfile {
+                name: "reviewer".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["review".to_string()],
+                description: "reviewer agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        harness::LongTermMemory::default(),
+    ));
+
+    // 创建父 Agent（Allow 权限）
+    let parent_agent_id = Uuid::new_v4();
+    let perms = AgentToolPermissions {
+        default_permission: ToolPermission::Allow,
+        ..Default::default()
+    };
+    app.world_mut().spawn((
+        Agent {
+            id: parent_agent_id,
+            profile: AgentProfile {
+                name: "parent-agent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["general".to_string()],
+                description: "parent agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: perms,
+        },
+        harness::LongTermMemory::default(),
+    ));
+
+    let parent_task_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Task {
+            id: parent_task_id,
+            content: "review doc".to_string(),
+            creator: Uuid::nil(),
+            delegate: Some(parent_agent_id),
+            status: TaskStatus::Ready,
+            input_summary: "review doc".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: default_channel(),
+            last_evaluated_turn: None,
+        },
+        harness::ShortTermMemory::default(),
+    ));
+
+    app.update();
+
+    // 第一轮：创建对话
+    app.world_mut().spawn(harness::ToolExecutionRequestMessage {
+        request: harness::AgentExecutionRequest {
+            task_id: parent_task_id,
+            agent_id: parent_agent_id,
+            request_kind: harness::AgentRequestKind::LlmCompletion,
+            prompt: "call chat_with_agent".to_string(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "chat_with_agent".to_string(),
+        tool_input: serde_json::json!({
+            "agent": "reviewer",
+            "message": "first round message"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_round_1".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 找到创建的对话子任务
+    let handle: Uuid = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&harness::Task, &harness::ChatSession)>();
+        query
+            .iter(world)
+            .find(|(t, _)| t.parent_task_id == Some(parent_task_id))
+            .map(|(t, _)| t.id)
+            .expect("chat subtask should exist after first round")
+    };
+
+    // 第二轮：通过 handle 继续对话
+    app.world_mut().spawn(harness::ToolExecutionRequestMessage {
+        request: harness::AgentExecutionRequest {
+            task_id: parent_task_id,
+            agent_id: parent_agent_id,
+            request_kind: harness::AgentRequestKind::LlmCompletion,
+            prompt: "continue chat".to_string(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+        },
+        tool_name: "chat_with_agent".to_string(),
+        tool_input: serde_json::json!({
+            "handle": handle.to_string(),
+            "message": "second round message"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_round_2".to_string()),
+        pending_confirmation_options: None,
+    });
+
+    for _ in 0..10 {
+        app.update();
+    }
+
+    // 验证子任务仍然只有一个（没有创建新的）
+    let chat_tasks_after: Vec<Uuid> = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::Task>();
+        query
+            .iter(world)
+            .filter(|t| t.parent_task_id == Some(parent_task_id))
+            .map(|t| t.id)
+            .collect()
+    };
+
+    assert_eq!(
+        chat_tasks_after.len(),
+        1,
+        "should still have exactly one chat subtask after multi-round"
+    );
+    assert_eq!(
+        chat_tasks_after[0], handle,
+        "chat subtask id should not change between rounds"
+    );
+}
