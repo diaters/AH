@@ -7,15 +7,17 @@ use serde::Serialize;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::app::Clock;
 use crate::contracts::SessionBackend;
 use crate::domain::{
-    AgentExecutionOutput, AgentExecutionResult, AgentId, BatchTaskState, ChannelId,
-    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingExperienceHooks,
-    SessionSummary, ShellExecResult, ShellSessionResult, ShortTermMemory,
-    SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId,
-    TaskStatus, ToolAction, ToolCallingState, ToolError, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason,
+    Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, BatchTaskState,
+    ChannelId, ChatRoundStartedMessage, ChatSession, EntryRole, ExperienceCandidate,
+    ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
+    FrontendKind, OutputContent, PendingExperienceHooks, SessionSummary, ShellExecResult,
+    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    WaitingForTasksInfo, WaitingReason,
 };
 
 /// 等待任务结果
@@ -330,10 +332,13 @@ pub fn handle_tool_action<B: SessionBackend>(
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
     tasks: &mut Query<(Entity, &mut Task)>,
+    agents: &Query<&Agent>,
+    short_term_memories: &mut Query<&mut ShortTermMemory>,
     backend: &B,
     experience_store: &mut ExperienceStore,
     pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
+    clock: &Clock,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -624,12 +629,171 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request_entity,
             });
         }
-        Ok(ToolAction::StartChatRound { .. }) => {
-            // Handled in Task 4
-            warn!(
-                event = "StartChatRoundNotYetImplemented",
-                "StartChatRound handling will be implemented in Task 4"
-            );
+        Ok(ToolAction::StartChatRound {
+            agent_name,
+            agent_tags,
+            message,
+            context,
+            handle,
+        }) => {
+            let parent_task_id = request.request.task_id;
+            let parent_tool_call_id = request.tool_call_id.clone().unwrap_or_default();
+
+            // 一次性从父任务 clone 出所需信息，避免 Query 借用冲突
+            let (parent_origin_channel, _parent_delegate) = tasks
+                .get(task_entity)
+                .map(|(_, t)| (t.origin_channel.clone(), t.delegate))
+                .unwrap_or_else(|_| {
+                    warn!(
+                        event = "ParentTaskNotFoundForChatChannel",
+                        task_id = %parent_task_id,
+                        "parent task entity not found, falling back to Tui/default for chat subtask origin_channel"
+                    );
+                    (
+                        ChannelId {
+                            frontend: FrontendKind::Tui,
+                            user_id: "default".to_string(),
+                            thread_id: None,
+                        },
+                        None,
+                    )
+                });
+
+            let (child_task_id, batch_id) = if let Some(handle) = handle {
+                // 继续已有对话：先只读收集信息，再单独修改
+                let Some((child_entity, child_task)) = tasks
+                    .iter()
+                    .find(|(_, t)| t.id == handle)
+                    .map(|(e, t)| (e, t.clone()))
+                else {
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::NotFound(format!("chat handle {}", handle)),
+                    );
+                    return;
+                };
+
+                if child_task.parent_task_id != Some(parent_task_id) {
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::PermissionDenied(
+                            "chat handle does not belong to current task".to_string(),
+                        ),
+                    );
+                    return;
+                }
+
+                if !matches!(child_task.status, TaskStatus::Waiting(WaitingReason::ChatAgent)) {
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InvalidInput(
+                            "chat handle is not in waiting state".to_string(),
+                        ),
+                    );
+                    return;
+                }
+
+                let new_batch_id = Uuid::new_v4();
+                let child_task_id = child_task.id;
+
+                // 追加本轮用户消息到子任务 STM
+                if let Ok(mut stm) = short_term_memories.get_mut(child_entity) {
+                    stm.add_entry(EntryRole::User, &message, Default::default());
+                }
+
+                // 更新 ChatSession
+                commands.entity(child_entity).insert(ChatSession {
+                    parent_tool_call_id: parent_tool_call_id.clone(),
+                    current_batch_id: new_batch_id,
+                });
+
+                // 唤醒子任务
+                if let Ok((_, mut task)) = tasks.get_mut(child_entity) {
+                    task.status = TaskStatus::Ready;
+                    task.updated_at = clock.0;
+                }
+
+                (child_task_id, new_batch_id)
+            } else {
+                // 开始新对话
+                let agent = {
+                    let name = agent_name.as_deref();
+                    let by_name = name.and_then(|n| {
+                        agents
+                            .iter()
+                            .find(|a| a.kind == AgentKind::Persistent && a.profile.name == n)
+                    });
+                    if let Some(a) = by_name {
+                        Some(a)
+                    } else if !agent_tags.is_empty() {
+                        agents.iter().find(|a| {
+                            a.kind == AgentKind::Persistent
+                                && agent_tags
+                                    .iter()
+                                    .all(|tag| a.capabilities.tags.contains(tag))
+                        })
+                    } else {
+                        None
+                    }
+                };
+                let Some(agent) = agent else {
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::NotFound("no matching persistent agent found".to_string()),
+                    );
+                    return;
+                };
+
+                let child_task_id = Uuid::new_v4();
+                let batch_id = Uuid::new_v4();
+
+                let mut initial_stm = ShortTermMemory::default();
+                if let Some(ref ctx) = context {
+                    initial_stm.add_entry(
+                        EntryRole::User,
+                        &format!("[System context]\n{}\n\n{}", ctx, message),
+                        Default::default(),
+                    );
+                } else {
+                    initial_stm.add_entry(EntryRole::User, &message, Default::default());
+                }
+
+                let mut child_task =
+                    Task::from_user_input(&message, 0, parent_origin_channel.clone());
+                child_task.id = child_task_id;
+                child_task.parent_task_id = Some(parent_task_id);
+                child_task.delegate = Some(agent.id);
+                child_task.creator = request.request.agent_id;
+                child_task.status = TaskStatus::Ready;
+                child_task.multi_turn = true;
+
+                commands.spawn((
+                    child_task,
+                    initial_stm,
+                    ChatSession {
+                        parent_tool_call_id: parent_tool_call_id.clone(),
+                        current_batch_id: batch_id,
+                    },
+                ));
+
+                (child_task_id, batch_id)
+            };
+
+            commands.spawn(ChatRoundStartedMessage {
+                parent_task_id,
+                child_task_id,
+                batch_id,
+                parent_tool_call_id,
+            });
+
             commands.entity(request_entity).despawn();
         }
         Err(e) => {

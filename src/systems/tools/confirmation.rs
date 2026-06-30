@@ -6,13 +6,13 @@ use bevy::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::HarnessSettings,
+    app::{Clock, HarnessSettings},
     domain::{
         Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
-        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, Task, ToolCallingState,
-        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
-        ToolReturnedHookPending,
+        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, Task,
+        ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolPermission, ToolReturnedHookPending,
     },
     systems::NativeProcessBackend,
 };
@@ -37,16 +37,19 @@ pub fn tool_confirmation_request_system(
 pub fn tool_confirmation_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
+    agents_readonly: Query<&Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
     mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
+    mut short_term_memories: Query<&mut ShortTermMemory>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
+    clock: Res<Clock>,
 ) {
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -209,10 +212,13 @@ pub fn tool_confirmation_result_system(
                         tool_request,
                         action,
                         &mut tasks,
+                        &agents_readonly,
+                        &mut short_term_memories,
                         &*backend,
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         None,
+                        &clock,
                     );
                 }
 

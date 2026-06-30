@@ -6,13 +6,13 @@ use bevy::prelude::*;
 use tracing::debug;
 
 use crate::{
-    app::HarnessSettings,
+    app::{Clock, HarnessSettings},
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ExecutionError, ExperienceStore, GrantMode,
-        PendingExperienceHooks, SharedKnowledgeBase, Task, TaskStatus, ToolCallingState,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, WaitingReason,
+        PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,
+        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -79,16 +79,19 @@ pub fn approval_dispatch_system(
 pub fn approval_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
+    agents_readonly: Query<&Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
     mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
+    mut short_term_memories: Query<&mut ShortTermMemory>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
+    clock: Res<Clock>,
 ) {
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -217,10 +220,13 @@ pub fn approval_result_system(
                         tool_request,
                         action,
                         &mut tasks,
+                        &agents_readonly,
+                        &mut short_term_memories,
                         &*backend,
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         None,
+                        &clock,
                     );
                 }
 

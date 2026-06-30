@@ -7,12 +7,13 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::{
-    app::HarnessSettings,
+    app::{Clock, HarnessSettings},
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
         ConfirmationOption, ConfirmationSource, ExperienceStore, PendingExperienceHooks,
-        SharedKnowledgeBase, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
+        SharedKnowledgeBase, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus,
+        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolPermission, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -33,10 +34,12 @@ pub fn tool_dispatch_system(
     mut experience_store: ResMut<ExperienceStore>,
     mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     agents: Query<&Agent>,
+    mut short_term_memories: Query<&mut ShortTermMemory>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
+    clock: Res<Clock>,
 ) {
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -171,10 +174,13 @@ pub fn tool_dispatch_system(
                         &request,
                         action,
                         &mut tasks,
+                        &agents,
+                        &mut short_term_memories,
                         &*backend,
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         parent_agent_id,
+                        &clock,
                     );
                 }
 
