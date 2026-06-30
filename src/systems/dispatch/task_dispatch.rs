@@ -9,7 +9,7 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        ChannelId, LongTermMemory, MessageDispatchedHookPending, ShortTermMemory,
+        ChannelId, ChatSession, LongTermMemory, MessageDispatchedHookPending, ShortTermMemory,
         SpaceToolRegistry, Task, TaskStatus, ToolPermission,
     },
 };
@@ -104,15 +104,16 @@ fn append_memory_section(
 pub fn task_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    mut tasks: Query<(&mut Task, Option<&ShortTermMemory>)>,
+    mut tasks: Query<(Entity, &mut Task, Option<&ShortTermMemory>, Has<ChatSession>)>,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
     skill_loader: Res<crate::infrastructure::skills::SkillLoader>,
     plugin_skills: Res<crate::infrastructure::skills::PluginSkillContributions>,
 ) {
-    for (mut task, short_term) in &mut tasks {
-        // 子任务由 Brain 分发，普通 dispatch 不处理
-        if task.parent_task_id.is_some() {
+    for (_entity, mut task, short_term, has_chat_session) in &mut tasks {
+        // 子任务由 Brain 分发，普通 dispatch 不处理；
+        // 例外：chat_with_agent 对话型子任务且已指定 delegate 时，直接调度到该 Persistent Agent。
+        if task.parent_task_id.is_some() && !(has_chat_session && task.delegate.is_some()) {
             continue;
         }
 
@@ -519,5 +520,79 @@ mod tests {
             TaskStatus::Waiting(crate::domain::WaitingReason::Agent)
         );
         assert_eq!(task_after.delegate, Some(delegate_agent_id));
+    }
+
+    #[test]
+    fn chat_subtask_with_delegate_is_dispatched() {
+        let mut app = build_test_app();
+
+        let agent_id = Uuid::new_v4();
+        app.world_mut().spawn((
+            Agent {
+                id: agent_id,
+                profile: AgentProfile {
+                    name: "reviewer".to_string(),
+                    model: "test-model".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["review".to_string()],
+                    description: "reviewer agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+            },
+            LongTermMemory::default(),
+        ));
+
+        let parent_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+        let channel = make_channel();
+
+        app.world_mut().spawn((
+            Task {
+                id: child_id,
+                content: "review this doc".to_string(),
+                creator: parent_id,
+                delegate: Some(agent_id),
+                status: TaskStatus::Ready,
+                input_summary: "review this doc".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: Some(parent_id),
+                batch_id: None,
+                origin_channel: channel,
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+            ChatSession {
+                parent_tool_call_id: "call_1".to_string(),
+                current_batch_id: Uuid::new_v4(),
+            },
+        ));
+
+        app.update();
+
+        let requests: Vec<&AgentExecutionRequestMessage> = {
+            let world = app.world_mut();
+            let mut query = world.query::<&AgentExecutionRequestMessage>();
+            query.iter(world).collect()
+        };
+
+        assert_eq!(requests.len(), 1, "chat subtask should be dispatched");
+        assert_eq!(requests[0].request.agent_id, agent_id);
+        assert_eq!(requests[0].request.task_id, child_id);
+        assert_eq!(
+            requests[0].request.request_kind,
+            AgentRequestKind::LlmCompletion
+        );
     }
 }
