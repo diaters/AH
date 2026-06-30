@@ -8,9 +8,9 @@ use tracing::{debug, warn};
 use crate::{
     app::{Clock, HarnessSettings},
     domain::{
-        Agent, BuiltinToolExecutors, ConfirmationOption, ExecutionError, ExperienceStore,
-        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, Task,
-        ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+        Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
+        ExperienceStore, GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory,
+        Task, ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
         ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         ToolPermission, ToolReturnedHookPending,
     },
@@ -43,6 +43,7 @@ pub fn tool_confirmation_result_system(
     mut experience_store: ResMut<ExperienceStore>,
     mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     mut short_term_memories: Query<&mut ShortTermMemory>,
+    chat_sessions: Query<&ChatSession>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
@@ -212,6 +213,7 @@ pub fn tool_confirmation_result_system(
                         action,
                         &mut tasks,
                         &agents,
+                        &chat_sessions,
                         &mut short_term_memories,
                         &*backend,
                         &mut experience_store,

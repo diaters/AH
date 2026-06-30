@@ -333,6 +333,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     action: Result<ToolAction, ToolError>,
     tasks: &mut Query<(Entity, &mut Task)>,
     agents: &Query<&mut Agent>,
+    chat_sessions: &Query<&ChatSession>,
     short_term_memories: &mut Query<&mut ShortTermMemory>,
     backend: &B,
     experience_store: &mut ExperienceStore,
@@ -708,8 +709,13 @@ pub fn handle_tool_action<B: SessionBackend>(
                     stm.add_entry(EntryRole::User, &message, Default::default());
                 }
 
-                // 更新 ChatSession
+                // 更新 ChatSession（保留 child_agent_name）
+                let child_agent_name = chat_sessions
+                    .get(child_entity)
+                    .map(|s| s.child_agent_name.clone())
+                    .unwrap_or_default();
                 commands.entity(child_entity).insert(ChatSession {
+                    child_agent_name,
                     parent_tool_call_id: parent_tool_call_id.clone(),
                     current_batch_id: new_batch_id,
                 });
@@ -780,6 +786,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     child_task,
                     initial_stm,
                     ChatSession {
+                        child_agent_name: agent.profile.name.clone(),
                         parent_tool_call_id: parent_tool_call_id.clone(),
                         current_batch_id: batch_id,
                     },

@@ -379,6 +379,8 @@ pub struct ChatRoundReadyMessage {
     pub batch_id: Uuid,
     pub parent_tool_call_id: String,
     pub response: String,
+    /// 目标对话 Agent 名称（用于工具返回值中的 `agent` 字段）
+    pub child_agent_name: String,
 }
 
 // ============ 摘要 ============

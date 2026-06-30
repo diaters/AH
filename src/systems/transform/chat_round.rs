@@ -91,7 +91,7 @@ pub fn chat_round_completion_system(
                 tool_output: Ok(serde_json::json!({
                     "handle": msg.child_task_id.to_string(),
                     "response": msg.response,
-                    "agent": msg.parent_agent_id.to_string()
+                    "agent": msg.child_agent_name
                 })),
                 tool_call_id: Some(msg.parent_tool_call_id.clone()),
                 processed: false,

@@ -579,6 +579,7 @@ mod tests {
             },
             ShortTermMemory::default(),
             ChatSession {
+                child_agent_name: "reviewer".to_string(),
                 parent_tool_call_id: "call_1".to_string(),
                 current_batch_id: Uuid::new_v4(),
             },

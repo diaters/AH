@@ -191,6 +191,10 @@ fn chat_with_agent_creates_chat_subtask() {
         "exactly one chat subtask should be created"
     );
     assert!(
+        chat_tasks[0].1.child_agent_name == "reviewer",
+        "ChatSession should have the correct child_agent_name"
+    );
+    assert!(
         chat_tasks[0].1.parent_tool_call_id == "call_chat_1",
         "ChatSession should have the correct parent_tool_call_id"
     );

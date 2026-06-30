@@ -111,6 +111,8 @@
 ```rust
 #[derive(Component, Debug, Clone)]
 pub struct ChatSession {
+    /// 目标对话 Agent 名称（创建时设置，不变）
+    pub child_agent_name: String,
     /// 本轮父任务的 tool_call_id（每轮更新）
     pub parent_tool_call_id: String,
     /// 本轮父任务等待用的 batch_id（每轮更新）
@@ -118,7 +120,8 @@ pub struct ChatSession {
 }
 ```
 
-仅 2 个字段，都是每轮变化、无法从现有结构推导的状态。
+`child_agent_name` 在子任务创建时设置后不再变化，用于工具返回值中的 `agent` 字段；
+其余两个字段每轮更新。
 
 ### WaitingReason 新增变体
 
@@ -140,11 +143,17 @@ pub enum WaitingReason {
 pub struct ChatRoundReadyMessage {
     pub child_task_id: TaskId,
     pub parent_task_id: TaskId,
+    pub parent_agent_id: AgentId,
     pub batch_id: Uuid,
     pub parent_tool_call_id: String,
     pub response: String,
+    /// 目标对话 Agent 名称（用于工具返回值中的 `agent` 字段）
+    pub child_agent_name: String,
 }
 ```
+
+注：`parent_agent_id` 与 `child_agent_name` 为实施阶段新增字段，分别用于
+`AgentExecutionResult.agent_id` 和工具返回值中的 `agent` 字段。
 
 ### 子 Task 关键字段
 
@@ -295,18 +304,12 @@ chat_with_agent executor:
   ↓
 chat_session_cleanup_system:
   - 遍历所有带 ChatSession 组件的子 task，其 Task.parent_task_id == 父 task id
-  - 对每个子 task:
-    - 若 status == Running / Waiting(ToolExecution) / Waiting(Approval) / Waiting(SubTaskBatch):
-      - 取消进行中的 LLM 请求（依赖 ProviderBackend 的取消机制）
-      - 清理关联的 ToolCallingState、ToolExecutionRequestMessage、ApprovalRequestMessage 等中间实体
-    - 若 status == Waiting(ChatAgent) / Ready / 其他状态:
-      - 直接标记
-    - 统一标记为 Failed("parent task terminated")
-  - 触发现有 task_lifecycle 清理链路
-  - 经验收集照常进行
+  - 对每个子 task 直接 despawn（不做中间状态标记），依赖 ECS despawn 链路级联清理关联实体
 ```
 
-> 注：清理通过 `Task.parent_task_id` 查找关联子任务，`ChatSession` 仅作为过滤标记，不持有 `parent_task_id` 字段。
+> 注：实现采用直接 despawn 策略，与 `create_tasks` 子任务的 Failed 标记策略不同。
+> 这是因为 chat 子任务的生命周期紧密跟随父任务，父任务终止即意味着对话无条件结束，
+> 无需保留审计状态。若后续需要审计追踪，可改为先标记 Failed 再交由 task_lifecycle 链路清理。
 
 ### 嵌套
 

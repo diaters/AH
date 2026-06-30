@@ -728,6 +728,7 @@ pub fn llm_response_system(
                             batch_id: chat_session.current_batch_id,
                             parent_tool_call_id: chat_session.parent_tool_call_id.clone(),
                             response: response_text,
+                            child_agent_name: chat_session.child_agent_name.clone(),
                         });
 
                         trace!(
