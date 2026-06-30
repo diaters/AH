@@ -32,8 +32,8 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool, ShellExecTool,
-    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
+    ChatWithAgentTool, CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool,
+    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SubmitExperienceCandidateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
@@ -331,6 +331,45 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ListExperienceCandidatesTool));
+
+    // chat_with_agent tool
+    registry.register(ToolDefinition {
+        name: "chat_with_agent".to_string(),
+        description: "与一个持久化 Agent 开始或继续多轮对话。第一轮不传 handle，后续轮次传入 handle。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "目标 Persistent Agent 名称。第一轮必填；后续若提供可用来校验。"
+                    },
+                    "agent_tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "agent 不存在时的备选匹配标签。第一轮至少提供 agent 或 agent_tags 之一。"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "本轮要发送给子 Agent 的消息。"
+                    },
+                    "handle": {
+                        "type": "string",
+                        "description": "已有对话的 handle（即子任务 task_id）。不传表示开始新对话。"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "仅在第一轮生效的额外系统上下文。"
+                    }
+                },
+                "required": ["message"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("chat_with_agent".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ChatWithAgentTool));
 
     // Channel send tool
     registry.register(ChannelSendTool::definition());

@@ -1,5 +1,6 @@
 //! 内置 Tool 实现
 
+mod chat_with_agent;
 mod create_tasks;
 mod knowledge_search;
 mod list_experience_candidates;
@@ -7,6 +8,7 @@ mod shell;
 mod submit_experience_candidate;
 mod wait_tasks;
 
+pub use chat_with_agent::ChatWithAgentTool;
 pub use create_tasks::CreateTasksTool;
 pub use knowledge_search::KnowledgeSearchTool;
 pub use list_experience_candidates::ListExperienceCandidatesTool;
