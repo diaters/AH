@@ -9,12 +9,12 @@ use crate::{
     app::{Clock, HarnessSettings, MemoryConfig},
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
-        AgentExecutionResultMessage, AgentRequestKind, ConversationMessage, EntryMetadata,
-        EntryRole, ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
-        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ShortTermMemory,
-        SystemOutputMessage, Task, TaskStatus, ToolCalledHookPending, ToolCallingState,
-        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, UserOutputMessage,
-        WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
+        AgentExecutionResultMessage, AgentRequestKind, ChatRoundReadyMessage, ChatSession,
+        ConversationMessage, EntryMetadata, EntryRole, ExperienceCollectionCompletedMessage,
+        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy, OutputContent,
+        ShortTermMemory, SystemOutputMessage, Task, TaskStatus, ToolCalledHookPending,
+        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        UserOutputMessage, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     user_plugins::hook_point::HookPoint,
 };
@@ -63,7 +63,7 @@ fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::Ta
 #[allow(clippy::too_many_arguments, clippy::drop_non_drop)]
 fn handle_evaluation_work_item_result(
     commands: &mut Commands,
-    tasks: &mut Query<(&mut Task, Option<&mut ShortTermMemory>)>,
+    tasks: &mut Query<(Entity, &mut Task, Option<&mut ShortTermMemory>, Option<&ChatSession>)>,
     result_entity: Entity,
     work_item_entity: Entity,
     work_item: &WorkItem,
@@ -90,8 +90,8 @@ fn handle_evaluation_work_item_result(
                     "failed to parse evaluation result"
                 );
                 // 解析失败，恢复任务状态避免死锁
-                if let Some((mut task, _)) =
-                    tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+                if let Some((_, mut task, _, _)) =
+                    tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id)
                     && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
                 {
                     let old_status = task.status.clone();
@@ -118,7 +118,7 @@ fn handle_evaluation_work_item_result(
                 "evaluation returned non-text output"
             );
             // 非文本输出，恢复任务状态避免死锁
-            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id)
                 && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
             {
                 let old_status = task.status.clone();
@@ -145,7 +145,7 @@ fn handle_evaluation_work_item_result(
                 "evaluation execution failed"
             );
             // 执行失败，恢复任务状态避免死锁
-            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id)
+            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id)
                 && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
             {
                 let old_status = task.status.clone();
@@ -166,7 +166,7 @@ fn handle_evaluation_work_item_result(
     };
 
     // 更新任务状态（两阶段应用，避免借用冲突）
-    if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == work_item.task_id) {
+    if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id) {
         let old_status = task.status.clone();
 
         // 第一阶段：推导出中间动作描述
@@ -309,7 +309,7 @@ fn handle_evaluation_work_item_result(
 
         // 注入纠偏上下文到 STM（AutoCorrect / AskUser 均适用）
         if let Some((role, content, metadata)) = effects.stm_injection
-            && let Some((_, Some(mut stm))) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+            && let Some((_, _, Some(mut stm), _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
         {
             stm.add_entry(role, &content, metadata);
         }
@@ -341,7 +341,7 @@ fn handle_evaluation_work_item_result(
 #[allow(clippy::too_many_arguments)]
 fn handle_summarization_work_item_result(
     commands: &mut Commands,
-    tasks: &mut Query<(&mut Task, Option<&mut ShortTermMemory>)>,
+    tasks: &mut Query<(Entity, &mut Task, Option<&mut ShortTermMemory>, Option<&ChatSession>)>,
     result_entity: Entity,
     work_item_entity: Entity,
     work_item: &WorkItem,
@@ -358,7 +358,7 @@ fn handle_summarization_work_item_result(
         }) => {
             // 更新摘要前缀（查找任意一个带 ShortTermMemory 的任务）
             // 注意：这里简化处理，假设全局只有一个 STM（当前架构确实如此）
-            for (_, short_term) in tasks.iter_mut() {
+            for (_, _, short_term, _) in tasks.iter_mut() {
                 if let Some(mut memory) = short_term {
                     memory.summary_prefix = Some(summary.clone());
 
@@ -397,7 +397,7 @@ fn handle_summarization_work_item_result(
 
             // 恢复任务状态：从 Waiting(Summarization) 恢复为 Waiting(User)
             // 这适用于 UserCommand 和 TokenThreshold 触发的摘要
-            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
                 && matches!(
                     task.status,
                     TaskStatus::Waiting(WaitingReason::Summarization)
@@ -430,7 +430,7 @@ fn handle_summarization_work_item_result(
             });
 
             // 即使摘要失败，也恢复任务状态，避免任务卡住
-            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
                 && matches!(
                     task.status,
                     TaskStatus::Waiting(WaitingReason::Summarization)
@@ -465,7 +465,7 @@ fn handle_summarization_work_item_result(
             });
 
             // 即使摘要失败，也恢复任务状态，避免任务卡住
-            if let Some((mut task, _)) = tasks.iter_mut().find(|(t, _)| t.id == task_id)
+            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
                 && matches!(
                     task.status,
                     TaskStatus::Waiting(WaitingReason::Summarization)
@@ -500,7 +500,7 @@ pub fn llm_response_system(
     config: Res<MemoryConfig>,
     eval_config: Res<crate::domain::TaskEvaluationConfig>,
     mut commands: Commands,
-    mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
+    mut tasks: Query<(Entity, &mut Task, Option<&mut ShortTermMemory>, Option<&ChatSession>)>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     mut work_items: Query<(Entity, &mut WorkItem)>,
@@ -645,7 +645,7 @@ pub fn llm_response_system(
             }
         }
 
-        for (mut task, short_term) in &mut tasks {
+        for (_task_entity, mut task, short_term, chat_session) in &mut tasks {
             if task.id != result.task_id {
                 continue;
             }
@@ -685,6 +685,36 @@ pub fn llm_response_system(
                     }
                     let stm_tokens_after =
                         stm_tokens_before + crate::domain::estimate_tokens(content);
+
+                    // 若当前任务是 chat_with_agent 子任务，则进入 Waiting(ChatAgent) 并触发 ChatRoundReadyMessage
+                    if let Some(parent_task_id) = task.parent_task_id
+                        && let Some(chat_session) = chat_session
+                    {
+                        let response_text = content.clone();
+
+                        task.status = TaskStatus::Waiting(WaitingReason::ChatAgent);
+                        task.result_summary = response_text.clone();
+                        task.updated_at = clock.0;
+
+                        commands.spawn(ChatRoundReadyMessage {
+                            child_task_id: task.id,
+                            parent_task_id,
+                            parent_agent_id: task.creator,
+                            batch_id: chat_session.current_batch_id,
+                            parent_tool_call_id: chat_session.parent_tool_call_id.clone(),
+                            response: response_text,
+                        });
+
+                        trace!(
+                            event = "ChatRoundReady",
+                            child_task_id = %task.id,
+                            parent_task_id = %parent_task_id,
+                            batch_id = %chat_session.current_batch_id,
+                            "chat subtask waiting for parent next round"
+                        );
+
+                        continue;
+                    }
 
                     if task.multi_turn {
                         let old_status = task.status.clone();
