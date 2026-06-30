@@ -11,10 +11,11 @@ use crate::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResultMessage, AgentRequestKind, ChatRoundReadyMessage, ChatSession,
         ConversationMessage, EntryMetadata, EntryRole, ExperienceCollectionCompletedMessage,
-        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy, OutputContent,
-        ShortTermMemory, SystemOutputMessage, Task, TaskStatus, ToolCalledHookPending,
-        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        UserOutputMessage, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
+        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy,
+        OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
+        ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem,
+        WorkItemLifecycleHookPending, WorkItemType,
     },
     user_plugins::hook_point::HookPoint,
 };
@@ -63,7 +64,12 @@ fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::Ta
 #[allow(clippy::too_many_arguments, clippy::drop_non_drop)]
 fn handle_evaluation_work_item_result(
     commands: &mut Commands,
-    tasks: &mut Query<(Entity, &mut Task, Option<&mut ShortTermMemory>, Option<&ChatSession>)>,
+    tasks: &mut Query<(
+        Entity,
+        &mut Task,
+        Option<&mut ShortTermMemory>,
+        Option<&ChatSession>,
+    )>,
     result_entity: Entity,
     work_item_entity: Entity,
     work_item: &WorkItem,
@@ -90,8 +96,9 @@ fn handle_evaluation_work_item_result(
                     "failed to parse evaluation result"
                 );
                 // 解析失败，恢复任务状态避免死锁
-                if let Some((_, mut task, _, _)) =
-                    tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id)
+                if let Some((_, mut task, _, _)) = tasks
+                    .iter_mut()
+                    .find(|(_, t, _, _)| t.id == work_item.task_id)
                     && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
                 {
                     let old_status = task.status.clone();
@@ -118,7 +125,9 @@ fn handle_evaluation_work_item_result(
                 "evaluation returned non-text output"
             );
             // 非文本输出，恢复任务状态避免死锁
-            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id)
+            if let Some((_, mut task, _, _)) = tasks
+                .iter_mut()
+                .find(|(_, t, _, _)| t.id == work_item.task_id)
                 && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
             {
                 let old_status = task.status.clone();
@@ -145,7 +154,9 @@ fn handle_evaluation_work_item_result(
                 "evaluation execution failed"
             );
             // 执行失败，恢复任务状态避免死锁
-            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id)
+            if let Some((_, mut task, _, _)) = tasks
+                .iter_mut()
+                .find(|(_, t, _, _)| t.id == work_item.task_id)
                 && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
             {
                 let old_status = task.status.clone();
@@ -166,7 +177,10 @@ fn handle_evaluation_work_item_result(
     };
 
     // 更新任务状态（两阶段应用，避免借用冲突）
-    if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == work_item.task_id) {
+    if let Some((_, mut task, _, _)) = tasks
+        .iter_mut()
+        .find(|(_, t, _, _)| t.id == work_item.task_id)
+    {
         let old_status = task.status.clone();
 
         // 第一阶段：推导出中间动作描述
@@ -309,7 +323,8 @@ fn handle_evaluation_work_item_result(
 
         // 注入纠偏上下文到 STM（AutoCorrect / AskUser 均适用）
         if let Some((role, content, metadata)) = effects.stm_injection
-            && let Some((_, _, Some(mut stm), _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
+            && let Some((_, _, Some(mut stm), _)) =
+                tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
         {
             stm.add_entry(role, &content, metadata);
         }
@@ -341,7 +356,12 @@ fn handle_evaluation_work_item_result(
 #[allow(clippy::too_many_arguments)]
 fn handle_summarization_work_item_result(
     commands: &mut Commands,
-    tasks: &mut Query<(Entity, &mut Task, Option<&mut ShortTermMemory>, Option<&ChatSession>)>,
+    tasks: &mut Query<(
+        Entity,
+        &mut Task,
+        Option<&mut ShortTermMemory>,
+        Option<&ChatSession>,
+    )>,
     result_entity: Entity,
     work_item_entity: Entity,
     work_item: &WorkItem,
@@ -500,7 +520,12 @@ pub fn llm_response_system(
     config: Res<MemoryConfig>,
     eval_config: Res<crate::domain::TaskEvaluationConfig>,
     mut commands: Commands,
-    mut tasks: Query<(Entity, &mut Task, Option<&mut ShortTermMemory>, Option<&ChatSession>)>,
+    mut tasks: Query<(
+        Entity,
+        &mut Task,
+        Option<&mut ShortTermMemory>,
+        Option<&ChatSession>,
+    )>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     mut work_items: Query<(Entity, &mut WorkItem)>,

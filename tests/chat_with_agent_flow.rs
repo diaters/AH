@@ -95,8 +95,10 @@ fn chat_with_agent_creates_chat_subtask() {
 
     // 创建父 Agent（Allow 权限以直接执行工具）
     let parent_agent_id = Uuid::new_v4();
-    let mut perms = AgentToolPermissions::default();
-    perms.default_permission = ToolPermission::Allow;
+    let perms = AgentToolPermissions {
+        default_permission: ToolPermission::Allow,
+        ..Default::default()
+    };
     app.world_mut().spawn((
         Agent {
             id: parent_agent_id,

@@ -35,7 +35,10 @@ fn parse_and_resolve(
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok());
 
-    let agent_name = input.get("agent").and_then(|v| v.as_str()).map(String::from);
+    let agent_name = input
+        .get("agent")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let agent_tags: Vec<String> = input
         .get("agent_tags")
         .and_then(|v| v.as_array())

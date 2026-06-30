@@ -71,19 +71,14 @@ impl ToolApprovalPolicy for DefaultToolApprovalPolicy {
         match permission {
             ToolPermission::Allow => ApprovalRoute::AutoAllow,
             ToolPermission::Confirm => {
-                if let Some(parent_task_id) = task.parent_task_id {
-                    if let Some((_, parent_task)) = tasks.iter().find(|(_, t)| t.id == parent_task_id)
-                    {
-                        if let Some(parent_agent_id) = parent_task.delegate {
-                            if let Some(parent_agent) =
-                                agents.iter().find(|a| a.id == parent_agent_id)
-                            {
-                                if parent_agent.has_permission(tool_name) {
-                                    return ApprovalRoute::ParentApproval { parent_agent_id };
-                                }
-                            }
-                        }
-                    }
+                if let Some(parent_task_id) = task.parent_task_id
+                    && let Some((_, parent_task)) =
+                        tasks.iter().find(|(_, t)| t.id == parent_task_id)
+                    && let Some(parent_agent_id) = parent_task.delegate
+                    && let Some(parent_agent) = agents.iter().find(|a| a.id == parent_agent_id)
+                    && parent_agent.has_permission(tool_name)
+                {
+                    return ApprovalRoute::ParentApproval { parent_agent_id };
                 }
                 ApprovalRoute::UserConfirmation
             }

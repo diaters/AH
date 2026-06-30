@@ -33,7 +33,7 @@ pub fn tool_dispatch_system(
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
     mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
-    agents: Query<&Agent>,
+    agents: Query<&mut Agent>,
     mut short_term_memories: Query<&mut ShortTermMemory>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,

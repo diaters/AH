@@ -79,7 +79,6 @@ pub fn approval_dispatch_system(
 pub fn approval_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
-    agents_readonly: Query<&Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
@@ -220,7 +219,7 @@ pub fn approval_result_system(
                         tool_request,
                         action,
                         &mut tasks,
-                        &agents_readonly,
+                        &agents,
                         &mut short_term_memories,
                         &*backend,
                         &mut experience_store,

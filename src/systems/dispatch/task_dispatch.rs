@@ -104,7 +104,12 @@ fn append_memory_section(
 pub fn task_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    mut tasks: Query<(Entity, &mut Task, Option<&ShortTermMemory>, Has<ChatSession>)>,
+    mut tasks: Query<(
+        Entity,
+        &mut Task,
+        Option<&ShortTermMemory>,
+        Has<ChatSession>,
+    )>,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
     skill_loader: Res<crate::infrastructure::skills::SkillLoader>,

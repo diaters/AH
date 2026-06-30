@@ -332,7 +332,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
     tasks: &mut Query<(Entity, &mut Task)>,
-    agents: &Query<&Agent>,
+    agents: &Query<&mut Agent>,
     short_term_memories: &mut Query<&mut ShortTermMemory>,
     backend: &B,
     experience_store: &mut ExperienceStore,
@@ -687,14 +687,15 @@ pub fn handle_tool_action<B: SessionBackend>(
                     return;
                 }
 
-                if !matches!(child_task.status, TaskStatus::Waiting(WaitingReason::ChatAgent)) {
+                if !matches!(
+                    child_task.status,
+                    TaskStatus::Waiting(WaitingReason::ChatAgent)
+                ) {
                     spawn_tool_error(
                         commands,
                         request_entity,
                         request,
-                        ToolError::InvalidInput(
-                            "chat handle is not in waiting state".to_string(),
-                        ),
+                        ToolError::InvalidInput("chat handle is not in waiting state".to_string()),
                     );
                     return;
                 }
@@ -759,7 +760,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 if let Some(ref ctx) = context {
                     initial_stm.add_entry(
                         EntryRole::User,
-                        &format!("[System context]\n{}\n\n{}", ctx, message),
+                        format!("[System context]\n{}\n\n{}", ctx, message),
                         Default::default(),
                     );
                 } else {
