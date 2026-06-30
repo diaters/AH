@@ -624,6 +624,14 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request_entity,
             });
         }
+        Ok(ToolAction::StartChatRound { .. }) => {
+            // Handled in Task 4
+            warn!(
+                event = "StartChatRoundNotYetImplemented",
+                "StartChatRound handling will be implemented in Task 4"
+            );
+            commands.entity(request_entity).despawn();
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }

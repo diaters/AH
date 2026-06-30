@@ -36,6 +36,8 @@ pub enum WaitingReason {
     Session {
         handle_id: Uuid,
     },
+    /// chat_with_agent 子任务等待父 Agent 下一轮调用
+    ChatAgent,
 }
 
 /// 信号载荷
@@ -357,6 +359,26 @@ pub struct SubTaskCompletedMessage {
     pub child_task_name: String,
     pub result_summary: String,
     pub success: bool,
+}
+
+/// chat_with_agent 新一轮开始，触发父 Task 阻塞
+#[derive(Debug, Clone, Component)]
+pub struct ChatRoundStartedMessage {
+    pub parent_task_id: TaskId,
+    pub child_task_id: TaskId,
+    pub batch_id: Uuid,
+    pub parent_tool_call_id: String,
+}
+
+/// chat_with_agent 子任务本轮回复就绪
+#[derive(Debug, Clone, Component)]
+pub struct ChatRoundReadyMessage {
+    pub child_task_id: TaskId,
+    pub parent_task_id: TaskId,
+    pub parent_agent_id: AgentId,
+    pub batch_id: Uuid,
+    pub parent_tool_call_id: String,
+    pub response: String,
 }
 
 // ============ 摘要 ============
