@@ -34,6 +34,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 #### 工具与会话
 
 - 工具权限、审批流程、结果回写与用户确认 UI 已可用
+- `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
 - `Space` 已收敛为最小共享资源边界，当前只保留 `SharedKnowledgeBase` 和
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：

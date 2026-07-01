@@ -7,12 +7,13 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::{
-    app::HarnessSettings,
+    app::{Clock, HarnessSettings},
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
-        ConfirmationOption, ConfirmationSource, ExperienceStore, PendingExperienceHooks,
-        SharedKnowledgeBase, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
+        ChatSession, ConfirmationOption, ConfirmationSource, ExperienceStore,
+        PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, SpaceToolRegistry, Task,
+        TaskStatus, ToolConfirmationRequestMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolPermission, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -32,11 +33,14 @@ pub fn tool_dispatch_system(
     knowledge: Res<SharedKnowledgeBase>,
     mut experience_store: ResMut<ExperienceStore>,
     mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
-    agents: Query<&Agent>,
+    agents: Query<&mut Agent>,
+    mut short_term_memories: Query<&mut ShortTermMemory>,
+    chat_sessions: Query<&ChatSession>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
+    clock: Res<Clock>,
 ) {
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -171,31 +175,52 @@ pub fn tool_dispatch_system(
                         &request,
                         action,
                         &mut tasks,
+                        &agents,
+                        &chat_sessions,
+                        &mut short_term_memories,
                         &*backend,
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         parent_agent_id,
+                        &clock,
                     );
                 }
 
                 restore_task_after_tool(&mut tasks, &calling_states, request.request.task_id);
             }
             ToolPermission::Confirm => {
-                // 检查 Agent 是否有父 Agent，且父 Agent 有该工具的 Allow 权限
-                if let Some(parent_id) = agent.parent_id
-                    && let Some(parent) = agents.iter().find(|a| a.id == parent_id)
-                    && parent.has_permission(&tool_name)
-                {
+                // Find the task to check parent_task_id
+                let task_for_approval = tasks
+                    .iter()
+                    .find(|(_, t)| t.id == request.request.task_id)
+                    .map(|(_, t)| t.clone());
+
+                // 统一按 task.parent_task_id 查找父 Agent
+                let parent_approval = task_for_approval
+                    .as_ref()
+                    .and_then(|task| task.parent_task_id)
+                    .and_then(|parent_task_id| {
+                        tasks
+                            .iter()
+                            .find(|(_, t)| t.id == parent_task_id)
+                            .and_then(|(_, parent_task)| parent_task.delegate)
+                            .and_then(|parent_agent_id| {
+                                agents.iter().find(|a| a.id == parent_agent_id)
+                            })
+                            .filter(|parent| parent.has_permission(&tool_name))
+                            .map(|parent| parent.id)
+                    });
+
+                if let Some(parent_agent_id) = parent_approval {
                     debug!(
                         event = "ToolRequiresParentApproval",
                         tool_name = %tool_name,
                         agent_id = %agent.id,
-                        parent_agent_id = %parent.id,
-                        reason = "parent agent has permission",
+                        parent_agent_id = %parent_agent_id,
+                        reason = "parent task delegate has permission",
                         "tool requires parent agent approval"
                     );
 
-                    // 将 Task 设置为等待父 Agent 审批状态
                     if let Some((_, mut task)) = tasks
                         .iter_mut()
                         .find(|(_, t)| t.id == request.request.task_id)
@@ -203,14 +228,13 @@ pub fn tool_dispatch_system(
                         task.status = TaskStatus::Waiting(WaitingReason::Approval);
                     }
 
-                    // 生成父 Agent 审批请求消息
                     let request_id = Uuid::new_v4();
                     commands.spawn((
                         ApprovalRequestMessage {
                             request_id,
                             tool_name: tool_name.clone(),
                             source_task_id: request.request.task_id,
-                            parent_agent_id: parent.id,
+                            parent_agent_id,
                             child_agent_id: agent.id,
                             tool_input: request.tool_input.clone(),
                             approval_task_id: Uuid::new_v4(),
@@ -223,16 +247,15 @@ pub fn tool_dispatch_system(
                     continue;
                 }
 
-                // 无父 Agent 或父 Agent 无权限 → 用户确认
+                // fallback 用户确认
                 debug!(
                     event = "ToolRequiresUserConfirmation",
                     tool_name = %tool_name,
                     agent_id = %agent.id,
-                    reason = "no parent agent or parent lacks permission",
+                    reason = "no parent task delegate or parent lacks permission",
                     "tool requires user confirmation"
                 );
 
-                // 将 Task 设置为等待用户确认状态
                 if let Some((_, mut task)) = tasks
                     .iter_mut()
                     .find(|(_, t)| t.id == request.request.task_id)
@@ -240,7 +263,6 @@ pub fn tool_dispatch_system(
                     task.status = TaskStatus::Waiting(WaitingReason::User);
                 }
 
-                // 生成用户确认请求消息
                 let request_id = Uuid::new_v4();
                 let options = ConfirmationOption::default_options();
                 commands.spawn(ToolConfirmationRequestMessage {

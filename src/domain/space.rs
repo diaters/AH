@@ -216,6 +216,20 @@ pub enum ToolAction {
         content: String,
         attachments: Vec<crate::channels::ChannelAttachment>,
     },
+    /// 开始或继续 chat_with_agent 对话轮次。
+    /// executor 只负责解析参数，真正的子任务创建/更新在 orchestrator 中完成。
+    StartChatRound {
+        /// 目标 Persistent Agent 名称（第一轮必填，后续可用来校验）
+        agent_name: Option<String>,
+        /// 目标 Persistent Agent 匹配标签（agent 不存在时的备选）
+        agent_tags: Vec<String>,
+        /// 本轮要发送给子 Agent 的消息
+        message: String,
+        /// 仅在第一轮生效的额外系统上下文
+        context: Option<String>,
+        /// 已有对话的 handle（即子任务 task_id），不传表示开始新对话
+        handle: Option<TaskId>,
+    },
 }
 
 /// 经验候选提交数据

@@ -4,6 +4,7 @@
 
 mod agent;
 mod brain;
+mod chat_session;
 mod command;
 mod confirmation;
 mod contribution;
@@ -40,6 +41,9 @@ pub use agent::{
     Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
     AgentToolPermissions,
 };
+
+// chat_session
+pub use chat_session::ChatSession;
 
 // brain
 pub use brain::{BrainDecisionError, BrainDecisionOutput};
@@ -92,15 +96,15 @@ pub use memory::{
 pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
-    ApprovalResultMessage, ContinueTaskMessage, CreateTaskMessage,
-    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, LlmResponseHookPending,
-    MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind, OutputMessage,
-    PendingChannelSend, ReloadPluginsMessage, RetryReadyMessage, SessionExitedMessage,
-    SessionOutputAppendedMessage, SessionStartedMessage, Signal, SignalPayload, SignalType,
-    SubTaskBatchCreatedMessage, SubTaskCompletedMessage, SummarizationRequestMessage,
-    SystemOutputMessage, TaskTerminatedMessage, ToolConfirmationRequestMessage,
-    ToolConfirmationResponseMessage, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    UserInputMessage, UserOutputMessage, WaitingReason,
+    ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ContinueTaskMessage,
+    CreateTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage,
+    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind,
+    OutputMessage, PendingChannelSend, ReloadPluginsMessage, RetryReadyMessage,
+    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
+    SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
+    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
 };
 
 // session

@@ -15,6 +15,7 @@
 | `plans/2026-06-11-experience-candidate-governance.md` | 经验候选治理与可执行记忆实施 | 活跃 |
 | `plans/2026-06-15-experience-governance-writeback.md` | 经验治理统一写回与任务级孵化实施 | 活跃 |
 | `plans/2026-06-27-auto-channel-reply.md` | IM 出向-自动回执实施 | 活跃 |
+| `plans/2026-06-30-chat-with-agent-implementation.md` | chat_with_agent 工具实施 | 活跃 |
 
 ### 活跃规格
 
@@ -30,6 +31,7 @@
 | `specs/2026-06-14-experience-persistence-fix-design.md` | 经验落盘链路完整修复设计 | 活跃 |
 | `specs/2026-06-15-experience-governance-writeback-design.md` | 经验治理统一写回与任务级孵化设计 | 活跃 |
 | `specs/2026-06-27-auto-channel-reply-design.md` | IM 出向-自动回执设计 | 活跃 |
+| `specs/2026-06-30-chat-with-agent-design.md` | chat_with_agent 工具设计 | 活跃 |
 
 ## 生命周期规则
 
