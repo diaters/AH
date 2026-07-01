@@ -381,3 +381,140 @@ fn chat_with_agent_multi_round_via_handle() {
         "chat subtask id should not change between rounds"
     );
 }
+
+/// 验证 chat_round_completion_system 不再直接恢复父任务到 Ready，
+/// 而是保持 Waiting(SubTaskBatch) 等待 tool_calling_orchestrator_system 收集结果。
+#[test]
+fn chat_round_completion_preserves_parent_waiting_status() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty().0,
+    );
+
+    let reviewer_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Agent {
+            id: reviewer_id,
+            profile: AgentProfile {
+                name: "reviewer".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["review".to_string()],
+                description: "reviewer agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        harness::LongTermMemory::default(),
+    ));
+
+    let parent_agent_id = Uuid::new_v4();
+    let perms = AgentToolPermissions {
+        default_permission: ToolPermission::Allow,
+        ..Default::default()
+    };
+    app.world_mut().spawn((
+        Agent {
+            id: parent_agent_id,
+            profile: AgentProfile {
+                name: "parent-agent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["general".to_string()],
+                description: "parent agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: perms,
+        },
+        harness::LongTermMemory::default(),
+    ));
+
+    let parent_task_id = Uuid::new_v4();
+    let batch_id = Uuid::new_v4();
+    let child_task_id = Uuid::new_v4();
+
+    // 直接创建一个处于 Waiting(SubTaskBatch) 的父任务
+    app.world_mut().spawn((
+        Task {
+            id: parent_task_id,
+            content: "test".to_string(),
+            creator: parent_agent_id,
+            delegate: Some(parent_agent_id),
+            status: TaskStatus::Waiting(harness::WaitingReason::SubTaskBatch { batch_id }),
+            input_summary: "test".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: default_channel(),
+            last_evaluated_turn: None,
+        },
+        harness::ShortTermMemory::default(),
+    ));
+
+    // 模拟子任务完成，发出 ChatRoundReadyMessage
+    app.world_mut().spawn(harness::ChatRoundReadyMessage {
+        child_task_id,
+        parent_task_id,
+        parent_agent_id,
+        batch_id,
+        parent_tool_call_id: "call_chat_test".to_string(),
+        response: "test response".to_string(),
+        child_agent_name: "reviewer".to_string(),
+    });
+
+    // 运行一帧让 chat_round_completion_system 处理
+    app.update();
+
+    // 验证父任务状态仍然是 Waiting(SubTaskBatch)，而非 Ready
+    let parent_status: harness::TaskStatus = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::Task>();
+        query
+            .iter(world)
+            .find(|t| t.id == parent_task_id)
+            .map(|t| t.status.clone())
+            .expect("parent task should exist")
+    };
+
+    assert!(
+        matches!(parent_status, harness::TaskStatus::Waiting(harness::WaitingReason::SubTaskBatch { .. })),
+        "parent task should still be Waiting(SubTaskBatch) after chat_round_completion, got {:?}",
+        parent_status
+    );
+
+    // 验证 ToolExecutionResultMessage 已生成
+    let tool_result_count: usize = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        query
+            .iter(world)
+            .filter(|r| r.tool_call_id.as_deref() == Some("call_chat_test"))
+            .count()
+    };
+
+    assert_eq!(
+        tool_result_count, 1,
+        "exactly one ToolExecutionResultMessage should be spawned for the chat round"
+    );
+}
