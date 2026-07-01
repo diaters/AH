@@ -498,7 +498,10 @@ fn chat_round_completion_preserves_parent_waiting_status() {
     };
 
     assert!(
-        matches!(parent_status, harness::TaskStatus::Waiting(harness::WaitingReason::SubTaskBatch { .. })),
+        matches!(
+            parent_status,
+            harness::TaskStatus::Waiting(harness::WaitingReason::SubTaskBatch { .. })
+        ),
         "parent task should still be Waiting(SubTaskBatch) after chat_round_completion, got {:?}",
         parent_status
     );
