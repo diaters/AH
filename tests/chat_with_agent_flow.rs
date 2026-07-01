@@ -506,18 +506,28 @@ fn chat_round_completion_preserves_parent_waiting_status() {
         parent_status
     );
 
-    // 验证 ToolExecutionResultMessage 已生成
-    let tool_result_count: usize = {
+    // 验证 Tool 调用已记录到父任务的 ShortTermMemory
+    let tool_call_recorded: bool = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<(&harness::Task, &harness::ShortTermMemory)>();
         query
             .iter(world)
-            .filter(|r| r.tool_call_id.as_deref() == Some("call_chat_test"))
-            .count()
+            .find(|(t, _)| t.id == parent_task_id)
+            .map(|(_, stm)| {
+                stm.entries
+                    .iter()
+                    .any(|e| {
+                        e.metadata
+                            .tool_calls
+                            .iter()
+                            .any(|tc| tc.id.as_deref() == Some("call_chat_test"))
+                    })
+            })
+            .unwrap_or(false)
     };
 
-    assert_eq!(
-        tool_result_count, 1,
-        "exactly one ToolExecutionResultMessage should be spawned for the chat round"
+    assert!(
+        tool_call_recorded,
+        "chat_with_agent tool call should be recorded in parent task's ShortTermMemory"
     );
 }

@@ -9,9 +9,10 @@ use crate::{
     domain::TaskEvaluationConfig,
     systems::{
         HarnessSet, chat_round_block_system, chat_round_completion_system,
-        chat_session_cleanup_system, llm_response_system, retry_ready_system,
-        sub_task_batch_block_system, sub_task_completion_system, task_completion_hook_system,
-        task_termination_system, tool_calling_orchestrator_system, tool_result_system,
+        chat_session_cleanup_system, llm_response_system, on_tool_returned_hook_system,
+        retry_ready_system, sub_task_batch_block_system, sub_task_completion_system,
+        task_completion_hook_system, task_termination_system, tool_calling_orchestrator_system,
+        tool_result_system,
     },
 };
 
@@ -50,7 +51,7 @@ impl Plugin for TaskRuntimePlugin {
                     .after(tool_result_system),
                 chat_round_completion_system
                     .in_set(HarnessSet::Transform)
-                    .after(tool_result_system)
+                    .before(on_tool_returned_hook_system)
                     .before(chat_round_block_system)
                     .before(tool_calling_orchestrator_system),
                 chat_round_block_system
