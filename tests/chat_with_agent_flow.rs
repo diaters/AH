@@ -514,14 +514,12 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             .iter(world)
             .find(|(t, _)| t.id == parent_task_id)
             .map(|(_, stm)| {
-                stm.entries
-                    .iter()
-                    .any(|e| {
-                        e.metadata
-                            .tool_calls
-                            .iter()
-                            .any(|tc| tc.id.as_deref() == Some("call_chat_test"))
-                    })
+                stm.entries.iter().any(|e| {
+                    e.metadata
+                        .tool_calls
+                        .iter()
+                        .any(|tc| tc.id.as_deref() == Some("call_chat_test"))
+                })
             })
             .unwrap_or(false)
     };
