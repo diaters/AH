@@ -43,23 +43,21 @@ pub fn chat_round_block_system(
     }
 }
 
-/// 消费 ChatRoundReadyMessage，生成完整 ToolExecutionResultMessage 回填父任务，并恢复父任务 Ready。
+/// 消费 ChatRoundReadyMessage，生成 ToolExecutionResultMessage 回填父任务。
+/// 父任务状态恢复由 tool_calling_orchestrator_system 统一处理。
 pub fn chat_round_completion_system(
     mut commands: Commands,
-    clock: Res<Clock>,
-    mut tasks: Query<&mut Task>,
+    tasks: Query<&Task>,
     ready: Query<(Entity, &ChatRoundReadyMessage)>,
 ) {
     for (entity, msg) in &ready {
-        if let Some(mut parent) = tasks.iter_mut().find(|t| t.id == msg.parent_task_id) {
-            parent.status = TaskStatus::Ready;
-            parent.updated_at = clock.0;
+        if tasks.iter().any(|t| t.id == msg.parent_task_id) {
             debug!(
                 event = "ChatRoundCompleted",
                 parent_task_id = %msg.parent_task_id,
                 child_task_id = %msg.child_task_id,
                 batch_id = %msg.batch_id,
-                "chat round completed, parent task restored to Ready"
+                "chat round completed, spawning tool result for orchestrator"
             );
         } else {
             warn!(
