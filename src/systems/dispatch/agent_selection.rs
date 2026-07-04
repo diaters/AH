@@ -18,6 +18,11 @@ pub fn match_score(agent: &Agent, task_content: &str) -> usize {
 }
 
 /// 选择最适合任务的 Agent
+///
+/// 评分逻辑与 `select_agent_for_sub_task` 保持一致：
+/// 1. 按 task content 与 agent tags 的匹配度评分；
+/// 2. 所有评分为 0 时，fallback 到带 "default" tag 的 agent；
+/// 3. 同分或均无匹配时，优先 tag 数量更多的 agent，最后选择第一个候选。
 pub fn select_agent_with_memory<'a>(
     agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,
@@ -27,11 +32,36 @@ pub fn select_agent_with_memory<'a>(
         .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
         .collect();
 
-    let selected = candidates
-        .iter()
-        .max_by_key(|(a, _)| match_score(a, task_content));
+    if candidates.is_empty() {
+        return None;
+    }
 
-    if let Some((agent, _ltm)) = selected {
+    let max_score = candidates
+        .iter()
+        .map(|(a, _)| match_score(a, task_content))
+        .max()
+        .unwrap_or(0);
+
+    let selected = if max_score > 0 {
+        // 有正向匹配：选最高分，同分时优先 "default" tag，再按 tag 数量 tie-break
+        candidates
+            .iter()
+            .filter(|(a, _)| match_score(a, task_content) == max_score)
+            .max_by_key(|(a, _)| {
+                (
+                    a.capabilities.tags.contains(&"default".to_string()) as usize,
+                    a.capabilities.tags.len(),
+                )
+            })
+    } else {
+        // 全部评分为 0：fallback 到带 "default" tag 的 agent
+        candidates
+            .iter()
+            .filter(|(a, _)| a.capabilities.tags.contains(&"default".to_string()))
+            .max_by_key(|(a, _)| a.capabilities.tags.len())
+    };
+
+    if let Some((agent, ltm)) = selected {
         let score = match_score(agent, task_content);
         let all_scores: Vec<_> = candidates
             .iter()
@@ -43,11 +73,22 @@ pub fn select_agent_with_memory<'a>(
             selected_score = score,
             all_candidates_scores = ?all_scores,
             task_content_preview = %task_content.chars().take(100).collect::<String>(),
+            fallback = (max_score == 0),
             "agent scoring completed"
         );
+        Some((*agent, *ltm))
+    } else {
+        // 无 "default" tag 的 fallback：选第一个候选
+        let (agent, ltm) = candidates.into_iter().next()?;
+        debug!(
+            event = "AgentScoring",
+            selected_agent = %agent.profile.name,
+            selected_score = 0,
+            fallback = true,
+            "agent selected as last resort (no default tag found)"
+        );
+        Some((agent, ltm))
     }
-
-    selected.copied()
 }
 
 /// 为子任务选择 Agent：基于 task content 与 agent tags 匹配评分，
