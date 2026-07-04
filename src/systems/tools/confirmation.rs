@@ -10,14 +10,17 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
         ExperienceStore, GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory,
-        Task, TaskId, ToolCallingState, ToolConfirmationRequestMessage,
-        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolPermission, ToolReturnedHookPending,
+        Task, ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolPermission, ToolReturnedHookPending,
     },
     systems::NativeProcessBackend,
 };
 
-use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_tool_error};
+use super::orchestrator::{
+    clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
+    spawn_tool_error,
+};
 
 /// Tool 确认请求输出 System
 ///
@@ -85,6 +88,14 @@ pub fn tool_confirmation_result_system(
             continue;
         }
 
+        // 统计仍排队的 sibling 请求数（不含当前这条）
+        let pending_sibling_count = tool_requests
+            .iter()
+            .filter(|(e, r)| {
+                *e != request_entity && r.request.task_id == tool_request.request.task_id
+            })
+            .count();
+
         // 从 ToolExecutionRequestMessage 保存的选项中查找
         let options = tool_request
             .pending_confirmation_options
@@ -102,6 +113,7 @@ pub fn tool_confirmation_result_system(
                     tool_name = %tool_request.tool_name,
                     task_id = %tool_request.request.task_id,
                     agent_id = %tool_request.request.agent_id,
+                    pending_sibling_count = pending_sibling_count,
                     "tool execution denied by user"
                 );
 
@@ -144,6 +156,7 @@ pub fn tool_confirmation_result_system(
                     task_id = %tool_request.request.task_id,
                     agent_id = %tool_request.request.agent_id,
                     mode = ?option.mode,
+                    pending_sibling_count = pending_sibling_count,
                     "tool execution confirmed by user"
                 );
 
@@ -242,12 +255,6 @@ pub fn tool_confirmation_result_system(
         }
 
         commands.entity(entity).despawn();
-    }
-}
-
-fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
-    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
-        task.pending_confirmation_id = None;
     }
 }
 

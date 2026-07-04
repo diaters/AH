@@ -194,6 +194,12 @@ pub fn tool_dispatch_system(
                     t.id == request.request.task_id && t.pending_confirmation_id.is_some()
                 });
                 if already_pending {
+                    debug!(
+                        event = "ToolConfirmationQueued",
+                        queued_task_id = %request.request.task_id,
+                        tool_name = %tool_name,
+                        "sequential tool confirmation: sibling already pending, queuing next request"
+                    );
                     continue;
                 }
 

@@ -26,6 +26,11 @@ pub(crate) fn user_input_routing_system(
     tasks: Query<&Task>,
 ) {
     for (entity, input) in &user_inputs {
+        // 命令优先（即使在等待工具确认期间也允许 /finish 等指令）
+        if UserCommand::parse(&input.content).is_command() {
+            continue; // 跳过，由 command_parse_system 处理
+        }
+
         // 优先处理处于 Waiting(User) 且正在等待工具确认的任务
         if let Some(task) = tasks.iter().find(|t| {
             t.status == TaskStatus::Waiting(WaitingReason::User)
@@ -67,11 +72,6 @@ pub(crate) fn user_input_routing_system(
             }
             commands.entity(entity).despawn();
             continue;
-        }
-
-        // 检查是否是命令（命令由 command_parse_system 处理）
-        if UserCommand::parse(&input.content).is_command() {
-            continue; // 跳过，由 command_parse_system 处理
         }
 
         // 查找是否有 Waiting(User) 状态的任务
@@ -184,10 +184,13 @@ mod tests {
     use crate::prelude::*;
 
     use super::user_input_routing_system;
+    use crate::app::MemoryConfig;
     use crate::domain::{
-        ChannelId, ContinueTaskMessage, CreateTaskMessage, FrontendKind, SystemOutputMessage, Task,
-        TaskStatus, ToolConfirmationResponseMessage, UserInputMessage, WaitingReason,
+        ChannelId, ContinueTaskMessage, CreateTaskMessage, FinishTaskMessage, FrontendKind,
+        PendingKnowledgeWriteHooks, SharedKnowledgeBase, SystemOutputMessage, Task, TaskStatus,
+        ToolConfirmationResponseMessage, UserInputMessage, WaitingReason,
     };
+    use crate::systems::command::command_parse_system;
 
     fn telegram_channel() -> ChannelId {
         ChannelId {
@@ -449,6 +452,57 @@ mod tests {
         assert!(
             outputs.is_empty(),
             "should not prompt retry without pending id"
+        );
+    }
+
+    #[test]
+    fn command_during_pending_confirmation_still_executes() {
+        let mut app = App::new();
+        app.add_systems(Update, (user_input_routing_system, command_parse_system));
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+
+        let pending_id = uuid::Uuid::new_v4();
+        let task = make_waiting_task_with_confirmation(telegram_channel(), pending_id);
+        app.world_mut().spawn(task);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "/finish".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let outputs: Vec<&SystemOutputMessage> = app
+            .world_mut()
+            .query::<&SystemOutputMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            outputs.is_empty(),
+            "should not treat command as invalid confirmation option"
+        );
+
+        let responses: Vec<&ToolConfirmationResponseMessage> = app
+            .world_mut()
+            .query::<&ToolConfirmationResponseMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            responses.is_empty(),
+            "should not spawn confirmation response for command input"
+        );
+
+        let finishes: Vec<&FinishTaskMessage> = app
+            .world_mut()
+            .query::<&FinishTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(
+            finishes.len(),
+            1,
+            "command_parse_system should handle /finish while pending confirmation"
         );
     }
 }

@@ -10,10 +10,10 @@ use std::{
 
 use harness::prelude::*;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
-    EngineEvent, EventTarget, ExecutorFuture, ExternalInput, Frontend, FrontendKind, HarnessConfig,
-    LlmToolCall, NativeProcessBackend, OutputContent, ToolConfirmationResponseMessage,
-    build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ApprovalOption,
+    ChannelId, EngineEvent, EventTarget, ExecutorFuture, ExternalInput, Frontend, FrontendKind,
+    HarnessConfig, LlmToolCall, OutputContent, ToolConfirmationResponseMessage,
+    ToolExecutionResultMessage, build_harness_app,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -102,6 +102,19 @@ struct TestFrontendEvents(Arc<Mutex<Vec<EngineEvent>>>);
 #[derive(Resource, Clone)]
 struct TestExecutorHandle(Arc<CannedExecutor>);
 
+/// 测试资源：捕获 Tool 执行结果消息。
+#[derive(Resource, Clone, Default)]
+struct TestToolResults(Arc<Mutex<Vec<ToolExecutionResultMessage>>>);
+
+fn capture_tool_results_system(
+    results: Query<&ToolExecutionResultMessage>,
+    captured: ResMut<TestToolResults>,
+) {
+    for result in &results {
+        captured.0.lock().unwrap().push(result.clone());
+    }
+}
+
 /// 捕获所有前端事件的 MockFrontend。
 struct CapturingFrontend {
     events: Arc<Mutex<Vec<EngineEvent>>>,
@@ -143,6 +156,8 @@ fn build_test_app() -> App {
     app.insert_resource(TestInputSender(input_tx));
     app.insert_resource(TestFrontendEvents(events));
     app.insert_resource(TestExecutorHandle(executor));
+    app.insert_resource(TestToolResults::default());
+    app.add_systems(Update, capture_tool_results_system);
 
     app
 }
@@ -204,12 +219,12 @@ fn collect_approval_requests(app: &mut App) -> Vec<Uuid> {
 }
 
 #[derive(Debug)]
-struct CapturedOutput {
-    content: String,
+struct CapturedApprovalRequest {
     target: ChannelId,
+    options: Vec<ApprovalOption>,
 }
 
-fn collect_qq_outputs(app: &mut App) -> Vec<CapturedOutput> {
+fn collect_qq_approval_requests(app: &mut App) -> Vec<CapturedApprovalRequest> {
     let events = app
         .world()
         .resource::<TestFrontendEvents>()
@@ -219,26 +234,10 @@ fn collect_qq_outputs(app: &mut App) -> Vec<CapturedOutput> {
     events
         .iter()
         .filter_map(|event| match event {
-            EngineEvent::Text {
-                target, content, ..
-            } => {
-                if let EventTarget::Directed(channels) = target {
-                    channels
-                        .iter()
-                        .find(|c| c.frontend == FrontendKind::QQ)
-                        .cloned()
-                        .map(|target| CapturedOutput {
-                            content: content.clone(),
-                            target,
-                        })
-                } else {
-                    None
-                }
-            }
             EngineEvent::ApprovalRequest {
                 target,
                 options,
-                tool_name,
+                tool_name: _,
                 ..
             } => {
                 if let EventTarget::Directed(channels) = target {
@@ -246,15 +245,9 @@ fn collect_qq_outputs(app: &mut App) -> Vec<CapturedOutput> {
                         .iter()
                         .find(|c| c.frontend == FrontendKind::QQ)
                         .cloned()
-                        .map(|target| {
-                            let mut lines = vec![format!("工具 `{}` 请求执行，选项：", tool_name)];
-                            for (idx, opt) in options.iter().enumerate() {
-                                lines.push(format!("{}={}", idx + 1, opt.description));
-                            }
-                            CapturedOutput {
-                                content: lines.join("\n"),
-                                target,
-                            }
+                        .map(|target| CapturedApprovalRequest {
+                            target,
+                            options: options.clone(),
                         })
                 } else {
                     None
@@ -265,20 +258,13 @@ fn collect_qq_outputs(app: &mut App) -> Vec<CapturedOutput> {
         .collect()
 }
 
-fn collect_tool_results(app: &mut App) -> Vec<serde_json::Value> {
-    let backend = app.world().resource::<NativeProcessBackend>();
-    let sessions = backend.sessions.lock().unwrap();
-    sessions
-        .values()
-        .map(|handle| {
-            serde_json::json!({
-                "tool_name": "shell_exec",
-                "command": handle.command,
-                "status": format!("{:?}", handle.status),
-                "output": handle.output,
-            })
-        })
-        .collect()
+fn collect_tool_results(app: &mut App) -> Vec<ToolExecutionResultMessage> {
+    app.world()
+        .resource::<TestToolResults>()
+        .0
+        .lock()
+        .unwrap()
+        .clone()
 }
 
 #[test]
@@ -348,24 +334,31 @@ fn qq_text_confirmation_resolves_tool() {
     inject_qq_text(&mut app, "请执行 echo qq");
     run_ticks(&mut app, 10);
 
-    let qq_outputs = collect_qq_outputs(&mut app);
-    let approval = qq_outputs
+    let qq_approvals = collect_qq_approval_requests(&mut app);
+    let approval = qq_approvals
         .iter()
-        .find(|o| o.content.contains("1=仅本次允许"))
-        .expect("QQ 应收到带选项编号的审批消息");
+        .find(|a| a.options.iter().any(|o| o.id == "allow_once"))
+        .expect("QQ 应收到带选项的审批请求");
     assert_eq!(approval.target.frontend, FrontendKind::QQ);
+    assert!(!approval.options.is_empty(), "审批选项不应为空");
 
     inject_qq_text(&mut app, "2");
     run_ticks(&mut app, 20);
 
     let results = collect_tool_results(&mut app);
     assert!(!results.is_empty(), "工具应被执行");
-    let commands: Vec<String> = results
-        .iter()
-        .filter_map(|r| r.get("command").and_then(|v| v.as_str()).map(String::from))
-        .collect();
     assert!(
-        commands.iter().any(|c| c.contains("echo qq")),
+        results.iter().any(|r| {
+            r.tool_name == "shell_exec"
+                && matches!(
+                    &r.tool_output,
+                    Ok(v) if v
+                        .get("output")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.contains("qq"))
+                        .unwrap_or(false)
+                )
+        }),
         "应执行 echo qq"
     );
 }

@@ -22,7 +22,7 @@ pub fn match_score(agent: &Agent, task_content: &str) -> usize {
 /// 评分逻辑与 `select_agent_for_sub_task` 保持一致：
 /// 1. 按 task content 与 agent tags 的匹配度评分；
 /// 2. 所有评分为 0 时，fallback 到带 "default" tag 的 agent；
-/// 3. 同分或均无匹配时，优先 tag 数量更多的 agent，最后选择第一个候选。
+/// 3. 同分或均无匹配时，优先 tag 数量更多的 agent；若仍平局，则保留后出现的最大元素（`max_by_key` 行为）。
 pub fn select_agent_with_memory<'a>(
     agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,

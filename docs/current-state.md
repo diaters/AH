@@ -39,13 +39,16 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
-- shell 输出语义已收敛为”最新快照”，不再对 LLM 暴露伪增量游标协议
+- shell 输出语义已收敛为"最新快照"，不再对 LLM 暴露伪增量游标协议
+- 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always` 授权的权限会立即复用，后续同工具请求直接执行
+- 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务
 
 #### IM 通道
 
 - 统一 `Channel` 抽象与 `ChannelManager`（含 listen 重启退避与 shutdown）
 - Telegram 通道接入（长轮询、白名单、文本分块发送）
 - QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
+- QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复按 `origin_channel` 自动推回来源 IM 通道

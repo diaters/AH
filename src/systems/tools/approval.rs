@@ -10,14 +10,17 @@ use crate::{
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, ExecutionError, ExperienceStore,
-        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskId,
-        TaskStatus, ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
+        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,
+        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
 
-use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_tool_error};
+use super::orchestrator::{
+    clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
+    spawn_tool_error,
+};
 
 /// 审批分发 System
 ///
@@ -239,12 +242,6 @@ pub fn approval_result_system(
         }
 
         commands.entity(entity).despawn();
-    }
-}
-
-fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
-    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
-        task.pending_confirmation_id = None;
     }
 }
 
