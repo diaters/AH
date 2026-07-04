@@ -10,9 +10,9 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
         ExperienceStore, GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory,
-        Task, ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolPermission, ToolReturnedHookPending,
+        Task, TaskId, ToolCallingState, ToolConfirmationRequestMessage,
+        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, ToolPermission, ToolReturnedHookPending,
     },
     systems::NativeProcessBackend,
 };
@@ -133,6 +133,7 @@ pub fn tool_confirmation_result_system(
                 ));
 
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
+                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
             }
             Some(option) => {
@@ -178,6 +179,12 @@ pub fn tool_confirmation_result_system(
                         tool_request,
                         ToolError::NotFound(format!("executor for {}", tool_request.tool_name)),
                     );
+                    if let Some((_, mut task)) = tasks
+                        .iter_mut()
+                        .find(|(_, t)| t.id == tool_request.request.task_id)
+                    {
+                        task.pending_confirmation_id = None;
+                    }
                     restore_task_after_tool(
                         &mut tasks,
                         &calling_states,
@@ -223,6 +230,7 @@ pub fn tool_confirmation_result_system(
                     );
                 }
 
+                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                 restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
             }
             None => {
@@ -238,5 +246,151 @@ pub fn tool_confirmation_result_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
+    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
+        task.pending_confirmation_id = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Clock, HarnessConfig, HarnessSettings};
+    use crate::domain::{
+        AgentExecutionRequest, AgentRequestKind, ChannelId, ConfirmationOption, FrontendKind, Task,
+        TaskStatus, ToolConfirmationResponseMessage, ToolExecutionRequestMessage, WaitingReason,
+    };
+    use crate::systems::NativeProcessBackend;
+    use bevy_ecs::system::RunSystemOnce;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn test_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(HarnessSettings(HarnessConfig::default()));
+        world.insert_resource(Clock(Utc::now()));
+        world.insert_resource(NativeProcessBackend::default());
+        world.insert_resource(crate::domain::BuiltinToolExecutors::default());
+        world.insert_resource(crate::domain::SharedKnowledgeBase::default());
+        world.insert_resource(crate::domain::ExperienceStore::default());
+        world.insert_resource(crate::domain::PendingExperienceHooks::default());
+        world
+    }
+
+    fn dummy_task(task_id: Uuid) -> Task {
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        Task {
+            id: task_id,
+            content: "test".to_string(),
+            creator: Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Waiting(WaitingReason::User),
+            pending_confirmation_id: None,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: channel,
+            last_evaluated_turn: None,
+        }
+    }
+
+    fn dummy_request(
+        task_id: Uuid,
+        agent_id: Uuid,
+        request_id: Uuid,
+    ) -> ToolExecutionRequestMessage {
+        ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "shell_exec".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+            },
+            tool_name: "shell_exec".to_string(),
+            tool_input: serde_json::json!({"cmd": "echo ok"}),
+            pending_confirmation_id: Some(request_id),
+            tool_call_id: None,
+            pending_confirmation_options: Some(ConfirmationOption::default_options()),
+        }
+    }
+
+    #[test]
+    fn confirmation_denied_clears_task_pending_id() {
+        let mut world = test_world();
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+
+        let mut task = dummy_task(task_id);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "deny".to_string(),
+        });
+
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert!(
+            task.pending_confirmation_id.is_none(),
+            "pending_confirmation_id should be cleared after denial"
+        );
+    }
+
+    #[test]
+    fn confirmation_approved_clears_task_pending_id() {
+        let mut world = test_world();
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+
+        let mut task = dummy_task(task_id);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "allow_once".to_string(),
+        });
+
+        // No executor registered, so the system will emit an error result and
+        // restore the task. The pending id must still be cleared.
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert!(
+            task.pending_confirmation_id.is_none(),
+            "pending_confirmation_id should be cleared after approval"
+        );
     }
 }
