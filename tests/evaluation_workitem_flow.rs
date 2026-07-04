@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use bevy::prelude::*;
 use crossbeam_channel::unbounded;
+use harness::prelude::*;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult, AgentExecutionResultMessage,
     AgentExecutor, AgentRequestKind, ChannelId, EngineEvent, EntryMetadata, EntryRole,

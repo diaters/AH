@@ -3,7 +3,7 @@
 //! 清除所有插件贡献（工具、技能、Agent 实体），重新扫描插件目录，
 //! 重新集成所有贡献。
 
-use bevy::prelude::World;
+use crate::prelude::World;
 
 use crate::domain::{Agent, BuiltinToolExecutors, SpaceToolRegistry};
 use crate::infrastructure::skills::PluginSkillContributions;
@@ -65,9 +65,9 @@ pub fn reload_plugins(world: &mut World) {
     }
 
     // 5) Despawn 插件贡献的 Agent 实体（profile.name 以 "plugin_id:" 开头）
-    let mut agents_to_despawn: Vec<bevy::prelude::Entity> = Vec::new();
+    let mut agents_to_despawn: Vec<crate::prelude::Entity> = Vec::new();
     {
-        let mut query = world.query::<(bevy::prelude::Entity, &Agent)>();
+        let mut query = world.query::<(crate::prelude::Entity, &Agent)>();
         for (entity, agent) in query.iter(world) {
             if stale_plugin_ids
                 .iter()

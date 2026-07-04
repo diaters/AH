@@ -6,7 +6,7 @@
 //! 写入系统（如 `command_parse_system`）将条目推入队列，
 //! 本系统逐条派发 `on_shared_knowledge_write` hook 后清空队列。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{PendingKnowledgeWriteHooks, SharedKnowledgeEntry};
@@ -43,7 +43,7 @@ pub fn on_shared_knowledge_write_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for _entry in &entries {
                 dispatch_shared_knowledge_write_hook(world, &mut registry);
             }

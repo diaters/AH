@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::debug;
 
@@ -60,7 +60,7 @@ pub fn agent_started_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (_entity, agent) in targets {
                 dispatch_agent_lifecycle_hook(
                     world,
@@ -99,7 +99,7 @@ pub fn agent_stopped_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, agent) in targets {
                 dispatch_agent_lifecycle_hook(
                     world,

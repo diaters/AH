@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use crate::prelude::*;
 use anyhow::{Context, Result};
-use bevy::{app::App, prelude::*};
+use bevy_app::App;
 use chrono::{DateTime, Utc};
 use crossbeam_channel::Receiver;
 use tokio::{runtime::Runtime, sync::mpsc};

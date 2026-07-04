@@ -4,7 +4,7 @@
 //! `input_ingress_system` 在 spawn `Signal::user_input` 或 `ToolConfirmationResponseMessage` 时
 //! 附带 `MessageReceivedHookPending` 标记，本系统查询带标记的 entity，派发 hook 后移除标记。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::MessageReceivedHookPending;
@@ -32,8 +32,8 @@ pub fn on_message_received_hook_system(world: &mut World) {
     }
 
     // 采集所有带标记的 entity，避免在派发 hook 期间借用 world。
-    let targets: Vec<bevy::ecs::entity::Entity> = world
-        .query_filtered::<bevy::ecs::entity::Entity, With<MessageReceivedHookPending>>()
+    let targets: Vec<bevy_ecs::entity::Entity> = world
+        .query_filtered::<bevy_ecs::entity::Entity, With<MessageReceivedHookPending>>()
         .iter(world)
         .collect();
 
@@ -42,7 +42,7 @@ pub fn on_message_received_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for entity in targets {
                 dispatch_message_received_hook(world, &mut registry);
 

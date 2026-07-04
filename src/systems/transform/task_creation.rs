@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::debug;
 
@@ -86,8 +86,8 @@ pub fn on_task_created_hook_system(world: &mut World) {
 
     // 先采集所有带标记的 Task entity 及其 Task clone，避免在派发 hook 期间
     // 借用 world（dispatch_hook 需要 &mut World）。
-    let targets: Vec<(bevy::prelude::Entity, Task)> = world
-        .query_filtered::<(bevy::prelude::Entity, &Task), With<NewlyCreatedTask>>()
+    let targets: Vec<(crate::prelude::Entity, Task)> = world
+        .query_filtered::<(crate::prelude::Entity, &Task), With<NewlyCreatedTask>>()
         .iter(world)
         .map(|(e, t)| (e, t.clone()))
         .collect();
@@ -97,7 +97,7 @@ pub fn on_task_created_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, task) in targets {
                 dispatch_on_task_created(world, &mut registry, &task);
                 // 派发后移除标记，避免重复派发。

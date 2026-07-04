@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+use crate::prelude::Resource;
 use anyhow::Result;
-use bevy::prelude::Resource;
 use tracing::{debug, warn};
 
 use crate::domain::{AgentConfig, AgentEntry, AgentToolsConfig};

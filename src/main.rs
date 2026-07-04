@@ -57,6 +57,10 @@ impl Drop for TuiGuard {
 }
 
 fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+
     dotenvy::from_filename(".env.local").ok();
     let _log_guard = init_tracing();
 

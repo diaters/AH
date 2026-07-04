@@ -2,7 +2,7 @@
 //!
 //! 定义 ECS 中使用的各种消息组件。
 
-use bevy::prelude::{Component, Entity};
+use crate::prelude::{Component, Entity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

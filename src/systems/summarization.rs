@@ -2,7 +2,7 @@
 //!
 //! 处理记忆压缩的摘要请求和结果处理。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::{

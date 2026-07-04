@@ -8,7 +8,7 @@
 //!   由 `long_term_memory_decay_system` 在检测到驱逐后附带 `LtmEvictedHookPending` 标记，
 //!   本系统查询带标记的 Agent entity，派发 hook 后移除标记。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{Agent, LtmEvictedHookPending, LtmWriteHookPending};
@@ -36,8 +36,8 @@ pub fn on_ltm_write_hook_system(world: &mut World) {
     }
 
     // 先采集所有带标记的 Agent entity 及 clone，避免在派发 hook 期间借用 world。
-    let targets: Vec<(bevy::ecs::entity::Entity, Agent)> = world
-        .query_filtered::<(bevy::ecs::entity::Entity, &Agent), With<LtmWriteHookPending>>()
+    let targets: Vec<(bevy_ecs::entity::Entity, Agent)> = world
+        .query_filtered::<(bevy_ecs::entity::Entity, &Agent), With<LtmWriteHookPending>>()
         .iter(world)
         .map(|(e, a)| (e, a.clone()))
         .collect();
@@ -47,7 +47,7 @@ pub fn on_ltm_write_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, _agent) in targets {
                 dispatch_ltm_hook(world, &mut registry, HookPoint::OnLongTermMemoryWrite);
 
@@ -72,8 +72,8 @@ pub fn on_ltm_evicted_hook_system(world: &mut World) {
     }
 
     // 先采集所有带标记的 Agent entity 及 clone，避免在派发 hook 期间借用 world。
-    let targets: Vec<(bevy::ecs::entity::Entity, Agent)> = world
-        .query_filtered::<(bevy::ecs::entity::Entity, &Agent), With<LtmEvictedHookPending>>()
+    let targets: Vec<(bevy_ecs::entity::Entity, Agent)> = world
+        .query_filtered::<(bevy_ecs::entity::Entity, &Agent), With<LtmEvictedHookPending>>()
         .iter(world)
         .map(|(e, a)| (e, a.clone()))
         .collect();
@@ -83,7 +83,7 @@ pub fn on_ltm_evicted_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, _agent) in targets {
                 dispatch_ltm_hook(world, &mut registry, HookPoint::OnLongTermMemoryEvicted);
 

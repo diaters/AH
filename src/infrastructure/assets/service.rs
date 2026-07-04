@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
+use crate::prelude::Resource;
 use anyhow::{Context, Result};
-use bevy::prelude::Resource;
 use uuid::Uuid;
 
 use crate::domain::TaskId;

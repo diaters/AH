@@ -37,7 +37,7 @@ fn test_config() -> HarnessConfig {
     HarnessConfig::default()
 }
 
-fn spawn_shell_agent(world: &mut bevy::prelude::World) -> Uuid {
+fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
     let id = Uuid::new_v4();
     world.spawn(Agent {
         id,

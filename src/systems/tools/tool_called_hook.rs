@@ -18,7 +18,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::{debug, warn};
 
@@ -65,7 +65,7 @@ pub fn on_tool_called_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, request) in targets {
                 let outcome = dispatch_on_tool_called(world, &mut registry, &request);
 

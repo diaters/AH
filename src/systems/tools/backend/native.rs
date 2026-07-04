@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bevy::prelude::Resource;
+use crate::prelude::Resource;
 use chrono::Utc;
 use tracing::debug;
 use uuid::Uuid;

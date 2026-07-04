@@ -16,3 +16,9 @@ pub use infrastructure::assets::{AgentAssetService, ExperienceAssetDraft, SkillP
 pub use llm::*;
 pub use plugins::*;
 pub use systems::tools::NativeProcessBackend;
+
+pub mod prelude {
+    pub use bevy_app::prelude::*;
+    pub use bevy_ecs::prelude::*;
+    pub use bevy_time::prelude::*;
+}

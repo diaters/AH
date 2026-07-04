@@ -1,4 +1,4 @@
-use bevy::prelude::{Component, Resource};
+use crate::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 

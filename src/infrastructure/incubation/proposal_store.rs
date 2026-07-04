@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::prelude::Resource;
 use anyhow::Result;
-use bevy::prelude::Resource;
 
 use crate::domain::IncubationProposal;
 

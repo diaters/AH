@@ -1,6 +1,6 @@
 //! wait_tasks 工具集成测试
 
-use bevy::prelude::*;
+use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExperienceStore,

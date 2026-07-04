@@ -6,8 +6,8 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use crate::prelude::Resource;
 use anyhow::Result;
-use bevy::prelude::Resource;
 use tracing::warn;
 
 use crate::domain::{LongTermMemory, LongTermMemoryEntry};

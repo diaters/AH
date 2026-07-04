@@ -24,7 +24,7 @@ pub use task_completion_hook::{TaskTerminalDispatched, task_completion_hook_syst
 pub use task_creation::{on_task_created_hook_system, user_message_to_task_system};
 pub use task_lifecycle::{finish_task_system, retry_ready_system, task_termination_system};
 
-use bevy::prelude::*;
+use crate::prelude::*;
 
 use crate::{
     app::ExecutionResultReceiver,

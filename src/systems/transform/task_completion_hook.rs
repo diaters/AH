@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::debug;
 use uuid::Uuid;
@@ -79,7 +79,7 @@ pub fn task_completion_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (_entity, task) in pending {
                 let point = match &task.status {
                     TaskStatus::Done => HookPoint::OnTaskCompleted,

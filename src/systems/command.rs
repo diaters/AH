@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::app::MemoryConfig;
@@ -255,9 +255,10 @@ pub(crate) fn command_parse_system(
 /// `command_parse_system` 使用 `Commands` 无法直接获取 `&mut World`，
 /// 因此 spawn `ReloadPluginsMessage`，由此系统在下一帧消费并执行重载。
 pub(crate) fn reload_plugins_system(world: &mut World) {
-    let mut messages: Vec<bevy::prelude::Entity> = Vec::new();
+    let mut messages: Vec<crate::prelude::Entity> = Vec::new();
     {
-        let mut query = world.query_filtered::<bevy::prelude::Entity, With<ReloadPluginsMessage>>();
+        let mut query =
+            world.query_filtered::<crate::prelude::Entity, With<ReloadPluginsMessage>>();
         for entity in query.iter(world) {
             messages.push(entity);
         }
@@ -278,7 +279,7 @@ pub(crate) fn reload_plugins_system(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use bevy::prelude::*;
+    use crate::prelude::*;
 
     use super::command_parse_system;
     use crate::{

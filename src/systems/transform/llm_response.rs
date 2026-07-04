@@ -2,7 +2,7 @@
 //!
 //! 处理 LLM 响应和 Tool 调用循环。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::{debug, trace, warn};
 
 use crate::{

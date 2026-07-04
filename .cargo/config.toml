@@ -1,0 +1,2 @@
+[target.aarch64-linux-android]
+linker = "${env:ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android30-clang"

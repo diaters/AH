@@ -1,4 +1,4 @@
-use bevy::prelude::Component;
+use crate::prelude::Component;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tiktoken_rs::cl100k_base;

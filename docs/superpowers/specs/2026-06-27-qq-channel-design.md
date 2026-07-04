@@ -467,7 +467,7 @@ self.send_text_markdown(&recipient, &note).await?;
 新增 crate（[Cargo.toml](../../../Cargo.toml)），符合项目依赖原则（crates.io / MIT/Apache-2.0 兼容 / 纯 Rust 实现）：
 
 ```toml
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.22"
 sha2 = "0.10"
 md5 = "0.7"

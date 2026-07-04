@@ -6,7 +6,7 @@
 //!
 //! 启动阶段和 /reload-plugins 均调用此模块，避免重复逻辑。
 
-use bevy::prelude::World;
+use crate::prelude::World;
 
 use crate::infrastructure::skills::{PluginSkillContributions, PluginSkillEntry};
 use crate::systems::tools::register_plugin_tools;
@@ -24,7 +24,7 @@ pub fn integrate_plugin_contributions(world: &mut World, registry: &PluginRegist
     // 注册插件贡献的工具：逐个 resource_scope 避免同时 &mut World。
     world.resource_scope(
         |world: &mut World,
-         mut space: bevy::ecs::change_detection::Mut<crate::domain::SpaceToolRegistry>| {
+         mut space: bevy_ecs::change_detection::Mut<crate::domain::SpaceToolRegistry>| {
             if let Some(mut execs) = world.get_resource_mut::<crate::domain::BuiltinToolExecutors>()
             {
                 register_plugin_tools(&mut space, &mut execs, registry);

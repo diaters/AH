@@ -4,8 +4,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use bevy::prelude::*;
 use crossbeam_channel::unbounded;
+use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, FrontendKind,

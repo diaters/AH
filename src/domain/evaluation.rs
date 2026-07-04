@@ -1,4 +1,4 @@
-use bevy::prelude::Resource;
+use crate::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 /// 评估触发条件

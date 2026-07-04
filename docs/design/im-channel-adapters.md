@@ -252,7 +252,7 @@ async-trait = "0.1"
 
 ```toml
 # QQ / 飞书阶段
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 prost = "0.13"
 bytes = "1"
 ```

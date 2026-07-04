@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::{
@@ -128,7 +128,7 @@ pub(crate) fn continue_task_system(
 
 #[cfg(test)]
 mod tests {
-    use bevy::prelude::*;
+    use crate::prelude::*;
 
     use super::user_input_routing_system;
     use crate::domain::{

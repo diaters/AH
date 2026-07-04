@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
-use bevy::prelude::Resource;
+use crate::prelude::Resource;
 
 use crate::domain::SharedKnowledgeUpgradeQueue;
 

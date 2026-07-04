@@ -3,8 +3,8 @@
 //! 对外暴露按 Agent 名称读写长期记忆的高层接口。
 //! 内部持有 `Box<dyn MemoryStore>`，将领域模型与持久化细节隔离。
 
+use crate::prelude::Resource;
 use anyhow::Result;
-use bevy::prelude::Resource;
 use tracing::{debug, warn};
 
 use crate::contracts::MemoryStore;

@@ -14,7 +14,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::debug;
 
@@ -59,7 +59,7 @@ pub fn workitem_lifecycle_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, work_item, hook_point) in targets {
                 dispatch_workitem_lifecycle_hook(world, &mut registry, &work_item, hook_point);
 

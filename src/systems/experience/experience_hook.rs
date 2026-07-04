@@ -7,7 +7,7 @@
 //! 写入系统将 `(HookPoint, candidate_id)` 推入队列，
 //! 本系统逐条派发对应 hook 后清空队列。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 #[cfg(test)]
@@ -46,7 +46,7 @@ pub fn on_experience_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (point, _candidate_id) in &events {
                 dispatch_experience_hook(world, &mut registry, *point);
             }
