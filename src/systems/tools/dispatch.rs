@@ -251,6 +251,13 @@ pub fn tool_dispatch_system(
                         ApprovalRequestedHookPending,
                     ));
 
+                    if let Some((_, mut task)) = tasks
+                        .iter_mut()
+                        .find(|(_, t)| t.id == request.request.task_id)
+                    {
+                        task.pending_confirmation_id = Some(request_id);
+                    }
+
                     request.pending_confirmation_id = Some(request_id);
                     continue;
                 }
