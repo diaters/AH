@@ -4,10 +4,20 @@ use tracing::debug;
 use crate::{
     app::Clock,
     domain::{
-        ContinueTaskMessage, CreateTaskMessage, EntryMetadata, EntryRole, ShortTermMemory, Task,
-        TaskStatus, UserCommand, UserInputMessage, WaitingReason,
+        ContinueTaskMessage, CreateTaskMessage, EntryMetadata, EntryRole, ShortTermMemory,
+        SystemOutputMessage, Task, TaskStatus, ToolConfirmationResponseMessage, UserCommand,
+        UserInputMessage, WaitingReason,
     },
 };
+
+fn parse_confirmation_option(content: &str) -> Option<String> {
+    match content.trim().to_lowercase().as_str() {
+        "1" => Some("allow_once".to_string()),
+        "2" => Some("allow_always".to_string()),
+        "3" => Some("deny".to_string()),
+        _ => None,
+    }
+}
 
 /// 用户输入路由系统：判断是创建新任务还是继续现有任务
 pub(crate) fn user_input_routing_system(
@@ -16,6 +26,49 @@ pub(crate) fn user_input_routing_system(
     tasks: Query<&Task>,
 ) {
     for (entity, input) in &user_inputs {
+        // 优先处理处于 Waiting(User) 且正在等待工具确认的任务
+        if let Some(task) = tasks.iter().find(|t| {
+            t.status == TaskStatus::Waiting(WaitingReason::User)
+                && t.origin_channel == input.origin_channel
+                && t.pending_confirmation_id.is_some()
+        }) {
+            let pending_id = task
+                .pending_confirmation_id
+                .expect("pending id confirmed above");
+            match parse_confirmation_option(&input.content) {
+                Some(option_id) => {
+                    debug!(
+                        event = "RoutingDecision",
+                        decision = "confirmation_response",
+                        input = %input.content,
+                        selected_option = %option_id,
+                        request_id = %pending_id,
+                        task_id = %task.id,
+                        "routing input as tool confirmation response"
+                    );
+                    commands.spawn(ToolConfirmationResponseMessage {
+                        request_id: pending_id,
+                        selected_option: option_id,
+                    });
+                }
+                None => {
+                    debug!(
+                        event = "RoutingDecision",
+                        decision = "confirmation_retry_prompt",
+                        input = %input.content,
+                        task_id = %task.id,
+                        "invalid confirmation option, prompting retry"
+                    );
+                    commands.spawn(SystemOutputMessage {
+                        task_id: task.id,
+                        content: "请输入有效选项：1=仅本次允许，2=永久允许，3=拒绝".to_string(),
+                    });
+                }
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 检查是否是命令（命令由 command_parse_system 处理）
         if UserCommand::parse(&input.content).is_command() {
             continue; // 跳过，由 command_parse_system 处理
@@ -132,8 +185,8 @@ mod tests {
 
     use super::user_input_routing_system;
     use crate::domain::{
-        ChannelId, ContinueTaskMessage, CreateTaskMessage, FrontendKind, Task, TaskStatus,
-        UserInputMessage, WaitingReason,
+        ChannelId, ContinueTaskMessage, CreateTaskMessage, FrontendKind, SystemOutputMessage, Task,
+        TaskStatus, ToolConfirmationResponseMessage, UserInputMessage, WaitingReason,
     };
 
     fn telegram_channel() -> ChannelId {
@@ -176,6 +229,12 @@ mod tests {
             origin_channel: channel,
             last_evaluated_turn: None,
         }
+    }
+
+    fn make_waiting_task_with_confirmation(channel: ChannelId, pending_id: uuid::Uuid) -> Task {
+        let mut task = make_waiting_task(channel);
+        task.pending_confirmation_id = Some(pending_id);
+        task
     }
 
     #[test]
@@ -238,5 +297,158 @@ mod tests {
             .collect();
         assert_eq!(continue_msgs.len(), 1);
         assert_eq!(continue_msgs[0].task_id, task_id);
+    }
+
+    #[test]
+    fn text_confirmation_option_2_maps_to_allow_always() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let pending_id = uuid::Uuid::new_v4();
+        let task = make_waiting_task_with_confirmation(telegram_channel(), pending_id);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "2".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let responses: Vec<&ToolConfirmationResponseMessage> = app
+            .world_mut()
+            .query::<&ToolConfirmationResponseMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].request_id, pending_id);
+        assert_eq!(responses[0].selected_option, "allow_always");
+
+        let continues: Vec<&ContinueTaskMessage> = app
+            .world_mut()
+            .query::<&ContinueTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            continues.is_empty(),
+            "should not continue task while pending confirmation"
+        );
+
+        let outputs: Vec<&SystemOutputMessage> = app
+            .world_mut()
+            .query::<&SystemOutputMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            outputs.is_empty(),
+            "should not prompt retry for valid option"
+        );
+
+        let tasks: Vec<&Task> = app.world_mut().query::<&Task>().iter(app.world()).collect();
+        assert_eq!(tasks[0].id, task_id);
+        assert_eq!(tasks[0].pending_confirmation_id, Some(pending_id));
+    }
+
+    #[test]
+    fn invalid_confirmation_text_prompts_retry() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let pending_id = uuid::Uuid::new_v4();
+        app.world_mut().spawn(make_waiting_task_with_confirmation(
+            telegram_channel(),
+            pending_id,
+        ));
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "hello".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let outputs: Vec<&SystemOutputMessage> = app
+            .world_mut()
+            .query::<&SystemOutputMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(outputs.len(), 1);
+        assert!(outputs[0].content.contains("1=仅本次允许"));
+
+        let responses: Vec<&ToolConfirmationResponseMessage> = app
+            .world_mut()
+            .query::<&ToolConfirmationResponseMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            responses.is_empty(),
+            "should not spawn confirmation response for invalid input"
+        );
+
+        let new_tasks: Vec<&CreateTaskMessage> = app
+            .world_mut()
+            .query::<&CreateTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            new_tasks.is_empty(),
+            "should not create new task while pending confirmation"
+        );
+
+        let continues: Vec<&ContinueTaskMessage> = app
+            .world_mut()
+            .query::<&ContinueTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            continues.is_empty(),
+            "should not continue task while pending confirmation"
+        );
+    }
+
+    #[test]
+    fn no_pending_confirmation_routes_to_continue_task() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let task = make_waiting_task(telegram_channel());
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "继续".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let continues: Vec<&ContinueTaskMessage> = app
+            .world_mut()
+            .query::<&ContinueTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(continues.len(), 1);
+        assert_eq!(continues[0].task_id, task_id);
+
+        let responses: Vec<&ToolConfirmationResponseMessage> = app
+            .world_mut()
+            .query::<&ToolConfirmationResponseMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            responses.is_empty(),
+            "should not spawn confirmation response without pending id"
+        );
+
+        let outputs: Vec<&SystemOutputMessage> = app
+            .world_mut()
+            .query::<&SystemOutputMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            outputs.is_empty(),
+            "should not prompt retry without pending id"
+        );
     }
 }
