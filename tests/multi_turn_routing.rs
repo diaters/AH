@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,

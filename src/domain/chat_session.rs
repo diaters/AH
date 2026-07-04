@@ -1,6 +1,6 @@
 //! chat_with_agent 会话组件
 
-use bevy::prelude::Component;
+use crate::prelude::Component;
 use uuid::Uuid;
 
 /// 标记一个子任务为 chat_with_agent 对话型子任务，并保存每轮变化的状态。

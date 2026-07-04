@@ -1,4 +1,4 @@
-use bevy::prelude::Resource;
+use crate::prelude::Resource;
 use std::path::PathBuf;
 
 /// 插件贡献的 Skill 条目。

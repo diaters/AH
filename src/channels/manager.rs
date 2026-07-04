@@ -19,7 +19,7 @@ fn frontend_kind_for_name(name: &str) -> FrontendKind {
     }
 }
 
-#[derive(Clone, bevy::prelude::Resource)]
+#[derive(Clone, crate::prelude::Resource)]
 pub struct ChannelManager {
     channels: Vec<Arc<dyn Channel>>,
     outbound_tx: mpsc::UnboundedSender<(String, ChannelOutboundMessage)>,

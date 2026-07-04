@@ -2,7 +2,7 @@
 //!
 //! 定义 Agent 实体、配置、权限等。
 
-use bevy::prelude::Component;
+use crate::prelude::Component;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

@@ -2,7 +2,7 @@
 //!
 //! 定义统一的工作单元类型，支持执行、摘要、评估等多种工作类型。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use uuid::Uuid;
 
 use crate::user_plugins::hook_point::HookPoint;

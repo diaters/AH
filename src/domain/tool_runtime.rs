@@ -2,7 +2,7 @@
 //!
 //! 定义 Tool 调用状态、对话消息等。
 
-use bevy::prelude::Component;
+use crate::prelude::Component;
 
 use super::{AgentId, AgentRequestKind, ConversationMessage, TaskId, ToolDefinition};
 

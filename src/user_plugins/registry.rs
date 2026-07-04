@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use bevy::prelude::Resource;
+use crate::prelude::Resource;
 use rhai::AST;
 
 use crate::user_plugins::hook_point::HookPoint;

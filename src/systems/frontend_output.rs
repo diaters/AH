@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::{
@@ -176,7 +176,7 @@ fn task_status_to_kind(status: &crate::domain::TaskStatus) -> TaskStatusKind {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use bevy::prelude::*;
+    use crate::prelude::*;
     use uuid::Uuid;
 
     use crate::app::FrontendRegistry;

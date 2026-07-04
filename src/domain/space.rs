@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::{Component, Resource};
+use crate::prelude::{Component, Resource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

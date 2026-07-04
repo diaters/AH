@@ -1,10 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use genai::{
     Client, ModelIden, ServiceTarget,
     adapter::AdapterKind,
     chat::{ChatMessage, ChatRequest, ChatResponse, ContentPart, Tool, ToolCall, ToolResponse},
     resolver::{AuthData, Endpoint, ServiceTargetResolver},
 };
+use reqwest_013;
 use tokio::time::Instant;
 use tracing::debug;
 
@@ -20,13 +21,28 @@ pub(crate) struct GenaiExecutor {
     model: String,
 }
 
+fn create_reqwest_client() -> Result<reqwest_013::Client> {
+    let roots = webpki_roots::TLS_SERVER_ROOTS.iter().cloned();
+    let root_store = rustls::RootCertStore::from_iter(roots);
+    let rustls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    reqwest_013::Client::builder()
+        .tls_backend_preconfigured(rustls_config)
+        .build()
+        .context("failed to build reqwest client with webpki roots")
+}
+
 impl GenaiExecutor {
     pub(crate) fn new(config: &LlmProviderConfig) -> Result<Self> {
         debug!(model = %config.model, provider = ?config.provider, "creating genai executor");
 
         let client = match config.provider {
             LlmProviderKind::OpenAi | LlmProviderKind::Anthropic | LlmProviderKind::DeepSeek => {
-                Client::default()
+                Client::builder()
+                    .with_reqwest(create_reqwest_client()?)
+                    .build()
             }
             LlmProviderKind::OpenAiCompatible => {
                 let api_base = config
@@ -55,6 +71,7 @@ impl GenaiExecutor {
                 );
 
                 Client::builder()
+                    .with_reqwest(create_reqwest_client()?)
                     .with_service_target_resolver(target_resolver)
                     .build()
             }

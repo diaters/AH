@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::World;
+use crate::prelude::World;
 use rhai::{Dynamic, Engine, Map};
 use uuid::Uuid;
 

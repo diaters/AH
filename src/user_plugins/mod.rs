@@ -17,7 +17,7 @@ pub mod tool_executor;
 /// 核心 Host API 版本。manifest 的 `api_version` 必须与此相等才能加载。
 pub const API_VERSION: u32 = 1;
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use std::path::PathBuf;
 
 use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};

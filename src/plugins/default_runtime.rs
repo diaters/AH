@@ -2,8 +2,8 @@
 //!
 //! 提供默认的运行时插件组合。
 
-use bevy::app::PluginGroupBuilder;
-use bevy::prelude::*;
+use crate::prelude::*;
+use bevy_app::PluginGroupBuilder;
 
 use super::{
     DispatchPlugin, ExecutionPlugin, FrontendPlugin, MemoryPlugin, TaskRuntimePlugin,

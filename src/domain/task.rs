@@ -2,7 +2,7 @@
 //!
 //! 定义任务实体、状态、等待原因等。
 
-use bevy::prelude::Component;
+use crate::prelude::Component;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::debug;

@@ -7,7 +7,7 @@
 //! 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的那个。
 //! 这允许灵活配置多个 Brain Agent（如不同模型），同时保持确定性选择。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::{debug, trace};
 
 use crate::{

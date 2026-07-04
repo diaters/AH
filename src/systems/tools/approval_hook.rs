@@ -8,7 +8,7 @@
 //!   由 `approval_dispatch_system` 在 spawn `ApprovalResultMessage` 时附带
 //!   `ApprovalResolvedHookPending` 标记，本系统查询带标记的 entity，派发 hook 后移除标记。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
@@ -39,8 +39,8 @@ pub fn on_approval_requested_hook_system(world: &mut World) {
     }
 
     // 先采集所有带标记的 entity 及 clone，避免在派发 hook 期间借用 world。
-    let targets: Vec<(bevy::ecs::entity::Entity, ApprovalRequestMessage)> = world
-        .query_filtered::<(bevy::ecs::entity::Entity, &ApprovalRequestMessage), With<ApprovalRequestedHookPending>>()
+    let targets: Vec<(bevy_ecs::entity::Entity, ApprovalRequestMessage)> = world
+        .query_filtered::<(bevy_ecs::entity::Entity, &ApprovalRequestMessage), With<ApprovalRequestedHookPending>>()
         .iter(world)
         .map(|(e, msg)| (e, msg.clone()))
         .collect();
@@ -50,7 +50,7 @@ pub fn on_approval_requested_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, msg) in targets {
                 dispatch_approval_hook(
                     world,
@@ -80,8 +80,8 @@ pub fn on_approval_resolved_hook_system(world: &mut World) {
     }
 
     // 先采集所有带标记的 entity 及 clone，避免在派发 hook 期间借用 world。
-    let targets: Vec<(bevy::ecs::entity::Entity, ApprovalResultMessage)> = world
-        .query_filtered::<(bevy::ecs::entity::Entity, &ApprovalResultMessage), With<ApprovalResolvedHookPending>>()
+    let targets: Vec<(bevy_ecs::entity::Entity, ApprovalResultMessage)> = world
+        .query_filtered::<(bevy_ecs::entity::Entity, &ApprovalResultMessage), With<ApprovalResolvedHookPending>>()
         .iter(world)
         .map(|(e, msg)| (e, msg.clone()))
         .collect();
@@ -91,7 +91,7 @@ pub fn on_approval_resolved_hook_system(world: &mut World) {
     }
 
     world.resource_scope(
-        |world: &mut World, mut registry: bevy::ecs::change_detection::Mut<PluginRegistry>| {
+        |world: &mut World, mut registry: bevy_ecs::change_detection::Mut<PluginRegistry>| {
             for (entity, msg) in targets {
                 dispatch_approval_hook(
                     world,

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use bevy::prelude::World;
+use crate::prelude::World;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use tracing::{debug, warn};

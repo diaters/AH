@@ -16,7 +16,7 @@ mod summarization;
 pub mod tools;
 mod transform;
 
-use bevy::ecs::schedule::SystemSet;
+use bevy_ecs::schedule::SystemSet;
 
 pub(crate) use command::{command_parse_system, reload_plugins_system};
 pub(crate) use dispatch::{

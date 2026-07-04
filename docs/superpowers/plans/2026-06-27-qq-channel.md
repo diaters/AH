@@ -65,7 +65,7 @@ __Interfaces:__
 修改 [Cargo.toml](../../../Cargo.toml)，在 `[dependencies]` 段 `reqwest` 之后追加：
 
 ```toml
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.22"
 sha2 = "0.10"
 md5 = "0.7"

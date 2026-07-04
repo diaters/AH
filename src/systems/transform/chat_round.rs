@@ -1,6 +1,6 @@
 //! chat_with_agent 多轮对话阻塞与结果回填系统
 
-use bevy::prelude::*;
+use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{

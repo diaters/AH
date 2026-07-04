@@ -7,7 +7,10 @@ edition = "2024"
 anyhow = "1.0.102"
 dotenvy = "0.15"
 genai = "0.6"
-bevy = { version = "0.18.1", default-features = false, features = ["multi_threaded"] }
+bevy_app = "0.18.1"
+bevy_ecs = { version = "0.18.1", features = ["multi_threaded"] }
+bevy_time = "0.18.1"
+bevy_utils = "0.18.1"
 chrono = { version = "0.4.44", features = ["clock", "serde"] }
 crossbeam-channel = "0.5.15"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -25,13 +28,16 @@ crossterm = "0.28"
 termimad = "0.31"
 rhai = { version = "1.19", default-features = false, features = ["sync"] }
 jsonschema = { version = "0.20", default-features = false, features = ["resolve-file"] }
-reqwest = { version = "0.12", features = ["json", "multipart"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.22"
 sha2 = "0.10"
 md5 = "0.7"
 async-trait = "0.1"
 futures-util = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+reqwest_013 = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "gzip", "rustls-no-provider"] }
+webpki-roots = "0.26"
 
 [dev-dependencies]
 tempfile = "3.27.0"

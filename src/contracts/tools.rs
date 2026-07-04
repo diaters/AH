@@ -2,8 +2,8 @@
 //!
 //! 定义工具目录和审批策略相关的 trait 接口。
 
-use bevy::prelude::Entity;
-use bevy::prelude::Query;
+use crate::prelude::Entity;
+use crate::prelude::Query;
 
 use crate::domain::{Agent, AgentId, Task, ToolDefinition, ToolPermission};
 
@@ -94,8 +94,8 @@ mod tests {
         AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId, FrontendKind,
         Task,
     };
-    use bevy::ecs::system::SystemState;
-    use bevy::prelude::*;
+    use crate::prelude::*;
+    use bevy_ecs::system::SystemState;
     use uuid::Uuid;
 
     fn default_channel() -> ChannelId {

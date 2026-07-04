@@ -2,7 +2,7 @@
 //!
 //! 提供记忆管理相关的系统。
 
-use bevy::prelude::*;
+use crate::prelude::*;
 
 use crate::infrastructure::assets::AgentAssetService;
 use crate::infrastructure::memory::LongTermMemoryService;

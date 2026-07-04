@@ -2,7 +2,7 @@
 //!
 //! 定义子任务、批处理、DAG 执行状态等。
 
-use bevy::prelude::Component;
+use crate::prelude::Component;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
