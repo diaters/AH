@@ -235,6 +235,7 @@ pub fn tool_confirmation_result_system(
                     selected_option = %response.selected_option,
                     "unknown option selected"
                 );
+                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                 // 清理残留的请求 entity，避免永久泄漏
                 commands.entity(request_entity).despawn();
             }
