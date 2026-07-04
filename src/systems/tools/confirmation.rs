@@ -246,10 +246,41 @@ pub fn tool_confirmation_result_system(
                     event = "ToolConfirmationUnknownOption",
                     request_id = %response.request_id,
                     selected_option = %response.selected_option,
+                    pending_sibling_count = pending_sibling_count,
                     "unknown option selected"
                 );
+
+                // 将未知选项视为拒绝，避免任务卡住
+                let execution_result = crate::domain::AgentExecutionResult {
+                    task_id: tool_request.request.task_id,
+                    agent_id: tool_request.request.agent_id,
+                    request_kind: tool_request.request.request_kind.clone(),
+                    result: Err(ExecutionError::UserCancelled(
+                        "unknown confirmation option".to_string(),
+                    )),
+                    prompt: String::new(),
+                    system_prompt: None,
+                    tools: vec![],
+                    reasoning_content: None,
+                    work_item_id: None,
+                };
+
+                commands.spawn((
+                    ToolExecutionResultMessage {
+                        result: execution_result,
+                        tool_name: tool_request.tool_name.clone(),
+                        tool_output: Err(ToolError::PermissionDenied(
+                            "unknown confirmation option".to_string(),
+                        )),
+                        tool_call_id: tool_request.tool_call_id.clone(),
+                        processed: false,
+                        original_tool_output: None,
+                    },
+                    ToolReturnedHookPending,
+                ));
+
                 clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
-                // 清理残留的请求 entity，避免永久泄漏
+                restore_task_after_tool(&mut tasks, &calling_states, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
             }
         }
