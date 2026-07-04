@@ -160,6 +160,7 @@ mod tests {
             creator: uuid::Uuid::nil(),
             delegate: None,
             status: TaskStatus::Waiting(WaitingReason::User),
+            pending_confirmation_id: None,
             input_summary: String::new(),
             result_summary: String::new(),
             priority: 0,
