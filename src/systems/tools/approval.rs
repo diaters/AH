@@ -191,12 +191,7 @@ pub fn approval_result_system(
                         tool_request,
                         ToolError::NotFound(format!("executor for {}", tool_request.tool_name)),
                     );
-                    if let Some((_, mut task)) = tasks
-                        .iter_mut()
-                        .find(|(_, t)| t.id == tool_request.request.task_id)
-                    {
-                        task.pending_confirmation_id = None;
-                    }
+                    clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                     restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
                     commands.entity(entity).despawn();
                     continue;
