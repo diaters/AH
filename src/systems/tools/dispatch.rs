@@ -189,6 +189,14 @@ pub fn tool_dispatch_system(
                 restore_task_after_tool(&mut tasks, &calling_states, request.request.task_id);
             }
             ToolPermission::Confirm => {
+                // 顺序审批：同一任务同一时间仅允许一个待确认请求
+                let already_pending = tasks.iter().any(|(_, t)| {
+                    t.id == request.request.task_id && t.pending_confirmation_id.is_some()
+                });
+                if already_pending {
+                    continue;
+                }
+
                 // Find the task to check parent_task_id
                 let task_for_approval = tasks
                     .iter()
@@ -276,6 +284,13 @@ pub fn tool_dispatch_system(
                     parent_agent_id: None,
                 });
 
+                if let Some((_, mut task)) = tasks
+                    .iter_mut()
+                    .find(|(_, t)| t.id == request.request.task_id)
+                {
+                    task.pending_confirmation_id = Some(request_id);
+                }
+
                 request.pending_confirmation_id = Some(request_id);
                 request.pending_confirmation_options = Some(options);
             }
@@ -295,5 +310,143 @@ pub fn tool_dispatch_system(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::{Clock, HarnessConfig, HarnessSettings},
+        domain::{
+            Agent, AgentCapabilities, AgentExecutionRequest, AgentKind, AgentProfile,
+            AgentRequestKind, AgentToolPermissions, BuiltinToolExecutors, ChannelId,
+            ExperienceStore, FrontendKind, PendingExperienceHooks, SharedKnowledgeBase,
+            SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage, ToolDefinition,
+            ToolExecutionRequestMessage, ToolExecutorKind, ToolPermission, ToolSchema,
+            WaitingReason,
+        },
+        systems::NativeProcessBackend,
+    };
+    use bevy_ecs::prelude::*;
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    #[test]
+    fn sequential_confirmation_only_one_pending_at_a_time() {
+        let mut world = World::new();
+
+        // 注册必要资源
+        world.init_resource::<SharedKnowledgeBase>();
+        world.init_resource::<ExperienceStore>();
+        world.init_resource::<PendingExperienceHooks>();
+        world.insert_resource(HarnessSettings(HarnessConfig::default()));
+        world.insert_resource(NativeProcessBackend::default());
+        world.insert_resource(Clock::default());
+
+        // 注册需要确认的测试工具
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(ToolDefinition {
+            name: "shell_exec".to_string(),
+            description: "test tool".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: ToolPermission::Confirm,
+            executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
+            required_tag: None,
+        });
+        world.insert_resource(registry);
+
+        // 该测试不会真正执行工具，执行器注册表可为空
+        world.insert_resource(BuiltinToolExecutors::default());
+
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+
+        let task_entity = world
+            .spawn(Task {
+                id: task_id,
+                content: "test".to_string(),
+                creator: agent_id,
+                delegate: Some(agent_id),
+                status: TaskStatus::Waiting(WaitingReason::ToolExecution),
+                pending_confirmation_id: None,
+                input_summary: String::new(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: channel,
+                last_evaluated_turn: None,
+            })
+            .id();
+
+        world.spawn(Agent {
+            id: agent_id,
+            profile: AgentProfile {
+                name: "test-agent".to_string(),
+                model: "test".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: "test".to_string(),
+            },
+            kind: AgentKind::TaskScoped,
+            parent_id: None,
+            bound_task_id: Some(task_id),
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Confirm,
+                overrides: HashMap::new(),
+            },
+        });
+
+        // spawn 3 个需要确认的工具请求
+        for _ in 0..3 {
+            world.spawn(ToolExecutionRequestMessage {
+                request: AgentExecutionRequest {
+                    task_id,
+                    agent_id,
+                    request_kind: AgentRequestKind::ToolExecution {
+                        tool_name: "shell_exec".to_string(),
+                    },
+                    prompt: String::new(),
+                    system_prompt: None,
+                    tools: vec![],
+                    conversation: None,
+                    work_item_id: None,
+                },
+                tool_name: "shell_exec".to_string(),
+                tool_input: serde_json::json!({"cmd": "echo ok"}),
+                pending_confirmation_id: None,
+                tool_call_id: None,
+                pending_confirmation_options: None,
+            });
+        }
+
+        // 运行一次 dispatch 系统
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_dispatch_system);
+        schedule.run(&mut world);
+
+        let pending_count = world
+            .query::<&ToolConfirmationRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(pending_count, 1, "同一时刻应只有一个确认请求");
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert!(task.pending_confirmation_id.is_some());
     }
 }
