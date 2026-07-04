@@ -10,9 +10,10 @@ use std::{
 
 use harness::prelude::*;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, EngineEvent,
-    EventTarget, ExecutorFuture, ExternalInput, Frontend, FrontendKind, HarnessConfig, LlmToolCall,
-    NativeProcessBackend, OutputContent, ToolConfirmationResponseMessage, build_harness_app,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
+    EngineEvent, EventTarget, ExecutorFuture, ExternalInput, Frontend, FrontendKind, HarnessConfig,
+    LlmToolCall, NativeProcessBackend, OutputContent, ToolConfirmationResponseMessage,
+    build_harness_app,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -79,8 +80,7 @@ impl CannedExecutor {
 impl AgentExecutor for CannedExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         // 治理型 WorkItem / 非普通 LLM 请求直接返回占位文本，避免干扰主流程。
-        if request.work_item_id.is_some()
-            || request.request_kind != harness::AgentRequestKind::LlmCompletion
+        if request.work_item_id.is_some() || request.request_kind != AgentRequestKind::LlmCompletion
         {
             return Box::pin(async move { Ok(text_output("ok")) });
         }
@@ -223,14 +223,14 @@ fn collect_qq_outputs(app: &mut App) -> Vec<CapturedOutput> {
                 target, content, ..
             } => {
                 if let EventTarget::Directed(channels) = target {
-                    if channels.iter().any(|c| c.frontend == FrontendKind::QQ) {
-                        Some(CapturedOutput {
+                    channels
+                        .iter()
+                        .find(|c| c.frontend == FrontendKind::QQ)
+                        .cloned()
+                        .map(|target| CapturedOutput {
                             content: content.clone(),
-                            target: channels.first().cloned().unwrap_or_else(qq_channel),
+                            target,
                         })
-                    } else {
-                        None
-                    }
                 } else {
                     None
                 }
@@ -242,18 +242,20 @@ fn collect_qq_outputs(app: &mut App) -> Vec<CapturedOutput> {
                 ..
             } => {
                 if let EventTarget::Directed(channels) = target {
-                    if channels.iter().any(|c| c.frontend == FrontendKind::QQ) {
-                        let mut lines = vec![format!("工具 `{}` 请求执行，选项：", tool_name)];
-                        for (idx, opt) in options.iter().enumerate() {
-                            lines.push(format!("{}={}", idx + 1, opt.description));
-                        }
-                        Some(CapturedOutput {
-                            content: lines.join("\n"),
-                            target: channels.first().cloned().unwrap_or_else(qq_channel),
+                    channels
+                        .iter()
+                        .find(|c| c.frontend == FrontendKind::QQ)
+                        .cloned()
+                        .map(|target| {
+                            let mut lines = vec![format!("工具 `{}` 请求执行，选项：", tool_name)];
+                            for (idx, opt) in options.iter().enumerate() {
+                                lines.push(format!("{}={}", idx + 1, opt.description));
+                            }
+                            CapturedOutput {
+                                content: lines.join("\n"),
+                                target,
+                            }
                         })
-                    } else {
-                        None
-                    }
                 } else {
                     None
                 }
