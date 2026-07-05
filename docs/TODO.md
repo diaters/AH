@@ -44,6 +44,9 @@
 - [ ] 清理旧经验直写链路：`memory_contribution_system` / `memory_absorption_system`（当前为过渡态保留）
 - [ ] 实现顶层治理对候选 `kind_hint` 的修正能力
 - [x] 实现非顶层基于多个子候选整理组合候选的主动重写
+- [x] 顺序工具确认：同一任务的多个工具确认请求按顺序逐个弹出
+- [x] 工具调用软限制与硬上限：达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，
+  绝对硬上限时强制失败
 
 ### 中优先级
 
@@ -60,6 +63,7 @@
 - [x] __出向-自动__：Agent 对 Task 的文字回复按 `origin_channel` 自动推回来源平台
   （需 `Channel` 实现 `Frontend` trait 并持有出向发送句柄）
 - [x] __QQ 通道__：OAuth2 app token、WebSocket Gateway、markdown/富媒体发送
+- [x] __跨通道隔离__：用户输入仅路由到同一通道的 Task，命令限定在发出通道生效
 - [ ] __飞书 / Lark 通道__：tenant_access_token、WebSocket/Webhook、interactive card
 - [ ] __媒体附件__：统一 `[IMAGE:path]`、`[VIDEO:path]`、`[DOCUMENT:path]`、`[VOICE:path]`
   标记，支持三平台下载/上传
@@ -68,6 +72,7 @@
 
 ### 低优先级
 
+- [ ] 验证 Android aarch64 + rustls 在实际设备上的运行约束
 - [ ] 评估配置热加载是否值得引入
 - [ ] 评估分布式或多实例支持是否进入近期路线
 - [ ] 评估长期记忆是否需要引入向量检索或语义匹配能力，
@@ -82,6 +87,7 @@
 
 ### 文档状态
 
+- `docs/superpowers/` 下已完成的计划和规格已归档到 `docs/archive/superpowers/`
 - `docs/design/` 下仍有一部分历史阶段文档保留旧语境
 - 这些文档可作为设计演进背景，不应直接视为当前实现说明
 

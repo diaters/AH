@@ -11,22 +11,33 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - Brain 调度、Agent 配置加载与多 Agent 执行链路
 - `create_tasks` + `wait_tasks` 驱动的任务分解能力
+- `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
 - Summarization 与 Evaluation 收敛到 `WorkItem` 闭环
-- 工具权限、审批 UI、结果回写与工具执行链路
+- 工具权限、审批 UI、顺序确认与工具执行链路
 - 精简后的 shell 工具集：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
+- 记忆治理：ShortTermMemory、LongTermMemory、SharedKnowledgeBase 三层收敛，
+  支持衰退淘汰与 JSON 文件持久化
+- 经验候选治理：两层分层汇聚模型，顶层治理后知识/技能落盘与孵化提案
+- 插件系统：Rhai 脚本扩展，20 个 hook 点，支持贡献工具、技能和 Agent
+- IM 通道：Telegram（长轮询、白名单、媒体附件）+ QQ（WebSocket Gateway、OAuth2、
+  富媒体），跨通道隔离，出向-自动回执
 - 结构化日志、CI、单元测试与集成测试
+- Android aarch64 支持（rustls TLS 后端）
 
 ### 待完善
 
 - 父 Agent 审批仍为 MVP 自动通过实现，尚未接入真实 LLM 审查
 - 部分历史设计文档仍需持续整理状态标注
 - 更多真实场景下的 provider 兼容性与复杂任务策略验证
+- 飞书通道仅有占位模块，尚未接入实际 API
 
 ### 已收敛
 
 - `Plan` 已收敛为任务分解能力，不再作为独立运行时模块存在
 - `Evaluation` 保留独立语义层，但执行链路统一走 `WorkItem`
+- `spawn_agent` 工具已废弃并从 LLM 可调工具集中移除
+- `AgentExperience` 已删除，不再作为独立运行时概念保留
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
 
@@ -151,4 +162,4 @@ Shell 相关运行参数见 `docs/configuration.md`。
 - Plan / Evaluation 重评估：
   [`docs/design/2026-06-06-plan-evaluation-reassessment-design.md`](docs/design/2026-06-06-plan-evaluation-reassessment-design.md)
 - Shell 工具精简设计：
-  [`docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`](docs/superpowers/specs/2026-06-08-shell-tool-simplification-design.md)
+  [`docs/archive/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`](docs/archive/superpowers/specs/2026-06-08-shell-tool-simplification-design.md)

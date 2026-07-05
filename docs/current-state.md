@@ -17,6 +17,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 用户输入经过 Frontend、Signal、Task、Dispatch、Execution、Writeback 形成闭环
 - TUI 已作为当前主要交互入口
 - 结构化日志、CI、集成测试与回归测试已接入主流程
+- Android aarch64 支持（rustls TLS 后端），可通过交叉编译在 Android 设备运行
 
 #### 任务与执行模型
 
@@ -49,6 +50,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复按 `origin_channel` 自动推回来源 IM 通道
+- 跨通道隔离：用户输入仅路由到同一通道中等待用户的 Task；`/finish`、`/summarize`、`/btw` 等命令限定在发出通道生效；子任务继承父任务的 `origin_channel`
 
 #### 记忆治理
 
