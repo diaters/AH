@@ -72,7 +72,7 @@
 |----------|--------|------|
 | `HARNESS_BRAIN_ENABLED` | `false` | 是否启用 Brain Agent 调度 |
 | `HARNESS_MAX_RETRIES` | `3` | LLM 请求最大重试次数 |
-| `HARNESS_MAX_TOOL_ITERATIONS` | `5` | 单轮工具调用最大迭代次数 |
+| `HARNESS_MAX_TOOL_ITERATIONS` | `5` | 单次用户输入后，LLM 工具调用最大迭代次数 |
 | `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS` | `300` | `wait_tasks` 默认超时时间 |
 | `HARNESS_AGENTS_CONFIG` | `agents.toml` | Agent 配置文件路径 |
 | `HARNESS_LOG_DIR` | `logs` | JSONL 日志输出目录 |

@@ -562,6 +562,7 @@ mod tests {
                 creator: parent_id,
                 delegate: Some(agent_id),
                 status: TaskStatus::Ready,
+                pending_confirmation_id: None,
                 input_summary: "review this doc".to_string(),
                 result_summary: String::new(),
                 priority: 0,

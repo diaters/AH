@@ -407,6 +407,7 @@ fn waiting_task_waits_for_user_input() {
             creator: uuid::Uuid::nil(),
             delegate: None,
             status: TaskStatus::Waiting(WaitingReason::User),
+            pending_confirmation_id: None,
             input_summary: "waiting".to_string(),
             result_summary: String::new(),
             priority: 0,

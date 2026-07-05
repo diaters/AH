@@ -3,7 +3,7 @@
 //! 处理父 Agent 审批请求和结果。
 
 use crate::prelude::*;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     app::{Clock, HarnessSettings},
@@ -17,7 +17,10 @@ use crate::{
     systems::NativeProcessBackend,
 };
 
-use super::orchestrator::{handle_tool_action, restore_task_after_tool, spawn_tool_error};
+use super::orchestrator::{
+    clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
+    spawn_tool_error,
+};
 
 /// 审批分发 System
 ///
@@ -150,6 +153,7 @@ pub fn approval_result_system(
                 ));
 
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
+                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
             }
             ApprovalDecision::Approved => {
@@ -190,6 +194,7 @@ pub fn approval_result_system(
                         tool_request,
                         ToolError::NotFound(format!("executor for {}", tool_request.tool_name)),
                     );
+                    clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                     restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
                     commands.entity(entity).despawn();
                     continue;
@@ -231,6 +236,7 @@ pub fn approval_result_system(
                     );
                 }
 
+                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
                 restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
             }
         }
@@ -239,4 +245,147 @@ pub fn approval_result_system(
     }
 }
 
-use tracing::warn;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{Clock, HarnessConfig, HarnessSettings};
+    use crate::domain::{
+        AgentExecutionRequest, AgentRequestKind, ApprovalDecision, ApprovalResultMessage,
+        ChannelId, FrontendKind, GrantMode, Task, TaskStatus, ToolExecutionRequestMessage,
+        WaitingReason,
+    };
+    use crate::systems::NativeProcessBackend;
+    use bevy_ecs::system::RunSystemOnce;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn test_world() -> World {
+        let mut world = World::new();
+        world.insert_resource(HarnessSettings(HarnessConfig::default()));
+        world.insert_resource(Clock(Utc::now()));
+        world.insert_resource(NativeProcessBackend::default());
+        world.insert_resource(crate::domain::BuiltinToolExecutors::default());
+        world.insert_resource(crate::domain::SharedKnowledgeBase::default());
+        world.insert_resource(crate::domain::ExperienceStore::default());
+        world.insert_resource(crate::domain::PendingExperienceHooks::default());
+        world
+    }
+
+    fn dummy_task(task_id: Uuid) -> Task {
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        Task {
+            id: task_id,
+            content: "test".to_string(),
+            creator: Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Waiting(WaitingReason::Approval),
+            pending_confirmation_id: None,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: channel,
+            last_evaluated_turn: None,
+        }
+    }
+
+    fn dummy_request(
+        task_id: Uuid,
+        agent_id: Uuid,
+        request_id: Uuid,
+    ) -> ToolExecutionRequestMessage {
+        ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "shell_exec".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+            },
+            tool_name: "shell_exec".to_string(),
+            tool_input: serde_json::json!({"cmd": "echo ok"}),
+            pending_confirmation_id: Some(request_id),
+            tool_call_id: None,
+            pending_confirmation_options: None,
+        }
+    }
+
+    #[test]
+    fn approval_rejected_clears_task_pending_id() {
+        let mut world = test_world();
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+
+        let mut task = dummy_task(task_id);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        world.spawn(ApprovalResultMessage {
+            request_id,
+            source_task_id: task_id,
+            approval_task_id: Uuid::new_v4(),
+            decision: ApprovalDecision::Rejected,
+            reasoning: "no".to_string(),
+            grant_mode: GrantMode::Once,
+        });
+
+        world.run_system_once(approval_result_system).unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert!(
+            task.pending_confirmation_id.is_none(),
+            "pending_confirmation_id should be cleared after parent agent rejection"
+        );
+    }
+
+    #[test]
+    fn approval_approved_clears_task_pending_id() {
+        let mut world = test_world();
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+
+        let mut task = dummy_task(task_id);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        world.spawn(ApprovalResultMessage {
+            request_id,
+            source_task_id: task_id,
+            approval_task_id: Uuid::new_v4(),
+            decision: ApprovalDecision::Approved,
+            reasoning: "yes".to_string(),
+            grant_mode: GrantMode::Once,
+        });
+
+        // No executor registered, so the system emits an error result and
+        // restores the task. The pending id must still be cleared.
+        world.run_system_once(approval_result_system).unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert!(
+            task.pending_confirmation_id.is_none(),
+            "pending_confirmation_id should be cleared after parent agent approval"
+        );
+    }
+}
