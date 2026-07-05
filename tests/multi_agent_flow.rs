@@ -202,6 +202,7 @@ fn task_scoped_agent_lifecycle() {
             creator: parent_agent_id,
             delegate: None,
             status: TaskStatus::Done,
+            pending_confirmation_id: None,
             input_summary: String::new(),
             result_summary: "done".to_string(),
             priority: 0,

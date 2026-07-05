@@ -9,16 +9,20 @@ use crate::{
     app::{Clock, HarnessSettings, MemoryConfig},
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
-        AgentExecutionResultMessage, AgentRequestKind, ChatRoundReadyMessage, ChatSession,
-        ConversationMessage, EntryMetadata, EntryRole, ExperienceCollectionCompletedMessage,
-        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy,
-        OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
-        ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem,
+        AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
+        ChatRoundReadyMessage, ChatSession, ConversationMessage, EntryMetadata, EntryRole,
+        ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
+        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ShortTermMemory,
+        SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState,
+        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
         WorkItemLifecycleHookPending, WorkItemType,
     },
     user_plugins::hook_point::HookPoint,
 };
+
+/// 绝对硬上限倍数：iteration 超过此值 × max_iterations 时强制失败任务
+const HARD_LIMIT_MULTIPLIER: u32 = 2;
 
 /// 从子任务输出中提取 <<<RESULT>>>...<<</RESULT>>> 标记对内容。
 /// 提取最后一对标记。如果未找到，返回 None。
@@ -510,6 +514,58 @@ fn handle_summarization_work_item_result(
     commands.entity(result_entity).despawn();
 }
 
+/// 生成合成 ToolExecutionResultMessage，用于向 LLM 传达工具预算已耗尽
+///
+/// 合成结果跳过 ToolCalledHookPending（不 spawn），因此不会触发 on_tool_called hook。
+/// 合成结果附加 ToolReturnedHookPending，会进入 on_tool_returned hook 流水线。
+fn spawn_synthetic_limit_result(
+    commands: &mut Commands,
+    task_id: TaskId,
+    agent_id: AgentId,
+    tool_call_id: &str,
+    tool_name: &str,
+    iteration: u32,
+    max_iterations: u32,
+) {
+    let tool_output = Ok(serde_json::json!({
+        "exit_code": 1,
+        "status": "tool_budget_exhausted",
+        "output": format!(
+            "[TOOL_BUDGET_EXHAUSTED] 本轮工具调用次数已达上限 ({}/{})。请总结你目前取得的进展，并向用户说明下一步需要什么，等待用户决策是否继续。",
+            iteration, max_iterations
+        )
+    }));
+
+    let result = AgentExecutionResult {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: tool_name.to_string(),
+        },
+        result: Ok(AgentExecutionOutput {
+            content: OutputContent::Text(String::new()),
+            reasoning_content: None,
+        }),
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        reasoning_content: None,
+        work_item_id: None,
+    };
+
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result,
+            tool_name: tool_name.to_string(),
+            tool_output,
+            tool_call_id: Some(tool_call_id.to_string()),
+            processed: false,
+            original_tool_output: None,
+        },
+        ToolReturnedHookPending,
+    ));
+}
+
 /// LLM 响应处理 System
 ///
 /// 处理 LLM 的响应，更新任务状态，处理 Tool 调用。
@@ -798,24 +854,6 @@ pub fn llm_response_system(
 
                     if let Some(info) = existing {
                         let new_iteration = info.iteration + 1;
-                        if new_iteration > info.max_iterations {
-                            warn!(
-                                event = "ToolCallingLimitExceeded",
-                                task_id = %task.id,
-                                iteration = new_iteration,
-                                max_iterations = info.max_iterations,
-                                "tool calling exceeded max iterations"
-                            );
-                            task.last_error = Some(format!(
-                                "tool calling exceeded max iterations ({})",
-                                info.max_iterations
-                            ));
-                            task.status = TaskStatus::Failed(FailureReason::AgentError);
-                            task.updated_at = clock.0;
-                            commands.entity(info.entity).despawn();
-                            break;
-                        }
-
                         // Despawn old state and create updated one
                         let mut new_conversation = info.conversation.clone();
                         new_conversation.push(ConversationMessage::Assistant {
@@ -823,6 +861,89 @@ pub fn llm_response_system(
                             tool_calls: calls.clone(),
                             reasoning_content: reasoning_content.clone(),
                         });
+
+                        if new_iteration > info.max_iterations {
+                            // 绝对硬上限：任何情况下都强制失败，防止无限循环
+                            if new_iteration > HARD_LIMIT_MULTIPLIER * info.max_iterations {
+                                warn!(
+                                    event = "ToolCallingHardLimitExceeded",
+                                    task_id = %task.id,
+                                    iteration = new_iteration,
+                                    max_iterations = info.max_iterations,
+                                    "tool calling exceeded absolute hard limit"
+                                );
+                                if info.work_item_id.is_none() {
+                                    task.last_error = Some(format!(
+                                        "tool calling exceeded absolute hard limit ({}/{})",
+                                        new_iteration, info.max_iterations
+                                    ));
+                                    task.status = TaskStatus::Failed(FailureReason::AgentError);
+                                    task.updated_at = clock.0;
+                                }
+                                commands.entity(info.entity).despawn();
+                                break;
+                            }
+
+                            if info.work_item_id.is_some() {
+                                // WorkItem 保持硬失败语义，但不修改原任务状态
+                                warn!(
+                                    event = "ToolCallingLimitExceeded",
+                                    task_id = %task.id,
+                                    work_item_id = ?info.work_item_id,
+                                    iteration = new_iteration,
+                                    max_iterations = info.max_iterations,
+                                    "work item tool calling exceeded max iterations"
+                                );
+                                commands.entity(info.entity).despawn();
+                                break;
+                            }
+
+                            // 普通任务：生成合成 tool result
+                            debug!(
+                                event = "ToolBudgetExhausted",
+                                task_id = %task.id,
+                                iteration = new_iteration,
+                                max_iterations = info.max_iterations,
+                                "tool budget exhausted, returning synthetic result"
+                            );
+
+                            for call in calls {
+                                spawn_synthetic_limit_result(
+                                    &mut commands,
+                                    task.id,
+                                    result.agent_id,
+                                    &call.id,
+                                    &call.name,
+                                    info.iteration,
+                                    info.max_iterations,
+                                );
+                            }
+
+                            // 更新 ToolCallingState，记录这些 tool_call_id 正在等待合成结果
+                            let pending_ids: Vec<String> =
+                                calls.iter().map(|c| c.id.clone()).collect();
+                            commands.entity(info.entity).despawn();
+                            commands.spawn(ToolCallingState {
+                                task_id: task.id,
+                                agent_id: result.agent_id,
+                                pending_tool_call_ids: pending_ids,
+                                iteration: new_iteration,
+                                max_iterations: info.max_iterations,
+                                conversation: new_conversation,
+                                tools: info.tools.clone(),
+                                request_kind: info.request_kind.clone(),
+                                work_item_id: info.work_item_id,
+                            });
+
+                            // 不生成真实 ToolExecutionRequestMessage，避免真实工具执行
+                            // 将任务设为 Waiting(ToolExecution)，使 tool_calling_orchestrator_system
+                            // 入口检查允许此状态继续处理合成结果
+                            if info.work_item_id.is_none() && !task.status.is_terminal() {
+                                task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                                task.updated_at = clock.0;
+                            }
+                            continue;
+                        }
 
                         let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
 
@@ -1112,26 +1233,54 @@ pub fn tool_calling_orchestrator_system(
 
         // Check iteration limit
         if state.iteration >= state.max_iterations {
-            warn!(
-                event = "ToolCallingLimitExceeded",
-                task_id = %state.task_id,
-                iteration = state.iteration,
-                max_iterations = state.max_iterations,
-                "tool calling reached max iterations"
-            );
-            // ExperienceCollection WorkItem 失败不应修改原任务状态
-            if state.work_item_id.is_none()
-                && let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
-            {
-                task.last_error = Some(format!(
-                    "tool calling reached max iterations ({})",
-                    state.max_iterations
-                ));
-                task.status = TaskStatus::Failed(FailureReason::AgentError);
-                task.updated_at = clock.0;
+            // 绝对硬上限
+            if state.iteration > HARD_LIMIT_MULTIPLIER * state.max_iterations {
+                warn!(
+                    event = "ToolCallingHardLimitExceeded",
+                    task_id = %state.task_id,
+                    iteration = state.iteration,
+                    max_iterations = state.max_iterations,
+                    "tool calling exceeded absolute hard limit on result collection"
+                );
+                // WorkItem 不修改原任务状态
+                if state.work_item_id.is_none()
+                    && let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
+                {
+                    task.last_error = Some(format!(
+                        "tool calling exceeded absolute hard limit ({}/{})",
+                        state.iteration, state.max_iterations
+                    ));
+                    task.status = TaskStatus::Failed(FailureReason::AgentError);
+                    task.updated_at = clock.0;
+                }
+                commands.entity(state_entity).despawn();
+                continue;
             }
-            commands.entity(state_entity).despawn();
-            continue;
+
+            if state.work_item_id.is_some() {
+                // WorkItem 保持现有隔离语义：不修改原任务状态，停止 follow-up
+                warn!(
+                    event = "ToolCallingLimitExceeded",
+                    task_id = %state.task_id,
+                    work_item_id = ?state.work_item_id,
+                    iteration = state.iteration,
+                    max_iterations = state.max_iterations,
+                    "work item tool calling reached max iterations"
+                );
+                commands.entity(state_entity).despawn();
+                continue;
+            } else {
+                // 普通任务：允许 LLM 再响应一次，用于总结和询问用户
+                // 任务当前处于 Waiting(ToolExecution) 状态，
+                // tool_calling_orchestrator_system 入口检查允许此状态继续处理
+                debug!(
+                    event = "ToolBudgetExhaustedAllowingSummary",
+                    task_id = %state.task_id,
+                    iteration = state.iteration,
+                    max_iterations = state.max_iterations,
+                    "tool budget exhausted, allowing LLM to summarize"
+                );
+            }
         }
 
         // 在 follow-up 中保留当前通道上下文，避免多轮 tool calling 后丢失来源信息。

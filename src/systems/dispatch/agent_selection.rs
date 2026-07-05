@@ -18,6 +18,11 @@ pub fn match_score(agent: &Agent, task_content: &str) -> usize {
 }
 
 /// 选择最适合任务的 Agent
+///
+/// 评分逻辑与 `select_agent_for_sub_task` 保持一致：
+/// 1. 按 task content 与 agent tags 的匹配度评分；
+/// 2. 所有评分为 0 时，fallback 到带 "default" tag 的 agent；
+/// 3. 同分或均无匹配时，优先 tag 数量更多的 agent；若仍平局，则保留后出现的最大元素（`max_by_key` 行为）。
 pub fn select_agent_with_memory<'a>(
     agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,
@@ -27,11 +32,36 @@ pub fn select_agent_with_memory<'a>(
         .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
         .collect();
 
-    let selected = candidates
-        .iter()
-        .max_by_key(|(a, _)| match_score(a, task_content));
+    if candidates.is_empty() {
+        return None;
+    }
 
-    if let Some((agent, _ltm)) = selected {
+    let max_score = candidates
+        .iter()
+        .map(|(a, _)| match_score(a, task_content))
+        .max()
+        .unwrap_or(0);
+
+    let selected = if max_score > 0 {
+        // 有正向匹配：选最高分，同分时优先 "default" tag，再按 tag 数量 tie-break
+        candidates
+            .iter()
+            .filter(|(a, _)| match_score(a, task_content) == max_score)
+            .max_by_key(|(a, _)| {
+                (
+                    a.capabilities.tags.contains(&"default".to_string()) as usize,
+                    a.capabilities.tags.len(),
+                )
+            })
+    } else {
+        // 全部评分为 0：fallback 到带 "default" tag 的 agent
+        candidates
+            .iter()
+            .filter(|(a, _)| a.capabilities.tags.contains(&"default".to_string()))
+            .max_by_key(|(a, _)| a.capabilities.tags.len())
+    };
+
+    if let Some((agent, ltm)) = selected {
         let score = match_score(agent, task_content);
         let all_scores: Vec<_> = candidates
             .iter()
@@ -43,11 +73,22 @@ pub fn select_agent_with_memory<'a>(
             selected_score = score,
             all_candidates_scores = ?all_scores,
             task_content_preview = %task_content.chars().take(100).collect::<String>(),
+            fallback = (max_score == 0),
             "agent scoring completed"
         );
+        Some((*agent, *ltm))
+    } else {
+        // 无 "default" tag 的 fallback：选第一个候选
+        let (agent, ltm) = candidates.into_iter().next()?;
+        debug!(
+            event = "AgentScoring",
+            selected_agent = %agent.profile.name,
+            selected_score = 0,
+            fallback = true,
+            "agent selected as last resort (no default tag found)"
+        );
+        Some((agent, ltm))
     }
-
-    selected.copied()
 }
 
 /// 为子任务选择 Agent：基于 task content 与 agent tags 匹配评分，
@@ -72,11 +113,16 @@ pub fn select_agent_for_sub_task<'a>(
         .unwrap_or(0);
 
     let selected = if max_score > 0 {
-        // 有正向匹配：选最高分，同分时优先 "default" tag
+        // 有正向匹配：选最高分，同分时优先 "default" tag，再按 tag 数量 tie-break
         candidates
             .iter()
             .filter(|(a, _)| match_score(a, task_content) == max_score)
-            .max_by_key(|(a, _)| a.capabilities.tags.contains(&"default".to_string()) as usize)
+            .max_by_key(|(a, _)| {
+                (
+                    a.capabilities.tags.contains(&"default".to_string()) as usize,
+                    a.capabilities.tags.len(),
+                )
+            })
     } else {
         // 全部评分为 0：fallback 到带 "default" tag 的 agent
         candidates
@@ -122,7 +168,7 @@ mod tests {
     };
     use uuid::Uuid;
 
-    use super::select_agent_for_sub_task;
+    use super::{select_agent_for_sub_task, select_agent_with_memory};
 
     fn make_agent(name: &str, tags: Vec<&str>) -> Agent {
         Agent {
@@ -190,5 +236,54 @@ mod tests {
         let (agent, _) = selected.unwrap();
         // Both have "default" tag, agent_b has more tags
         assert_eq!(agent.profile.name, "agent-b");
+    }
+
+    #[test]
+    fn with_memory_falls_back_to_default_on_no_match() {
+        let default_agent = make_agent("default-llm-agent", vec!["llm", "default", "general"]);
+        let summarizer = make_agent("summarizer", vec!["summarization", "memory"]);
+
+        let agents = vec![
+            (&default_agent, None as Option<&LongTermMemory>),
+            (&summarizer, None as Option<&LongTermMemory>),
+        ];
+
+        let selected = select_agent_with_memory(agents.into_iter(), "请计算兔子的繁衍数量");
+        assert!(selected.is_some());
+        let (agent, _) = selected.unwrap();
+        assert_eq!(agent.profile.name, "default-llm-agent");
+    }
+
+    #[test]
+    fn with_memory_uses_default_and_tag_count_tie_break() {
+        let agent_a = make_agent("agent-a", vec!["summarization", "default"]);
+        let agent_b = make_agent("agent-b", vec!["summarization", "default", "memory"]);
+
+        let agents = vec![
+            (&agent_a, None as Option<&LongTermMemory>),
+            (&agent_b, None as Option<&LongTermMemory>),
+        ];
+
+        let selected = select_agent_with_memory(agents.into_iter(), "Please perform summarization");
+        assert!(selected.is_some());
+        let (agent, _) = selected.unwrap();
+        // Same score, both have "default" tag, agent_b has more tags
+        assert_eq!(agent.profile.name, "agent-b");
+    }
+
+    #[test]
+    fn with_memory_selects_first_candidate_when_no_default() {
+        let agent_a = make_agent("agent-a", vec!["llm", "general"]);
+        let agent_b = make_agent("agent-b", vec!["summarization", "memory"]);
+
+        let agents = vec![
+            (&agent_a, None as Option<&LongTermMemory>),
+            (&agent_b, None as Option<&LongTermMemory>),
+        ];
+
+        let selected = select_agent_with_memory(agents.into_iter(), "无关键词匹配");
+        assert!(selected.is_some());
+        let (agent, _) = selected.unwrap();
+        assert_eq!(agent.profile.name, "agent-a");
     }
 }

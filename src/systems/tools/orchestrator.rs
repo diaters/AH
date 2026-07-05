@@ -20,6 +20,13 @@ use crate::domain::{
     WaitingForTasksInfo, WaitingReason,
 };
 
+/// 清除任务上正在等待的工具确认 ID。
+pub fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
+    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
+        task.pending_confirmation_id = None;
+    }
+}
+
 /// 等待任务结果
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskWaitResult {
@@ -66,6 +73,7 @@ pub fn spawn_create_tasks_messages(
             creator: agent_id,
             delegate: None,
             status: TaskStatus::Pending,
+            pending_confirmation_id: None,
             input_summary: def.name.clone(),
             result_summary: String::new(),
             priority: 0,
@@ -1050,6 +1058,7 @@ mod tests {
             creator: uuid::Uuid::nil(),
             delegate: None,
             status: TaskStatus::Pending,
+            pending_confirmation_id: None,
             input_summary: String::new(),
             result_summary: String::new(),
             priority: 0,
