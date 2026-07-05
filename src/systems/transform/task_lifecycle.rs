@@ -11,7 +11,7 @@ use crate::{
     domain::{
         FailureReason, FinishTaskMessage, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
-        ToolCallingState,
+        ToolCallingState, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -196,6 +196,32 @@ pub fn finish_task_system(
             task.mark_done("finished by user", clock.0);
         }
         commands.entity(entity).despawn();
+    }
+}
+
+/// User Turn 结束时重置 ToolCallingState（安全网）
+///
+/// 核心重置已由 LLM 产出文本时的 ToolCallingState despawn 完成。
+/// 本 system 处理边界场景：任务已进入 Waiting(User) 但 ToolCallingState
+/// 仍残留（如外部信号直接修改了任务状态）。
+pub fn tool_calling_turn_reset_system(
+    mut commands: Commands,
+    tasks: Query<&Task>,
+    calling_states: Query<(Entity, &ToolCallingState)>,
+) {
+    for (state_entity, state) in &calling_states {
+        if let Some(task) = tasks.iter().find(|t| t.id == state.task_id) {
+            if task.status == TaskStatus::Waiting(WaitingReason::User)
+                && task.pending_confirmation_id.is_none()
+            {
+                debug!(
+                    event = "ToolCallingStateTurnReset",
+                    task_id = %state.task_id,
+                    "despawning residual ToolCallingState on Waiting(User)"
+                );
+                commands.entity(state_entity).despawn();
+            }
+        }
     }
 }
 

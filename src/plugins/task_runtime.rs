@@ -12,7 +12,7 @@ use crate::{
         chat_session_cleanup_system, llm_response_system, on_tool_returned_hook_system,
         retry_ready_system, sub_task_batch_block_system, sub_task_completion_system,
         task_completion_hook_system, task_termination_system, tool_calling_orchestrator_system,
-        tool_result_system,
+        tool_calling_turn_reset_system, tool_result_system,
     },
 };
 
@@ -60,6 +60,7 @@ impl Plugin for TaskRuntimePlugin {
                 chat_session_cleanup_system
                     .in_set(HarnessSet::Maintenance)
                     .after(task_termination_system),
+                tool_calling_turn_reset_system.in_set(HarnessSet::Transform),
             ),
         );
     }
