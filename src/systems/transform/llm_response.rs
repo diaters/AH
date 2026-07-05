@@ -935,8 +935,12 @@ pub fn llm_response_system(
                             });
 
                             // 不生成真实 ToolExecutionRequestMessage，避免真实工具执行
-                            // 任务保持在原有状态（通常是 Waiting(ToolExecution)），
-                            // tool_calling_orchestrator_system 入口检查允许此状态继续处理合成结果
+                            // 将任务设为 Waiting(ToolExecution)，使 tool_calling_orchestrator_system
+                            // 入口检查允许此状态继续处理合成结果
+                            if info.work_item_id.is_none() && !task.status.is_terminal() {
+                                task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                                task.updated_at = clock.0;
+                            }
                             continue;
                         }
 

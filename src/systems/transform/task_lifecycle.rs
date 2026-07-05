@@ -210,17 +210,16 @@ pub fn tool_calling_turn_reset_system(
     calling_states: Query<(Entity, &ToolCallingState)>,
 ) {
     for (state_entity, state) in &calling_states {
-        if let Some(task) = tasks.iter().find(|t| t.id == state.task_id) {
-            if task.status == TaskStatus::Waiting(WaitingReason::User)
-                && task.pending_confirmation_id.is_none()
-            {
-                debug!(
-                    event = "ToolCallingStateTurnReset",
-                    task_id = %state.task_id,
-                    "despawning residual ToolCallingState on Waiting(User)"
-                );
-                commands.entity(state_entity).despawn();
-            }
+        if let Some(task) = tasks.iter().find(|t| t.id == state.task_id)
+            && task.status == TaskStatus::Waiting(WaitingReason::User)
+            && task.pending_confirmation_id.is_none()
+        {
+            debug!(
+                event = "ToolCallingStateTurnReset",
+                task_id = %state.task_id,
+                "despawning residual ToolCallingState on Waiting(User)"
+            );
+            commands.entity(state_entity).despawn();
         }
     }
 }
