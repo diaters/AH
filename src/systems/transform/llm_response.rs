@@ -9,16 +9,20 @@ use crate::{
     app::{Clock, HarnessSettings, MemoryConfig},
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
-        AgentExecutionResultMessage, AgentRequestKind, ChatRoundReadyMessage, ChatSession,
-        ConversationMessage, EntryMetadata, EntryRole, ExperienceCollectionCompletedMessage,
-        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy,
-        OutputContent, ShortTermMemory, SystemOutputMessage, Task, TaskStatus,
-        ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, UserOutputMessage, WaitingReason, WorkItem,
+        AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
+        ChatRoundReadyMessage, ChatSession, ConversationMessage, EntryMetadata, EntryRole,
+        ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
+        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ShortTermMemory,
+        SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState,
+        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
         WorkItemLifecycleHookPending, WorkItemType,
     },
     user_plugins::hook_point::HookPoint,
 };
+
+/// 绝对硬上限倍数：iteration 超过此值 × max_iterations 时强制失败任务
+const HARD_LIMIT_MULTIPLIER: u32 = 2;
 
 /// 从子任务输出中提取 <<<RESULT>>>...<<</RESULT>>> 标记对内容。
 /// 提取最后一对标记。如果未找到，返回 None。
@@ -508,6 +512,58 @@ fn handle_summarization_work_item_result(
     // 清理 WorkItem 和结果消息
     commands.entity(work_item_entity).despawn();
     commands.entity(result_entity).despawn();
+}
+
+/// 生成合成 ToolExecutionResultMessage，用于向 LLM 传达工具预算已耗尽
+///
+/// 合成结果跳过 ToolCalledHookPending（不 spawn），因此不会触发 on_tool_called hook。
+/// 合成结果附加 ToolReturnedHookPending，会进入 on_tool_returned hook 流水线。
+fn spawn_synthetic_limit_result(
+    commands: &mut Commands,
+    task_id: TaskId,
+    agent_id: AgentId,
+    tool_call_id: &str,
+    tool_name: &str,
+    iteration: u32,
+    max_iterations: u32,
+) {
+    let tool_output = Ok(serde_json::json!({
+        "exit_code": 1,
+        "status": "tool_budget_exhausted",
+        "output": format!(
+            "[TOOL_BUDGET_EXHAUSTED] 本轮工具调用次数已达上限 ({}/{})。请总结你目前取得的进展，并向用户说明下一步需要什么，等待用户决策是否继续。",
+            iteration, max_iterations
+        )
+    }));
+
+    let result = AgentExecutionResult {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: tool_name.to_string(),
+        },
+        result: Ok(AgentExecutionOutput {
+            content: OutputContent::Text(String::new()),
+            reasoning_content: None,
+        }),
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        reasoning_content: None,
+        work_item_id: None,
+    };
+
+    commands.spawn((
+        ToolExecutionResultMessage {
+            result,
+            tool_name: tool_name.to_string(),
+            tool_output,
+            tool_call_id: Some(tool_call_id.to_string()),
+            processed: false,
+            original_tool_output: None,
+        },
+        ToolReturnedHookPending,
+    ));
 }
 
 /// LLM 响应处理 System
