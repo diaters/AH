@@ -41,14 +41,11 @@
 
 ### IM 通道接入
 
-若你想回答"如何从 IM 触发 Task、Agent 如何主动推送消息到 IM"，优先阅读：
+若你想回答”如何从 IM 触发 Task、Agent 如何主动推送消息到 IM”，优先阅读：
 
 - [im-channel-adapters.md](im-channel-adapters.md)
-- [docs/configuration.md](../configuration.md) 的“IM 通道配置”章节
-- 实施计划：[docs/superpowers/plans/2026-06-26-im-channel-adapters.md](../superpowers/plans/2026-06-26-im-channel-adapters.md)
-- QQ 通道实施计划：[docs/superpowers/plans/2026-06-27-qq-channel.md](../superpowers/plans/2026-06-27-qq-channel.md)
-- QQ 通道设计规格：[docs/superpowers/specs/2026-06-27-qq-channel-design.md](../superpowers/specs/2026-06-27-qq-channel-design.md)
-- 出向-自动回执设计：[docs/superpowers/specs/2026-06-27-auto-channel-reply-design.md](../superpowers/specs/2026-06-27-auto-channel-reply-design.md)
+- [docs/configuration.md](../configuration.md) 的”IM 通道配置”章节
+- 历史实施计划与规格已归档至 [docs/archive/superpowers/](../archive/superpowers/)
 
 ## 已归档文档
 
