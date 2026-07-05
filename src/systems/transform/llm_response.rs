@@ -920,7 +920,8 @@ pub fn llm_response_system(
                             }
 
                             // 更新 ToolCallingState，记录这些 tool_call_id 正在等待合成结果
-                            let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
+                            let pending_ids: Vec<String> =
+                                calls.iter().map(|c| c.id.clone()).collect();
                             commands.entity(info.entity).despawn();
                             commands.spawn(ToolCallingState {
                                 task_id: task.id,

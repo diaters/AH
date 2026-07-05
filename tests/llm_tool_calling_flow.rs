@@ -84,15 +84,12 @@ struct BudgetAwareMockExecutor;
 
 impl AgentExecutor for BudgetAwareMockExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
-        let has_budget_exhausted = request
-            .conversation
-            .as_ref()
-            .is_some_and(|conv| {
-                conv.iter().any(|m| {
-                    matches!(m, harness::ConversationMessage::Tool { content, .. }
+        let has_budget_exhausted = request.conversation.as_ref().is_some_and(|conv| {
+            conv.iter().any(|m| {
+                matches!(m, harness::ConversationMessage::Tool { content, .. }
                         if content.contains("TOOL_BUDGET_EXHAUSTED"))
-                })
-            });
+            })
+        });
         let iteration = request
             .conversation
             .as_ref()
@@ -407,7 +404,10 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
     let task_id = task.id;
 
     // CRITICAL: set multi_turn = true so task enters Waiting(User) after text response
-    app.world_mut().get_mut::<Task>(task_entity).unwrap().multi_turn = true;
+    app.world_mut()
+        .get_mut::<Task>(task_entity)
+        .unwrap()
+        .multi_turn = true;
 
     let request = AgentExecutionRequest {
         task_id,
