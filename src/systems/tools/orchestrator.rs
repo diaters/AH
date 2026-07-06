@@ -19,6 +19,11 @@ use crate::domain::{
     ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
     WaitingForTasksInfo, WaitingReason,
 };
+use crate::triggers::{
+    DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
+    ScheduledTaskInfo, ScheduledTaskRegistry, update_scheduler_state,
+};
+use chrono::{DateTime, Local, Utc};
 
 /// 清除任务上正在等待的工具确认 ID。
 pub fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
@@ -823,19 +828,65 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
-        Ok(ToolAction::ScheduleTask { .. }) => {
-            // ToolAction::ScheduleTask 的实际处理（spawn ScheduleTaskRequestMessage
-            // + ScheduleTaskCommitPending 标记 + schedule_task_commit_system 提交到
-            // SchedulerState）在 timer-local-timezone-schedule-task 特性的 Task 7 中实现。
-            // 当前阶段返回错误以保持 tool calling loop 不阻塞，待 Task 7 替换。
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::ExecutionFailed(
-                    "schedule_task orchestrator handling not yet implemented".to_string(),
-                ),
-            );
+        Ok(ToolAction::ScheduleTask {
+            id,
+            kind,
+            content,
+            schedule,
+            output_channel,
+        }) => {
+            // 计算 next_trigger 用于工具返回（一次性任务返回其触发时间，
+            // cron 任务返回下一次本地时区触发时间，无法计算时为 null）
+            let next_trigger = compute_next_trigger(&schedule);
+
+            // 投递 ScheduleTaskRequestMessage + ScheduleTaskCommitPending 标记，
+            // 由 schedule_task_commit_system 提交到 SchedulerState 与 ScheduledTaskRegistry。
+            commands.spawn((
+                ScheduleTaskRequestMessage {
+                    id,
+                    kind: kind.clone(),
+                    content,
+                    schedule,
+                    output_channel,
+                },
+                ScheduleTaskCommitPending,
+            ));
+
+            let output = serde_json::json!({
+                "status": "scheduled",
+                "schedule_id": id.to_string(),
+                "kind": kind,
+                "next_trigger": next_trigger.map(|t| t.to_rfc3339()),
+            });
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!("task scheduled: {}", id)),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "schedule_task".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            commands.entity(request_entity).despawn();
         }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
@@ -1021,10 +1072,87 @@ pub fn spawn_shell_result(
     commands.entity(request_entity).despawn();
 }
 
+/// 计算 `ScheduleSpec` 的下一次触发时间（UTC）。
+///
+/// - `Once(at)` 直接返回 `Some(at)`
+/// - `Cron(schedule)` 通过 `Local` 时区计算下一次触发，再转换为 UTC；
+///   若 cron 无下一次触发（理论上不会发生，因为 cron 表达式永远匹配未来某个时刻），
+///   则返回 `None`
+fn compute_next_trigger(schedule: &ScheduleSpec) -> Option<DateTime<Utc>> {
+    match schedule {
+        ScheduleSpec::Once(at) => Some(*at),
+        ScheduleSpec::Cron(schedule) => schedule
+            .upcoming(Local)
+            .next()
+            .map(|t| t.with_timezone(&Utc)),
+    }
+}
+
+/// 提交 `ScheduleTaskRequestMessage` 到 `SchedulerState` 与 `ScheduledTaskRegistry`。
+///
+/// 独占系统：使用 `&mut World` 直接调用 `update_scheduler_state`，确保
+/// `SchedulerState` 与 `SchedulerStateWatcher` 原子同步。
+///
+/// 处理步骤（每条待提交消息）：
+/// 1. 通过 `update_scheduler_state` 向 `SchedulerState.dynamic_tasks` 追加
+///    `DynamicScheduledTask`，同时通过 watch 通道通知 timer scheduler。
+/// 2. 向 `ScheduledTaskRegistry` 插入 `ScheduledTaskInfo`，`is_once` 由
+///    `matches!(msg.schedule, ScheduleSpec::Once(_))` 推导。
+/// 3. despawn 消息实体。
+///
+/// 资源缺失时不会 panic：
+/// - `SchedulerStateWatcher` 由 `update_scheduler_state` 内部用 `get_resource` 处理
+/// - `ScheduledTaskRegistry` 用 `get_resource_mut` 防御性查询，缺失时跳过插入
+pub fn schedule_task_commit_system(world: &mut World) {
+    // 先收集所有待提交请求，避免在持有 world 不可变借用时调用 update_scheduler_state
+    let mut to_commit: Vec<(Entity, ScheduleTaskRequestMessage)> = Vec::new();
+    {
+        let mut query = world.query_filtered::<
+            (Entity, &ScheduleTaskRequestMessage),
+            With<ScheduleTaskCommitPending>,
+        >();
+        for (entity, msg) in query.iter(world) {
+            to_commit.push((entity, msg.clone()));
+        }
+    }
+
+    for (entity, msg) in to_commit {
+        let is_once = matches!(msg.schedule, ScheduleSpec::Once(_));
+
+        // 1. 提交到 SchedulerState.dynamic_tasks（并通知 timer scheduler）
+        update_scheduler_state(world, |state| {
+            state.dynamic_tasks_mut().push(DynamicScheduledTask {
+                id: msg.id,
+                kind: msg.kind.clone(),
+                schedule: msg.schedule.clone(),
+                created_at: Utc::now(),
+            });
+        });
+
+        // 2. 提交到 ScheduledTaskRegistry（防御性查询，缺失时跳过）
+        if let Some(mut registry) = world.get_resource_mut::<ScheduledTaskRegistry>() {
+            registry.insert(
+                msg.kind.clone(),
+                ScheduledTaskInfo {
+                    content: msg.content.clone(),
+                    output_channel: msg.output_channel.clone(),
+                    is_once,
+                },
+            );
+        }
+
+        // 3. despawn 消息实体
+        world.entity_mut(entity).despawn();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::AgentRequestKind;
+    use crate::triggers::SchedulerState;
+    use chrono::Timelike;
+    use std::str::FromStr;
 
     /// 测试系统：从世界中的父 Task 读取 origin_channel，调用 spawn_create_tasks_messages。
     ///
@@ -1136,5 +1264,265 @@ mod tests {
             }),
             "subtask channel must NOT be the hardcoded Tui/default"
         );
+    }
+
+    /// 构造一次性 `ScheduleTaskRequestMessage` + `ScheduleTaskCommitPending` entity。
+    fn spawn_once_request(world: &mut World, kind: &str) -> Entity {
+        world
+            .spawn((
+                ScheduleTaskRequestMessage {
+                    id: Uuid::new_v4(),
+                    kind: kind.to_string(),
+                    content: format!("content for {}", kind),
+                    schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::days(1)),
+                    output_channel: Some(ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "tester".to_string(),
+                        thread_id: None,
+                    }),
+                },
+                ScheduleTaskCommitPending,
+            ))
+            .id()
+    }
+
+    /// 构造 cron `ScheduleTaskRequestMessage` + `ScheduleTaskCommitPending` entity。
+    fn spawn_cron_request(world: &mut World, kind: &str) -> Entity {
+        let schedule = cron::Schedule::from_str("0 0 9 * * * *").unwrap();
+        world
+            .spawn((
+                ScheduleTaskRequestMessage {
+                    id: Uuid::new_v4(),
+                    kind: kind.to_string(),
+                    content: format!("cron content for {}", kind),
+                    schedule: ScheduleSpec::Cron(Box::new(schedule)),
+                    output_channel: None,
+                },
+                ScheduleTaskCommitPending,
+            ))
+            .id()
+    }
+
+    /// 注入调度相关的 Resource：`SchedulerState`、`SchedulerStateWatcher`、`ScheduledTaskRegistry`。
+    fn insert_scheduler_resources(world: &mut World) {
+        world.insert_resource(SchedulerState::default());
+        world.insert_resource(ScheduledTaskRegistry::default());
+    }
+
+    /// `schedule_task_commit_system` 处理 Once 任务后：
+    /// - `SchedulerState.dynamic_tasks` 新增一条
+    /// - `ScheduledTaskRegistry` 含对应 `kind` 的 `ScheduledTaskInfo`，`is_once = true`
+    /// - 消息实体被 despawn
+    #[test]
+    fn schedule_task_commit_system_commits_once_task() {
+        let mut world = World::new();
+        insert_scheduler_resources(&mut world);
+        let entity = spawn_once_request(&mut world, "scheduled:once-1");
+
+        schedule_task_commit_system(&mut world);
+
+        let state = world.resource::<SchedulerState>();
+        assert_eq!(state.dynamic_tasks().len(), 1);
+        assert_eq!(state.dynamic_tasks()[0].kind, "scheduled:once-1");
+        assert!(
+            matches!(state.dynamic_tasks()[0].schedule, ScheduleSpec::Once(_)),
+            "dynamic task schedule should preserve Once variant"
+        );
+
+        let registry = world.resource::<ScheduledTaskRegistry>();
+        let info = registry
+            .get("scheduled:once-1")
+            .expect("Once task must be inserted into registry");
+        assert_eq!(info.content, "content for scheduled:once-1");
+        assert_eq!(info.output_channel.as_ref().unwrap().user_id, "tester");
+        assert!(info.is_once, "is_once must be true for Once schedule");
+
+        assert!(
+            world.get_entity(entity).is_err(),
+            "message entity must be despawn after commit"
+        );
+    }
+
+    /// `schedule_task_commit_system` 处理 Cron 任务后：
+    /// - `SchedulerState.dynamic_tasks` 新增一条
+    /// - `ScheduledTaskRegistry` 含对应 `kind` 的 `ScheduledTaskInfo`，`is_once = false`
+    #[test]
+    fn schedule_task_commit_system_commits_cron_task() {
+        let mut world = World::new();
+        insert_scheduler_resources(&mut world);
+        let entity = spawn_cron_request(&mut world, "scheduled:cron-1");
+
+        schedule_task_commit_system(&mut world);
+
+        let state = world.resource::<SchedulerState>();
+        assert_eq!(state.dynamic_tasks().len(), 1);
+        assert_eq!(state.dynamic_tasks()[0].kind, "scheduled:cron-1");
+        assert!(
+            matches!(state.dynamic_tasks()[0].schedule, ScheduleSpec::Cron(_)),
+            "dynamic task schedule should preserve Cron variant"
+        );
+
+        let registry = world.resource::<ScheduledTaskRegistry>();
+        let info = registry
+            .get("scheduled:cron-1")
+            .expect("Cron task must be inserted into registry");
+        assert_eq!(info.content, "cron content for scheduled:cron-1");
+        assert!(!info.is_once, "is_once must be false for Cron schedule");
+        assert!(
+            info.output_channel.is_none(),
+            "output_channel should be None when message carried None"
+        );
+
+        assert!(
+            world.get_entity(entity).is_err(),
+            "message entity must be despawn after commit"
+        );
+    }
+
+    /// `schedule_task_commit_system` 通过 `update_scheduler_state` 通知
+    /// `SchedulerStateWatcher`，使 timer scheduler 能感知新动态任务。
+    #[test]
+    fn schedule_task_commit_system_notifies_watcher() {
+        use tokio::sync::watch;
+
+        let mut world = World::new();
+        world.insert_resource(SchedulerState::default());
+        world.insert_resource(ScheduledTaskRegistry::default());
+        let (tx, mut rx) = watch::channel(SchedulerState::default());
+        world.insert_resource(crate::triggers::SchedulerStateWatcher(Some(tx)));
+
+        let _entity = spawn_once_request(&mut world, "scheduled:watch-1");
+
+        schedule_task_commit_system(&mut world);
+
+        assert!(
+            rx.has_changed().unwrap(),
+            "watcher must be notified after commit"
+        );
+        let state = rx.borrow_and_update();
+        assert_eq!(state.dynamic_tasks().len(), 1);
+        assert_eq!(state.dynamic_tasks()[0].kind, "scheduled:watch-1");
+    }
+
+    /// `schedule_task_commit_system` 在 `SchedulerStateWatcher` 缺失时不应 panic：
+    /// `update_scheduler_state` 内部用 `get_resource` 处理 watcher。
+    #[test]
+    fn schedule_task_commit_system_does_not_panic_without_watcher() {
+        let mut world = World::new();
+        world.insert_resource(SchedulerState::default());
+        world.insert_resource(ScheduledTaskRegistry::default());
+        // 故意不插入 SchedulerStateWatcher
+
+        let _entity = spawn_once_request(&mut world, "scheduled:no-watcher");
+
+        schedule_task_commit_system(&mut world);
+
+        let state = world.resource::<SchedulerState>();
+        assert_eq!(state.dynamic_tasks().len(), 1);
+        assert!(
+            world
+                .resource::<ScheduledTaskRegistry>()
+                .get("scheduled:no-watcher")
+                .is_some(),
+            "registry should still be updated without watcher"
+        );
+    }
+
+    /// `schedule_task_commit_system` 在 `ScheduledTaskRegistry` 缺失时不应 panic，
+    /// 但 `SchedulerState.dynamic_tasks` 仍应更新（保证 timer scheduler 一致）。
+    #[test]
+    fn schedule_task_commit_system_does_not_panic_without_registry() {
+        let mut world = World::new();
+        world.insert_resource(SchedulerState::default());
+        // 故意不插入 ScheduledTaskRegistry
+
+        let _entity = spawn_once_request(&mut world, "scheduled:no-registry");
+
+        schedule_task_commit_system(&mut world);
+
+        let state = world.resource::<SchedulerState>();
+        assert_eq!(
+            state.dynamic_tasks().len(),
+            1,
+            "SchedulerState should be updated even when registry is missing"
+        );
+    }
+
+    /// `schedule_task_commit_system` 一次运行处理多条待提交消息，
+    /// 顺序追加到 `SchedulerState.dynamic_tasks`，registry 含所有 kind。
+    #[test]
+    fn schedule_task_commit_system_handles_multiple_messages() {
+        let mut world = World::new();
+        insert_scheduler_resources(&mut world);
+        let _e1 = spawn_once_request(&mut world, "scheduled:multi-1");
+        let _e2 = spawn_cron_request(&mut world, "scheduled:multi-2");
+        let _e3 = spawn_once_request(&mut world, "scheduled:multi-3");
+
+        schedule_task_commit_system(&mut world);
+
+        let state = world.resource::<SchedulerState>();
+        assert_eq!(state.dynamic_tasks().len(), 3);
+        assert_eq!(state.dynamic_tasks()[0].kind, "scheduled:multi-1");
+        assert_eq!(state.dynamic_tasks()[1].kind, "scheduled:multi-2");
+        assert_eq!(state.dynamic_tasks()[2].kind, "scheduled:multi-3");
+
+        let registry = world.resource::<ScheduledTaskRegistry>();
+        assert!(registry.get("scheduled:multi-1").is_some());
+        assert!(registry.get("scheduled:multi-2").is_some());
+        assert!(registry.get("scheduled:multi-3").is_some());
+    }
+
+    /// `schedule_task_commit_system` 不处理无 `ScheduleTaskCommitPending` 标记的
+    /// `ScheduleTaskRequestMessage`，避免误提交。
+    #[test]
+    fn schedule_task_commit_system_ignores_messages_without_pending_marker() {
+        let mut world = World::new();
+        insert_scheduler_resources(&mut world);
+
+        // spawn 一条不带 ScheduleTaskCommitPending 标记的 message
+        let _untouched = world
+            .spawn(ScheduleTaskRequestMessage {
+                id: Uuid::new_v4(),
+                kind: "scheduled:untouched".to_string(),
+                content: "should not be committed".to_string(),
+                schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::days(1)),
+                output_channel: None,
+            })
+            .id();
+
+        schedule_task_commit_system(&mut world);
+
+        let state = world.resource::<SchedulerState>();
+        assert_eq!(
+            state.dynamic_tasks().len(),
+            0,
+            "non-pending message must not be committed"
+        );
+        let registry = world.resource::<ScheduledTaskRegistry>();
+        assert!(
+            registry.get("scheduled:untouched").is_none(),
+            "non-pending message must not be inserted into registry"
+        );
+    }
+
+    /// `compute_next_trigger` 对 `Once(at)` 直接返回 `Some(at)`。
+    #[test]
+    fn compute_next_trigger_for_once_returns_some_at() {
+        let at = Utc::now() + chrono::Duration::days(7);
+        let schedule = ScheduleSpec::Once(at);
+        let next = compute_next_trigger(&schedule);
+        assert_eq!(next, Some(at));
+    }
+
+    /// `compute_next_trigger` 对 `Cron(schedule)` 返回下一次本地时区触发时间（转 UTC）。
+    /// 工作日 9:00 cron 至少存在一个未来触发点。
+    #[test]
+    fn compute_next_trigger_for_cron_returns_next_upcoming() {
+        let cron_schedule = cron::Schedule::from_str("0 0 9 * * * *").unwrap();
+        let schedule = ScheduleSpec::Cron(Box::new(cron_schedule));
+        let next = compute_next_trigger(&schedule).expect("cron must have a next trigger");
+        // 转回 Local 验证小时为 9
+        let local_next = next.with_timezone(&Local);
+        assert_eq!(local_next.hour(), 9, "next trigger should be at local 9:00");
     }
 }

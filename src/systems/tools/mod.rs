@@ -21,6 +21,7 @@ pub use backend::NativeProcessBackend;
 pub use channel_send_dispatch::channel_send_dispatch_system;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
+pub use orchestrator::schedule_task_commit_system;
 pub use result::tool_result_system;
 pub use tool_called_hook::on_tool_called_hook_system;
 pub use tool_returned_hook::on_tool_returned_hook_system;
