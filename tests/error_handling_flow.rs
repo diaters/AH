@@ -7,8 +7,8 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutionError,
-    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskRoutingPolicy,
+    TaskStatus, WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -42,6 +42,7 @@ fn test_config() -> HarnessConfig {
         idle_poll_ms: 150,
         channels: Default::default(),
         channels_config_path: None,
+        triggers_config_path: None,
     }
 }
 
@@ -420,7 +421,8 @@ fn waiting_task_waits_for_user_input() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         harness::ShortTermMemory::default(),

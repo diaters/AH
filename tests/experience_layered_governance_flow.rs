@@ -320,6 +320,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
         options: harness::ConfirmationOption::default_options(),
         source: harness::ConfirmationSource::User,
         parent_agent_id: None,
+        approval_context: None,
     });
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -453,6 +454,7 @@ fn approved_candidate_spawns_writeback_request() {
         options: harness::ConfirmationOption::default_options(),
         source: harness::ConfirmationSource::User,
         parent_agent_id: None,
+        approval_context: None,
     });
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -573,6 +575,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         options: harness::ConfirmationOption::default_options(),
         source: harness::ConfirmationSource::User,
         parent_agent_id: None,
+        approval_context: None,
     });
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -691,6 +694,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
             options: harness::ConfirmationOption::default_options(),
             source: harness::ConfirmationSource::User,
             parent_agent_id: None,
+            approval_context: None,
         });
         app.world_mut().spawn(ToolExecutionRequestMessage {
             request: AgentExecutionRequest {
@@ -865,6 +869,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
             options: harness::ConfirmationOption::default_options(),
             source: harness::ConfirmationSource::User,
             parent_agent_id: None,
+            approval_context: None,
         });
         app.world_mut().spawn(ToolExecutionRequestMessage {
             request: AgentExecutionRequest {

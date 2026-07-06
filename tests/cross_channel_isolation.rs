@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, OutputContent, ShortTermMemory, Task, TaskStatus,
-    WaitingReason, build_harness_app,
+    ExternalInput, FrontendKind, HarnessConfig, OutputContent, ShortTermMemory, Task,
+    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app,
 };
 use tokio::runtime::Runtime;
 
@@ -62,7 +62,8 @@ fn make_waiting_task(channel: ChannelId) -> Task {
         multi_turn: true,
         parent_task_id: None,
         batch_id: None,
-        origin_channel: channel,
+        origin_channel: Some(channel.clone()),
+        routing_policy: TaskRoutingPolicy::conversational(channel.clone()),
         last_evaluated_turn: None,
     }
 }
@@ -115,7 +116,7 @@ fn cross_channel_plain_text_does_not_takeover_waiting_task() {
 
     let qq_tasks: Vec<_> = tasks
         .iter()
-        .filter(|t| t.origin_channel == qq_channel())
+        .filter(|t| t.origin_channel == Some(qq_channel()))
         .collect();
     assert!(
         !qq_tasks.is_empty(),
@@ -162,7 +163,8 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: qq_channel(),
+            origin_channel: Some(qq_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(qq_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
@@ -184,7 +186,7 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
     let tasks: Vec<_> = app.world_mut().query::<&Task>().iter(app.world()).collect();
     let tg_tasks: Vec<_> = tasks
         .iter()
-        .filter(|t| t.origin_channel == telegram_channel())
+        .filter(|t| t.origin_channel == Some(telegram_channel()))
         .collect();
     assert!(
         !tg_tasks.is_empty(),
@@ -197,7 +199,7 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
         .find(|t| t.content == "/btw new topic")
         .expect("Telegram /btw task should use the original input as content");
     assert_eq!(tg_new_task.content, "/btw new topic");
-    assert_eq!(tg_new_task.origin_channel, telegram_channel());
+    assert_eq!(tg_new_task.origin_channel, Some(telegram_channel()));
 }
 
 #[test]
@@ -240,7 +242,8 @@ fn cross_channel_finish_does_not_finish_other_channel_task() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: qq_channel(),
+            origin_channel: Some(qq_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(qq_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),

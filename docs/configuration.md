@@ -304,6 +304,76 @@ pairing_code = ""
 - ChannelId 编码：`user:<openid>` 表示私聊，`group:<openid>` 表示群聊
 - 监听异常自动重启：指数退避（1s → 60s）
 
+## 信号触发系统配置
+
+### 核心变量
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HARNESS_TRIGGERS_CONFIG_PATH` | 无（不启用触发） | 信号触发配置文件路径（TOML 格式） |
+
+当 `HARNESS_TRIGGERS_CONFIG_PATH` 未设置时，信号触发系统不启用。
+
+### 配置文件格式
+
+配置文件为 TOML 格式，示例见 `triggers.toml.example`：
+
+```toml
+[webhook]
+enabled = true
+listen_addr = "127.0.0.1:8080"
+auth_token = "shared-secret-token"
+
+[[webhook.routes]]
+kind = "github.issue_opened"
+approval_channel = { frontend = "telegram", user_id = "reviewer" }
+approval_context = "GitHub issue opened"
+prompt_template = "请分析新 issue:\n{{body_json.title}}"
+
+[timer]
+enabled = true
+
+[[timer.routes]]
+kind = "daily_summary"
+cron = "0 9 * * 1-5"
+approval_channel = { frontend = "telegram", user_id = "reviewer" }
+approval_context = "daily summary"
+prompt_template = "执行每日摘要"
+```
+
+### Webhook 配置字段
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `webhook.enabled` | bool | 否 | 是否启用 webhook 服务器，默认 `false` |
+| `webhook.listen_addr` | string | 是（启用时） | 监听地址，格式 `host:port` |
+| `webhook.auth_token` | string | 否 | 共享认证 token；设置后请求需携带 `Authorization: Bearer <token>` |
+| `webhook.routes[].kind` | string | 是 | 触发 kind 标识，用于匹配 `SignalTriggerRegistry` 路由 |
+| `webhook.routes[].approval_channel` | table | 否 | 审批通道，包含 `frontend` 和 `user_id` 字段 |
+| `webhook.routes[].approval_context` | string | 否 | 审批上下文描述 |
+| `webhook.routes[].prompt_template` | string | 是 | 任务提示模板，支持 `{{body_json.field}}` 插值 |
+
+### Timer 配置字段
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `timer.enabled` | bool | 否 | 是否启用 timer 调度器，默认 `false` |
+| `timer.routes[].kind` | string | 是 | 触发 kind 标识 |
+| `timer.routes[].cron` | string | 是 | cron 表达式（5 字段：分 时 日 月 周） |
+| `timer.routes[].approval_channel` | table | 否 | 审批通道 |
+| `timer.routes[].approval_context` | string | 否 | 审批上下文描述 |
+| `timer.routes[].prompt_template` | string | 是 | 任务提示模板 |
+
+### Prompt 模板插值
+
+模板中使用 `{{body_json.field}}` 语法从 webhook 请求的 JSON body 中提取字段值。
+支持点分路径访问嵌套字段，如 `{{body_json.repository.full_name}}`。
+
+### 热重载
+
+运行时执行 `/reload-triggers` 命令可重新加载 `triggers.toml`，无需重启应用。
+重载会刷新 `SignalTriggerRegistry`、重启 webhook 服务器与 timer 调度器。
+
 ## 已废弃的旧配置语义
 
 以下旧语义已经不再作为当前对外能力存在：

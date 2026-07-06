@@ -50,6 +50,8 @@ pub struct HarnessConfig {
     pub channels: crate::channels::config::ChannelConfigs,
     /// IM 通道配置文件路径（用于 Telegram /bind 回写）
     pub channels_config_path: Option<String>,
+    /// 触发器配置文件路径（用于 webhook/timer 事件路由）
+    pub triggers_config_path: Option<String>,
 }
 
 impl HarnessConfig {
@@ -133,6 +135,7 @@ impl HarnessConfig {
                 }
             },
             channels_config_path: std::env::var("HARNESS_CHANNELS_CONFIG").ok(),
+            triggers_config_path: std::env::var("HARNESS_TRIGGERS_CONFIG").ok(),
         })
     }
 }
@@ -160,6 +163,7 @@ impl Default for HarnessConfig {
             idle_poll_ms: 150,
             channels: crate::channels::config::ChannelConfigs::default(),
             channels_config_path: None,
+            triggers_config_path: None,
         }
     }
 }
@@ -253,6 +257,11 @@ pub fn build_harness_app(
 
     // Skill 加载器
     app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
+
+    // Signal 触发路由（默认空，由 main.rs 根据 triggers.toml 配置覆盖）
+    app.insert_resource(crate::domain::SignalTriggerRegistry::default());
+    app.insert_resource(crate::triggers::TriggerConfigState::default());
+    app.insert_resource(crate::triggers::TriggerConfigWatcher::default());
 
     // Startup: 先加载插件注册表（含 Tool 注册），再加载持久化 Agent（含插件贡献）
     app.add_systems(Startup, crate::user_plugins::plugin_load_startup_system);

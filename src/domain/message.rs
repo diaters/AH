@@ -6,17 +6,12 @@ use crate::prelude::{Component, Entity};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{AgentExecutionRequest, AgentExecutionResult, AgentId, SummarizationTrigger, TaskId};
+use super::{
+    AgentExecutionRequest, AgentExecutionResult, AgentId, SignalSource, SummarizationTrigger,
+    TaskId, TaskRoutingPolicy, TaskTrigger,
+};
 
 // ============ 信号与输入 ============
-
-/// 信号类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SignalType {
-    UserInput,
-    RetryWakeup,
-    SystemWakeup,
-}
 
 /// 等待原因
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,19 +36,26 @@ pub enum WaitingReason {
 }
 
 /// 信号载荷
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SignalPayload {
     UserInput(String),
     RetryWakeup(TaskId),
     SystemWakeup,
+    Webhook {
+        kind: String,
+        body: serde_json::Value,
+    },
+    Timer {
+        kind: String,
+    },
 }
 
 /// 信号组件
 #[derive(Debug, Clone, Component)]
 pub struct Signal {
-    pub kind: SignalType,
+    pub source: SignalSource,
     pub payload: SignalPayload,
-    pub origin_channel: super::ChannelId,
+    pub origin_channel: Option<super::ChannelId>,
 }
 
 impl Signal {
@@ -74,28 +76,54 @@ impl Signal {
         origin_channel: super::ChannelId,
     ) -> Self {
         Self {
-            kind: SignalType::UserInput,
+            source: SignalSource("user".to_string()),
             payload: SignalPayload::UserInput(content.into()),
-            origin_channel,
+            origin_channel: Some(origin_channel),
         }
     }
 
-    /// 构造重试唤醒信号（origin_channel 使用 Tui 默认）。
+    /// 构造重试唤醒信号。
     pub fn retry_wakeup(task_id: TaskId) -> Self {
         Self {
-            kind: SignalType::RetryWakeup,
+            source: SignalSource("retry".to_string()),
             payload: SignalPayload::RetryWakeup(task_id),
-            origin_channel: super::ChannelId {
-                frontend: super::FrontendKind::Tui,
-                user_id: "default".to_string(),
-                thread_id: None,
+            origin_channel: None,
+        }
+    }
+
+    /// 构造系统唤醒信号。
+    pub fn system_wakeup(source: SignalSource) -> Self {
+        Self {
+            source,
+            payload: SignalPayload::SystemWakeup,
+            origin_channel: None,
+        }
+    }
+
+    /// 构造 webhook 事件信号。
+    pub fn webhook(source: SignalSource, kind: impl Into<String>, body: serde_json::Value) -> Self {
+        Self {
+            source,
+            payload: SignalPayload::Webhook {
+                kind: kind.into(),
+                body,
             },
+            origin_channel: None,
+        }
+    }
+
+    /// 构造 timer 事件信号。
+    pub fn timer(source: SignalSource, kind: impl Into<String>) -> Self {
+        Self {
+            source,
+            payload: SignalPayload::Timer { kind: kind.into() },
+            origin_channel: None,
         }
     }
 }
 
 /// 外部输入
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ExternalInput {
     TextWithChannel {
         channel: super::ChannelId,
@@ -106,6 +134,17 @@ pub enum ExternalInput {
     Confirmation {
         request_id: Uuid,
         option: String,
+    },
+    /// Webhook 事件
+    Webhook {
+        source: SignalSource,
+        kind: String,
+        body: serde_json::Value,
+    },
+    /// Timer 事件
+    Timer {
+        source: SignalSource,
+        kind: String,
     },
 }
 
@@ -120,6 +159,13 @@ pub struct UserInputMessage {
 #[derive(Debug, Clone, Component)]
 pub struct RetryReadyMessage {
     pub task_id: TaskId,
+}
+
+/// 事件触发任务消息
+#[derive(Debug, Clone, Component)]
+pub struct TriggerTaskMessage {
+    pub source: SignalSource,
+    pub trigger: TaskTrigger,
 }
 
 // ============ 执行请求/响应 ============
@@ -197,7 +243,8 @@ pub struct SystemOutputMessage {
 #[derive(Debug, Clone, Component)]
 pub struct CreateTaskMessage {
     pub content: String,
-    pub origin_channel: super::ChannelId,
+    pub origin_channel: Option<super::ChannelId>,
+    pub routing_policy: TaskRoutingPolicy,
 }
 
 /// 继续现有任务消息
@@ -286,6 +333,8 @@ pub struct ToolConfirmationRequestMessage {
     pub source: super::ConfirmationSource,
     /// 父 Agent ID（当 source == ParentAgent 时）
     pub parent_agent_id: Option<AgentId>,
+    /// 事件任务审批上下文（来自 TaskRoutingPolicy.approval_context）
+    pub approval_context: Option<String>,
 }
 
 /// Tool 确认响应消息
@@ -464,6 +513,13 @@ pub struct ExperienceCollectionCompletedMessage {
 #[derive(Debug, Clone, Component)]
 pub struct ReloadPluginsMessage;
 
+/// /reload-triggers 触发的重载请求消息。
+///
+/// 与 `ReloadPluginsMessage` 同模式：`command_parse_system` spawn 此消息实体，
+/// 由 `reload_triggers_message_consumer_system` 消费后调用 `triggers::reload_triggers_system` 执行重载。
+#[derive(Debug, Clone, Component)]
+pub struct ReloadTriggersMessage;
+
 /// 待发送的通道消息，由 channel_send_dispatch_system 消费。
 #[derive(Debug, Clone, Component)]
 pub struct PendingChannelSend {
@@ -486,7 +542,10 @@ mod tests {
     #[test]
     fn signal_user_input_carries_default_channel() {
         let signal = Signal::user_input("hi");
-        assert_eq!(signal.origin_channel.frontend, FrontendKind::Tui);
+        assert_eq!(
+            signal.origin_channel.as_ref().unwrap().frontend,
+            FrontendKind::Tui
+        );
     }
 
     #[test]
@@ -497,6 +556,6 @@ mod tests {
             thread_id: None,
         };
         let signal = Signal::user_input_with_channel("hi", channel.clone());
-        assert_eq!(signal.origin_channel, channel);
+        assert_eq!(signal.origin_channel.as_ref().unwrap(), &channel);
     }
 }

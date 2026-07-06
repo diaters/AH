@@ -295,6 +295,7 @@ pub fn tool_dispatch_system(
                     options: options.clone(),
                     source: ConfirmationSource::User,
                     parent_agent_id: None,
+                    approval_context: None,
                 });
 
                 if let Some((_, mut task)) = tasks
@@ -401,7 +402,8 @@ mod tests {
                 multi_turn: false,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: channel,
+                origin_channel: Some(channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
                 last_evaluated_turn: None,
             })
             .id();

@@ -5,8 +5,8 @@ use crate::{
     app::Clock,
     domain::{
         ContinueTaskMessage, CreateTaskMessage, EntryMetadata, EntryRole, ShortTermMemory,
-        SystemOutputMessage, Task, TaskStatus, ToolConfirmationResponseMessage, UserCommand,
-        UserInputMessage, WaitingReason,
+        SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage,
+        UserCommand, UserInputMessage, WaitingReason,
     },
 };
 
@@ -34,7 +34,7 @@ pub(crate) fn user_input_routing_system(
         // 优先处理处于 Waiting(User) 且正在等待工具确认的任务
         if let Some(task) = tasks.iter().find(|t| {
             t.status == TaskStatus::Waiting(WaitingReason::User)
-                && t.origin_channel == input.origin_channel
+                && t.origin_channel == Some(input.origin_channel.clone())
                 && t.pending_confirmation_id.is_some()
         }) {
             let pending_id = task
@@ -79,7 +79,7 @@ pub(crate) fn user_input_routing_system(
             .iter()
             .filter(|t| {
                 t.status == TaskStatus::Waiting(WaitingReason::User)
-                    && t.origin_channel == input.origin_channel
+                    && t.origin_channel == Some(input.origin_channel.clone())
             })
             .collect();
 
@@ -113,7 +113,8 @@ pub(crate) fn user_input_routing_system(
             // 创建新任务
             commands.spawn(CreateTaskMessage {
                 content: input.content.clone(),
-                origin_channel: input.origin_channel.clone(),
+                origin_channel: Some(input.origin_channel.clone()),
+                routing_policy: TaskRoutingPolicy::conversational(input.origin_channel.clone()),
             });
         }
 
@@ -229,7 +230,8 @@ mod tests {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: channel,
+            origin_channel: Some(channel.clone()),
+            routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
             last_evaluated_turn: None,
         }
     }

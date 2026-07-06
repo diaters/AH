@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskRoutingPolicy,
+    TaskStatus, WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -102,7 +102,8 @@ fn user_input_continues_waiting_task() {
         multi_turn: true,
         parent_task_id: None,
         batch_id: None,
-        origin_channel: default_channel(),
+        origin_channel: Some(default_channel()),
+        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
         last_evaluated_turn: None,
     });
 
@@ -232,7 +233,8 @@ fn evaluation_triggered_on_turn_limit() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         stm,
@@ -294,7 +296,8 @@ fn multiple_waiting_user_tasks_routes_to_one() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
@@ -321,7 +324,8 @@ fn multiple_waiting_user_tasks_routes_to_one() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
@@ -395,7 +399,8 @@ fn finish_command_ends_multi_turn_conversation() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),

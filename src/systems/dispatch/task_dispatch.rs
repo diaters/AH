@@ -24,7 +24,7 @@ fn build_prompt_with_context(
     task_content: &str,
     short_term: Option<&ShortTermMemory>,
     long_term: Option<&LongTermMemory>,
-    origin_channel: &ChannelId,
+    origin_channel: Option<&ChannelId>,
 ) -> String {
     let mut parts = Vec::new();
 
@@ -73,7 +73,9 @@ fn build_prompt_with_context(
     }
 
     // 3. 当前通道上下文，帮助 LLM 正确路由文件/消息到来源会话
-    parts.push(origin_channel.to_prompt_context());
+    if let Some(ch) = origin_channel {
+        parts.push(ch.to_prompt_context());
+    }
 
     // 4. 当前请求
     parts.push(format!("[Current request]\n{}", task_content));
@@ -171,8 +173,12 @@ pub fn task_dispatch_system(
         };
 
         // 构建带历史对话、长期记忆和当前通道信息的 prompt
-        let prompt =
-            build_prompt_with_context(&task.content, short_term, long_term, &task.origin_channel);
+        let prompt = build_prompt_with_context(
+            &task.content,
+            short_term,
+            long_term,
+            task.origin_channel.as_ref(),
+        );
         let stm_entries = short_term.map(|s| s.entries.len()).unwrap_or(0);
         let stm_tokens = short_term.map(|s| s.estimated_tokens).unwrap_or(0);
         let ltm_entries = long_term.map(|l| l.entries.len()).unwrap_or(0);
@@ -318,7 +324,8 @@ mod tests {
             metadata,
         );
 
-        let prompt = build_prompt_with_context("do the task", Some(&stm), None, &make_channel());
+        let prompt =
+            build_prompt_with_context("do the task", Some(&stm), None, Some(&make_channel()));
 
         assert!(
             prompt.contains("System note: [Evaluation AutoCorrect] refocus on original goal"),
@@ -337,7 +344,8 @@ mod tests {
             EntryMetadata::default(),
         );
 
-        let prompt = build_prompt_with_context("do the task", Some(&stm), None, &make_channel());
+        let prompt =
+            build_prompt_with_context("do the task", Some(&stm), None, Some(&make_channel()));
 
         assert!(
             !prompt.contains("archived content"),
@@ -403,7 +411,7 @@ mod tests {
             "please improve shell timeout behavior",
             None,
             Some(&long_term),
-            &make_channel(),
+            Some(&make_channel()),
         );
 
         assert!(prompt.contains("[Core agent memory]"));
@@ -575,7 +583,8 @@ mod tests {
                 multi_turn: false,
                 parent_task_id: Some(parent_id),
                 batch_id: None,
-                origin_channel: channel,
+                origin_channel: Some(channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),

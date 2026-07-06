@@ -28,6 +28,34 @@ impl TaskStatus {
     }
 }
 
+/// 定义任务的普通输出与审批输出去向。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskRoutingPolicy {
+    pub output_channel: Option<ChannelId>,
+    pub approval_channel: Option<ChannelId>,
+    pub approval_context: Option<String>,
+}
+
+impl TaskRoutingPolicy {
+    /// 构造普通聊天任务的路由策略。
+    pub fn conversational(channel: ChannelId) -> Self {
+        Self {
+            output_channel: Some(channel.clone()),
+            approval_channel: Some(channel),
+            approval_context: None,
+        }
+    }
+
+    /// 构造事件任务的路由策略。
+    pub fn event(approval_channel: Option<ChannelId>, approval_context: Option<String>) -> Self {
+        Self {
+            output_channel: None,
+            approval_channel,
+            approval_context,
+        }
+    }
+}
+
 /// 任务实体
 #[derive(Debug, Clone, Component, Serialize, Deserialize)]
 pub struct Task {
@@ -53,8 +81,10 @@ pub struct Task {
     pub parent_task_id: Option<TaskId>,
     /// 批次 ID（同一批 create_tasks 调用共享）
     pub batch_id: Option<Uuid>,
-    /// 任务来源的前端通道
-    pub origin_channel: ChannelId,
+    /// 任务来源的前端通道，事件任务为 None
+    pub origin_channel: Option<ChannelId>,
+    /// 任务输出与审批路由策略
+    pub routing_policy: TaskRoutingPolicy,
     /// 最近一次由 TurnLimitReached 触发评估时的轮数（用于同进度去重）
     pub last_evaluated_turn: Option<u32>,
 }
@@ -144,7 +174,8 @@ impl Task {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: channel,
+            origin_channel: Some(channel.clone()),
+            routing_policy: TaskRoutingPolicy::conversational(channel),
             last_evaluated_turn: None,
         }
     }
@@ -177,7 +208,41 @@ impl Task {
             multi_turn: false,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: channel,
+            origin_channel: Some(channel.clone()),
+            routing_policy: TaskRoutingPolicy::conversational(channel),
+            last_evaluated_turn: None,
+        }
+    }
+
+    /// 基于外部事件创建一个处于 Pending 状态的新任务。
+    pub fn from_trigger(
+        content: impl Into<String>,
+        max_retries: u32,
+        routing_policy: TaskRoutingPolicy,
+    ) -> Self {
+        let content = content.into();
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            content: content.clone(),
+            creator: Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Pending,
+            pending_confirmation_id: None,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            retry_count: 0,
+            max_retries,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: None,
+            routing_policy,
             last_evaluated_turn: None,
         }
     }
@@ -344,5 +409,38 @@ mod tests {
         assert!(t1.last_evaluated_turn.is_none());
         let t2 = Task::from_user_input_ready("b", 0, ch);
         assert!(t2.last_evaluated_turn.is_none());
+    }
+
+    #[test]
+    fn conversational_routing_policy_targets_same_channel() {
+        let channel = ChannelId {
+            frontend: crate::domain::FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: Some("t1".to_string()),
+        };
+        let policy = TaskRoutingPolicy::conversational(channel.clone());
+        assert_eq!(policy.output_channel, Some(channel.clone()));
+        assert_eq!(policy.approval_channel, Some(channel));
+        assert!(policy.approval_context.is_none());
+    }
+
+    #[test]
+    fn trigger_task_has_no_origin_channel_and_keeps_approval_route() {
+        let approval_channel = ChannelId {
+            frontend: crate::domain::FrontendKind::QQ,
+            user_id: "reviewer".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_trigger(
+            "analyze webhook",
+            3,
+            TaskRoutingPolicy::event(
+                Some(approval_channel.clone()),
+                Some("GitHub issue opened".to_string()),
+            ),
+        );
+        assert_eq!(task.origin_channel, None);
+        assert_eq!(task.routing_policy.output_channel, None);
+        assert_eq!(task.routing_policy.approval_channel, Some(approval_channel));
     }
 }

@@ -6,7 +6,8 @@ use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole, ExecutorFuture,
     ExperienceCollectionRequestMessage, FrontendKind, HarnessConfig, LongTermMemory,
-    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, build_harness_app,
+    ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason, WorkItem,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -76,7 +77,8 @@ fn multi_turn_task_lifecycle() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
@@ -168,7 +170,8 @@ fn short_term_memory_tracks_turns() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
@@ -336,7 +339,8 @@ fn experience_collection_triggered_on_agent_termination() {
         multi_turn: true,
         parent_task_id: None,
         batch_id: None,
-        origin_channel: default_channel(),
+        origin_channel: Some(default_channel()),
+        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
         last_evaluated_turn: None,
     });
 
@@ -436,7 +440,8 @@ fn multi_turn_memory_records_user_and_assistant() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
@@ -485,7 +490,8 @@ fn multi_turn_full_conversation_flow() {
     // 通过 CreateTaskMessage 创建任务，走完整系统流程
     app.world_mut().spawn(harness::CreateTaskMessage {
         content: "hello".to_string(),
-        origin_channel: default_channel(),
+        origin_channel: Some(default_channel()),
+        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
     });
 
     // 运行直到任务进入 Waiting(User)
@@ -603,7 +609,8 @@ fn prompt_includes_conversation_history() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory {
@@ -671,7 +678,8 @@ fn initial_user_input_recorded_in_short_term_memory() {
     // 通过 CreateTaskMessage 创建任务，走 user_message_to_task_system 流程
     app.world_mut().spawn(harness::CreateTaskMessage {
         content: "hello world".to_string(),
-        origin_channel: default_channel(),
+        origin_channel: Some(default_channel()),
+        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
     });
 
     // 运行直到任务进入 Waiting(User)
@@ -730,7 +738,8 @@ fn three_turn_conversation_maintains_correct_order() {
     // 第一轮：通过 CreateTaskMessage 创建任务
     app.world_mut().spawn(harness::CreateTaskMessage {
         content: "first question".to_string(),
-        origin_channel: default_channel(),
+        origin_channel: Some(default_channel()),
+        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
     });
 
     for _ in 0..5 {
@@ -870,7 +879,8 @@ fn second_dispatch_prompt_includes_correct_history() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory {
@@ -971,7 +981,8 @@ fn task_content_updates_on_continue() {
                 multi_turn: true,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),

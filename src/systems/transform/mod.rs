@@ -11,6 +11,7 @@ mod subtask;
 mod task_completion_hook;
 mod task_creation;
 mod task_lifecycle;
+mod trigger_task;
 
 pub use brain_decision::brain_decision_system;
 pub use chat_round::{
@@ -25,6 +26,7 @@ pub use task_creation::{on_task_created_hook_system, user_message_to_task_system
 pub use task_lifecycle::{
     finish_task_system, retry_ready_system, task_termination_system, tool_calling_turn_reset_system,
 };
+pub use trigger_task::trigger_task_routing_system;
 
 use crate::prelude::*;
 

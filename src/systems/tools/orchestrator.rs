@@ -46,7 +46,7 @@ pub fn spawn_create_tasks_messages(
     request_kind: crate::domain::AgentRequestKind,
     definitions: Vec<SubTaskDefinition>,
     tool_call_id: Option<String>,
-    parent_origin_channel: ChannelId,
+    parent_origin_channel: Option<ChannelId>,
 ) {
     let batch_id = Uuid::new_v4();
     let total_count = definitions.len();
@@ -87,6 +87,10 @@ pub fn spawn_create_tasks_messages(
             parent_task_id: Some(task_id),
             batch_id: Some(batch_id),
             origin_channel: parent_origin_channel.clone(),
+            routing_policy: parent_origin_channel.as_ref().map_or_else(
+                || crate::domain::TaskRoutingPolicy::event(None, None),
+                |ch| crate::domain::TaskRoutingPolicy::conversational(ch.clone()),
+            ),
             last_evaluated_turn: None,
         };
 
@@ -391,11 +395,11 @@ pub fn handle_tool_action<B: SessionBackend>(
                         task_id = %request.request.task_id,
                         "parent task entity not found, falling back to Tui/default for sub-task origin_channel"
                     );
-                    ChannelId {
+                    Some(ChannelId {
                         frontend: FrontendKind::Tui,
                         user_id: "default".to_string(),
                         thread_id: None,
-                    }
+                    })
                 });
             spawn_create_tasks_messages(
                 commands,
@@ -659,11 +663,11 @@ pub fn handle_tool_action<B: SessionBackend>(
                         "parent task entity not found, falling back to Tui/default for chat subtask origin_channel"
                     );
                     (
-                        ChannelId {
+                        Some(ChannelId {
                             frontend: FrontendKind::Tui,
                             user_id: "default".to_string(),
                             thread_id: None,
-                        },
+                        }),
                         None,
                     )
                 });
@@ -781,8 +785,15 @@ pub fn handle_tool_action<B: SessionBackend>(
                     initial_stm.add_entry(EntryRole::User, &message, Default::default());
                 }
 
-                let mut child_task =
-                    Task::from_user_input(&message, 0, parent_origin_channel.clone());
+                let mut child_task = Task::from_user_input(
+                    &message,
+                    0,
+                    parent_origin_channel.clone().unwrap_or_else(|| ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "default".to_string(),
+                        thread_id: None,
+                    }),
+                );
                 child_task.id = child_task_id;
                 child_task.parent_task_id = Some(parent_task_id);
                 child_task.delegate = Some(agent.id);
@@ -1071,7 +1082,10 @@ mod tests {
             multi_turn: false,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: telegram_channel.clone(),
+            origin_channel: Some(telegram_channel.clone()),
+            routing_policy: crate::domain::TaskRoutingPolicy::conversational(
+                telegram_channel.clone(),
+            ),
             last_evaluated_turn: None,
         };
         app.world_mut()
@@ -1094,17 +1108,18 @@ mod tests {
             "exactly one child task should be spawned"
         );
         assert_eq!(
-            child_tasks[0].origin_channel, telegram_channel,
+            child_tasks[0].origin_channel,
+            Some(telegram_channel),
             "subtask should inherit parent's Telegram channel, not Tui/default"
         );
         // 显式断言：不得回退到硬编码的 Tui/default
         assert_ne!(
             child_tasks[0].origin_channel,
-            ChannelId {
+            Some(ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "default".to_string(),
                 thread_id: None,
-            },
+            }),
             "subtask channel must NOT be the hardcoded Tui/default"
         );
     }

@@ -1,0 +1,147 @@
+//! Timer scheduler 集成测试
+//!
+//! 不测试真实 cron 等待（太慢），改为通过 watch 通道与 tracing 事件捕获
+//! 验证热加载行为：scheduler 必须在收到新配置后实际重建 schedules 并发出
+//! `TimerSchedulerReloaded` / `TimerSchedulerReloadFailed` 事件。
+
+use std::fmt;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use crossbeam_channel::unbounded;
+use harness::domain::ChannelId;
+use harness::domain::ExternalInput;
+use harness::domain::FrontendKind;
+use harness::triggers::TimerRouteConfig;
+use harness::triggers::TriggerConfig;
+use harness::triggers::run_timer_scheduler;
+use tokio::sync::watch;
+use tracing::field::Field;
+use tracing::field::Visit;
+use tracing_subscriber::Layer;
+use tracing_subscriber::Registry;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::layer::SubscriberExt;
+
+/// 捕获 tracing 事件中 `event` 字段的值，用于断言 reload 行为是否真实发生。
+#[derive(Clone, Default)]
+struct CapturingLayer {
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Default)]
+struct EventNameVisitor {
+    name: Option<String>,
+}
+
+impl Visit for EventNameVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "event" {
+            self.name = Some(value.to_string());
+        }
+    }
+
+    fn record_debug(&mut self, _field: &Field, _value: &dyn fmt::Debug) {
+        // 仅关心 `event` 字段（str）；count、error 等字段忽略。
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = EventNameVisitor::default();
+        event.record(&mut visitor);
+        if let Some(name) = visitor.name {
+            self.events.lock().unwrap().push(name);
+        }
+    }
+}
+
+fn route(kind: &str, cron: &str) -> TimerRouteConfig {
+    TimerRouteConfig {
+        kind: kind.to_string(),
+        cron: cron.to_string(),
+        approval_channel: ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "r".to_string(),
+            thread_id: None,
+        },
+        approval_context: "x".to_string(),
+        prompt_template: "x".to_string(),
+    }
+}
+
+fn assert_contains(events: &CapturingLayer, name: &str) {
+    let got = events.events.lock().unwrap().clone();
+    assert!(
+        got.iter().any(|n| n == name),
+        "expected event `{}` in captured events, got: {:?}",
+        name,
+        got
+    );
+}
+
+#[tokio::test]
+async fn scheduler_starts_with_empty_config_and_handles_reload() {
+    let (input_tx, _input_rx) = unbounded::<ExternalInput>();
+    let (config_tx, config_rx) = watch::channel(TriggerConfig::default());
+
+    let capturing = CapturingLayer::default();
+    let subscriber = Registry::default().with(capturing.clone());
+    // current-thread runtime：spawned task 与本测试同线程，thread-local
+    // default subscriber 会对 scheduler task 生效。
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let handle = tokio::spawn(async move {
+        let _ = run_timer_scheduler(input_tx, config_rx).await;
+    });
+
+    // 给 scheduler 启动时间
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_contains(&capturing, "TimerSchedulerStarted");
+
+    // 发送有效配置（一条路由），应触发 TimerSchedulerReloaded
+    let mut valid = TriggerConfig::default();
+    valid.timer.routes.push(route("daily", "0 9 * * 1-5"));
+    config_tx.send(valid).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_contains(&capturing, "TimerSchedulerReloaded");
+
+    // 发送无效 cron 配置，应触发 TimerSchedulerReloadFailed，且 scheduler 不退出
+    let mut bad = TriggerConfig::default();
+    bad.timer.routes.push(route("bad", "not a cron"));
+    config_tx.send(bad).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_contains(&capturing, "TimerSchedulerReloadFailed");
+    assert!(
+        !handle.is_finished(),
+        "scheduler must survive a failed reload"
+    );
+
+    // 再发送一个有效但空配置，应再次触发 TimerSchedulerReloaded
+    config_tx.send(TriggerConfig::default()).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let got = capturing.events.lock().unwrap().clone();
+    let reloaded_count = got
+        .iter()
+        .filter(|n| *n == "TimerSchedulerReloaded")
+        .count();
+    assert_eq!(
+        reloaded_count, 2,
+        "expected two TimerSchedulerReloaded events, got: {:?}",
+        got
+    );
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn scheduler_initial_config_with_invalid_cron_returns_error() {
+    let (input_tx, _input_rx) = unbounded::<ExternalInput>();
+    let mut bad_config = TriggerConfig::default();
+    bad_config.timer.routes.push(route("bad", "not a cron"));
+    let (_config_tx, config_rx) = watch::channel(bad_config);
+
+    let result = run_timer_scheduler(input_tx, config_rx).await;
+    assert!(result.is_err());
+}
