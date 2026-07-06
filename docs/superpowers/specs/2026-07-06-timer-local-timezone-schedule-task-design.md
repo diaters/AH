@@ -58,9 +58,25 @@ Scheduler ──→ ExternalInput::Timer ──→ signal_ingest_system
 #[derive(Resource, Clone, Default)]
 pub struct SchedulerState {
     /// 来自 triggers.toml 的静态路由
-    pub static_routes: Option<SchedulerRoutes>,
+    static_routes: Option<SchedulerRoutes>,
     /// 由 schedule_task 工具动态添加的任务
-    pub dynamic_tasks: Vec<DynamicScheduledTask>,
+    dynamic_tasks: Vec<DynamicScheduledTask>,
+}
+
+impl SchedulerState {
+    /// 通过统一入口修改 state，保证 Resource 与 watch payload 一致。
+    pub fn update<F>(&mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut Self),
+    {
+        f(self);
+        self.clone()
+    }
+
+    pub fn static_routes(&self) -> Option<&SchedulerRoutes> { self.static_routes.as_ref() }
+    pub fn static_routes_mut(&mut self) -> &mut Option<SchedulerRoutes> { &mut self.static_routes }
+    pub fn dynamic_tasks(&self) -> &[DynamicScheduledTask] { &self.dynamic_tasks }
+    pub fn dynamic_tasks_mut(&mut self) -> &mut Vec<DynamicScheduledTask> { &mut self.dynamic_tasks }
 }
 
 pub struct SchedulerRoutes {
@@ -76,10 +92,14 @@ pub struct DynamicScheduledTask {
 }
 
 pub enum ScheduleSpec {
-    Once(DateTime<Local>),
-    Cron(String),
+    /// 一次性触发时间，统一存储为 UTC，避免系统时区切换导致漂移
+    Once(DateTime<Utc>),
+    /// 预解析的 cron schedule，在工具参数解析阶段完成校验
+    Cron(Schedule),
 }
 ```
+
+`ScheduleSpec` 的实现保证 `Clone + Send + Sync`，满足作为 watch channel payload 的要求。
 
 ### ScheduledTaskRegistry
 
@@ -94,6 +114,35 @@ pub struct ScheduledTaskRegistry {
 pub struct ScheduledTaskInfo {
     pub content: String,
     pub output_channel: Option<ChannelId>,
+}
+
+impl ScheduledTaskInfo {
+    /// 构造供 Brain 执行的任务输入
+    pub fn build_task_input(&self) -> String {
+        self.content.clone()
+    }
+
+    /// 构造动态任务的 routing_policy
+    pub fn build_routing_policy(&self) -> TaskRoutingPolicy {
+        TaskRoutingPolicy::scheduled_task(self.output_channel.clone(), "scheduled task")
+    }
+}
+```
+
+### TaskRoutingPolicy 扩展
+
+新增 `scheduled_task` 构造器，不破坏现有 `event()` 调用方：
+
+```rust
+impl TaskRoutingPolicy {
+    /// 用于 schedule_task 动态任务：有 output_channel，无审批
+    pub fn scheduled_task(output_channel: Option<ChannelId>, approval_context: &str) -> Self {
+        Self {
+            output_channel,
+            approval_channel: None,
+            approval_context: Some(approval_context.to_string()),
+        }
+    }
 }
 ```
 
@@ -116,7 +165,7 @@ pub enum ToolAction {
 }
 ```
 
-`schedule_task` 工具返回该变体，由 `handle_tool_action` 统一处理。
+`schedule_task` 工具返回该变体，由 `tool_dispatch_system` 调用 `handle_tool_action` 处理。
 
 ### SignalPayload::Timer
 
@@ -154,10 +203,12 @@ let now = Local::now();
 let next = s.upcoming(Local).next();
 ```
 
-cron 解析仍使用 5 字段输入，内部补齐：
+cron 解析仍使用 5 字段输入（分 时 日 月 周），内部补齐为 `cron` crate 要求的 7 字段格式（秒 分 时 日 月 周 年）：
 
 ```rust
+// route.cron 是 "0 9 * * 1-5"
 let cron_expr = format!("0 {} *", route.cron);
+// 结果: "0 0 9 * * 1-5 *"，秒固定为 0，年固定为 *
 Schedule::from_str(&cron_expr)
 ```
 
@@ -188,14 +239,16 @@ fn update_scheduler_state(
     world: &mut World,
     f: impl FnOnce(&mut SchedulerState),
 ) {
-    let mut state = world.resource_mut::<SchedulerState>().clone();
+    let mut state = world.remove_resource::<SchedulerState>().unwrap_or_default();
     f(&mut state);
-    world.insert_resource(state.clone());
     if let Some(watcher) = world.resource::<SchedulerStateWatcher>().0.as_ref() {
-        let _ = watcher.send(state);
+        let _ = watcher.send(state.clone());
     }
+    world.insert_resource(state);
 }
 ```
+
+说明：先 `remove_resource` 取出所有权，避免借用冲突；watch sender 只需要一次 clone；最后把 state 重新插入为 Resource。
 
 **reload 流程**：
 
@@ -207,7 +260,18 @@ fn update_scheduler_state(
 
 **schedule_task 工具执行流程**：
 
-1. `tool_dispatch_system` 调用 `handle_tool_action`，对 `ToolAction::ScheduleTask` 生成一个 `ScheduleTaskRequestMessage`。
+1. `tool_dispatch_system` 调用 `handle_tool_action`，对 `ToolAction::ScheduleTask` 生成一个 `ScheduleTaskRequestMessage`：
+
+```rust
+pub struct ScheduleTaskRequestMessage {
+    pub id: Uuid,
+    pub kind: String,
+    pub content: String,
+    pub schedule: ScheduleSpec,
+    pub output_channel: Option<ChannelId>,
+}
+```
+
 2. 新增 `schedule_task_commit_system` 消费该 message，调用 `update_scheduler_state`：
    - 向 `dynamic_tasks` 追加 `DynamicScheduledTask`。
    - 向 `ScheduledTaskRegistry` 插入 `ScheduledTaskInfo`。
@@ -222,7 +286,12 @@ fn update_scheduler_state(
 
 ### 启动策略
 
-为了让 `schedule_task` 工具在没有 `triggers.toml` 的情况下也能工作，timer scheduler **始终启动**。当未配置 `triggers.toml` 时，`SchedulerState.static_routes` 为 `None`，`dynamic_tasks` 为空；schedule_task 工具仍可向 `dynamic_tasks` 追加任务。
+为了让 `schedule_task` 工具在没有 `triggers.toml` 的情况下也能工作，timer scheduler **始终启动**。启动时根据配置打印不同日志：
+
+- 已配置 `triggers.toml`：`TimerSchedulerStarted { listen_addr, static_routes: N, dynamic_tasks: 0 }`
+- 未配置 `triggers.toml`：`TimerSchedulerStarted { static_routes: 0, dynamic_tasks: 0, mode: "dynamic_only" }`
+
+当未配置 `triggers.toml` 时，`SchedulerState.static_routes` 为 `None`，`dynamic_tasks` 为空；schedule_task 工具仍可向 `dynamic_tasks` 追加任务。
 
 ### 输入源统一
 
@@ -233,22 +302,33 @@ fn update_scheduler_state(
 3. 合并为统一的 schedule 列表。
 4. 重新计算下一次触发时间并 sleep。
 
-### 一次性任务触发与清理
+### 一次性任务触发
 
-一次性任务直接比较 `DateTime<Local>`：
+一次性任务统一用 UTC 比较，避免系统时区切换导致漂移：
 
 ```rust
+let now_utc = Utc::now();
 for task in dynamic_tasks {
     if let ScheduleSpec::Once(at) = &task.schedule {
-        if *at <= now {
+        if *at <= now_utc {
             external_input_tx.send(ExternalInput::Timer { ... })?;
-            // 从 dynamic_tasks 移除
+            // 注意：这里只负责触发，清理在 ECS 中完成
         }
     }
 }
 ```
 
 Cron 动态任务与普通静态 Timer 一样用 `s.upcoming(Local)` 处理，触发后不移除。
+
+### 一次性任务清理
+
+scheduler 运行在 tokio task 中，不能直接修改 ECS Resource。因此一次性任务触发后**不立即从 `SchedulerState` 移除**，而是：
+
+1. scheduler 发送 `ExternalInput::Timer`。
+2. `trigger_task_routing_system` 成功构造 `CreateTaskMessage` 后，从 `SchedulerState.dynamic_tasks` 和 `ScheduledTaskRegistry` 中移除对应条目。
+3. 若 `ScheduledTaskRegistry` 中找不到该 kind，记录 `ScheduledTaskNotFound` 警告，但仍丢弃该次触发。
+
+这种设计保证 scheduler 只负责产生信号，ECS 负责状态清理，避免跨运行时边界直接修改 Resource。
 
 ## schedule_task 工具设计
 
@@ -271,8 +351,8 @@ Cron 动态任务与普通静态 Timer 一样用 `s.upcoming(Local)` 处理，�
       },
       "output_channel": {
         "type": "string",
-        "enum": ["telegram", "qq", "feishu"],
-        "description": "可选，显式指定输出通道类型"
+        "enum": ["tui", "telegram", "qq", "feishu", "web"],
+        "description": "可选，显式指定输出通道类型，与 FrontendKind 保持一致"
       },
       "target": {
         "type": "string",
@@ -287,15 +367,17 @@ Cron 动态任务与普通静态 Timer 一样用 `s.upcoming(Local)` 处理，�
 ### 执行逻辑
 
 1. 解析 `schedule` 字段：
-   - 以 `once:` 开头，解析后续为 `DateTime<Local>`（带偏移按偏移解析，无偏移按系统本地时区解释）。
-   - 以 `cron:` 开头，解析后续为 5 字段 cron 表达式。
-   - 其他前缀返回错误。
+   - 以 `once:` 开头，解析后续为 `DateTime<Local>`，再转换为 `DateTime<Utc>` 存储（带偏移按偏移解析，无偏移按系统本地时区解释）。
+   - 以 `cron:` 开头，解析后续为 5 字段 cron 表达式，预编译为 `Schedule` 对象。
+   - 其他前缀返回 `invalid_schedule_prefix`。
 2. 构造 `output_channel`：
-   - 若提供了 `output_channel` 参数，使用它作为 `ChannelId.frontend`；若同时提供了 `target`，作为 `ChannelId.user_id`；否则 `user_id` 继承当前任务的 `origin_channel.user_id`。
-   - 若未提供 `output_channel`：从当前任务的 `origin_channel` 完整继承；若当前任务无通道，返回错误。
-3. 生成唯一 `id` 和 `kind = "scheduled:{id}"`。
-4. 返回 `ToolAction::ScheduleTask { ... }`。
-5. `handle_tool_action` 中新增分支，把任务追加到 `SchedulerState.dynamic_tasks`、把 content/output_channel 写入 `ScheduledTaskRegistry`，并通过 watch sender 通知 scheduler。这三步在同一个 ECS system 中顺序执行，保证 ECS 内部状态一致。
+   - 若提供了 `output_channel` 参数，使用它作为 `ChannelId.frontend`；`target` 作为 `ChannelId.user_id`（必须同时提供，否则返回 `missing_target`）。
+   - 若未提供 `output_channel`：从当前任务的 `origin_channel` 完整继承；若当前任务无通道，返回 `missing_output_channel`。
+   - 验证 `output_channel` 字符串能否转换为 `FrontendKind`；转换失败返回 `invalid_output_channel`。
+3. 若 `schedule` 为 `once:` 且指定时间已过，返回 `past_once_time`。
+4. 生成唯一 `id` 和 `kind = "scheduled:{id}"`。
+5. 返回 `ToolAction::ScheduleTask { ... }`。
+6. `handle_tool_action` 对该变体生成 `ScheduleTaskRequestMessage`，由 `schedule_task_commit_system` 后续提交到 `SchedulerState` 和 `ScheduledTaskRegistry`。
 
 ### 返回结果
 
@@ -324,11 +406,12 @@ Cron 动态任务与普通静态 Timer 一样用 `s.upcoming(Local)` 处理，�
 
 | 错误码 | 含义 |
 |--------|------|
-| `missing_schedule` | 未提供 `schedule` 字段 |
 | `invalid_schedule_prefix` | `schedule` 前缀不是 `once:` 或 `cron:` |
 | `invalid_once_time` | `once:` 后的时间格式无效 |
 | `invalid_cron` | `cron:` 后的表达式解析失败 |
+| `invalid_output_channel` | `output_channel` 不是有效的 FrontendKind |
 | `missing_output_channel` | 未提供 output_channel 且当前任务无 origin_channel |
+| `missing_target` | 提供了 output_channel 但未提供 target |
 | `past_once_time` | `once:` 指定的时间已经过去 |
 | `scheduler_unavailable` | scheduler watch 通道不可用 |
 
@@ -347,24 +430,33 @@ ExternalInput::Timer {
 }
 ```
 
-`signal_ingest_system` 生成 `TriggerTaskMessage`，`trigger_task_routing_system` 根据 kind 查找：
-
-- 先在 `SignalTriggerRegistry.timer_routes` 中查静态 Timer 路由
-- 未命中则在 `ScheduledTaskRegistry` 中查动态 scheduled task
-- reload triggers.toml 会重建 `SignalTriggerRegistry`，但不会影响 `ScheduledTaskRegistry`；动态任务查找因此不受 reload 影响
-- 找到后构造 `CreateTaskMessage`：
+`signal_ingest_system` 生成 `TriggerTaskMessage`，`trigger_task_routing_system` 根据 kind 分支处理：
 
 ```rust
-CreateTaskMessage {
-    content,
-    origin_channel: None, // 事件触发任务无来源会话
-    routing_policy: TaskRoutingPolicy {
-        output_channel,
-        approval_channel: None,
-        approval_context: Some("scheduled task".to_string()),
-    },
+if let Some(route) = signal_trigger_registry.timer_routes.get(&kind) {
+    // 静态 Timer 路径：使用 EventTaskRoute 构造任务
+    create_event_task(route, ...)
+} else if kind.starts_with("scheduled:") {
+    // 动态 scheduled task 路径：从 ScheduledTaskRegistry 取信息
+    if let Some(info) = scheduled_task_registry.get(&kind) {
+        let create_msg = CreateTaskMessage {
+            content: info.build_task_input(),
+            origin_channel: None,
+            routing_policy: info.build_routing_policy(),
+            // 其他字段与静态 Timer 对齐
+        };
+        // 若是一次性任务，触发后从两个 registry 中移除
+        cleanup_scheduled_task_if_once(&kind, &mut scheduler_state, &mut scheduled_task_registry);
+    } else {
+        warn!("ScheduledTaskNotFound", kind = kind);
+    }
+} else {
+    warn!("SignalTriggerRouteMissing", kind = kind);
 }
 ```
+
+- `kind.starts_with("scheduled:")` 作为稳定的动态任务前缀协议。
+- reload triggers.toml 会重建 `SignalTriggerRegistry`，但不会影响 `ScheduledTaskRegistry`；动态任务查找因此不受 reload 影响。
 
 ## 错误处理与边界情况
 
@@ -372,11 +464,12 @@ CreateTaskMessage {
 
 | 场景 | 返回 |
 |------|------|
-| 未提供 `schedule` | `error_code: missing_schedule` |
 | `schedule` 前缀无效 | `error_code: invalid_schedule_prefix` |
 | `once:` 后的时间格式无效 | `error_code: invalid_once_time` |
 | `cron:` 后的表达式解析失败 | `error_code: invalid_cron` |
+| `output_channel` 转换 FrontendKind 失败 | `error_code: invalid_output_channel` |
 | 未提供 `output_channel` 且当前任务无通道 | `error_code: missing_output_channel` |
+| 提供了 `output_channel` 但未提供 `target` | `error_code: missing_target` |
 | `once:` 指定的时间已经过去 | `error_code: past_once_time` |
 
 ### 运行时错误
@@ -385,8 +478,7 @@ CreateTaskMessage {
 |------|------|
 | scheduler watch 通道发送失败 | 记录错误日志，工具返回 `scheduler_unavailable`，任务不加入 registry |
 | 动态任务触发时找不到 ScheduledTaskRegistry 记录 | 记录 `ScheduledTaskNotFound` 警告，丢弃该次触发 |
-| cron 动态任务 schedule 解析异常 | 记录警告，跳过该任务，不影响其他任务 |
-| 一次性任务触发后 | 同时从 `SchedulerState.dynamic_tasks` 和 `ScheduledTaskRegistry` 移除对应条目，避免内存累积 |
+| 一次性任务触发后 | `trigger_task_routing_system` 成功路由后同时从 `SchedulerState.dynamic_tasks` 和 `ScheduledTaskRegistry` 移除对应条目，避免内存累积 |
 | 进程重启 | 所有动态任务丢失（符合"内存中即可"约束） |
 
 ### triggers.toml reload 边界
@@ -427,3 +519,4 @@ CreateTaskMessage {
 - 动态任务持久化（重启丢失）。
 - 已调度任务的查询、取消、修改。
 - 多个输出通道同时发送。
+- 静态 Timer（triggers.toml 配置）的 output_channel 支持（仍只使用 approval_channel）。
