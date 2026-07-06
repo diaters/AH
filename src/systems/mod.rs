@@ -14,7 +14,7 @@ mod memory_hook;
 mod routing;
 mod summarization;
 pub mod tools;
-mod transform;
+pub mod transform;
 
 use bevy_ecs::schedule::SystemSet;
 
