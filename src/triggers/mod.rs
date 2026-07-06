@@ -18,7 +18,8 @@ pub use config::{
     build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
 };
 pub use scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledItem, SchedulerRoutes, SchedulerState,
+    DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
+    ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerRoutes, SchedulerState,
     SchedulerStateWatcher, update_scheduler_state,
 };
 pub use timer_scheduler::run_timer_scheduler;

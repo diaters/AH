@@ -5,12 +5,15 @@
 //! timer scheduler task 的 `watch::Sender`，热加载与动态任务提交都通过
 //! `update_scheduler_state` 同步发送。
 
-use bevy_ecs::prelude::{Resource, World};
+use std::collections::HashMap;
+
+use bevy_ecs::prelude::{Component, Resource, World};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::domain::{ChannelId, TaskRoutingPolicy};
 use crate::triggers::config::{TimerConfig, WebhookConfig};
 
 /// 持有通往 timer_scheduler 的 watch sender。
@@ -108,6 +111,66 @@ pub fn update_scheduler_state(world: &mut World, f: impl FnOnce(&mut SchedulerSt
     world.insert_resource(state);
 }
 
+/// schedule_task 工具创建的动态任务元信息。
+///
+/// `tasks` 按 `kind` 索引。一次性任务（`is_once == true`）触发后由调度器
+/// 通过 `remove` 清理；cron 任务保留在 registry 中以便反复触发。
+#[derive(Resource, Default, Debug, Clone)]
+pub struct ScheduledTaskRegistry {
+    tasks: HashMap<String, ScheduledTaskInfo>,
+}
+
+/// 单条动态任务的描述：内容、输出通道、是否一次性。
+#[derive(Debug, Clone)]
+pub struct ScheduledTaskInfo {
+    pub content: String,
+    pub output_channel: Option<ChannelId>,
+    /// true 表示一次性任务，触发后需清理；false 表示 cron 任务，保留在 registry 中
+    pub is_once: bool,
+}
+
+impl ScheduledTaskInfo {
+    pub fn build_task_input(&self) -> String {
+        self.content.clone()
+    }
+
+    pub fn build_routing_policy(&self) -> TaskRoutingPolicy {
+        TaskRoutingPolicy::scheduled_task(self.output_channel.clone(), "scheduled task")
+    }
+}
+
+impl ScheduledTaskRegistry {
+    pub fn insert(&mut self, kind: impl Into<String>, info: ScheduledTaskInfo) {
+        self.tasks.insert(kind.into(), info);
+    }
+
+    pub fn get(&self, kind: &str) -> Option<&ScheduledTaskInfo> {
+        self.tasks.get(kind)
+    }
+
+    pub fn remove(&mut self, kind: &str) -> Option<ScheduledTaskInfo> {
+        self.tasks.remove(kind)
+    }
+}
+
+/// `schedule_task` 工具请求创建动态任务时投递的组件。
+///
+/// 由工具实现 spawn，调度消费系统读取后转换为 `SchedulerState` 中的
+/// `DynamicScheduledTask` 并写入 `ScheduledTaskRegistry`。
+#[derive(Debug, Clone, Component)]
+pub struct ScheduleTaskRequestMessage {
+    pub id: Uuid,
+    pub kind: String,
+    pub content: String,
+    pub schedule: ScheduleSpec,
+    pub output_channel: Option<ChannelId>,
+}
+
+/// 标记已写入 `SchedulerState.dynamic_tasks` 但尚未提交 `ScheduledTaskRegistry`
+/// 的请求。提交完成后由调度系统移除。
+#[derive(Debug, Clone, Component)]
+pub struct ScheduleTaskCommitPending;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +249,125 @@ mod tests {
         assert_eq!(state.dynamic_tasks().len(), 1);
         assert_eq!(state.dynamic_tasks()[0].kind, "a");
         assert!(state.static_routes().is_some());
+    }
+
+    fn sample_channel() -> ChannelId {
+        ChannelId {
+            frontend: crate::domain::FrontendKind::Tui,
+            user_id: "test-user".to_string(),
+            thread_id: None,
+        }
+    }
+
+    fn sample_info(content: &str, is_once: bool) -> ScheduledTaskInfo {
+        ScheduledTaskInfo {
+            content: content.to_string(),
+            output_channel: Some(sample_channel()),
+            is_once,
+        }
+    }
+
+    #[test]
+    fn registry_insert_get_remove_roundtrip() {
+        let mut registry = ScheduledTaskRegistry::default();
+        assert!(registry.get("missing").is_none());
+
+        registry.insert("cron-task", sample_info("hello cron", false));
+        let info = registry
+            .get("cron-task")
+            .expect("inserted task must be retrievable");
+        assert_eq!(info.content, "hello cron");
+        assert!(!info.is_once);
+        assert!(info.output_channel.is_some());
+
+        let removed = registry
+            .remove("cron-task")
+            .expect("remove must return stored info");
+        assert_eq!(removed.content, "hello cron");
+        assert!(registry.get("cron-task").is_none());
+    }
+
+    #[test]
+    fn registry_insert_overwrites_existing_kind() {
+        let mut registry = ScheduledTaskRegistry::default();
+        registry.insert("kind", sample_info("first", false));
+        registry.insert("kind", sample_info("second", true));
+        let info = registry
+            .get("kind")
+            .expect("kind must exist after overwrite");
+        assert_eq!(info.content, "second");
+        assert!(info.is_once);
+    }
+
+    #[test]
+    fn registry_remove_returns_none_for_missing_kind() {
+        let mut registry = ScheduledTaskRegistry::default();
+        assert!(registry.remove("absent").is_none());
+    }
+
+    #[test]
+    fn build_task_input_returns_content_clone() {
+        let info = sample_info("do something", true);
+        let input = info.build_task_input();
+        assert_eq!(input, "do something");
+        // 修改返回值不应影响原 content
+        let _ = input.clone();
+        assert_eq!(info.content, "do something");
+    }
+
+    #[test]
+    fn build_routing_policy_uses_scheduled_task_constructor() {
+        let channel = sample_channel();
+        let info = ScheduledTaskInfo {
+            content: "x".to_string(),
+            output_channel: Some(channel.clone()),
+            is_once: false,
+        };
+        let policy = info.build_routing_policy();
+        assert_eq!(policy.output_channel, Some(channel));
+        assert!(policy.approval_channel.is_none());
+        assert_eq!(policy.approval_context.as_deref(), Some("scheduled task"));
+    }
+
+    #[test]
+    fn build_routing_policy_supports_no_output_channel() {
+        let info = ScheduledTaskInfo {
+            content: "y".to_string(),
+            output_channel: None,
+            is_once: true,
+        };
+        let policy = info.build_routing_policy();
+        assert!(policy.output_channel.is_none());
+    }
+
+    #[test]
+    fn registry_is_default_constructable_as_resource() {
+        let registry = ScheduledTaskRegistry::default();
+        assert!(registry.get("anything").is_none());
+    }
+
+    #[test]
+    fn schedule_task_request_message_carries_all_fields() {
+        let id = Uuid::new_v4();
+        let channel = sample_channel();
+        let msg = ScheduleTaskRequestMessage {
+            id,
+            kind: "report".to_string(),
+            content: "send report".to_string(),
+            schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::minutes(10)),
+            output_channel: Some(channel.clone()),
+        };
+        assert_eq!(msg.id, id);
+        assert_eq!(msg.kind, "report");
+        assert_eq!(msg.content, "send report");
+        assert!(matches!(msg.schedule, ScheduleSpec::Once(_)));
+        assert_eq!(msg.output_channel, Some(channel));
+    }
+
+    #[test]
+    fn schedule_task_commit_pending_is_unit_component() {
+        let _marker = ScheduleTaskCommitPending;
+        // 仅验证可构造、可 Debug
+        let _ = format!("{:?}", _marker);
     }
 }
