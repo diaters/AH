@@ -76,6 +76,7 @@ mod tests {
             shell_default_stop_timeout_secs: 5,
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
+            current_origin_channel: None,
         };
         let executor = WaitTasksTool;
 
@@ -114,6 +115,7 @@ mod tests {
             shell_default_stop_timeout_secs: 5,
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
+            current_origin_channel: None,
         };
         let executor = WaitTasksTool;
 
@@ -146,6 +148,7 @@ mod tests {
             shell_default_stop_timeout_secs: 5,
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
+            current_origin_channel: None,
         };
         let executor = WaitTasksTool;
 
@@ -171,6 +174,7 @@ mod tests {
             shell_default_stop_timeout_secs: 5,
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
+            current_origin_channel: None,
         };
         let executor = WaitTasksTool;
 

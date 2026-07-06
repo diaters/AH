@@ -33,8 +33,8 @@ use crate::domain::{
 
 use self::builtin::{
     ChatWithAgentTool, CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool,
-    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SubmitExperienceCandidateTool, WaitTasksTool,
+    ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool,
+    ShellStopTool, SubmitExperienceCandidateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -374,6 +374,41 @@ pub fn register_builtin_tools(
     // Channel send tool
     registry.register(ChannelSendTool::definition());
     executors.register(Box::new(ChannelSendTool));
+
+    // schedule_task tool
+    registry.register(ToolDefinition {
+        name: "schedule_task".to_string(),
+        description: "安排一个未来由 AI 执行的任务。支持一次性触发（once:ISO时间）或周期性 cron（cron:5字段表达式），结果会发送到指定输出通道。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "任务要执行的提示词/内容"
+                    },
+                    "schedule": {
+                        "type": "string",
+                        "description": "调度表达式。一次性: 'once:2026-07-07T09:00:00' 或 'once:2026-07-07T09:00:00+08:00'；周期性: 'cron:0 9 * * 1-5'（5字段：分 时 日 月 周）"
+                    },
+                    "output_channel": {
+                        "type": "string",
+                        "enum": ["tui", "telegram", "qq", "feishu", "web"],
+                        "description": "可选，显式指定输出通道类型"
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "可选，输出通道内的目标标识（如 Telegram chat_id）；output_channel 提供时必填"
+                    }
+                },
+                "required": ["content", "schedule"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("schedule_task".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ScheduleTaskTool));
 }
 
 /// 注册插件贡献的 Tool
@@ -517,6 +552,7 @@ mod tests {
             shell_default_stop_timeout_secs: 5,
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
+            current_origin_channel: None,
         };
         let executor = builtin::KnowledgeSearchTool;
 

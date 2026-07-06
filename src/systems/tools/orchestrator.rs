@@ -823,6 +823,20 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::ScheduleTask { .. }) => {
+            // ToolAction::ScheduleTask 的实际处理（spawn ScheduleTaskRequestMessage
+            // + ScheduleTaskCommitPending 标记 + schedule_task_commit_system 提交到
+            // SchedulerState）在 timer-local-timezone-schedule-task 特性的 Task 7 中实现。
+            // 当前阶段返回错误以保持 tool calling loop 不阻塞，待 Task 7 替换。
+            spawn_tool_error(
+                commands,
+                request_entity,
+                request,
+                ToolError::ExecutionFailed(
+                    "schedule_task orchestrator handling not yet implemented".to_string(),
+                ),
+            );
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
