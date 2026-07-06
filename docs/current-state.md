@@ -73,10 +73,13 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `TaskRoutingPolicy`：控制触发任务的 `output_channel`、`approval_channel`、`approval_context`，实现触发源与任务路由的解耦
 - `SignalTriggerRegistry`：映射触发 kind 到 `EventTaskRoute` 配置，支持运行时查询与热重载
 - axum Webhook 服务器：监听 HTTP 请求，按路由配置匹配 kind 并注入信号
-- cron Timer 调度器：按 cron 表达式周期触发信号，支持多路由并行调度
+- cron Timer 调度器：按 cron 表达式周期触发信号，cron 表达式按系统本地时区解释，支持多路由并行调度
 - prompt 模板插值：`{{body_json.field}}` 语法从 webhook payload 提取字段，生成任务提示
 - `triggers.toml` 配置文件：声明 webhook 监听地址、路由、auth token 与 timer cron 表达式、路由
-- `/reload-triggers` 命令：运行时热重载 `triggers.toml`，无需重启
+- `/reload-triggers` 命令：运行时热重载 `triggers.toml`，仅替换静态路由；动态 scheduled task 原样保留
+- `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
+- `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`feishu`/`web`
+- 动态 scheduled task 仅存内存，进程重启后丢失；一次性任务触发后自动从 registry 清理
 
 #### 插件系统
 

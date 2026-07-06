@@ -1,5 +1,5 @@
 # Webhook 与 Timer 信号注入配置
-# 通过 HARNESS_TRIGGERS_CONFIG_PATH 指向此文件启用
+# 通过 HARNESS_TRIGGERS_CONFIG 指向此文件启用
 
 [webhook]
 enabled = true

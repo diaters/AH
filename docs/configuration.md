@@ -310,9 +310,9 @@ pairing_code = ""
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `HARNESS_TRIGGERS_CONFIG_PATH` | 无（不启用触发） | 信号触发配置文件路径（TOML 格式） |
+| `HARNESS_TRIGGERS_CONFIG` | 无（不启用触发） | 信号触发配置文件路径（TOML 格式） |
 
-当 `HARNESS_TRIGGERS_CONFIG_PATH` 未设置时，信号触发系统不启用。
+当 `HARNESS_TRIGGERS_CONFIG` 未设置时，信号触发系统不启用，但 `schedule_task` 工具仍可动态安排任务。
 
 ### 配置文件格式
 
@@ -373,6 +373,22 @@ prompt_template = "执行每日摘要"
 
 运行时执行 `/reload-triggers` 命令可重新加载 `triggers.toml`，无需重启应用。
 重载会刷新 `SignalTriggerRegistry`、重启 webhook 服务器与 timer 调度器。
+重载仅替换 `static_routes`，`schedule_task` 工具动态添加的任务（`dynamic_tasks`）原样保留。
+
+### schedule_task 工具
+
+内置工具 `schedule_task` 允许 Agent 动态安排未来 AI 任务：
+
+- `content`: 任务提示词
+- `schedule`: `"once:2026-07-07T09:00:00"` 或 `"cron:0 9 * * 1-5"`
+- `output_channel`: 可选， `"tui" | "telegram" | "qq" | "feishu" | "web"`
+- `target`: 可选，指定通道目标 user_id
+
+未指定 `output_channel` 时继承当前任务的 `origin_channel`。
+显式指定 `output_channel` 时必须同时提供 `target`。
+`once:` 表达式接受 RFC 3339 带偏移时间或无偏移的本地时间，时间不能过去。
+`cron:` 表达式按系统本地时区解释（如 `0 9 * * 1-5` 表示本地工作日 9:00）。
+动态任务仅存内存，进程重启后丢失。
 
 ## 已废弃的旧配置语义
 
