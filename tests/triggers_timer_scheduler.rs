@@ -207,3 +207,58 @@ fn cron_schedule_uses_local_timezone() {
     assert_eq!(next.hour(), 9);
     assert!(next > now);
 }
+
+/// 验证一次性任务通过 scheduler 真实触发并产出 `ExternalInput::Timer`。
+///
+/// 此测试覆盖 `now_utc` 在 sleep 唤醒后必须重新获取的关键路径：
+/// 若使用 sleep 前的 `now_utc`，则未来一次性任务的 `at <= pre_sleep_now`
+/// 永远为 false，任务不会触发，测试会因 timeout 失败。
+#[tokio::test]
+async fn one_shot_task_triggers_and_is_removed() {
+    use chrono::Utc;
+    use harness::triggers::{DynamicScheduledTask, ScheduleSpec};
+    use uuid::Uuid;
+
+    let (input_tx, input_rx) = unbounded::<ExternalInput>();
+    let initial = SchedulerState::default();
+    let (state_tx, state_rx) = watch::channel(initial);
+
+    let handle = tokio::spawn(async move {
+        let _ = run_timer_scheduler(input_tx, state_rx).await;
+    });
+
+    // 添加一个 2 秒后触发的一次性任务
+    let mut state = SchedulerState::default();
+    state.dynamic_tasks_mut().push(DynamicScheduledTask {
+        id: Uuid::new_v4(),
+        kind: "scheduled:test-once".to_string(),
+        schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::seconds(2)),
+        created_at: Utc::now(),
+    });
+    state_tx.send(state).unwrap();
+
+    // 在 10 秒内应收到 ExternalInput::Timer。crossbeam recv 是阻塞调用，
+    // 用 spawn_blocking + recv_timeout 实现可被 tokio::time::timeout 中断的等待。
+    let rx = input_rx;
+    let received = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(9))),
+    )
+    .await;
+    assert!(
+        received.is_ok(),
+        "expected ExternalInput::Timer within 10s, scheduler did not fire"
+    );
+    let msg = received
+        .unwrap()
+        .expect("blocking task panicked")
+        .expect("channel closed without message");
+    match msg {
+        ExternalInput::Timer { kind, .. } => {
+            assert_eq!(kind, "scheduled:test-once");
+        }
+        other => panic!("expected ExternalInput::Timer, got {:?}", other),
+    }
+
+    handle.abort();
+}

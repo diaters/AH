@@ -85,6 +85,12 @@ pub async fn run_timer_scheduler(
 
         tokio::select! {
             _ = tokio::time::sleep(sleep_duration) => {
+                // sleep 唤醒后重新获取当前时间：循环顶部的 `now_utc` 是
+                // sleep 前计算的，用来推导 `next_deadline` 与 `sleep_duration`。
+                // 触发判断必须使用 post-sleep 时间，否则 `next_cron`（始终
+                // 是 sleep 前的未来时间）会永远满足 `cron_time <= pre_sleep_now`，
+                // 导致 cron 与未来一次性任务永远不触发。
+                let now_utc = Utc::now();
                 // 触发到期的 cron 任务。`next_cron` 是 sleep 前计算的最早 cron
                 // 触发时间；若 sleep 因其到期而唤醒，则 `cron_time <= now_utc`。
                 if let Some((cron_time, cron_kind)) = &next_cron
