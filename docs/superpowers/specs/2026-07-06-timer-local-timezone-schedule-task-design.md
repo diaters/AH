@@ -103,6 +103,8 @@ pub struct ScheduledTaskRegistry {
 pub struct ScheduledTaskInfo {
     pub content: String,
     pub output_channel: Option<ChannelId>,
+    /// 标记是否为一次性任务；cron 任务为 false，触发后仍保留在 registry 中
+    pub is_once: bool,
 }
 
 impl ScheduledTaskInfo {
@@ -352,7 +354,9 @@ Cron 动态任务与普通静态 Timer 一样用 `s.upcoming(Local)` 处理，�
 scheduler 运行在 tokio task 中，不能直接修改 ECS Resource。因此一次性任务触发后**不立即从 `SchedulerState` 移除**，而是：
 
 1. scheduler 发送 `ExternalInput::Timer`。
-2. `trigger_task_routing_system` 成功构造 `CreateTaskMessage` 后，从 `SchedulerState.dynamic_tasks` 和 `ScheduledTaskRegistry` 中移除对应条目。
+2. `trigger_task_routing_system` 成功构造 `CreateTaskMessage` 后，根据 `ScheduledTaskInfo.is_once` 判断：
+   - 若 `is_once == true`，从 `SchedulerState.dynamic_tasks` 和 `ScheduledTaskRegistry` 中移除对应条目。
+   - 若 `is_once == false`（cron 任务），保留两个 registry 中的条目，等待下次触发。
 3. 若 `ScheduledTaskRegistry` 中找不到该 kind，记录 `ScheduledTaskNotFound` 警告，但仍丢弃该次触发。
 
 这种设计保证 scheduler 只负责产生信号，ECS 负责状态清理，避免跨运行时边界直接修改 Resource。
