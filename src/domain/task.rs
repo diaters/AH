@@ -54,6 +54,15 @@ impl TaskRoutingPolicy {
             approval_context,
         }
     }
+
+    /// 构造 schedule_task 动态任务的路由策略：有 output_channel，无审批。
+    pub fn scheduled_task(output_channel: Option<ChannelId>, approval_context: &str) -> Self {
+        Self {
+            output_channel,
+            approval_channel: None,
+            approval_context: Some(approval_context.to_string()),
+        }
+    }
 }
 
 /// 任务实体
@@ -442,5 +451,18 @@ mod tests {
         assert_eq!(task.origin_channel, None);
         assert_eq!(task.routing_policy.output_channel, None);
         assert_eq!(task.routing_policy.approval_channel, Some(approval_channel));
+    }
+
+    #[test]
+    fn scheduled_task_routing_policy_has_output_channel_no_approval() {
+        let channel = ChannelId {
+            frontend: crate::domain::FrontendKind::Telegram,
+            user_id: "chat".to_string(),
+            thread_id: None,
+        };
+        let policy = TaskRoutingPolicy::scheduled_task(Some(channel.clone()), "scheduled task");
+        assert_eq!(policy.output_channel, Some(channel));
+        assert!(policy.approval_channel.is_none());
+        assert_eq!(policy.approval_context.as_deref(), Some("scheduled task"));
     }
 }
