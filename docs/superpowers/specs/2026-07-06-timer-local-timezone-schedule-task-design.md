@@ -64,19 +64,8 @@ pub struct SchedulerState {
 }
 
 impl SchedulerState {
-    /// 通过统一入口修改 state，保证 Resource 与 watch payload 一致。
-    pub fn update<F>(&mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut Self),
-    {
-        f(self);
-        self.clone()
-    }
-
     pub fn static_routes(&self) -> Option<&SchedulerRoutes> { self.static_routes.as_ref() }
-    pub fn static_routes_mut(&mut self) -> &mut Option<SchedulerRoutes> { &mut self.static_routes }
     pub fn dynamic_tasks(&self) -> &[DynamicScheduledTask] { &self.dynamic_tasks }
-    pub fn dynamic_tasks_mut(&mut self) -> &mut Vec<DynamicScheduledTask> { &mut self.dynamic_tasks }
 }
 
 pub struct SchedulerRoutes {
@@ -212,6 +201,15 @@ let cron_expr = format!("0 {} *", route.cron);
 Schedule::from_str(&cron_expr)
 ```
 
+### 时区基准说明
+
+scheduler 内部对一次性任务和 cron 任务使用不同的时间基准：
+
+- **一次性任务**：工具解析时已完成 Local→Utc 转换，存储为 `DateTime<Utc>`。scheduler 用 `Utc::now()` 比较，避免系统时区切换导致漂移。
+- **Cron 任务**：cron 表达式的语义是"按本地时区解释"（如 `0 9 * * 1-5` 表示本地 9:00），因此每次计算 next fire time 时使用 `s.upcoming(Local)`。
+
+两种基准在逻辑上互补：一次性时间是绝对的，cron 规则是本地语义相对的。
+
 ### Watch 通道
 
 当前 `TriggerConfigWatcher` Resource 保存 `tokio::sync::watch::Sender<TriggerConfig>`。改为保存 `tokio::sync::watch::Sender<SchedulerState>`，对应 Resource 改名为 `SchedulerStateWatcher`。
@@ -248,7 +246,11 @@ fn update_scheduler_state(
 }
 ```
 
-说明：先 `remove_resource` 取出所有权，避免借用冲突；watch sender 只需要一次 clone；最后把 state 重新插入为 Resource。
+说明：
+- `SchedulerState` 字段 private，所有修改必须通过 `update_scheduler_state`。
+- `remove_resource` 取出所有权，避免借用冲突。
+- 回调 `f` 修改 state 后，clone 一次发给 watch sender。
+- 最后把 state 重新插入为 Resource。
 
 **reload 流程**：
 
@@ -270,6 +272,10 @@ pub struct ScheduleTaskRequestMessage {
     pub schedule: ScheduleSpec,
     pub output_channel: Option<ChannelId>,
 }
+
+/// Marker component，供 schedule_task_commit_system query 过滤
+#[derive(Component)]
+pub struct ScheduleTaskCommitPending;
 ```
 
 2. 新增 `schedule_task_commit_system` 消费该 message，调用 `update_scheduler_state`：
@@ -299,7 +305,22 @@ pub struct ScheduleTaskRequestMessage {
 
 1. 从 `static_routes.timer.routes` 构建 cron schedules。
 2. 从 `dynamic_tasks` 构建一次性或 cron schedules。
-3. 合并为统一的 schedule 列表。
+3. 合并为统一的 scheduler 本地 schedule 列表 `Vec<ScheduledItem>`：
+
+```rust
+pub enum ScheduledItem {
+    Cron {
+        kind: String,
+        schedule: Schedule,
+    },
+    Once {
+        id: Uuid,
+        kind: String,
+        at: DateTime<Utc>,
+    },
+}
+```
+
 4. 重新计算下一次触发时间并 sleep。
 
 ### 一次性任务触发
@@ -308,15 +329,21 @@ pub struct ScheduleTaskRequestMessage {
 
 ```rust
 let now_utc = Utc::now();
-for task in dynamic_tasks {
-    if let ScheduleSpec::Once(at) = &task.schedule {
+let mut i = 0;
+while i < schedules.len() {
+    if let ScheduledItem::Once { id, at, kind } = &schedules[i] {
         if *at <= now_utc {
-            external_input_tx.send(ExternalInput::Timer { ... })?;
-            // 注意：这里只负责触发，清理在 ECS 中完成
+            external_input_tx.send(ExternalInput::Timer { kind: kind.clone() })?;
+            // 立即从本地 schedule 列表移除，防止 ECS 清理完成前重复触发
+            schedules.remove(i);
+            continue;
         }
     }
+    i += 1;
 }
 ```
+
+scheduler 维护的 `schedules` 是本地副本，与 ECS Resource 解耦。一次性任务触发后立即从本地副本移除，避免在 ECS 侧 `trigger_task_routing_system` 完成清理前重复触发。
 
 Cron 动态任务与普通静态 Timer 一样用 `s.upcoming(Local)` 处理，触发后不移除。
 
@@ -433,7 +460,7 @@ ExternalInput::Timer {
 `signal_ingest_system` 生成 `TriggerTaskMessage`，`trigger_task_routing_system` 根据 kind 分支处理：
 
 ```rust
-if let Some(route) = signal_trigger_registry.timer_routes.get(&kind) {
+if let Some(route) = signal_trigger_registry.timer_route(&kind) {
     // 静态 Timer 路径：使用 EventTaskRoute 构造任务
     create_event_task(route, ...)
 } else if kind.starts_with("scheduled:") {
