@@ -87,11 +87,17 @@ pub async fn run_timer_scheduler(
 /// 从 `SchedulerState` 的静态路由构建 schedules。
 ///
 /// `static_routes` 为 `None` 时返回空 vec（仅动态任务模式）。
+/// `timer.enabled = false` 时跳过静态 timer 路由（返回空 vec），
+/// 但不影响后续 task 中实现的动态任务。
 fn build_schedules_from_state(state: &SchedulerState) -> anyhow::Result<Vec<(Schedule, String)>> {
     let Some(routes) = state.static_routes() else {
         return Ok(Vec::new());
     };
-    build_schedules(&routes.timer)
+    if routes.timer.enabled {
+        build_schedules(&routes.timer)
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 /// 重建 schedules。失败时保留旧值并记 warning（spec L87-111）。

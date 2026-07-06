@@ -2,7 +2,7 @@
 //!
 //! 不测试真实 cron 等待（太慢），改为通过 watch 通道与 tracing 事件捕获
 //! 验证热加载行为：scheduler 必须在收到新配置后实际重建 schedules 并发出
-//! `TimerSchedulerReloaded` / `TimerSchedulerReloaded` 事件。
+//! `TimerSchedulerReloaded` / `TimerSchedulerReloadFailed` 事件。
 
 use std::fmt;
 use std::sync::Arc;
