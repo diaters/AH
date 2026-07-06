@@ -185,6 +185,50 @@ async fn scheduler_starts_with_empty_state_when_no_static_routes() {
     handle.abort();
 }
 
+/// 验证 reload（发送新的 static config）保留 `dynamic_tasks`：
+/// 先通过 `SchedulerState` 添加一个已过期的一次性动态任务，再发送空
+/// static config 的 reload，验证 scheduler 仍然运行且收到了 Timer 信号。
+#[tokio::test]
+async fn reload_preserves_dynamic_tasks() {
+    use chrono::Utc;
+    use harness::triggers::{DynamicScheduledTask, ScheduleSpec};
+    use uuid::Uuid;
+
+    let (input_tx, input_rx) = unbounded::<ExternalInput>();
+    let initial = SchedulerState::default();
+    let (state_tx, state_rx) = watch::channel(initial);
+
+    let handle = tokio::spawn(async move {
+        let _ = run_timer_scheduler(input_tx, state_rx).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 添加一个已过期的一次性动态任务，验证 reload 后仍能触发
+    let mut new_state = SchedulerState::default();
+    new_state.dynamic_tasks_mut().push(DynamicScheduledTask {
+        id: Uuid::new_v4(),
+        kind: "scheduled:test".to_string(),
+        schedule: ScheduleSpec::Once(Utc::now() - chrono::Duration::minutes(1)),
+        created_at: Utc::now(),
+    });
+    state_tx.send(new_state).unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 发送一个空 static config 的 reload，dynamic_tasks 应被保留
+    state_tx.send(SchedulerState::default()).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 检查 scheduler 仍然运行，且收到了 Timer 信号
+    assert!(!handle.is_finished());
+    assert!(
+        input_rx.try_recv().is_ok(),
+        "expected ExternalInput::Timer after reload"
+    );
+    handle.abort();
+}
+
 /// 验证 cron 调度使用 `Local` 时区。
 ///
 /// 用户在 `triggers.toml` 中书写 5 字段标准 cron（分 时 日 月 周），
