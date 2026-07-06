@@ -5,9 +5,11 @@
 //! - HTTP webhook server（axum）
 //! - cron timer scheduler
 //! - 路由热加载（`/reload-triggers`）
+//! - 统一的 `SchedulerState`（静态路由 + 动态任务）
 
 pub mod config;
 pub mod prompt_template;
+pub mod scheduled_task;
 pub mod timer_scheduler;
 pub mod webhook_server;
 
@@ -15,29 +17,24 @@ pub use config::{
     TimerConfig, TimerRouteConfig, TriggerConfig, WebhookConfig, WebhookRouteConfig,
     build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
 };
+pub use scheduled_task::{
+    DynamicScheduledTask, ScheduleSpec, SchedulerRoutes, SchedulerState, SchedulerStateWatcher,
+    update_scheduler_state,
+};
 pub use timer_scheduler::run_timer_scheduler;
 pub use webhook_server::run_webhook_server;
 
-use bevy_ecs::prelude::{Resource, World};
-use tokio::sync::watch;
+use bevy_ecs::prelude::World;
 use tracing::{error, info, warn};
 
 use crate::app::HarnessSettings;
-
-/// 持有 timer_scheduler 的 watch sender。
-///
-/// `default()` 为 `None`，由 `main.rs` 在启用 triggers 时用 `Some(tx)` 覆盖。
-#[derive(Resource, Default)]
-pub struct TriggerConfigWatcher(pub Option<watch::Sender<TriggerConfig>>);
-
-/// 持有当前 TriggerConfig 副本，供 `reload_triggers_system` 与诊断使用。
-#[derive(Resource, Clone, Default)]
-pub struct TriggerConfigState(pub Option<TriggerConfig>);
 
 /// `/reload-triggers` 系统。
 ///
 /// 遵循原子提交约束（spec L87-104）：解析 → 模板校验 → registry 构建 → cron 校验 → 一次性提交。
 /// 任一步骤失败则保留旧值，记日志，不更新任何资源。
+///
+/// 通过 `update_scheduler_state` 提交静态路由，保留 `SchedulerState.dynamic_tasks` 不变。
 pub fn reload_triggers_system(world: &mut World) {
     let path = world
         .get_resource::<HarnessSettings>()
@@ -106,25 +103,16 @@ pub fn reload_triggers_system(world: &mut World) {
     // 步骤 6: 原子提交
     let webhook_count = new_config.webhook.routes.len();
     let timer_count = new_config.timer.routes.len();
+
+    update_scheduler_state(world, |state| {
+        state.set_static_routes(SchedulerRoutes {
+            timer: new_config.timer.clone(),
+            webhook: new_config.webhook.clone(),
+        });
+        // dynamic_tasks 保持不变
+    });
+
     world.insert_resource(new_registry);
-    world.resource_mut::<TriggerConfigState>().0 = Some(new_config.clone());
-    match world.resource_mut::<TriggerConfigWatcher>().0.as_ref() {
-        Some(tx) => {
-            if let Err(e) = tx.send(new_config) {
-                warn!(
-                    event = "TriggerConfigWatcherSendFailed",
-                    error = %e,
-                    "timer_scheduler receiver dropped, but registry and state updated"
-                );
-            }
-        }
-        None => {
-            warn!(
-                event = "TriggerConfigWatcherMissing",
-                "timer_scheduler not running, only registry and state updated"
-            );
-        }
-    }
 
     info!(
         event = "TriggersReloaded",

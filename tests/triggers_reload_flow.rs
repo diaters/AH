@@ -6,7 +6,7 @@ use harness::HarnessConfig;
 use harness::app::HarnessSettings;
 use harness::domain::SignalTriggerRegistry;
 use harness::prelude::*;
-use harness::triggers::{TriggerConfigState, TriggerConfigWatcher, reload_triggers_system};
+use harness::triggers::{SchedulerState, SchedulerStateWatcher, reload_triggers_system};
 use tempfile::NamedTempFile;
 use tokio::sync::watch;
 
@@ -24,8 +24,8 @@ fn build_app(path: &str) -> App {
     };
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(SignalTriggerRegistry::default());
-    app.insert_resource(TriggerConfigWatcher::default());
-    app.insert_resource(TriggerConfigState::default());
+    app.insert_resource(SchedulerStateWatcher::default());
+    app.insert_resource(SchedulerState::default());
     app.add_systems(Update, reload_triggers_system);
     app
 }
@@ -48,8 +48,8 @@ prompt_template = "{{kind}}"
     app.update();
     let registry = app.world().resource::<SignalTriggerRegistry>();
     assert_eq!(registry.webhook_route_count(), 1);
-    let state = app.world().resource::<TriggerConfigState>();
-    assert!(state.0.is_some());
+    let state = app.world().resource::<SchedulerState>();
+    assert!(state.static_routes().is_some());
 }
 
 #[test]
@@ -170,12 +170,12 @@ approval_context = "c"
 prompt_template = "{{kind}}"
 "#,
     );
-    let (tx, mut rx) = watch::channel(harness::triggers::TriggerConfig::default());
+    let (tx, mut rx) = watch::channel(harness::triggers::SchedulerState::default());
     let mut app = build_app(f.path().to_str().unwrap());
     app.world_mut()
-        .insert_resource(TriggerConfigWatcher(Some(tx)));
+        .insert_resource(SchedulerStateWatcher(Some(tx)));
     app.update();
     assert!(rx.has_changed().unwrap());
     let updated = rx.borrow_and_update().clone();
-    assert_eq!(updated.webhook.routes.len(), 1);
+    assert_eq!(updated.static_routes().unwrap().webhook.routes.len(), 1);
 }

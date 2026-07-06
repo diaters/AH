@@ -2,7 +2,7 @@
 //!
 //! 不测试真实 cron 等待（太慢），改为通过 watch 通道与 tracing 事件捕获
 //! 验证热加载行为：scheduler 必须在收到新配置后实际重建 schedules 并发出
-//! `TimerSchedulerReloaded` / `TimerSchedulerReloadFailed` 事件。
+//! `TimerSchedulerReloaded` / `TimerSchedulerReloaded` 事件。
 
 use std::fmt;
 use std::sync::Arc;
@@ -13,8 +13,11 @@ use crossbeam_channel::unbounded;
 use harness::domain::ChannelId;
 use harness::domain::ExternalInput;
 use harness::domain::FrontendKind;
+use harness::triggers::SchedulerRoutes;
+use harness::triggers::SchedulerState;
+use harness::triggers::TimerConfig;
 use harness::triggers::TimerRouteConfig;
-use harness::triggers::TriggerConfig;
+use harness::triggers::WebhookConfig;
 use harness::triggers::run_timer_scheduler;
 use tokio::sync::watch;
 use tracing::field::Field;
@@ -71,6 +74,19 @@ fn route(kind: &str, cron: &str) -> TimerRouteConfig {
     }
 }
 
+/// 构造带单个 timer 路由的 `SchedulerState`（static_routes 非 None）。
+fn state_with_timer_route(kind: &str, cron: &str) -> SchedulerState {
+    let mut state = SchedulerState::default();
+    state.set_static_routes(SchedulerRoutes {
+        timer: TimerConfig {
+            enabled: true,
+            routes: vec![route(kind, cron)],
+        },
+        webhook: WebhookConfig::default(),
+    });
+    state
+}
+
 fn assert_contains(events: &CapturingLayer, name: &str) {
     let got = events.events.lock().unwrap().clone();
     assert!(
@@ -84,7 +100,7 @@ fn assert_contains(events: &CapturingLayer, name: &str) {
 #[tokio::test]
 async fn scheduler_starts_with_empty_config_and_handles_reload() {
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
-    let (config_tx, config_rx) = watch::channel(TriggerConfig::default());
+    let (config_tx, config_rx) = watch::channel(SchedulerState::default());
 
     let capturing = CapturingLayer::default();
     let subscriber = Registry::default().with(capturing.clone());
@@ -101,16 +117,16 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
     assert_contains(&capturing, "TimerSchedulerStarted");
 
     // 发送有效配置（一条路由），应触发 TimerSchedulerReloaded
-    let mut valid = TriggerConfig::default();
-    valid.timer.routes.push(route("daily", "0 9 * * 1-5"));
-    config_tx.send(valid).unwrap();
+    config_tx
+        .send(state_with_timer_route("daily", "0 9 * * 1-5"))
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_contains(&capturing, "TimerSchedulerReloaded");
 
     // 发送无效 cron 配置，应触发 TimerSchedulerReloadFailed，且 scheduler 不退出
-    let mut bad = TriggerConfig::default();
-    bad.timer.routes.push(route("bad", "not a cron"));
-    config_tx.send(bad).unwrap();
+    config_tx
+        .send(state_with_timer_route("bad", "not a cron"))
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_contains(&capturing, "TimerSchedulerReloadFailed");
     assert!(
@@ -119,7 +135,7 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
     );
 
     // 再发送一个有效但空配置，应再次触发 TimerSchedulerReloaded
-    config_tx.send(TriggerConfig::default()).unwrap();
+    config_tx.send(SchedulerState::default()).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     let got = capturing.events.lock().unwrap().clone();
     let reloaded_count = got
@@ -138,10 +154,33 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
 #[tokio::test]
 async fn scheduler_initial_config_with_invalid_cron_returns_error() {
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
-    let mut bad_config = TriggerConfig::default();
-    bad_config.timer.routes.push(route("bad", "not a cron"));
-    let (_config_tx, config_rx) = watch::channel(bad_config);
+    let bad_state = state_with_timer_route("bad", "not a cron");
+    let (_config_tx, config_rx) = watch::channel(bad_state);
 
     let result = run_timer_scheduler(input_tx, config_rx).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn scheduler_starts_with_empty_state_when_no_static_routes() {
+    // 无 triggers.toml 时，SchedulerState.static_routes = None，scheduler 仍正常启动。
+    let (input_tx, _input_rx) = unbounded::<ExternalInput>();
+    let (_config_tx, config_rx) = watch::channel(SchedulerState::default());
+
+    let capturing = CapturingLayer::default();
+    let subscriber = Registry::default().with(capturing.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let handle = tokio::spawn(async move {
+        let _ = run_timer_scheduler(input_tx, config_rx).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_contains(&capturing, "TimerSchedulerStarted");
+    assert!(
+        !handle.is_finished(),
+        "scheduler must keep running with empty state"
+    );
+
+    handle.abort();
 }

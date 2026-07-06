@@ -157,7 +157,9 @@ fn main() -> Result<()> {
         .0
         .triggers_config_path
         .clone();
-    if let Some(ref path) = triggers_config_path {
+    let loaded_trigger_config: Option<harness::triggers::TriggerConfig> = if let Some(ref path) =
+        triggers_config_path
+    {
         use std::path::PathBuf;
         let path = PathBuf::from(path);
         match harness::triggers::load_triggers_config(&path) {
@@ -169,6 +171,7 @@ fn main() -> Result<()> {
                         error = %e,
                         "trigger template validation failed, skipping triggers"
                     );
+                    None
                 } else {
                     // 构建 registry
                     match harness::triggers::build_registry_from_config(&trigger_config) {
@@ -180,46 +183,23 @@ fn main() -> Result<()> {
                                 webhook_count, timer_count, "triggers config loaded"
                             );
                             app.world_mut().insert_resource(registry);
-                            app.world_mut()
-                                .insert_resource(harness::triggers::TriggerConfigState(Some(
-                                    trigger_config.clone(),
-                                )));
 
                             // 启动 webhook server
                             if trigger_config.webhook.enabled {
                                 let input_tx_for_webhook = input_tx.clone();
                                 let webhook_config = trigger_config.webhook.clone();
                                 let _webhook_guard = runtime.spawn(async move {
-                                    if let Err(e) = harness::triggers::run_webhook_server(
-                                        input_tx_for_webhook,
-                                        webhook_config,
-                                    )
-                                    .await
-                                    {
-                                        warn!(event = "WebhookServerError", error = %e, "webhook server exited with error");
-                                    }
-                                });
+                                        if let Err(e) = harness::triggers::run_webhook_server(
+                                            input_tx_for_webhook,
+                                            webhook_config,
+                                        )
+                                        .await
+                                        {
+                                            warn!(event = "WebhookServerError", error = %e, "webhook server exited with error");
+                                        }
+                                    });
                             }
-
-                            // 启动 timer scheduler
-                            if trigger_config.timer.enabled {
-                                let (timer_tx, timer_rx) =
-                                    tokio::sync::watch::channel(trigger_config.clone());
-                                app.world_mut().insert_resource(
-                                    harness::triggers::TriggerConfigWatcher(Some(timer_tx)),
-                                );
-                                let input_tx_for_timer = input_tx.clone();
-                                let _timer_guard = runtime.spawn(async move {
-                                    if let Err(e) = harness::triggers::run_timer_scheduler(
-                                        input_tx_for_timer,
-                                        timer_rx,
-                                    )
-                                    .await
-                                    {
-                                        warn!(event = "TimerSchedulerError", error = %e, "timer scheduler exited with error");
-                                    }
-                                });
-                            }
+                            Some(trigger_config)
                         }
                         Err(e) => {
                             warn!(
@@ -227,6 +207,7 @@ fn main() -> Result<()> {
                                 error = %e,
                                 "failed to build trigger registry"
                             );
+                            None
                         }
                     }
                 }
@@ -237,17 +218,35 @@ fn main() -> Result<()> {
                     error = %e,
                     "failed to load triggers config, continuing without triggers"
                 );
+                None
             }
         }
     } else {
-        // 即使未配置 triggers.toml，也插入默认空 registry
-        app.world_mut()
-            .insert_resource(harness::domain::SignalTriggerRegistry::default());
-        app.world_mut()
-            .insert_resource(harness::triggers::TriggerConfigState(None));
-        app.world_mut()
-            .insert_resource(harness::triggers::TriggerConfigWatcher(None));
+        None
+    };
+
+    // 始终启动 timer scheduler：无论是否配置了 triggers.toml，以支持动态任务模式。
+    // 有配置时 SchedulerState.static_routes = Some(...)；无配置时为 None。
+    let mut initial_state = harness::triggers::SchedulerState::default();
+    if let Some(config) = &loaded_trigger_config {
+        initial_state.set_static_routes(harness::triggers::SchedulerRoutes {
+            timer: config.timer.clone(),
+            webhook: config.webhook.clone(),
+        });
     }
+    let (scheduler_tx, scheduler_rx) = tokio::sync::watch::channel(initial_state.clone());
+    app.world_mut().insert_resource(initial_state);
+    app.world_mut()
+        .insert_resource(harness::triggers::SchedulerStateWatcher(Some(scheduler_tx)));
+
+    let input_tx_for_timer = input_tx.clone();
+    let _timer_guard = runtime.spawn(async move {
+        if let Err(e) =
+            harness::triggers::run_timer_scheduler(input_tx_for_timer, scheduler_rx).await
+        {
+            warn!(event = "TimerSchedulerError", error = %e, "timer scheduler exited with error");
+        }
+    });
 
     info!(
         event = "EcsAppBuilt",
