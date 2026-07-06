@@ -73,6 +73,23 @@ impl SchedulerState {
     }
 }
 
+/// timer scheduler 内部统一调度的条目。
+///
+/// `Cron` 使用 `Box<Schedule>` 以避免 `cron::Schedule`（约 248 字节）撑大
+/// 整个枚举（clippy::large_enum_variant），与 `ScheduleSpec` 保持一致。
+#[derive(Debug, Clone)]
+pub enum ScheduledItem {
+    Cron {
+        kind: String,
+        schedule: Box<Schedule>,
+    },
+    Once {
+        id: Uuid,
+        kind: String,
+        at: DateTime<Utc>,
+    },
+}
+
 /// 统一修改入口：先 remove_resource，修改，watch send，再 insert_resource。
 ///
 /// 使用 `world.get_resource::<SchedulerStateWatcher>()` 而非 `world.resource()`

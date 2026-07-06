@@ -18,8 +18,8 @@ pub use config::{
     build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
 };
 pub use scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, SchedulerRoutes, SchedulerState, SchedulerStateWatcher,
-    update_scheduler_state,
+    DynamicScheduledTask, ScheduleSpec, ScheduledItem, SchedulerRoutes, SchedulerState,
+    SchedulerStateWatcher, update_scheduler_state,
 };
 pub use timer_scheduler::run_timer_scheduler;
 pub use webhook_server::run_webhook_server;

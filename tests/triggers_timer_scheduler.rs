@@ -184,3 +184,26 @@ async fn scheduler_starts_with_empty_state_when_no_static_routes() {
 
     handle.abort();
 }
+
+/// 验证 cron 调度使用 `Local` 时区。
+///
+/// 用户在 `triggers.toml` 中书写 5 字段标准 cron（分 时 日 月 周），
+/// 内部加载时通过 `format!("0 {} *", user_cron)` 补齐为 7 字段
+/// （秒=0，年=*）。`schedule.upcoming(Local)` 必须返回本地时区的
+/// 下一次触发时间，因此工作日 9:00 的 cron 在本地时区下 hour==9。
+#[test]
+fn cron_schedule_uses_local_timezone() {
+    use chrono::{Local, Timelike};
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    // 用户输入 5 字段 cron，内部补齐为 7 字段（秒=0，年=*）
+    let user_cron = "0 9 * * 1-5"; // 工作日本地 9:00
+    let cron_expr = format!("0 {} *", user_cron);
+    let schedule = Schedule::from_str(&cron_expr).unwrap();
+    let now = Local::now();
+    let next = schedule.upcoming(Local).next().unwrap();
+    // 验证 next 的小时数是 9（本地时间）
+    assert_eq!(next.hour(), 9);
+    assert!(next > now);
+}
