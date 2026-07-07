@@ -257,7 +257,10 @@ mod tests {
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "say hi");
-        assert_eq!(messages[0].routing_policy.output_channel, Some(channel.clone()));
+        assert_eq!(
+            messages[0].routing_policy.output_channel,
+            Some(channel.clone())
+        );
         assert_eq!(
             messages[0].routing_policy.approval_channel,
             Some(channel.clone())

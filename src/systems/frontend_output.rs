@@ -548,7 +548,9 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert!(
-            !events.iter().any(|e| matches!(e, EngineEvent::ApprovalRequest { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::ApprovalRequest { .. })),
             "should not emit ApprovalRequest for disabled frontend"
         );
     }
@@ -605,7 +607,9 @@ mod tests {
             EventTarget::Directed(channels) => {
                 assert_eq!(channels, vec![output_channel]);
             }
-            EventTarget::Broadcast => panic!("approval should route to scheduled task output channel"),
+            EventTarget::Broadcast => {
+                panic!("approval should route to scheduled task output channel")
+            }
         }
     }
 }
