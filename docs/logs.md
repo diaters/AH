@@ -45,7 +45,7 @@ RUST_LOG=harness=trace,harness::channels=info cargo run
 | 审批 | ApprovalRequestReceived / ApprovalResolved | tool_name, decision, grant_mode |
 | 任务 | TaskCreated / TaskTerminated | content, task_status, result_summary |
 | 摘要 | SummarizationRequested / SummarizationTriggered | trigger, stm_entries, target_tokens |
-| 工具 | ToolExecutionStarted / ToolExecutionDenied | tool_name, agent_name, permission |
+| 工具 | ToolExecutionStarted / ToolExecutionDenied | tool_name, agent_name, task_id |
 | 评估 | EvaluationTriggered | turn_count, max_turns |
 | 输入 | ExternalInputReceived | kind, channel, content_len |
 
