@@ -143,21 +143,20 @@ pub(crate) fn frontend_output_system(
         // 事件任务的审批必须走路由策略中显式配置的 approval_channel。
         // 普通聊天任务的 approval_channel 与 output_channel 相同，由
         // TaskRoutingPolicy::conversational 构造时设置。
-        let Some(approval_channel) = all_tasks
+        let Some((task_entity, task)) = all_tasks
             .iter()
             .find(|(_, t)| t.id == confirmation.task_id)
-            .and_then(|(_, t)| t.routing_policy.approval_channel.clone())
         else {
-            // 缺少审批通道时，显式标记任务失败，避免任务卡在等待态
-            if let Some((task_entity, task)) =
-                all_tasks.iter().find(|(_, t)| t.id == confirmation.task_id)
-            {
-                let mut failed_task = task.clone();
-                failed_task.status = TaskStatus::Failed(FailureReason::Unknown);
-                failed_task.last_error =
-                    Some("missing approval channel for event task approval request".to_string());
-                commands.entity(task_entity).insert(failed_task);
-            }
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        let Some(approval_channel) = task.routing_policy.approval_channel.clone() else {
+            let mut failed_task = task.clone();
+            failed_task.status = TaskStatus::Failed(FailureReason::Unknown);
+            failed_task.last_error =
+                Some("missing approval channel for event task approval request".to_string());
+            commands.entity(task_entity).insert(failed_task);
             warn!(
                 event = "FrontendApprovalRouteMissing",
                 task_id = %confirmation.task_id,
@@ -168,25 +167,22 @@ pub(crate) fn frontend_output_system(
             continue;
         };
 
-        if !registry.has_frontend(approval_channel.frontend.clone()) {
-            if let Some((task_entity, task)) =
-                all_tasks.iter().find(|(_, t)| t.id == confirmation.task_id)
-            {
-                let frontend_name = match approval_channel.frontend {
-                    FrontendKind::Tui => "tui",
-                    FrontendKind::Telegram => "telegram",
-                    FrontendKind::Web => "web",
-                    FrontendKind::QQ => "qq",
-                    FrontendKind::Feishu => "feishu",
-                };
-                let mut failed_task = task.clone();
-                failed_task.status = TaskStatus::Failed(FailureReason::Unknown);
-                failed_task.last_error = Some(format!(
-                    "approval channel frontend '{}' is not enabled",
-                    frontend_name
-                ));
-                commands.entity(task_entity).insert(failed_task);
-            }
+        // 仅对事件任务检查 frontend 是否注册
+        if task.origin_channel.is_none() && !registry.has_frontend(approval_channel.frontend.clone()) {
+            let frontend_name = match approval_channel.frontend {
+                FrontendKind::Tui => "tui",
+                FrontendKind::Telegram => "telegram",
+                FrontendKind::Web => "web",
+                FrontendKind::QQ => "qq",
+                FrontendKind::Feishu => "feishu",
+            };
+            let mut failed_task = task.clone();
+            failed_task.status = TaskStatus::Failed(FailureReason::Unknown);
+            failed_task.last_error = Some(format!(
+                "approval channel frontend '{}' is not enabled",
+                frontend_name
+            ));
+            commands.entity(task_entity).insert(failed_task);
             warn!(
                 event = "FrontendApprovalRouteInvalid",
                 task_id = %confirmation.task_id,
