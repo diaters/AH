@@ -10,9 +10,9 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentExecutor,
-        AgentSpawnRequestMessage, Frontend, PendingKnowledgeWriteHooks, RetryReadyMessage,
-        SharedKnowledgeBase, Signal, Task, TaskTerminatedMessage, ToolCallingState,
-        UserInputMessage, UserOutputMessage,
+        AgentSpawnRequestMessage, Frontend, FrontendKind, PendingKnowledgeWriteHooks,
+        RetryReadyMessage, SharedKnowledgeBase, Signal, Task, TaskTerminatedMessage,
+        ToolCallingState, UserInputMessage, UserOutputMessage,
     },
     llm::LlmProviderConfig,
     plugins::DefaultRuntimePluginGroup,
@@ -174,6 +174,15 @@ pub struct InputReceiver(pub Receiver<crate::domain::ExternalInput>);
 #[derive(Resource)]
 pub struct FrontendRegistry {
     pub frontends: Vec<Box<dyn Frontend>>,
+}
+
+impl FrontendRegistry {
+    /// 检查指定类型的 frontend 是否已在注册表中。
+    /// 注意：返回 true 仅表示该 frontend 类型已注册，不保证底层 channel 当前可用
+    ///（channel 可用性由 ChannelManager 的运行时发送结果覆盖）。
+    pub fn has_frontend(&self, kind: FrontendKind) -> bool {
+        self.frontends.iter().any(|f| f.kind() == kind)
+    }
 }
 
 #[derive(Resource, Clone)]
@@ -343,5 +352,32 @@ mod tests {
         let config = HarnessConfig::default();
         assert_eq!(config.active_poll_ms, 16);
         assert_eq!(config.idle_poll_ms, 150);
+    }
+
+    #[test]
+    fn frontend_registry_has_frontend_checks_kind() {
+        use crate::domain::{EngineEvent, Frontend, FrontendKind, UserAction};
+
+        struct DummyFrontend(FrontendKind);
+        impl Frontend for DummyFrontend {
+            fn kind(&self) -> FrontendKind {
+                self.0.clone()
+            }
+            fn push_event(&self, _event: EngineEvent) {}
+            fn poll_actions(&self) -> Vec<UserAction> {
+                vec![]
+            }
+        }
+
+        let registry = FrontendRegistry {
+            frontends: vec![
+                Box::new(DummyFrontend(FrontendKind::Tui)),
+                Box::new(DummyFrontend(FrontendKind::QQ)),
+            ],
+        };
+        assert!(registry.has_frontend(FrontendKind::Tui));
+        assert!(registry.has_frontend(FrontendKind::QQ));
+        assert!(!registry.has_frontend(FrontendKind::Telegram));
+        assert!(!registry.has_frontend(FrontendKind::Feishu));
     }
 }
