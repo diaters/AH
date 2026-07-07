@@ -32,7 +32,7 @@ RUST_LOG=harness=trace,harness::channels=info cargo run
 
 模块前缀 `harness` 对应 Cargo.toml 中的 lib name，第三方依赖不会受到 harness 级别设置影响。
 
-> **注意：** 当前日志输出到 `logs/harness_*.jsonl` 文件，`HARNESS_LOG_DIR` 可控制输出目录。
+> __注意：__ 当前日志输出到 `logs/harness_*.jsonl` 文件，`HARNESS_LOG_DIR` 可控制输出目录。
 
 ## 审计事件分类
 
@@ -57,7 +57,7 @@ RUST_LOG=harness=trace,harness::channels=info cargo run
 |------|------|----------|
 | `trace!` | 高频事件、周期性检查 | 心跳、tick、空轮询 |
 | `debug!` | 数据流转、状态转换、决策过程 | 调度、请求构建、结果解析 |
-| `info!` | **审计事件**，用户可读的摘要 | LLM 调用开始/完成、审批请求/结果、任务创建/完成、工具执行、评估触发 |
+| `info!` | __审计事件__，用户可读的摘要 | LLM 调用开始/完成、审批请求/结果、任务创建/完成、工具执行、评估触发 |
 | `warn!` | 异常但可恢复的情况 | 降级、拒绝、非致命失败 |
 | `error!` | 错误场景，必须带现场 | 执行失败、配置错误、认证失败 |
 
@@ -94,7 +94,7 @@ debug!(
 
 - human-readable 消息正文（双引号字符串），简明描述事件
 - 关键业务字段（ID、名称、状态、结果）
-- **不包含** 工程细节（prompt 原文、tool_input 参数、内部状态结构）
+- __不包含__ 工程细节（prompt 原文、tool_input 参数、内部状态结构）
 
 工程细节在同一事件对应的 `debug!` 中记录。
 

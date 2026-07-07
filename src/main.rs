@@ -20,13 +20,11 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 
     let file_filter = tracing_subscriber::EnvFilter::builder()
         .with_env_var("RUST_LOG")
-        .with_default_directive(
-            if cfg!(debug_assertions) {
-                "harness=debug".parse().unwrap()
-            } else {
-                "harness=info".parse().unwrap()
-            },
-        )
+        .with_default_directive(if cfg!(debug_assertions) {
+            "harness=debug".parse().unwrap()
+        } else {
+            "harness=info".parse().unwrap()
+        })
         .from_env_lossy();
 
     let log_dir = std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
