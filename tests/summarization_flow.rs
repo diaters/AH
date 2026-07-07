@@ -7,8 +7,8 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus, WaitingReason,
-    build_harness_app,
+    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskRoutingPolicy,
+    TaskStatus, WaitingReason, build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -80,6 +80,7 @@ fn test_config() -> HarnessConfig {
         idle_poll_ms: 150,
         channels: Default::default(),
         channels_config_path: None,
+        triggers_config_path: None,
     }
 }
 
@@ -126,7 +127,8 @@ fn task_completion_triggers_summarization() {
                 multi_turn: false,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: default_channel(),
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
             ShortTermMemory {
@@ -201,7 +203,8 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory {

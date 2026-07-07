@@ -22,7 +22,8 @@ pub fn channel_send_dispatch_system(
                 let fallback = tasks
                     .iter()
                     .find(|t| t.id == send.task_id)
-                    .map(|t| t.origin_channel.user_id.clone());
+                    .and_then(|t| t.origin_channel.as_ref())
+                    .map(|c| c.user_id.clone());
                 match fallback {
                     Some(id) => id,
                     None => {
@@ -42,7 +43,8 @@ pub fn channel_send_dispatch_system(
         let thread_id = tasks
             .iter()
             .find(|t| t.id == send.task_id)
-            .and_then(|t| t.origin_channel.thread_id.clone());
+            .and_then(|t| t.origin_channel.as_ref())
+            .and_then(|c| c.thread_id.clone());
 
         let attachment_count = send.attachments.len();
         let result = channel_manager.send(

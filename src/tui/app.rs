@@ -574,6 +574,7 @@ mod tests {
                 label: "Allow Once".to_string(),
                 description: "仅本次允许".to_string(),
             }],
+            approval_context: None,
         });
         assert!(matches!(app.mode, AppMode::Approval { .. }));
         assert_eq!(app.pending_approvals.len(), 1);
@@ -672,6 +673,7 @@ mod tests {
                 label: "Allow Once".to_string(),
                 description: "仅本次允许".to_string(),
             }],
+            approval_context: None,
         });
         app.handle_engine_event(EngineEvent::ApprovalRequest {
             target: EventTarget::Broadcast,
@@ -684,6 +686,7 @@ mod tests {
                 label: "Allow Once".to_string(),
                 description: "仅本次允许".to_string(),
             }],
+            approval_context: None,
         });
 
         assert_eq!(app.pending_approvals.len(), 2);
@@ -729,6 +732,7 @@ mod tests {
                     description: "desc3".to_string(),
                 },
             ],
+            approval_context: None,
         });
 
         // 初始状态应该是 Approval 模式，selected_index = 0
@@ -818,6 +822,7 @@ mod tests {
                     description: "desc2".to_string(),
                 },
             ],
+            approval_context: None,
         });
 
         // 按 Down 键

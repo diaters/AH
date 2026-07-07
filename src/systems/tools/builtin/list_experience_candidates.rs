@@ -85,6 +85,7 @@ mod tests {
             shell_default_stop_timeout_secs: 5,
             current_task_id: task_id,
             current_agent_id: agent_id,
+            current_origin_channel: None,
         };
 
         let tool = ListExperienceCandidatesTool;

@@ -4,7 +4,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExternalInput,
-    FrontendKind, HarnessConfig, Task, TaskStatus, TaskTerminatedMessage, build_harness_app,
+    FrontendKind, HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, TaskTerminatedMessage,
+    build_harness_app,
 };
 
 fn default_channel() -> ChannelId {
@@ -51,6 +52,7 @@ fn multi_agent_config() -> HarnessConfig {
         idle_poll_ms: 150,
         channels: Default::default(),
         channels_config_path: None,
+        triggers_config_path: None,
     }
 }
 
@@ -215,7 +217,8 @@ fn task_scoped_agent_lifecycle() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         });
         world.spawn(TaskTerminatedMessage { task_id });

@@ -76,6 +76,7 @@ fn test_wait_tasks_tool_parsing() {
         shell_default_stop_timeout_secs: 10,
         current_task_id: uuid::Uuid::new_v4(),
         current_agent_id: uuid::Uuid::new_v4(),
+        current_origin_channel: None,
     };
 
     // This test will need the WaitTasksTool to be accessible

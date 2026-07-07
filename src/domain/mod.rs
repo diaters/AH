@@ -15,6 +15,7 @@ mod frontend;
 mod memory;
 mod message;
 mod session;
+mod signal_trigger;
 mod space;
 mod summarization;
 mod task;
@@ -99,13 +100,17 @@ pub use message::{
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ContinueTaskMessage,
     CreateTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage,
     LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind,
-    OutputMessage, PendingChannelSend, ReloadPluginsMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SignalType, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
+    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
+    Signal, SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, UserInputMessage, UserOutputMessage, WaitingReason,
+    ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage, UserOutputMessage,
+    WaitingReason,
 };
+
+// signal_trigger
+pub use signal_trigger::{EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger};
 
 // session
 pub use session::{
@@ -127,8 +132,8 @@ pub use summarization::SummarizationTrigger;
 
 // task
 pub use task::{
-    NewlyCreatedTask, Task, TaskStatus, ToolCalledHookPending, ToolReturnedHookPending,
-    WaitingForSessionInfo, WaitingForTasksInfo,
+    NewlyCreatedTask, Task, TaskRoutingPolicy, TaskStatus, ToolCalledHookPending,
+    ToolReturnedHookPending, WaitingForSessionInfo, WaitingForTasksInfo,
 };
 
 // tool_runtime

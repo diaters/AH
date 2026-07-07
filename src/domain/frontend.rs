@@ -5,6 +5,7 @@ use super::{AgentId, TaskId};
 
 /// 前端类型
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FrontendKind {
     Tui,
     Telegram,
@@ -104,6 +105,7 @@ pub enum EngineEvent {
         tool_name: String,
         tool_input: serde_json::Value,
         options: Vec<ApprovalOption>,
+        approval_context: Option<String>,
     },
     /// 审批结果
     ApprovalResult {

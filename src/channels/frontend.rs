@@ -237,6 +237,7 @@ mod tests {
                     description: String::new(),
                 },
             ],
+            approval_context: None,
         };
         fe.push_event(event);
         let (_, msg) = rx.try_recv().expect("one outbound message");

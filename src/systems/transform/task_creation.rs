@@ -47,11 +47,24 @@ pub fn user_message_to_task_system(
         stm.add_entry(EntryRole::User, &message.content, EntryMetadata::default());
         let stm_tokens = stm.estimated_tokens;
 
-        let task = Task::from_user_input(
-            message.content.clone(),
-            settings.0.max_retries,
-            message.origin_channel.clone(),
-        );
+        let task = if message.origin_channel.is_some() {
+            // 普通聊天任务：origin_channel 存在，使用 conversational 路由
+            Task::from_user_input(
+                message.content.clone(),
+                settings.0.max_retries,
+                message
+                    .origin_channel
+                    .clone()
+                    .expect("origin_channel is Some"),
+            )
+        } else {
+            // 事件触发任务：origin_channel 为 None，使用消息携带的 routing_policy
+            Task::from_trigger(
+                message.content.clone(),
+                settings.0.max_retries,
+                message.routing_policy.clone(),
+            )
+        };
         debug!(
             event = "TaskCreated",
             task_id = %task.id,

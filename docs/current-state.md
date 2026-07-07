@@ -67,6 +67,21 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
 
+#### 信号触发系统
+
+- 信号触发链路：外部 Signal → `TriggerTaskMessage` → `CreateTaskMessage` → Task，支持 Webhook 与 Timer 两类触发源
+- `TaskRoutingPolicy`：控制触发任务的 `output_channel`、`approval_channel`、`approval_context`，实现触发源与任务路由的解耦
+- `SignalTriggerRegistry`：映射触发 kind 到 `EventTaskRoute` 配置，支持运行时查询与热重载
+- axum Webhook 服务器：监听 HTTP 请求，按路由配置匹配 kind 并注入信号
+- cron Timer 调度器：按 cron 表达式周期触发信号，cron 表达式按系统本地时区解释，支持多路由并行调度
+- prompt 模板插值：`{{body_json.field}}` 语法从 webhook payload 提取字段，生成任务提示
+- `triggers.toml` 配置文件：声明 webhook 监听地址、路由、auth token 与 timer cron 表达式、路由
+- `/reload-triggers` 命令：运行时热重载 `triggers.toml`，仅替换静态路由；动态 scheduled task 原样保留
+- `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
+- `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`feishu`/`web`
+- 动态 scheduled task 触发后，其 `output_channel` 同时作为审批通道，执行期需要用户确认的工具请求会路由到该 IM 用户；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
+- 动态 scheduled task 仅存内存，进程重启后丢失；一次性任务触发后自动从 registry 清理，并记录 `DynamicTaskRemoved` 结构化日志
+
 #### 插件系统
 
 - 插件系统已实现完整的 Rhai 脚本扩展层，支持通过 `HARNESS_PLUGINS_DIR` 环境变量加载
@@ -111,7 +126,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
 - 飞书通道仅有占位模块，尚未接入实际 API
 - Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 通道已支持收发媒体附件与审批文本回复匹配；飞书仍为占位模块
-- Telegram webhook 模式仍由轮询替代，尚未切换
+- Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 
 ### 已收敛或已废弃
 

@@ -1287,7 +1287,8 @@ pub fn tool_calling_orchestrator_system(
         let system_prompt = tasks
             .iter()
             .find(|task| task.id == state.task_id)
-            .map(|task| task.origin_channel.to_prompt_context());
+            .and_then(|task| task.origin_channel.as_ref())
+            .map(|ch| ch.to_prompt_context());
 
         // Spawn follow-up LLM request with conversation
         let request = AgentExecutionRequest {

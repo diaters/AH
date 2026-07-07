@@ -35,6 +35,8 @@ sha2 = "0.10"
 md5 = "0.7"
 async-trait = "0.1"
 futures-util = "0.3"
+axum = "0.7"
+cron = "0.12"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 reqwest_013 = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "gzip", "rustls-no-provider"] }
 webpki-roots = "0.26"

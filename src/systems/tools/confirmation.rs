@@ -212,6 +212,11 @@ pub fn tool_confirmation_result_system(
                     shell_default_stop_timeout_secs: settings.0.shell_default_stop_timeout_secs,
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,
+                    current_origin_channel: tasks
+                        .iter()
+                        .find(|(_, t)| t.id == tool_request.request.task_id)
+                        .map(|(_, t)| t.origin_channel.clone())
+                        .unwrap_or(None),
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
@@ -339,7 +344,8 @@ mod tests {
             multi_turn: false,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: channel,
+            origin_channel: Some(channel.clone()),
+            routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
             last_evaluated_turn: None,
         }
     }

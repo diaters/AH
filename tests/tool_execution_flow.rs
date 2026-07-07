@@ -763,13 +763,14 @@ fn child_agent_confirm_routes_to_parent() {
             multi_turn: false,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: harness::TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
     ));
 
-    // 创建子 Agent（Confirm 权限，绑定为 TaskScoped）
+    // 创建子 Agent
     let child_id = uuid::Uuid::new_v4();
     let mut child_task = Task::from_user_input_ready("child task", 3, default_channel());
     child_task.parent_task_id = Some(parent_task_id);
@@ -905,7 +906,8 @@ fn confirmation_denied_rejects_tool() {
             multi_turn: false,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: harness::TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),

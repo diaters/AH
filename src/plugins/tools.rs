@@ -9,8 +9,8 @@ use crate::{
     systems::{
         HarnessSet, NativeProcessBackend, channel_send_dispatch_system, check_waiting_tasks_system,
         on_subtask_completed_check_waiting, on_tool_called_hook_system,
-        on_tool_returned_hook_system, register_builtin_tools, tool_dispatch_system,
-        tool_result_system,
+        on_tool_returned_hook_system, register_builtin_tools, schedule_task_commit_system,
+        tool_dispatch_system, tool_result_system,
     },
 };
 
@@ -60,6 +60,13 @@ impl Plugin for ToolRuntimePlugin {
                     .after(crate::systems::sub_task_completion_system),
                 // channel_send 工具出向消息派发 companion 系统
                 channel_send_dispatch_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(tool_dispatch_system),
+                // schedule_task 提交系统：消费 ScheduleTaskRequestMessage
+                // 并发提交到 SchedulerState 与 ScheduledTaskRegistry。
+                // 放在 Maintenance 集合，在 tool_dispatch_system 之后运行，
+                // 保证 orchestrator spawn 的 message 能在本帧被消费。
+                schedule_task_commit_system
                     .in_set(HarnessSet::Maintenance)
                     .after(tool_dispatch_system),
             ),

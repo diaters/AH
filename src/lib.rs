@@ -6,6 +6,7 @@ pub mod infrastructure;
 pub mod llm;
 pub mod plugins;
 pub mod systems;
+pub mod triggers;
 pub mod tui;
 pub mod user_plugins;
 

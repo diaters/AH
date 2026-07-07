@@ -187,6 +187,7 @@ fn spawn_experience_confirmation(
         options: ConfirmationOption::default_options(),
         source: ConfirmationSource::User,
         parent_agent_id: None,
+        approval_context: None,
     });
 
     // 配对 ToolExecutionRequestMessage 占位实体，使 tool_confirmation_result_system

@@ -6,7 +6,7 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
-    HarnessConfig, Task, TaskStatus, ToolPermission, build_harness_app,
+    HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, ToolPermission, build_harness_app,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -54,6 +54,7 @@ fn test_config() -> HarnessConfig {
         idle_poll_ms: 150,
         channels: Default::default(),
         channels_config_path: None,
+        triggers_config_path: None,
     }
 }
 
@@ -139,7 +140,8 @@ fn chat_with_agent_creates_chat_subtask() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         harness::ShortTermMemory::default(),
@@ -291,7 +293,8 @@ fn chat_with_agent_multi_round_via_handle() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         harness::ShortTermMemory::default(),
@@ -469,7 +472,8 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             multi_turn: true,
             parent_task_id: None,
             batch_id: None,
-            origin_channel: default_channel(),
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         harness::ShortTermMemory::default(),

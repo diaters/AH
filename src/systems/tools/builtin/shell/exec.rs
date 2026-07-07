@@ -62,6 +62,7 @@ mod tests {
             shell_default_stop_timeout_secs: 10,
             current_task_id: uuid::Uuid::new_v4(),
             current_agent_id: uuid::Uuid::new_v4(),
+            current_origin_channel: None,
         };
 
         let tool = ShellExecTool;

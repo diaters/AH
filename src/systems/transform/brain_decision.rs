@@ -37,10 +37,15 @@ fn build_tools_for_agent(
 /// 确保被委派 Agent 知道通过哪个 IM 通道回发文件/消息。
 fn augment_delegate_prompt(
     delegate_prompt: &str,
-    origin_channel: &crate::domain::ChannelId,
+    origin_channel: Option<&crate::domain::ChannelId>,
 ) -> String {
-    let context = origin_channel.to_prompt_context();
-    format!("{context}\n\n{delegate_prompt}")
+    match origin_channel {
+        Some(ch) => {
+            let context = ch.to_prompt_context();
+            format!("{context}\n\n{delegate_prompt}")
+        }
+        None => delegate_prompt.to_string(),
+    }
 }
 
 /// Brain 决策 System
@@ -105,7 +110,7 @@ pub fn brain_decision_system(
                         let tools = build_tools_for_agent(&registry, fallback);
                         let prompt = augment_delegate_prompt(
                             &decision.delegate_prompt,
-                            &task.origin_channel,
+                            task.origin_channel.as_ref(),
                         );
                         let request = AgentExecutionRequest {
                             task_id: task.id,
@@ -130,8 +135,10 @@ pub fn brain_decision_system(
                     };
 
                     let tools = build_tools_for_agent(&registry, selected_agent);
-                    let prompt =
-                        augment_delegate_prompt(&decision.delegate_prompt, &task.origin_channel);
+                    let prompt = augment_delegate_prompt(
+                        &decision.delegate_prompt,
+                        task.origin_channel.as_ref(),
+                    );
                     let request = AgentExecutionRequest {
                         task_id: task.id,
                         agent_id: selected_agent.id,

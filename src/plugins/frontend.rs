@@ -8,9 +8,9 @@ use crate::systems::{
     HarnessSet, command_parse_system, continue_task_system, finish_task_system,
     frontend_input_system, frontend_output_system, input_ingress_system,
     on_message_received_hook_system, on_shared_knowledge_write_hook_system,
-    on_task_created_hook_system, reload_plugins_system, retry_wakeup_system, signal_ingest_system,
-    tick_clock_system, tool_confirmation_request_system, user_input_routing_system,
-    user_message_to_task_system,
+    on_task_created_hook_system, reload_plugins_system, reload_triggers_message_consumer_system,
+    retry_wakeup_system, signal_ingest_system, tick_clock_system, tool_confirmation_request_system,
+    trigger_task_routing_system, user_input_routing_system, user_message_to_task_system,
 };
 
 /// 前端 Plugin
@@ -37,10 +37,18 @@ impl Plugin for FrontendPlugin {
                 retry_wakeup_system.in_set(HarnessSet::Signal),
                 // 信号转换
                 signal_ingest_system.in_set(HarnessSet::Signal),
+                // 触发器任务路由（消费 TriggerTaskMessage）
+                trigger_task_routing_system
+                    .in_set(HarnessSet::Signal)
+                    .after(signal_ingest_system),
                 // 命令解析
                 command_parse_system.in_set(HarnessSet::Transform),
                 // /reload-plugins 伴生系统（消费 ReloadPluginsMessage）
                 reload_plugins_system
+                    .in_set(HarnessSet::Transform)
+                    .after(command_parse_system),
+                // /reload-triggers 伴生系统（消费 ReloadTriggersMessage）
+                reload_triggers_message_consumer_system
                     .in_set(HarnessSet::Transform)
                     .after(command_parse_system),
                 // on_shared_knowledge_write 观察 hook companion 系统

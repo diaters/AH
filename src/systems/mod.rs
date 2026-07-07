@@ -14,11 +14,13 @@ mod memory_hook;
 mod routing;
 mod summarization;
 pub mod tools;
-mod transform;
+pub mod transform;
 
 use bevy_ecs::schedule::SystemSet;
 
-pub(crate) use command::{command_parse_system, reload_plugins_system};
+pub(crate) use command::{
+    command_parse_system, reload_plugins_system, reload_triggers_message_consumer_system,
+};
 pub(crate) use dispatch::{
     agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system,
     on_message_dispatched_hook_system, task_dispatch_system, workitem_dispatch_system,
@@ -49,8 +51,8 @@ pub(crate) use tools::{
     channel_send_dispatch_system, check_waiting_tasks_system, on_approval_requested_hook_system,
     on_approval_resolved_hook_system, on_subtask_completed_check_waiting,
     on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
-    tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
-    tool_result_system,
+    schedule_task_commit_system, tool_confirmation_request_system, tool_confirmation_result_system,
+    tool_dispatch_system, tool_result_system,
 };
 pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{
@@ -59,7 +61,8 @@ pub(crate) use transform::{
     llm_response_system, on_llm_response_hook_system, on_task_created_hook_system,
     retry_ready_system, signal_ingest_system, sub_task_batch_block_system,
     sub_task_completion_system, task_completion_hook_system, task_termination_system,
-    tool_calling_orchestrator_system, tool_calling_turn_reset_system, user_message_to_task_system,
+    tool_calling_orchestrator_system, tool_calling_turn_reset_system, trigger_task_routing_system,
+    user_message_to_task_system,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]

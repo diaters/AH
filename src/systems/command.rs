@@ -4,9 +4,9 @@ use tracing::debug;
 use crate::app::MemoryConfig;
 use crate::domain::{
     CreateTaskMessage, FinishTaskMessage, NewlyCreatedTask, PendingKnowledgeWriteHooks,
-    ReloadPluginsMessage, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
-    SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, UserCommand,
-    UserInputMessage,
+    ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
+    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy,
+    TaskStatus, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -37,7 +37,7 @@ pub(crate) fn command_parse_system(
                 let parent_task = tasks.iter().find(|(t, _)| {
                     !t.status.is_terminal()
                         && t.status != TaskStatus::Pending
-                        && t.origin_channel == input.origin_channel
+                        && t.origin_channel == Some(input.origin_channel.clone())
                 });
 
                 if let Some((parent, _)) = parent_task {
@@ -68,7 +68,10 @@ pub(crate) fn command_parse_system(
                     // 没有父任务，创建普通任务
                     commands.spawn(CreateTaskMessage {
                         content: input.content.clone(),
-                        origin_channel: input.origin_channel.clone(),
+                        origin_channel: Some(input.origin_channel.clone()),
+                        routing_policy: TaskRoutingPolicy::conversational(
+                            input.origin_channel.clone(),
+                        ),
                     });
                 }
                 commands.entity(entity).despawn();
@@ -76,7 +79,8 @@ pub(crate) fn command_parse_system(
             UserCommand::FinishCurrentTask => {
                 // /finish - 结束当前任务
                 let current_task = tasks.iter().find(|(t, _)| {
-                    !t.status.is_terminal() && t.origin_channel == input.origin_channel
+                    !t.status.is_terminal()
+                        && t.origin_channel == Some(input.origin_channel.clone())
                 });
 
                 if let Some((task, _)) = current_task {
@@ -96,7 +100,8 @@ pub(crate) fn command_parse_system(
             UserCommand::Summarize => {
                 // /summarize - 触发总结
                 let active_task = tasks.iter().find(|(t, _)| {
-                    !t.status.is_terminal() && t.origin_channel == input.origin_channel
+                    !t.status.is_terminal()
+                        && t.origin_channel == Some(input.origin_channel.clone())
                 });
 
                 if let Some((task, memory)) = active_task
@@ -215,6 +220,15 @@ pub(crate) fn command_parse_system(
                 commands.spawn(ReloadPluginsMessage);
                 commands.entity(entity).despawn();
             }
+            UserCommand::ReloadTriggers => {
+                // /reload-triggers - 重新加载事件触发配置
+                debug!(
+                    event = "ReloadTriggersCommandReceived",
+                    "spawning ReloadTriggersMessage"
+                );
+                commands.spawn(ReloadTriggersMessage);
+                commands.entity(entity).despawn();
+            }
             UserCommand::PluginCommand {
                 plugin_id,
                 command,
@@ -270,6 +284,33 @@ pub(crate) fn reload_plugins_system(world: &mut World) {
 
     // 执行重载
     crate::user_plugins::reload::reload_plugins(world);
+
+    // despawn 消息实体
+    for entity in messages {
+        world.despawn(entity);
+    }
+}
+
+/// /reload-triggers 伴生系统：消费 `ReloadTriggersMessage` 实体，执行触发器重载。
+///
+/// 与 `ReloadPluginsMessage` 同模式：`command_parse_system` spawn 此消息实体，
+/// 由此系统在下一帧消费并执行重载。
+pub(crate) fn reload_triggers_message_consumer_system(world: &mut World) {
+    let mut messages: Vec<crate::prelude::Entity> = Vec::new();
+    {
+        let mut query =
+            world.query_filtered::<crate::prelude::Entity, With<ReloadTriggersMessage>>();
+        for entity in query.iter(world) {
+            messages.push(entity);
+        }
+    }
+
+    if messages.is_empty() {
+        return;
+    }
+
+    // 执行重载
+    crate::triggers::reload_triggers_system(world);
 
     // despawn 消息实体
     for entity in messages {
@@ -502,7 +543,10 @@ mod tests {
                 multi_turn: false,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: qq_channel.clone(),
+                origin_channel: Some(qq_channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(
+                    qq_channel.clone(),
+                ),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
@@ -532,7 +576,7 @@ mod tests {
             1,
             "Telegram /btw with no Telegram parent should fall back to CreateTaskMessage"
         );
-        assert_eq!(create_msgs[0].origin_channel, tg_channel);
+        assert_eq!(create_msgs[0].origin_channel, Some(tg_channel));
     }
 
     #[test]
@@ -572,7 +616,10 @@ mod tests {
                 multi_turn: false,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: qq_channel.clone(),
+                origin_channel: Some(qq_channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(
+                    qq_channel.clone(),
+                ),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
@@ -597,7 +644,7 @@ mod tests {
         );
         assert_eq!(
             child_task.unwrap().origin_channel,
-            qq_channel,
+            Some(qq_channel),
             "child task should inherit input origin_channel"
         );
     }
@@ -638,7 +685,8 @@ mod tests {
                 multi_turn: false,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: qq_channel,
+                origin_channel: Some(qq_channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(qq_channel),
                 last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
@@ -707,7 +755,8 @@ mod tests {
                 multi_turn: false,
                 parent_task_id: None,
                 batch_id: None,
-                origin_channel: qq_channel,
+                origin_channel: Some(qq_channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(qq_channel),
                 last_evaluated_turn: None,
             },
             stm,

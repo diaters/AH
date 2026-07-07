@@ -1,0 +1,23 @@
+# Webhook 与 Timer 信号注入配置
+# 通过 HARNESS_TRIGGERS_CONFIG 指向此文件启用
+
+[webhook]
+enabled = true
+listen_addr = "127.0.0.1:8080"
+auth_token = "shared-secret-token"
+
+[[webhook.routes]]
+kind = "github.issue_opened"
+approval_channel = { frontend = "telegram", user_id = "reviewer" }
+approval_context = "GitHub issue opened"
+prompt_template = "请分析新 issue:\n{{body_json.title}}"
+
+[timer]
+enabled = true
+
+[[timer.routes]]
+kind = "daily_summary"
+cron = "0 9 * * 1-5"
+approval_channel = { frontend = "telegram", user_id = "reviewer" }
+approval_context = "daily summary"
+prompt_template = "执行每日摘要"

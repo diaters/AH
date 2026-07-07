@@ -42,6 +42,7 @@ fn test_config() -> HarnessConfig {
         idle_poll_ms: 150,
         channels: Default::default(),
         channels_config_path: None,
+        triggers_config_path: None,
     }
 }
 
@@ -86,7 +87,7 @@ fn tui_input_preserves_origin_channel() {
     };
 
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].origin_channel, tui_channel);
+    assert_eq!(tasks[0].origin_channel, Some(tui_channel));
 }
 
 /// 验证通过 Telegram 入口的 ExternalInput 正确保留 origin_channel。
@@ -130,5 +131,5 @@ fn telegram_input_preserves_origin_channel() {
     };
 
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].origin_channel, tg_channel);
+    assert_eq!(tasks[0].origin_channel, Some(tg_channel));
 }

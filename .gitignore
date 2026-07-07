@@ -12,6 +12,9 @@ Cargo.lock
 *.swp
 *.swo
 
+# Git worktrees
+.worktrees/
+
 # Environment
 .env
 .env.local

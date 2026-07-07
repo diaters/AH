@@ -66,6 +66,29 @@ pub(crate) fn input_ingress_system(
                     MessageReceivedHookPending,
                 ));
             }
+            ExternalInput::Webhook { source, kind, body } => {
+                debug!(
+                    event = "ExternalInputReceived",
+                    kind = "Webhook",
+                    source = ?source,
+                    webhook_kind = %kind,
+                    "received webhook event"
+                );
+                commands.spawn((
+                    Signal::webhook(source, kind, body),
+                    MessageReceivedHookPending,
+                ));
+            }
+            ExternalInput::Timer { source, kind } => {
+                debug!(
+                    event = "ExternalInputReceived",
+                    kind = "Timer",
+                    source = ?source,
+                    timer_kind = %kind,
+                    "received timer event"
+                );
+                commands.spawn((Signal::timer(source, kind), MessageReceivedHookPending));
+            }
         }
     }
 }
