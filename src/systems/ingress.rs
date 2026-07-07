@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use chrono::Utc;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use crate::{
     app::{Clock, InputReceiver, ShutdownState},
@@ -36,6 +36,15 @@ pub(crate) fn input_ingress_system(
                     kind = "TextWithChannel",
                     content_len = content.len(),
                     "received external text input"
+                );
+                info!(
+                    event = "ExternalInputReceived",
+                    kind = "TextWithChannel",
+                    channel = ?channel,
+                    content_len = content.len(),
+                    "收到外部输入：通道={:?}，内容长度 {}",
+                    channel,
+                    content.len()
                 );
                 commands.spawn((
                     Signal::user_input_with_channel(content, channel),
