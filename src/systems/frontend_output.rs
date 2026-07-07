@@ -143,9 +143,8 @@ pub(crate) fn frontend_output_system(
         // 事件任务的审批必须走路由策略中显式配置的 approval_channel。
         // 普通聊天任务的 approval_channel 与 output_channel 相同，由
         // TaskRoutingPolicy::conversational 构造时设置。
-        let Some((task_entity, task)) = all_tasks
-            .iter()
-            .find(|(_, t)| t.id == confirmation.task_id)
+        let Some((task_entity, task)) =
+            all_tasks.iter().find(|(_, t)| t.id == confirmation.task_id)
         else {
             commands.entity(entity).despawn();
             continue;
@@ -168,7 +167,9 @@ pub(crate) fn frontend_output_system(
         };
 
         // 仅对事件任务检查 frontend 是否注册
-        if task.origin_channel.is_none() && !registry.has_frontend(approval_channel.frontend.clone()) {
+        if task.origin_channel.is_none()
+            && !registry.has_frontend(approval_channel.frontend.clone())
+        {
             let frontend_name = match approval_channel.frontend {
                 FrontendKind::Tui => "tui",
                 FrontendKind::Telegram => "telegram",
