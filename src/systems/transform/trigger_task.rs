@@ -8,7 +8,7 @@
 //! 清理，cron 任务保留在 registry 中以便反复触发。
 
 use crate::prelude::*;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::domain::{
     CreateTaskMessage, SignalTriggerRegistry, TaskRoutingPolicy, TaskTrigger, TriggerTaskMessage,
@@ -141,6 +141,12 @@ fn cleanup_scheduled_task_if_once(
     scheduler_state
         .dynamic_tasks_mut()
         .retain(|t| t.kind != kind);
+    info!(
+        event = "DynamicTaskRemoved",
+        kind = %kind,
+        reason = "once scheduled task triggered",
+        "dynamic once scheduled task removed after trigger"
+    );
 }
 
 #[cfg(test)]
@@ -251,7 +257,11 @@ mod tests {
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "say hi");
-        assert_eq!(messages[0].routing_policy.output_channel, Some(channel));
+        assert_eq!(messages[0].routing_policy.output_channel, Some(channel.clone()));
+        assert_eq!(
+            messages[0].routing_policy.approval_channel,
+            Some(channel.clone())
+        );
         assert!(
             app.world()
                 .resource::<ScheduledTaskRegistry>()
