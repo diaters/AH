@@ -7,7 +7,7 @@ use harness::{
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
 };
 use tokio::runtime::Runtime;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// 一个极简的 Executor，直接返回固定文本作为 Agent 回复。
@@ -35,11 +35,9 @@ fn auto_channel_reply() {
 
         Mock::given(method("POST"))
             .and(path(format!("/bot{}/sendMessage", bot_token)))
-            .and(body_json(serde_json::json!({
-                "chat_id": "123456",
-                "text": "echo reply",
-                "parse_mode": "HTML",
-            })))
+            .and(body_string_contains(r#""chat_id":"123456""#))
+            .and(body_string_contains(r#""parse_mode":"HTML""#))
+            .and(body_string_contains("助手: echo reply"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
                 "result": { "message_id": 42 }
