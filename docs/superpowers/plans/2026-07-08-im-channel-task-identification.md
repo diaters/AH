@@ -49,41 +49,15 @@ pub enum EngineEvent {
 
 `src/domain/frontend.rs:143-152` 的现有模式 `Self::Text { target, .. } => target` 已兼容新增字段，无需改动。编译检查确认即可。
 
-- [ ] **Step 3: 更新测试代码中的 Text 事件构造**
-
-修改 `src/channels/frontend.rs:170-176`：
-
-```rust
-fn text_event(target: EventTarget) -> EngineEvent {
-    EngineEvent::Text {
-        target,
-        role: crate::domain::MessageRole::Agent,
-        content: "hello".to_string(),
-        task_id: None,
-    }
-}
-```
-
-修改 `src/tui/app.rs:550-554`：
-
-```rust
-app.handle_engine_event(EngineEvent::Text {
-    target: EventTarget::Broadcast,
-    role: MessageRole::Agent,
-    content: "hello world".to_string(),
-    task_id: None,
-});
-```
-
-- [ ] **Step 4: 编译检查**
+- [ ] **Step 3: 编译检查**
 
 Run: `cargo check --all-features`
-Expected: PASS（无新增字段导致的编译错误）
+Expected: 仅出现后续任务才会修复的调用点错误（如 `ChannelFrontend::push_event` 中的 Text match arm），无 `EngineEvent::Text` 自身错误。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/domain/frontend.rs src/channels/frontend.rs src/tui/app.rs
+git add src/domain/frontend.rs
 git commit -m "feat(domain): add task_id to EngineEvent::Text"
 ```
 
@@ -189,35 +163,17 @@ let event = EngineEvent::TaskStatusChanged {
 last_status.insert(task.id, status);
 ```
 
-- [ ] **Step 5: 更新 TUI 测试中的 TaskStatusChanged 构造**
+- [ ] **Step 5: 更新现有测试中的事件构造**
 
-在 `src/tui/app.rs` 测试模块中，所有 `EngineEvent::TaskStatusChanged { ... }` 构造添加 `old_status: None`。
-
-涉及位置：约 `src/tui/app.rs:601, 624, 634, 644, 859, 869, 879, 900, 911`。
-
-示例（其中一处）：
-
-```rust
-app.handle_engine_event(EngineEvent::TaskStatusChanged {
-    target: EventTarget::Broadcast,
-    task_id,
-    name: "task".to_string(),
-    status: TaskStatusKind::Running,
-    old_status: None,
-    result: None,
-    parent_id: None,
-});
-```
-
-- [ ] **Step 6: 运行测试**
+`src/systems/frontend_output.rs` 现有测试主要使用 `EngineEvent::Text { .. }` 或 `EngineEvent::ApprovalRequest { target, .. }` 模式匹配，新增字段不影响。但 MockFrontend 的 `push_event` 会把所有事件原样存入 `events`，测试只需匹配模式即可，无需改动。
 
 Run: `cargo test --all-features frontend_output`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/domain/frontend.rs src/systems/frontend_output.rs src/tui/app.rs
+git add src/domain/frontend.rs src/systems/frontend_output.rs
 git commit -m "feat(frontend-output): propagate task_id and old_status"
 ```
 
@@ -393,13 +349,11 @@ EngineEvent::Text { role, content, .. } => {
 Run: `cargo check --all-features`
 Expected: PASS
 
-- [ ] **Step 3: 无需 commit**
+- [ ] **Step 3: Commit（仅当有改动时）**
 
-TUI 代码无需改动，本任务不产生独立 commit。
+若无需改动，可跳过单独 commit，在 Task 7 的回归提交中备注即可。
 
 ## Task 5: 为 ChannelFrontend 添加单元测试
-
-**依赖：** Task 3 完成后执行（验证 Task 3 的渲染逻辑）；测试代码中的 `EngineEvent::Text` 构造只需 Task 1 的字段定义即可编写。
 
 **Files:**
 - Modify: `src/channels/frontend.rs:155-260`
@@ -407,8 +361,6 @@ TUI 代码无需改动，本任务不产生独立 commit。
 **Interfaces:**
 - Consumes: `ChannelFrontend::push_event` 输出
 - Produces: 通过测试
-
-> 注：Task 5 与 Task 6 分别覆盖不同模块的测试（`ChannelFrontend` vs `frontend_output_system`），因此拆分为两个任务。
 
 - [ ] **Step 1: 添加带 task_id 的 Text 事件测试辅助函数**
 
