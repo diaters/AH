@@ -3,7 +3,7 @@
 //! 处理任务终止、重试和完成。
 
 use crate::prelude::*;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     app::{Clock, MemoryConfig},
@@ -116,6 +116,15 @@ pub fn task_termination_system(
                 has_stm = memory.is_some(),
                 "task reached terminal state"
             );
+            info!(
+                event = "TaskTerminated",
+                task_id = %task.id,
+                task_status = ?task.status,
+                result_summary = %task.result_summary,
+                "任务完成：状态={:?}，结果摘要={}",
+                task.status,
+                task.result_summary
+            );
             commands.spawn(TaskTerminatedMessage { task_id: task.id });
 
             // 子任务完成时产出 SubTaskCompletedMessage
@@ -163,6 +172,14 @@ pub fn task_termination_system(
                     content_len = content.len(),
                     target_tokens = config.summary_target_tokens,
                     "triggering summarization on task completion"
+                );
+                info!(
+                    event = "SummarizationTriggered",
+                    task_id = %task.id,
+                    trigger = "TaskComplete",
+                    stm_entries = stm.entries.len(),
+                    "触发摘要：STM {} 条目",
+                    stm.entries.len()
                 );
                 commands.spawn(SummarizationRequestMessage {
                     task_id: task.id,

@@ -5,10 +5,51 @@
 
 ## 默认级别
 
-| 环境 | 默认级别 |
-|------|----------|
-| 生产 | `INFO` |
-| 开发 | `DEBUG` |
+| 环境 | 默认级别 | 说明 |
+|------|----------|------|
+| 生产（release） | `harness=info` | 可审计事件，通过 `RUST_LOG` 调整 |
+| 开发（debug） | `harness=debug` | 包含工程细节，通过 `RUST_LOG` 调整 |
+
+## 运行时级别控制
+
+日志级别通过 `RUST_LOG` 环境变量控制，未设置时使用环境感知的默认值：
+
+- 开发构建（`cargo run` / `cargo build`）：`harness=debug`
+- 发布构建（`cargo run --release` / `cargo build --release`）：`harness=info`
+
+### 常用示例
+
+```bash
+# 全局只看 warn 以上
+RUST_LOG=warn cargo run
+
+# 仅将 LLM 模块切到 debug，其他保持 info
+RUST_LOG=info,harness::llm=debug cargo run
+
+# 完整格式：按模块精细化控制
+RUST_LOG=harness=trace,harness::channels=info cargo run
+```
+
+模块前缀 `harness` 对应 Cargo.toml 中的 lib name，第三方依赖不会受到 harness 级别设置影响。
+
+> __注意：__ 当前日志输出到 `logs/harness_*.jsonl` 文件，`HARNESS_LOG_DIR` 可控制输出目录。
+
+## 审计事件分类
+
+以下 `info!` 事件构成完整的审计轨迹：
+
+| 领域 | 事件 | 字段 |
+|------|------|------|
+| LLM | LlmRequestStarted / LlmRequestCompleted | model, tools_count, duration_ms, response_len |
+| LLM | LlmToolCallsRequested | tool_names |
+| 审批 | ApprovalRequestReceived / ApprovalResolved | tool_name, decision, grant_mode |
+| 任务 | TaskCreated / TaskTerminated | content, task_status, result_summary |
+| 摘要 | SummarizationRequested / SummarizationTriggered | trigger, stm_entries, target_tokens |
+| 工具 | ToolExecutionStarted / ToolExecutionDenied | tool_name, agent_name, task_id |
+| 评估 | EvaluationTriggered | turn_count, max_turns |
+| 输入 | ExternalInputReceived | kind, channel, content_len |
+
+事件名遵循 PascalCase，详见「事件命名规范」。
 
 ## 日志级别使用
 
@@ -16,7 +57,7 @@
 |------|------|----------|
 | `trace!` | 高频事件、周期性检查 | 心跳、tick、空轮询 |
 | `debug!` | 数据流转、状态转换、决策过程 | 调度、请求构建、结果解析 |
-| `info!` | 重要业务事件、外部交互 | 启动、任务完成、摘要触发 |
+| `info!` | __审计事件__，用户可读的摘要 | LLM 调用开始/完成、审批请求/结果、任务创建/完成、工具执行、评估触发 |
 | `warn!` | 异常但可恢复的情况 | 降级、拒绝、非致命失败 |
 | `error!` | 错误场景，必须带现场 | 执行失败、配置错误、认证失败 |
 
@@ -46,6 +87,16 @@ debug!(
 | Task 相关 | `task_id` |
 | Agent 相关 | `agent_id`、`agent_name` |
 | 错误 | `error`、`error_type` |
+
+### 审计消息要求
+
+`info!` 级别的日志用于审计场景，除必需字段外还应包含：
+
+- human-readable 消息正文（双引号字符串），简明描述事件
+- 关键业务字段（ID、名称、状态、结果）
+- __不包含__ 工程细节（prompt 原文、tool_input 参数、内部状态结构）
+
+工程细节在同一事件对应的 `debug!` 中记录。
 
 ## 数据级日志要求
 

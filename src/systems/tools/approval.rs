@@ -3,7 +3,7 @@
 //! 处理父 Agent 审批请求和结果。
 
 use crate::prelude::*;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     app::{Clock, HarnessSettings},
@@ -45,6 +45,18 @@ pub fn approval_dispatch_system(
             child_agent_id = %request.child_agent_id,
             tool_input = ?request.tool_input,
             "approval request received - auto-approving in MVP"
+        );
+
+        info!(
+            event = "ApprovalRequestReceived",
+            request_id = %request.request_id,
+            tool_name = %request.tool_name,
+            parent_agent_id = %request.parent_agent_id,
+            child_agent_id = %request.child_agent_id,
+            "审批请求：Agent [{}] 请求调用 {}，等待 Agent [{}] 审批",
+            request.child_agent_id,
+            request.tool_name,
+            request.parent_agent_id,
         );
 
         // 记录原 Task 状态
@@ -180,6 +192,18 @@ pub fn approval_result_system(
                         "agent permission updated to Allow permanently"
                     );
                 }
+
+                info!(
+                    event = "ApprovalResolved",
+                    request_id = %result.request_id,
+                    tool_name = %tool_request.tool_name,
+                    decision = ?result.decision,
+                    grant_mode = ?result.grant_mode,
+                    "审批结果：{} => {:?}，授权模式 {:?}",
+                    tool_request.tool_name,
+                    result.decision,
+                    result.grant_mode,
+                );
 
                 // 执行 Tool
                 let Some(executor) = executors.get(&tool_request.tool_name) else {

@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
@@ -110,6 +110,12 @@ pub(crate) fn experience_writeback_system(
                     candidate_id = %candidate_id,
                     destination = ?decision.destination,
                     "experience writeback succeeded"
+                );
+                info!(
+                    event = "ExperienceWritebackCompleted",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    "经验写回完成"
                 );
             }
             Err(error) => {

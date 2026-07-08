@@ -7,7 +7,7 @@ use genai::{
 };
 use reqwest_013;
 use tokio::time::Instant;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ConversationMessage,
@@ -103,6 +103,18 @@ impl AgentExecutor for GenaiExecutor {
                 "sending request via genai"
             );
 
+            // info! — 审计摘要
+            info!(
+                event = "LlmRequestStarted",
+                task_id = %request.task_id,
+                agent_id = %request.agent_id,
+                model = %model,
+                tools_count = request.tools.len(),
+                "LLM 请求开始：model={}, tools={}",
+                model,
+                request.tools.len()
+            );
+
             let chat_request = build_chat_request(&request)?;
             let start = Instant::now();
 
@@ -123,6 +135,18 @@ impl AgentExecutor for GenaiExecutor {
                 duration_ms = duration_ms,
                 response_len = response.first_text().map(|c| c.len()).unwrap_or(0),
                 "genai request completed"
+            );
+
+            info!(
+                event = "LlmRequestCompleted",
+                task_id = %request.task_id,
+                agent_id = %request.agent_id,
+                model = %model,
+                duration_ms = duration_ms,
+                response_len = response.first_text().map(|c| c.len()).unwrap_or(0),
+                "LLM 调用完成：{}ms，响应 {} 字符",
+                duration_ms,
+                response.first_text().map(|c| c.len()).unwrap_or(0)
             );
 
             parse_response(&request.task_id, response)
@@ -249,6 +273,15 @@ fn parse_response(
             has_reasoning = reasoning_content.is_some(),
             "LLM requested tool calls"
         );
+
+        info!(
+            event = "LlmToolCallsRequested",
+            task_id = %task_id,
+            tool_names = ?parsed_calls.iter().map(|c| &c.name).collect::<Vec<_>>(),
+            "LLM 请求调用工具：{:?}",
+            parsed_calls.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+
         return Ok(AgentExecutionOutput {
             content: OutputContent::ToolCalls(parsed_calls),
             reasoning_content,
