@@ -172,6 +172,7 @@ mod tests {
             target,
             role: crate::domain::MessageRole::Agent,
             content: "hello".to_string(),
+            task_id: None,
         }
     }
 

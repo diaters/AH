@@ -49,6 +49,7 @@ pub(crate) fn frontend_output_system(
             target,
             role: MessageRole::Agent,
             content: output.content.clone(),
+            task_id: Some(output.task_id),
         };
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
@@ -84,6 +85,7 @@ pub(crate) fn frontend_output_system(
             target,
             role: MessageRole::System,
             content: output.content.clone(),
+            task_id: Some(output.task_id),
         };
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());

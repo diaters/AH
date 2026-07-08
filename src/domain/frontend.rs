@@ -96,6 +96,7 @@ pub enum EngineEvent {
         target: EventTarget,
         role: MessageRole,
         content: String,
+        task_id: Option<TaskId>,
     },
     /// 审批请求
     ApprovalRequest {

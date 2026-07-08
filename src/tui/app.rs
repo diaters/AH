@@ -551,6 +551,7 @@ mod tests {
             target: EventTarget::Broadcast,
             role: MessageRole::Agent,
             content: "hello world".to_string(),
+            task_id: None,
         });
         assert_eq!(app.messages.len(), 1);
         assert!(matches!(

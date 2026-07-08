@@ -77,6 +77,7 @@ fn directed_event_only_reaches_target_frontend() {
         }]),
         role: MessageRole::Agent,
         content: "hello".to_string(),
+        task_id: None,
     };
 
     tui.push_event(event.clone());
@@ -95,6 +96,7 @@ fn broadcast_event_reaches_all_frontends() {
         target: EventTarget::Broadcast,
         role: MessageRole::Agent,
         content: "hello".to_string(),
+        task_id: None,
     };
 
     tui.push_event(event.clone());
@@ -127,6 +129,7 @@ fn multi_directed_event_reaches_specified_frontends() {
             },
         ]),
         role: MessageRole::Agent,
+        task_id: None,
         content: "hello".to_string(),
     };
 
