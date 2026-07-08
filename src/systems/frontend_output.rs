@@ -444,6 +444,45 @@ mod tests {
     }
 
     #[test]
+    fn user_output_text_event_includes_task_id() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+        app.world_mut().spawn(UserOutputMessage {
+            task_id,
+            content: "hello".to_string(),
+        });
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        let text_task_id = events
+            .iter()
+            .find_map(|e| match e {
+                EngineEvent::Text { task_id, .. } => *task_id,
+                _ => None,
+            })
+            .expect("should emit Text event with task_id");
+        assert_eq!(text_task_id, task_id);
+    }
+
+    #[test]
     fn missing_approval_channel_marks_event_task_failed() {
         let mut app = App::new();
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -619,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn task_status_changed_propagates_old_status() {
+    fn task_status_changed_event_includes_old_status() {
         let mut app = App::new();
         let events = Arc::new(Mutex::new(Vec::new()));
         let frontend = MockFrontend {
@@ -631,62 +670,58 @@ mod tests {
         });
         app.add_systems(Update, frontend_output_system);
 
-        let channel = ChannelId {
+        let origin_channel = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
-            thread_id: Some("t1".to_string()),
+            thread_id: None,
         };
-        let task = Task::from_user_input("test", 3, channel.clone());
+        let task = Task::from_user_input("test", 3, origin_channel);
         let task_id = task.id;
-        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut().spawn(task);
 
-        // Transition: Pending -> Running (first observation, no prior tracked status)
+        // First update: task status change from Pending -> Running
         {
-            let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
             task.status = TaskStatus::Running;
         }
         app.update();
 
+        // Second update: Running -> Done
         {
-            let events = events.lock().unwrap();
-            let (status, old_status) = events
-                .iter()
-                .find_map(|e| match e {
-                    EngineEvent::TaskStatusChanged {
-                        task_id: id,
-                        status,
-                        old_status,
-                        ..
-                    } if *id == task_id => Some((*status, *old_status)),
-                    _ => None,
-                })
-                .expect("should emit TaskStatusChanged for Running");
-            assert_eq!(status, TaskStatusKind::Running);
-            assert_eq!(old_status, None);
-        }
-
-        // Transition: Running -> Done
-        {
-            let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
             task.status = TaskStatus::Done;
         }
         app.update();
 
         let events = events.lock().unwrap();
-        let (status, old_status) = events
+        let status_events: Vec<_> = events
             .iter()
-            .rev()
-            .find_map(|e| match e {
+            .filter_map(|e| match e {
                 EngineEvent::TaskStatusChanged {
                     task_id: id,
                     status,
                     old_status,
                     ..
-                } if *id == task_id => Some((*status, *old_status)),
+                } if *id == task_id => Some((*old_status, *status)),
                 _ => None,
             })
-            .expect("should emit TaskStatusChanged for Done");
-        assert_eq!(status, TaskStatusKind::Done);
-        assert_eq!(old_status, Some(TaskStatusKind::Running));
+            .collect();
+
+        assert_eq!(status_events.len(), 2);
+        assert_eq!(status_events[0], (None, TaskStatusKind::Running));
+        assert_eq!(
+            status_events[1],
+            (Some(TaskStatusKind::Running), TaskStatusKind::Done)
+        );
     }
 }
