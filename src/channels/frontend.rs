@@ -256,6 +256,75 @@ mod tests {
         }
     }
 
+    fn text_event_with_task(target: EventTarget, task_id: TaskId) -> EngineEvent {
+        EngineEvent::Text {
+            target,
+            role: crate::domain::MessageRole::Agent,
+            content: "hello".to_string(),
+            task_id: Some(task_id),
+        }
+    }
+
+    #[test]
+    fn prefixes_agent_text_with_task_short_id() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(text_event_with_task(
+            EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+        ));
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 助手: hello");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn prefixes_system_text_with_task_short_id() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            role: crate::domain::MessageRole::System,
+            content: "summary done".to_string(),
+            task_id: Some(task_id),
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 系统: summary done");
+    }
+
+    #[test]
+    fn renders_task_status_change_with_transition() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "test".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 状态: 运行中 → 已完成");
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn ignores_broadcast() {
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
