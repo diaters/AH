@@ -127,6 +127,7 @@ pub enum EngineEvent {
         task_id: TaskId,
         name: String,
         status: TaskStatusKind,
+        old_status: Option<TaskStatusKind>,
         result: Option<String>,
         parent_id: Option<TaskId>,
     },

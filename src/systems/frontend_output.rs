@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
 use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::app::FrontendRegistry;
 use crate::domain::{
     Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, FrontendKind, MessageRole,
-    SystemOutputMessage, Task, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
+    SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
     UserOutputMessage,
 };
 
@@ -22,6 +24,7 @@ pub(crate) fn frontend_output_system(
         (Entity, &ToolConfirmationRequestMessage),
         Added<ToolConfirmationRequestMessage>,
     >,
+    mut last_status: Local<HashMap<TaskId, TaskStatusKind>>,
 ) {
     // 用户可见文本输出
     for (entity, output) in &outputs {
@@ -109,6 +112,7 @@ pub(crate) fn frontend_output_system(
             continue;
         };
         let status = task_status_to_kind(&task.status);
+        let old_status = last_status.get(&task.id).copied();
         let result = if task.status.is_terminal() {
             Some(task.result_summary.clone())
         } else {
@@ -119,9 +123,11 @@ pub(crate) fn frontend_output_system(
             task_id: task.id,
             name: task.input_summary.clone(),
             status,
+            old_status,
             result,
             parent_id: task.parent_task_id,
         };
+        last_status.insert(task.id, status);
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
         }
@@ -264,8 +270,8 @@ mod tests {
     use crate::app::FrontendRegistry;
     use crate::domain::{
         ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend,
-        FrontendKind, Task, TaskRoutingPolicy, ToolConfirmationRequestMessage, UserAction,
-        UserOutputMessage,
+        FrontendKind, Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind,
+        ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
     };
 
     use super::frontend_output_system;
@@ -610,5 +616,77 @@ mod tests {
                 panic!("approval should route to scheduled task output channel")
             }
         }
+    }
+
+    #[test]
+    fn task_status_changed_propagates_old_status() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: Some("t1".to_string()),
+        };
+        let task = Task::from_user_input("test", 3, channel.clone());
+        let task_id = task.id;
+        let task_entity = app.world_mut().spawn(task).id();
+
+        // Transition: Pending -> Running (first observation, no prior tracked status)
+        {
+            let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
+            task.status = TaskStatus::Running;
+        }
+        app.update();
+
+        {
+            let events = events.lock().unwrap();
+            let (status, old_status) = events
+                .iter()
+                .find_map(|e| match e {
+                    EngineEvent::TaskStatusChanged {
+                        task_id: id,
+                        status,
+                        old_status,
+                        ..
+                    } if *id == task_id => Some((*status, *old_status)),
+                    _ => None,
+                })
+                .expect("should emit TaskStatusChanged for Running");
+            assert_eq!(status, TaskStatusKind::Running);
+            assert_eq!(old_status, None);
+        }
+
+        // Transition: Running -> Done
+        {
+            let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
+            task.status = TaskStatus::Done;
+        }
+        app.update();
+
+        let events = events.lock().unwrap();
+        let (status, old_status) = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    task_id: id,
+                    status,
+                    old_status,
+                    ..
+                } if *id == task_id => Some((*status, *old_status)),
+                _ => None,
+            })
+            .expect("should emit TaskStatusChanged for Done");
+        assert_eq!(status, TaskStatusKind::Done);
+        assert_eq!(old_status, Some(TaskStatusKind::Running));
     }
 }
