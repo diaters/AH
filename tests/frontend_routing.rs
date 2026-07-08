@@ -129,8 +129,8 @@ fn multi_directed_event_reaches_specified_frontends() {
             },
         ]),
         role: MessageRole::Agent,
-        task_id: None,
         content: "hello".to_string(),
+        task_id: None,
     };
 
     tui.push_event(event.clone());

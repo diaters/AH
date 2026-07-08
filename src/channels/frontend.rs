@@ -284,6 +284,24 @@ mod tests {
     }
 
     #[test]
+    fn leaves_text_unchanged_without_task_id() {
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        fe.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            role: crate::domain::MessageRole::Agent,
+            content: "hello".to_string(),
+            task_id: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "hello");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn prefixes_system_text_with_task_short_id() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
