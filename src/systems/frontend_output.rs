@@ -113,6 +113,9 @@ pub(crate) fn frontend_output_system(
         };
         let status = task_status_to_kind(&task.status);
         let old_status = last_status.get(&task.id).copied();
+        if old_status == Some(status) {
+            continue;
+        }
         let result = if task.status.is_terminal() {
             Some(task.result_summary.clone())
         } else {
