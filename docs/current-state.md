@@ -53,7 +53,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
-- IM 出向-自动回执：Agent 文本回复按 `origin_channel` 自动推回来源 IM 通道
+- IM 出向-自动回执：Agent 文本回复、`SystemOutputMessage`、任务失败提示等按 `output_channel`
+  （通常即来源 `origin_channel`）自动推回来源 IM 通道，并附加任务短 ID 前缀（如 `[a1b2c3d4]`），
+  便于同一会话中多任务并行时区分消息来源
+- IM 任务状态展示：任务状态变更（如运行中 → 等待中）作为独立状态消息推送到 IM 通道，同样携带任务短 ID 前缀
 - 跨通道隔离：用户输入仅路由到同一通道中等待用户的 Task；`/finish`、`/summarize`、`/btw` 等命令限定在发出通道生效；子任务继承父任务的 `origin_channel`
 
 #### 记忆治理
