@@ -130,7 +130,11 @@ pub(crate) fn frontend_output_system(
             result,
             parent_id: task.parent_task_id,
         };
-        last_status.insert(task.id, status);
+        if task.status.is_terminal() {
+            last_status.remove(&task.id);
+        } else {
+            last_status.insert(task.id, status);
+        }
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
         }
@@ -726,5 +730,70 @@ mod tests {
             status_events[1],
             (Some(TaskStatusKind::Running), TaskStatusKind::Done)
         );
+    }
+
+    #[test]
+    fn terminal_task_status_is_removed_from_last_status() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        for status in [
+            TaskStatus::Running,
+            TaskStatus::Done,
+            TaskStatus::Running,
+            TaskStatus::Failed(crate::domain::FailureReason::Unknown),
+            TaskStatus::Running,
+        ] {
+            {
+                let mut task = app
+                    .world_mut()
+                    .query::<&mut Task>()
+                    .iter_mut(app.world_mut())
+                    .find(|t| t.id == task_id)
+                    .unwrap();
+                task.status = status;
+            }
+            app.update();
+        }
+
+        let events = events.lock().unwrap();
+        let status_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    task_id: id,
+                    status,
+                    old_status,
+                    ..
+                } if *id == task_id => Some((*old_status, *status)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(status_events.len(), 5);
+        // 0: Pending -> Running
+        // 1: Running -> Done
+        // 2: Done -> Running (old_status 应为 None，说明 Done 后被清理)
+        // 3: Running -> Failed
+        // 4: Failed -> Running (old_status 应为 None，说明 Failed 后被清理)
+        assert_eq!(status_events[2], (None, TaskStatusKind::Running));
+        assert_eq!(status_events[4], (None, TaskStatusKind::Running));
     }
 }
