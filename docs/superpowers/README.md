@@ -11,6 +11,7 @@
 | `plans/2026-07-04-sequential-tool-confirmation-plan.md` | 顺序工具确认实施 | 活跃 |
 | `plans/2026-07-05-per-user-turn-tool-limit.md` | 单轮工具调用软限制实施 | 活跃 |
 | `plans/2026-07-07-dynamic-scheduled-task-approval-routing.md` | 动态 scheduled task 审批路由与事件任务审批通道检查实施 | 活跃 |
+| `plans/2026-07-08-im-channel-task-identification.md` | IM 通道任务标识实施 | 活跃 |
 
 ### 活跃规格
 
@@ -19,6 +20,7 @@
 | `specs/2026-07-04-sequential-tool-confirmation-design.md` | 顺序工具确认设计 | 活跃 |
 | `specs/2026-07-05-per-user-turn-tool-limit-design.md` | 单轮工具调用软限制设计 | 活跃 |
 | `specs/2026-07-07-dynamic-scheduled-task-approval-routing-design.md` | 动态 scheduled task 审批路由与事件任务审批通道检查设计 | 活跃 |
+| `specs/2026-07-08-im-channel-task-identification-design.md` | IM 通道任务标识设计 | 活跃 |
 
 ### 已归档
 

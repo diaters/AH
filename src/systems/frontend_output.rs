@@ -1,10 +1,12 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::app::FrontendRegistry;
 use crate::domain::{
     Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, FrontendKind, MessageRole,
-    SystemOutputMessage, Task, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
+    SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
     UserOutputMessage,
 };
 
@@ -22,6 +24,8 @@ pub(crate) fn frontend_output_system(
         (Entity, &ToolConfirmationRequestMessage),
         Added<ToolConfirmationRequestMessage>,
     >,
+    mut last_status: Local<HashMap<TaskId, TaskStatusKind>>,
+    mut reported_terminal: Local<HashSet<TaskId>>,
 ) {
     // 用户可见文本输出
     for (entity, output) in &outputs {
@@ -49,6 +53,7 @@ pub(crate) fn frontend_output_system(
             target,
             role: MessageRole::Agent,
             content: output.content.clone(),
+            task_id: Some(output.task_id),
         };
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
@@ -84,6 +89,7 @@ pub(crate) fn frontend_output_system(
             target,
             role: MessageRole::System,
             content: output.content.clone(),
+            task_id: Some(output.task_id),
         };
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
@@ -93,6 +99,10 @@ pub(crate) fn frontend_output_system(
 
     // Task 状态变化
     for task in &tasks {
+        if reported_terminal.contains(&task.id) {
+            continue;
+        }
+
         let Some(target) = task
             .routing_policy
             .output_channel
@@ -107,6 +117,10 @@ pub(crate) fn frontend_output_system(
             continue;
         };
         let status = task_status_to_kind(&task.status);
+        let old_status = last_status.get(&task.id).copied();
+        if old_status == Some(status) {
+            continue;
+        }
         let result = if task.status.is_terminal() {
             Some(task.result_summary.clone())
         } else {
@@ -117,9 +131,16 @@ pub(crate) fn frontend_output_system(
             task_id: task.id,
             name: task.input_summary.clone(),
             status,
+            old_status,
             result,
             parent_id: task.parent_task_id,
         };
+        if task.status.is_terminal() {
+            last_status.remove(&task.id);
+            reported_terminal.insert(task.id);
+        } else {
+            last_status.insert(task.id, status);
+        }
         for frontend in &registry.frontends {
             frontend.push_event(event.clone());
         }
@@ -262,8 +283,8 @@ mod tests {
     use crate::app::FrontendRegistry;
     use crate::domain::{
         ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend,
-        FrontendKind, Task, TaskRoutingPolicy, ToolConfirmationRequestMessage, UserAction,
-        UserOutputMessage,
+        FrontendKind, Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind,
+        ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
     };
 
     use super::frontend_output_system;
@@ -433,6 +454,45 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, EngineEvent::Text { .. }))
         );
+    }
+
+    #[test]
+    fn user_output_text_event_includes_task_id() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+        app.world_mut().spawn(UserOutputMessage {
+            task_id,
+            content: "hello".to_string(),
+        });
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        let text_task_id = events
+            .iter()
+            .find_map(|e| match e {
+                EngineEvent::Text { task_id, .. } => *task_id,
+                _ => None,
+            })
+            .expect("should emit Text event with task_id");
+        assert_eq!(text_task_id, task_id);
     }
 
     #[test]
@@ -608,5 +668,214 @@ mod tests {
                 panic!("approval should route to scheduled task output channel")
             }
         }
+    }
+
+    #[test]
+    fn task_status_changed_event_includes_old_status() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        // First update: task status change from Pending -> Running
+        {
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
+            task.status = TaskStatus::Running;
+        }
+        app.update();
+
+        // Second update: Running -> Done
+        {
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
+            task.status = TaskStatus::Done;
+        }
+        app.update();
+
+        let events = events.lock().unwrap();
+        let status_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    task_id: id,
+                    status,
+                    old_status,
+                    ..
+                } if *id == task_id => Some((*old_status, *status)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(status_events.len(), 2);
+        assert_eq!(status_events[0], (None, TaskStatusKind::Running));
+        assert_eq!(
+            status_events[1],
+            (Some(TaskStatusKind::Running), TaskStatusKind::Done)
+        );
+    }
+
+    #[test]
+    fn terminal_task_status_is_not_re_emitted_after_subsequent_changes() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        for status in [
+            TaskStatus::Running,
+            TaskStatus::Done,
+            TaskStatus::Running,
+            TaskStatus::Failed(crate::domain::FailureReason::Unknown),
+            TaskStatus::Running,
+        ] {
+            {
+                let mut task = app
+                    .world_mut()
+                    .query::<&mut Task>()
+                    .iter_mut(app.world_mut())
+                    .find(|t| t.id == task_id)
+                    .unwrap();
+                task.status = status;
+            }
+            app.update();
+        }
+
+        let events = events.lock().unwrap();
+        let status_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    task_id: id,
+                    status,
+                    old_status,
+                    ..
+                } if *id == task_id => Some((*old_status, *status)),
+                _ => None,
+            })
+            .collect();
+
+        // 只有 Pending -> Running 和 Running -> Done 会被发送，
+        // Done 之后的变更因已进入 reported_terminal 而被忽略。
+        assert_eq!(status_events.len(), 2);
+        assert_eq!(status_events[0], (None, TaskStatusKind::Running));
+        assert_eq!(
+            status_events[1],
+            (Some(TaskStatusKind::Running), TaskStatusKind::Done)
+        );
+    }
+
+    #[test]
+    fn terminal_task_status_is_not_duplicated_when_other_fields_change() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel);
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        // Pending -> Running
+        {
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
+            task.status = TaskStatus::Running;
+        }
+        app.update();
+
+        // Running -> Done
+        {
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
+            task.status = TaskStatus::Done;
+        }
+        app.update();
+
+        // Done 之后更新其他字段（如 result_summary），不应再次触发 TaskStatusChanged
+        {
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
+            task.result_summary = "final result".to_string();
+        }
+        app.update();
+
+        let events = events.lock().unwrap();
+        let status_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    task_id: id,
+                    status,
+                    ..
+                } if *id == task_id => Some(*status),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(status_events.len(), 2);
+        assert_eq!(status_events[0], TaskStatusKind::Running);
+        assert_eq!(status_events[1], TaskStatusKind::Done);
     }
 }

@@ -551,6 +551,7 @@ mod tests {
             target: EventTarget::Broadcast,
             role: MessageRole::Agent,
             content: "hello world".to_string(),
+            task_id: None,
         });
         assert_eq!(app.messages.len(), 1);
         assert!(matches!(
@@ -603,6 +604,7 @@ mod tests {
             task_id,
             name: "test task".to_string(),
             status: TaskStatusKind::Running,
+            old_status: None,
             result: None,
             parent_id: None,
         });
@@ -626,6 +628,7 @@ mod tests {
             task_id: main_id,
             name: "main task".to_string(),
             status: TaskStatusKind::Running,
+            old_status: None,
             result: None,
             parent_id: None,
         });
@@ -636,6 +639,7 @@ mod tests {
             task_id: sub1_id,
             name: "subtask 1".to_string(),
             status: TaskStatusKind::Done,
+            old_status: None,
             result: None,
             parent_id: Some(main_id),
         });
@@ -646,6 +650,7 @@ mod tests {
             task_id: sub2_id,
             name: "subtask 2".to_string(),
             status: TaskStatusKind::Running,
+            old_status: None,
             result: None,
             parent_id: Some(main_id),
         });
@@ -861,6 +866,7 @@ mod tests {
             task_id: main_id,
             name: "main task".to_string(),
             status: TaskStatusKind::Running,
+            old_status: None,
             result: None,
             parent_id: None,
         });
@@ -871,6 +877,7 @@ mod tests {
             task_id: sub1_id,
             name: "subtask 1".to_string(),
             status: TaskStatusKind::Done,
+            old_status: None,
             result: None,
             parent_id: Some(main_id),
         });
@@ -881,6 +888,7 @@ mod tests {
             task_id: sub2_id,
             name: "subtask 2".to_string(),
             status: TaskStatusKind::Failed,
+            old_status: None,
             result: Some("error".to_string()),
             parent_id: Some(main_id),
         });
@@ -902,6 +910,7 @@ mod tests {
             task_id: main_id,
             name: "lonely task".to_string(),
             status: TaskStatusKind::Running,
+            old_status: None,
             result: None,
             parent_id: None,
         });
@@ -913,6 +922,7 @@ mod tests {
             task_id: other_id,
             name: "other task".to_string(),
             status: TaskStatusKind::Running,
+            old_status: None,
             result: None,
             parent_id: None,
         });

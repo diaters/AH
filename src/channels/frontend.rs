@@ -1,7 +1,10 @@
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, trace};
 
-use crate::domain::{ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, UserAction};
+use crate::domain::{
+    ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, MessageRole, TaskId,
+    TaskStatusKind, UserAction,
+};
 
 use super::ChannelOutboundMessage;
 use super::traits::{ChannelParseMode, InlineKeyboardButton, ReplyMarkup};
@@ -52,6 +55,33 @@ fn html_escape(input: &str) -> String {
     out
 }
 
+fn task_short_id(task_id: TaskId) -> String {
+    task_id
+        .to_string()
+        .split('-')
+        .next()
+        .unwrap_or("????")
+        .to_string()
+}
+
+fn role_label(role: MessageRole) -> &'static str {
+    match role {
+        MessageRole::Agent => "助手",
+        MessageRole::System => "系统",
+        MessageRole::User => "用户",
+    }
+}
+
+fn status_label(status: TaskStatusKind) -> &'static str {
+    match status {
+        TaskStatusKind::Pending => "待处理",
+        TaskStatusKind::Running => "运行中",
+        TaskStatusKind::Waiting => "等待中",
+        TaskStatusKind::Done => "已完成",
+        TaskStatusKind::Failed => "已失败",
+    }
+}
+
 impl Frontend for ChannelFrontend {
     fn kind(&self) -> FrontendKind {
         self.kind.clone()
@@ -60,7 +90,11 @@ impl Frontend for ChannelFrontend {
     fn push_event(&self, event: EngineEvent) {
         match event {
             EngineEvent::Text {
-                target, content, ..
+                target,
+                role,
+                content,
+                task_id,
+                ..
             } => {
                 let targets = match target {
                     EventTarget::Broadcast => return,
@@ -79,11 +113,14 @@ impl Frontend for ChannelFrontend {
                     recipients = recipients.len(),
                     content_len = content.len(),
                 );
+                let prefixed_content = task_id
+                    .map(|id| format!("[{}] {}: {}", task_short_id(id), role_label(role), content))
+                    .unwrap_or(content);
                 for channel_id in recipients {
                     let msg = ChannelOutboundMessage {
                         recipient: channel_id.user_id,
                         thread_id: channel_id.thread_id,
-                        content: content.clone(),
+                        content: prefixed_content.clone(),
                         parse_mode: None,
                         reply_markup: None,
                         attachments: vec![],
@@ -143,6 +180,49 @@ impl Frontend for ChannelFrontend {
                     self.send_message(msg);
                 }
             }
+            EngineEvent::TaskStatusChanged {
+                target,
+                task_id,
+                status,
+                old_status,
+                ..
+            } => {
+                let targets = match target {
+                    EventTarget::Broadcast => return,
+                    EventTarget::Directed(v) => v,
+                };
+                let recipients: Vec<ChannelId> = targets
+                    .into_iter()
+                    .filter(|cid| self.matches(cid))
+                    .collect();
+                if recipients.is_empty() {
+                    return;
+                }
+                let status_text = match old_status {
+                    Some(old) => format!(
+                        "[{}] 状态: {} → {}",
+                        task_short_id(task_id),
+                        status_label(old),
+                        status_label(status)
+                    ),
+                    None => format!(
+                        "[{}] 状态: {}",
+                        task_short_id(task_id),
+                        status_label(status)
+                    ),
+                };
+                for channel_id in recipients {
+                    let msg = ChannelOutboundMessage {
+                        recipient: channel_id.user_id,
+                        thread_id: channel_id.thread_id,
+                        content: status_text.clone(),
+                        parse_mode: None,
+                        reply_markup: None,
+                        attachments: vec![],
+                    };
+                    self.send_message(msg);
+                }
+            }
             _ => {}
         }
     }
@@ -172,7 +252,95 @@ mod tests {
             target,
             role: crate::domain::MessageRole::Agent,
             content: "hello".to_string(),
+            task_id: None,
         }
+    }
+
+    fn text_event_with_task(target: EventTarget, task_id: TaskId) -> EngineEvent {
+        EngineEvent::Text {
+            target,
+            role: crate::domain::MessageRole::Agent,
+            content: "hello".to_string(),
+            task_id: Some(task_id),
+        }
+    }
+
+    #[test]
+    fn prefixes_agent_text_with_task_short_id() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(text_event_with_task(
+            EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+        ));
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 助手: hello");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn leaves_text_unchanged_without_task_id() {
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        fe.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            role: crate::domain::MessageRole::Agent,
+            content: "hello".to_string(),
+            task_id: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "hello");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn prefixes_system_text_with_task_short_id() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            role: crate::domain::MessageRole::System,
+            content: "summary done".to_string(),
+            task_id: Some(task_id),
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 系统: summary done");
+    }
+
+    #[test]
+    fn renders_task_status_change_with_transition() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "test".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 状态: 运行中 → 已完成");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -256,5 +424,89 @@ mod tests {
             html_escape("<script> & \"quotes\" 'single'"),
             "&lt;script&gt; &amp; &quot;quotes&quot; &#39;single&#39;"
         );
+    }
+
+    #[test]
+    fn queues_text_with_task_prefix() {
+        use uuid::Uuid;
+
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        fe.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            role: MessageRole::Agent,
+            content: "hello".to_string(),
+            task_id: Some(task_id),
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[00000000] 助手: hello");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn queues_status_change_with_transition() {
+        use uuid::Uuid;
+
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[00000000] 状态: 运行中 → 已完成");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn queues_status_change_without_old_status() {
+        use uuid::Uuid;
+
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[00000000] 状态: 运行中");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn ignores_status_change_broadcast() {
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: TaskId::nil(),
+            name: "task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+        });
+        assert!(rx.try_recv().is_err());
     }
 }

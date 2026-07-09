@@ -96,6 +96,7 @@ pub enum EngineEvent {
         target: EventTarget,
         role: MessageRole,
         content: String,
+        task_id: Option<TaskId>,
     },
     /// 审批请求
     ApprovalRequest {
@@ -126,6 +127,7 @@ pub enum EngineEvent {
         task_id: TaskId,
         name: String,
         status: TaskStatusKind,
+        old_status: Option<TaskStatusKind>,
         result: Option<String>,
         parent_id: Option<TaskId>,
     },

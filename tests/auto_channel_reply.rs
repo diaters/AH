@@ -7,8 +7,14 @@ use harness::{
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
 };
 use tokio::runtime::Runtime;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn extract_short_id_from_text(text: &str) -> Option<String> {
+    let start = text.find('[')? + 1;
+    let end = text[start..].find(']')? + start;
+    Some(text[start..end].to_string())
+}
 
 /// 一个极简的 Executor，直接返回固定文本作为 Agent 回复。
 struct EchoExecutor;
@@ -35,11 +41,9 @@ fn auto_channel_reply() {
 
         Mock::given(method("POST"))
             .and(path(format!("/bot{}/sendMessage", bot_token)))
-            .and(body_json(serde_json::json!({
-                "chat_id": "123456",
-                "text": "echo reply",
-                "parse_mode": "HTML",
-            })))
+            .and(body_string_contains(r#""chat_id":"123456""#))
+            .and(body_string_contains(r#""parse_mode":"HTML""#))
+            .and(body_string_contains("助手: echo reply"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
                 "result": { "message_id": 42 }
@@ -96,5 +100,116 @@ fn auto_channel_reply() {
         }
 
         mock_server.verify().await;
+    });
+}
+
+/// 验证多个并行任务发送到同一通道时，出站消息带有不同的短 ID 前缀。
+#[test]
+fn multi_task_channel_reply_has_different_short_ids() {
+    let rt = Arc::new(Runtime::new().unwrap());
+
+    rt.block_on(async {
+        let mock_server = MockServer::start().await;
+        let bot_token = "test-token";
+
+        Mock::given(method("POST"))
+            .and(path(format!("/bot{}/sendMessage", bot_token)))
+            .and(body_string_contains(r#""chat_id":"123456""#))
+            .and(body_string_contains("助手: echo reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": 42 }
+            })))
+            .expect(2)
+            .mount(&mock_server)
+            .await;
+
+        let (input_tx, input_rx) = unbounded::<ExternalInput>();
+
+        let cfg = TelegramConfig {
+            bot_token: bot_token.to_string(),
+            allowed_users: vec!["123456".to_string()],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let channel = Arc::new(TelegramChannel::new(cfg).with_base_url(mock_server.uri()))
+            as Arc<dyn Channel>;
+        let (channel_manager, _channel_handle, channel_frontends) =
+            ChannelManager::new(vec![channel], input_tx.clone());
+
+        let config = HarnessConfig::default();
+        let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+
+        let mut app = build_harness_app(
+            config,
+            rt.clone(),
+            executor,
+            input_rx,
+            channel_frontends,
+            channel_manager,
+        );
+
+        app.update();
+
+        let origin = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "123456".to_string(),
+            thread_id: None,
+        };
+
+        input_tx
+            .send(ExternalInput::TextWithChannel {
+                channel: origin.clone(),
+                content: "first task".to_string(),
+            })
+            .expect("send first input");
+        input_tx
+            .send(ExternalInput::TextWithChannel {
+                channel: origin,
+                content: "second task".to_string(),
+            })
+            .expect("send second input");
+
+        for _ in 0..200 {
+            app.update();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        mock_server.verify().await;
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("received requests");
+        let text_requests: Vec<_> = requests
+            .into_iter()
+            .filter(|req| {
+                if req.body.is_empty() {
+                    return false;
+                }
+                serde_json::from_slice::<serde_json::Value>(&req.body)
+                    .ok()
+                    .and_then(|body| body["text"].as_str().map(|t| t.to_string()))
+                    .map(|t| t.contains("助手: echo reply"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            text_requests.len(),
+            2,
+            "expected two agent text outbound messages"
+        );
+
+        let ids: Vec<String> = text_requests
+            .iter()
+            .map(|req| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&req.body).expect("valid json");
+                let text = body["text"].as_str().expect("text field");
+                extract_short_id_from_text(text).expect("short id prefix")
+            })
+            .collect();
+
+        assert_ne!(ids[0], ids[1], "two tasks should have different short ids");
     });
 }
