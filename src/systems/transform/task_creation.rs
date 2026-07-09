@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::prelude::*;
 use crossbeam_channel::unbounded;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     app::HarnessSettings,
@@ -65,6 +65,13 @@ pub fn user_message_to_task_system(
                 message.routing_policy.clone(),
             )
         };
+        info!(
+            event = "TaskCreated",
+            task_id = %task.id,
+            content = %message.content,
+            "任务创建：{}",
+            message.content
+        );
         debug!(
             event = "TaskCreated",
             task_id = %task.id,

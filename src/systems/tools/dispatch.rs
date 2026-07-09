@@ -3,7 +3,7 @@
 //! 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批。
 
 use crate::prelude::*;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -148,6 +148,17 @@ pub fn tool_dispatch_system(
                     tool_name = %tool_name,
                     agent_id = %agent.id,
                     "tool execution allowed"
+                );
+
+                info!(
+                    event = "ToolExecutionStarted",
+                    tool_name = %tool_name,
+                    agent_id = %agent.id,
+                    agent_name = %agent.profile.name,
+                    task_id = %request.request.task_id,
+                    "工具执行开始：Agent [{}] 调用 {}",
+                    agent.profile.name,
+                    tool_name,
                 );
 
                 let ctx = ToolContext {
@@ -320,6 +331,15 @@ pub fn tool_dispatch_system(
                     tool_name = %tool_name,
                     agent_id = %agent.id,
                     "tool execution denied"
+                );
+                info!(
+                    event = "ToolExecutionDenied",
+                    tool_name = %tool_name,
+                    agent_name = %agent.profile.name,
+                    task_id = %request.request.task_id,
+                    "工具调用被拒绝：Agent [{}] 无权使用 {}",
+                    agent.profile.name,
+                    tool_name,
                 );
                 spawn_tool_error(
                     &mut commands,

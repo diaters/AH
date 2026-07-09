@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::domain::{Agent, ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem};
 
@@ -42,6 +42,15 @@ pub(crate) fn evaluation_trigger_system(
                         turn_count,
                         max_turns,
                         "evaluation triggered by turn limit"
+                    );
+                    info!(
+                        event = "EvaluationTriggered",
+                        task_id = %task.id,
+                        turn_count,
+                        max_turns,
+                        "评估触发：任务已达 {}/{} 轮",
+                        turn_count,
+                        max_turns
                     );
 
                     // 创建评估 WorkItem

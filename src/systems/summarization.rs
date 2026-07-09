@@ -3,7 +3,7 @@
 //! 处理记忆压缩的摘要请求和结果处理。
 
 use crate::prelude::*;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     app::Clock,
@@ -59,6 +59,15 @@ pub(crate) fn summarization_dispatch_system(
             target_tokens = request.target_tokens,
             content_len = request.content_to_summarize.len(),
             "summarization work item created"
+        );
+        info!(
+            event = "SummarizationRequested",
+            task_id = %request.task_id,
+            trigger = ?request.trigger,
+            target_tokens = request.target_tokens,
+            "摘要请求：{:?}，目标 tokens {}",
+            request.trigger,
+            request.target_tokens
         );
         commands.entity(entity).despawn();
     }
