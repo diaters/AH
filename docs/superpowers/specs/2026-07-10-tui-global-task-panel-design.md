@@ -88,11 +88,12 @@ Tasks
  ✓ [TG]  审核部署
 ```
 
-标签颜色：
-- TUI: Green
-- QQ: Magenta
-- Telegram: Blue
-- 其他 / None: DarkGray
+标签颜色与文本：
+- TUI → `[TUI]` Green
+- QQ → `[QQ]` Magenta
+- Telegram → `[TG]` Blue
+- 事件任务（origin_channel 为 None）→ `[EVT]` DarkGray
+- 其他前端 → `[Web]`/`[FS]` 等 DarkGray
 
 #### 终态任务渲染
 
