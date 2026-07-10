@@ -494,7 +494,7 @@ mod tests {
         let config: crate::domain::AgentConfig = toml::from_str(&content).unwrap();
         assert_eq!(config.agent.len(), 1);
         assert_eq!(config.agent[0].name, profile.name);
-        assert_eq!(config.agent[0].model, profile.model);
+        assert_eq!(config.agent[0].model, Some(profile.model));
         assert_eq!(config.agent[0].description, "天体表面重力加速度计算流程");
     }
 }

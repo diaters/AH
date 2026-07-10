@@ -152,11 +152,22 @@ fn load_persistent_agents(
 /// 从配置条目生成持久化 Agent
 fn spawn_persistent_agent_from_entry(commands: &mut Commands, entry: &crate::domain::AgentEntry) {
     let id = Uuid::new_v4();
+
+    // 向后兼容：优先使用 model 字段，若为 None 则从 models[0] 提取
+    // 后续 Task 11 会实现完整的模型链解析逻辑
+    let model_str = entry.model.clone().unwrap_or_else(|| {
+        entry
+            .models
+            .first()
+            .map(|m| format!("{}:{}", m.provider, m.model))
+            .unwrap_or_else(|| "unknown".to_string())
+    });
+
     debug!(
         event = "PersistentAgentSpawned",
         agent_id = %id,
         agent_name = %entry.name,
-        agent_model = %entry.model,
+        agent_model = %model_str,
         agent_tags = ?entry.tags,
         "spawning persistent agent"
     );
@@ -171,7 +182,7 @@ fn spawn_persistent_agent_from_entry(commands: &mut Commands, entry: &crate::dom
         id,
         profile: AgentProfile {
             name: entry.name.clone(),
-            model: entry.model.clone(),
+            model: model_str,
         },
         capabilities: AgentCapabilities {
             tags: entry.tags.clone(),
