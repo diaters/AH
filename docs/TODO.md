@@ -21,6 +21,10 @@
 - [x] Evaluation 语义层与 `WorkItem` 执行收敛
 - [x] shell 工具精简重构与回归测试
 - [x] CI、格式检查、clippy、自动化测试
+- [x] IM 通道任务识别：任务短 ID 前缀、状态变更消息推送
+- [x] TUI 全局 Task 面板：任务状态展示、origin_channel 标签、自动清理已完成任务
+- [x] 日志级别重构：RUST_LOG 环境变量、审计事件分类
+- [x] Android aarch64 支持（rustls TLS 后端，交叉编译运行）
 
 ## 当前待办
 
@@ -34,7 +38,7 @@
 - [x] 实现跨会话记忆加载，Agent 启动时可从持久层恢复 `LongTermMemory`
 - [ ] `knowledge_search` 工具抽象为 trait，支持多种搜索策略（关键词、向量等），
   当前仅为单一实现，不利于扩展替换
-- [ ] 新增「知识库管理员」Agent 角色，负责响应其他 Agent 的搜索知识库请求，
+- [x] 新增「知识库管理员」Agent 角色，负责响应其他 Agent 的搜索知识库请求，
   将知识查询职责从调用方解耦到专职 Agent
 - [x] 增加 Agent 级别的 Skill 功能：可执行经验经治理后落盘为 Agent 私有 Skill Package
 - [x] 重新设计经验贡献系统架构
@@ -47,6 +51,7 @@
 - [x] 顺序工具确认：同一任务的多个工具确认请求按顺序逐个弹出
 - [x] 工具调用软限制与硬上限：达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，
   绝对硬上限时强制失败
+- [x] 定时任务审批路由：`schedule_task` 的审批通道验证与 Frontend 注册检查
 
 ### 中优先级
 
@@ -72,7 +77,7 @@
 
 ### 低优先级
 
-- [ ] 验证 Android aarch64 + rustls 在实际设备上的运行约束
+- [x] 验证 Android aarch64 + rustls 在实际设备上的运行约束（已实现基本支持）
 - [x] 评估配置热加载是否值得引入（信号触发系统已实现 `/reload-triggers` 热重载）
 - [ ] 评估分布式或多实例支持是否进入近期路线
 - [ ] 评估长期记忆是否需要引入向量检索或语义匹配能力，
