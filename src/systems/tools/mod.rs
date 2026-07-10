@@ -33,9 +33,9 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool,
-    ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool,
-    ShellStopTool, SubmitExperienceCandidateTool, WaitTasksTool,
+    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ScheduleTaskTool,
+    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
+    SubmitExperienceCandidateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -478,9 +478,7 @@ pub fn register_plugin_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions,
-    };
+    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
 
     #[allow(dead_code)]
     fn test_agent() -> crate::domain::Agent {
@@ -520,10 +518,7 @@ mod tests {
             .overrides
             .insert("shell_exec".to_string(), ToolPermission::Allow);
 
-        assert_eq!(
-            perms.get_permission("shell_exec"),
-            ToolPermission::Allow
-        );
+        assert_eq!(perms.get_permission("shell_exec"), ToolPermission::Allow);
         assert_eq!(perms.get_permission("other"), ToolPermission::Deny);
     }
 }

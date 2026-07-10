@@ -697,11 +697,7 @@ fn user_allows_tool_once() {
         query
             .iter(world)
             .find(|a| a.id == agent_id)
-            .map(|a| {
-                a.tool_permissions
-                    .overrides
-                    .contains_key("shell_exec")
-            })
+            .map(|a| a.tool_permissions.overrides.contains_key("shell_exec"))
             .unwrap_or(false)
     };
 
@@ -1217,11 +1213,7 @@ fn user_allows_tool_always() {
         query
             .iter(world)
             .find(|a| a.id == agent_id)
-            .map(|a| {
-                a.tool_permissions
-                    .overrides
-                    .contains_key("shell_exec")
-            })
+            .map(|a| a.tool_permissions.overrides.contains_key("shell_exec"))
             .unwrap_or(false)
     };
 
