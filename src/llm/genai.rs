@@ -88,7 +88,8 @@ impl AgentExecutor for GenaiExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         let client = self.client.clone();
         // 支持 model_override 覆盖默认模型
-        let model = request.model_override
+        let model = request
+            .model_override
             .as_ref()
             .unwrap_or(&self.model)
             .clone();
@@ -319,8 +320,8 @@ fn classify_genai_error(error: genai::Error) -> ExecutionError {
             let message = error.to_string();
             match status.as_u16() {
                 401 => ExecutionError::Authentication(message),
-                402 => ExecutionError::QuotaExhausted(message),  // 降级
-                403 => ExecutionError::Authentication(message),   // 不降级
+                402 => ExecutionError::QuotaExhausted(message), // 降级
+                403 => ExecutionError::Authentication(message), // 不降级
                 429 => ExecutionError::RateLimited {
                     message,
                     retry_after_secs: Some(5),

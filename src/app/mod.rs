@@ -205,6 +205,16 @@ pub struct ExecutionResultReceiver(
 );
 
 #[derive(Resource)]
+pub struct ModelChainStateUpdateSender(
+    pub mpsc::UnboundedSender<crate::domain::ModelChainStateUpdate>,
+);
+
+#[derive(Resource)]
+pub struct ModelChainStateUpdateReceiver(
+    pub mpsc::UnboundedReceiver<crate::domain::ModelChainStateUpdate>,
+);
+
+#[derive(Resource)]
 pub struct HarnessSettings(pub HarnessConfig);
 
 #[derive(Resource)]
@@ -251,6 +261,7 @@ pub fn build_harness_app(
     channel_manager: crate::channels::ChannelManager,
 ) -> App {
     let (result_tx, result_rx) = mpsc::unbounded_channel();
+    let (state_tx, state_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
 
     // 创建一个默认的 executor 用于 ExecutorHandle（向后兼容）
@@ -268,6 +279,8 @@ pub fn build_harness_app(
     app.insert_resource(ExecutorHandle(default_executor)); // 临时保留用于向后兼容
     app.insert_resource(ExecutionResultSender(result_tx));
     app.insert_resource(ExecutionResultReceiver(result_rx));
+    app.insert_resource(ModelChainStateUpdateSender(state_tx));
+    app.insert_resource(ModelChainStateUpdateReceiver(state_rx));
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());

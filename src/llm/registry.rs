@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 /// 全局 executor 注册表，按 provider name 索引
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct ExecutorRegistry {
     pub(crate) executors: HashMap<String, Arc<dyn crate::domain::AgentExecutor>>,
     default_fallback_cooldown_secs: u64,
