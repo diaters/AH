@@ -438,7 +438,7 @@ description = "My custom agent from plugin"
 [tools]
 default_permission = "Deny"
 my-plugin:search = "Allow"
-knowledge_search = "Allow"
+shell_exec = "Allow"
 ```text
 
 注册名为 `plugin_id:agent_id`（如 `my-plugin:my-agent`）。
@@ -446,7 +446,7 @@ knowledge_search = "Allow"
 ### Agent 工具权限
 
 `[tools]` 中的工具名使用命名空间格式。对插件自身贡献的工具使用 `my-plugin:search`，
-对内置工具使用原始名称（如 `knowledge_search`、`shell_exec`）。
+对内置工具使用原始名称（如 `shell_exec`、`create_tasks`）。
 
 ## 贡献命令
 

@@ -36,8 +36,6 @@
 - [x] 持续清理仍引用旧 shell 语义的历史注释、文档和过程文稿
 - [x] 为长期记忆实现持久化存储（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - [x] 实现跨会话记忆加载，Agent 启动时可从持久层恢复 `LongTermMemory`
-- [ ] `knowledge_search` 工具抽象为 trait，支持多种搜索策略（关键词、向量等），
-  当前仅为单一实现，不利于扩展替换
 - [x] 新增「知识库管理员」Agent 角色，负责响应其他 Agent 的搜索知识库请求，
   将知识查询职责从调用方解耦到专职 Agent
 - [x] 增加 Agent 级别的 Skill 功能：可执行经验经治理后落盘为 Agent 私有 Skill Package

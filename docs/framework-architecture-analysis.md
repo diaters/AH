@@ -431,7 +431,6 @@ graph LR
 
 | 工具名 | 功能 | 所需 Tag | 权限默认值 |
 |--------|------|----------|----------|
-| `knowledge_search` | 搜索全局知识库 | 无 | Allow |
 | `create_tasks` | 创建子任务批次（支持 DAG 依赖） | 无 | Allow |
 | `wait_tasks` | 等待子任务完成并收集结果 | 无 | Allow |
 
