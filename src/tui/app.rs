@@ -607,6 +607,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
@@ -631,6 +632,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         // 添加子任务 1（已完成）
@@ -642,6 +644,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 添加子任务 2（运行中）
@@ -653,6 +656,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 验证主任务进度
@@ -869,6 +873,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         // 添加子任务 1（已完成）
@@ -880,6 +885,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 添加子任务 2（失败）
@@ -891,6 +897,7 @@ mod tests {
             old_status: None,
             result: Some("error".to_string()),
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 验证：Done 和 Failed 都计入已完成
@@ -913,6 +920,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         // 触发另一个任务更新，确保零进度保持
@@ -925,6 +933,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();

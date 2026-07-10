@@ -134,6 +134,7 @@ pub(crate) fn frontend_output_system(
             old_status,
             result,
             parent_id: task.parent_task_id,
+            origin_channel: task.origin_channel.clone(),
         };
         if task.status.is_terminal() {
             last_status.remove(&task.id);
