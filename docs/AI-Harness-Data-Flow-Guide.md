@@ -248,7 +248,6 @@ __System 清单：__
 | `workitem_dispatch_system` | 为治理型 WorkItem（摘要/评估/经验收集）匹配 Agent |
 | `tool_dispatch_system` | 检查工具权限：Allow→执行 Confirm→审批 Deny→拒绝 |
 | `evaluation_trigger_system` | 检测 Task 对话轮数，达到阈值时创建 Evaluation WorkItem |
-| `summarization_dispatch_system` | 将摘要请求转换为 Summarization WorkItem |
 | `approval_dispatch_system` | 处理父 Agent 审批请求（当前为 MVP 自动通过） |
 | `tool_confirmation_result_system` | 处理用户对工具确认的响应 |
 
@@ -530,7 +529,6 @@ __IM 通道隔离规则：__
 | Dispatch | `workitem_dispatch_system` | WorkItem Pending | AgentExecutionRequest |
 | Dispatch | `tool_dispatch_system` | ToolExecutionRequestMessage | ToolExecutionResultMessage / 审批请求 |
 | Dispatch | `evaluation_trigger_system` | 对话轮数 | Evaluation WorkItem |
-| Dispatch | `summarization_dispatch_system` | SummarizationRequestMessage | Summarization WorkItem |
 | Dispatch | `approval_dispatch_system` | ApprovalRequestMessage | 审批结果（MVP 自动通过） |
 | Dispatch | `tool_confirmation_result_system` | ToolConfirmationResponseMessage | 恢复/取消工具执行 |
 | Execution | `agent_execution_system` | AgentExecutionRequest | tokio 异步执行 + Task → Running |
