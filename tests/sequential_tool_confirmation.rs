@@ -237,7 +237,6 @@ fn collect_qq_approval_requests(app: &mut App) -> Vec<CapturedApprovalRequest> {
             EngineEvent::ApprovalRequest {
                 target,
                 options,
-                tool_name: _,
                 ..
             } => {
                 if let EventTarget::Directed(channels) = target {
