@@ -549,7 +549,8 @@ impl App {
         // 移除过期主任务及其子任务
         self.tasks.retain(|t| {
             !expired_main_ids.contains(&t.id)
-                && !t.parent_id
+                && !t
+                    .parent_id
                     .is_some_and(|pid| expired_main_ids.contains(&pid))
         });
     }
