@@ -46,6 +46,10 @@ pub struct TaskState {
     pub parent_id: Option<uuid::Uuid>,
     pub subtask_count: u32,
     pub completed_count: u32,
+    /// 任务来源的前端通道
+    pub origin_channel: Option<ChannelId>,
+    /// 任务进入终态的时刻
+    pub completed_at: Option<std::time::Instant>,
 }
 
 /// 待处理审批
@@ -481,12 +485,25 @@ impl App {
                 status,
                 result,
                 parent_id,
+                origin_channel,
                 ..
             } => {
+                let completed_at =
+                    if matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed) {
+                        Some(std::time::Instant::now())
+                    } else {
+                        None
+                    };
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
                     task.status = status;
                     task.result = result;
                     task.parent_id = parent_id;
+                    if task.origin_channel.is_none() {
+                        task.origin_channel = origin_channel;
+                    }
+                    if completed_at.is_some() {
+                        task.completed_at = completed_at;
+                    }
                 } else {
                     self.tasks.push(TaskState {
                         id: task_id,
@@ -496,6 +513,8 @@ impl App {
                         parent_id,
                         subtask_count: 0,
                         completed_count: 0,
+                        origin_channel,
+                        completed_at,
                     });
                 }
 
@@ -506,8 +525,39 @@ impl App {
         }
     }
 
+    /// 清理已超过 5 秒的终态任务及其子任务
+    pub fn cleanup_completed_tasks(&mut self) {
+        const CLEANUP_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+        let now = std::time::Instant::now();
+
+        // 找出需要清理的主任务 ID
+        let expired_main_ids: Vec<Uuid> = self
+            .tasks
+            .iter()
+            .filter(|t| {
+                t.parent_id.is_none()
+                    && t.completed_at
+                        .is_some_and(|at| now.duration_since(at) > CLEANUP_DELAY)
+            })
+            .map(|t| t.id)
+            .collect();
+
+        if expired_main_ids.is_empty() {
+            return;
+        }
+
+        // 移除过期主任务及其子任务
+        self.tasks.retain(|t| {
+            !expired_main_ids.contains(&t.id)
+                && !t
+                    .parent_id
+                    .is_some_and(|pid| expired_main_ids.contains(&pid))
+        });
+    }
+
     /// 渲染 TUI
     pub fn render(&mut self, frame: &mut Frame) {
+        self.cleanup_completed_tasks();
         let area = frame.area();
 
         let main_layout = Layout::default()
@@ -533,7 +583,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::domain::{
-        AgentStatusKind, ApprovalOption, EngineEvent, EventTarget, MessageRole, TaskStatusKind,
+        AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, FrontendKind,
+        MessageRole, TaskStatusKind,
     };
     use crate::tui::chat::{ApprovalCardState, ChatMessage};
 
@@ -607,6 +658,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
@@ -631,6 +683,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         // 添加子任务 1（已完成）
@@ -642,6 +695,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 添加子任务 2（运行中）
@@ -653,6 +707,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 验证主任务进度
@@ -869,6 +924,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         // 添加子任务 1（已完成）
@@ -880,6 +936,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 添加子任务 2（失败）
@@ -891,6 +948,7 @@ mod tests {
             old_status: None,
             result: Some("error".to_string()),
             parent_id: Some(main_id),
+            origin_channel: None,
         });
 
         // 验证：Done 和 Failed 都计入已完成
@@ -913,6 +971,7 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         // 触发另一个任务更新，确保零进度保持
@@ -925,10 +984,170 @@ mod tests {
             old_status: None,
             result: None,
             parent_id: None,
+            origin_channel: None,
         });
 
         let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
         assert_eq!(main_task.subtask_count, 0);
         assert_eq!(main_task.completed_count, 0);
+    }
+
+    #[test]
+    fn task_state_origin_channel_from_event() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq_user".to_string(),
+            thread_id: None,
+        };
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "qq task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: Some(qq_channel.clone()),
+        });
+        assert_eq!(app.tasks[0].origin_channel, Some(qq_channel));
+        assert_eq!(app.tasks[0].completed_at, None);
+    }
+
+    #[test]
+    fn task_completed_at_set_on_terminal_status() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "done task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        assert!(app.tasks[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn same_task_id_does_not_duplicate() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].status, TaskStatusKind::Done);
+    }
+
+    #[test]
+    fn cleanup_removes_expired_completed_tasks() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+        let sub_id = Uuid::new_v4();
+
+        // 添加已完成的主任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "old done".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        // 添加已完成的子任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub_id,
+            name: "sub done".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: Some(main_id),
+            origin_channel: None,
+        });
+
+        // 手动将 completed_at 设为 6 秒前（超过 5 秒阈值）
+        let six_secs_ago = std::time::Instant::now() - std::time::Duration::from_secs(6);
+        for task in &mut app.tasks {
+            task.completed_at = Some(six_secs_ago);
+        }
+
+        app.cleanup_completed_tasks();
+        assert!(
+            app.tasks.is_empty(),
+            "expired completed tasks should be removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_recent_completed_tasks() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "fresh done".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+
+        // completed_at 刚设置，不会超过 5 秒
+        app.cleanup_completed_tasks();
+        assert_eq!(
+            app.tasks.len(),
+            1,
+            "recently completed tasks should be kept"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_active_tasks() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "running task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+
+        app.cleanup_completed_tasks();
+        assert_eq!(
+            app.tasks.len(),
+            1,
+            "active tasks should never be cleaned up"
+        );
     }
 }

@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::domain::{AgentStatusKind, TaskStatusKind};
+use crate::domain::{AgentStatusKind, ChannelId, FrontendKind, TaskStatusKind};
 
 pub struct StatusPanel;
 
@@ -20,6 +20,23 @@ impl StatusPanel {
             Color::DarkGray // #6272a4 的近似色
         } else {
             base_color
+        }
+    }
+
+    fn channel_label(channel: &ChannelId) -> (&'static str, Color) {
+        match channel.frontend {
+            FrontendKind::Tui => ("TUI", Color::Green),
+            FrontendKind::QQ => ("QQ", Color::Magenta),
+            FrontendKind::Telegram => ("TG", Color::Blue),
+            FrontendKind::Web => ("Web", Color::DarkGray),
+            FrontendKind::Feishu => ("FS", Color::DarkGray),
+        }
+    }
+
+    fn origin_label(origin_channel: &Option<ChannelId>) -> (&'static str, Color) {
+        match origin_channel {
+            Some(ch) => Self::channel_label(ch),
+            None => ("EVT", Color::DarkGray),
         }
     }
 
@@ -143,8 +160,10 @@ impl StatusPanel {
                     String::new()
                 };
 
+                let (label_text, label_color) = Self::origin_label(&main_task.origin_channel);
                 lines.push(Line::from(vec![
                     Span::styled(format!("{icon} "), Style::default().fg(main_color)),
+                    Span::styled(format!("[{label_text}] "), Style::default().fg(label_color)),
                     Span::styled(
                         format!("{}{}", main_task.name, progress_text),
                         Style::default().fg(main_color).add_modifier(Modifier::BOLD),

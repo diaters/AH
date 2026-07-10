@@ -130,6 +130,8 @@ pub enum EngineEvent {
         old_status: Option<TaskStatusKind>,
         result: Option<String>,
         parent_id: Option<TaskId>,
+        /// 任务来源的前端通道，事件任务为 None
+        origin_channel: Option<ChannelId>,
     },
     /// 子任务批次进度
     BatchProgress {
