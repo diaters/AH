@@ -879,4 +879,51 @@ mod tests {
         assert_eq!(status_events[0], TaskStatusKind::Running);
         assert_eq!(status_events[1], TaskStatusKind::Done);
     }
+
+    #[test]
+    fn task_status_changed_event_includes_origin_channel() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq_user".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, origin_channel.clone());
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+
+        // Update task status to trigger event
+        {
+            let mut task = app
+                .world_mut()
+                .query::<&mut Task>()
+                .iter_mut(app.world_mut())
+                .find(|t| t.id == task_id)
+                .unwrap();
+            task.status = TaskStatus::Running;
+        }
+        app.update();
+
+        let events = events.lock().unwrap();
+        let origin = events
+            .iter()
+            .find_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    origin_channel, ..
+                } => Some(origin_channel.clone()),
+                _ => None,
+            })
+            .expect("should emit TaskStatusChanged with origin_channel");
+        assert_eq!(origin, Some(origin_channel));
+    }
 }
