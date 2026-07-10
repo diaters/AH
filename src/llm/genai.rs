@@ -87,7 +87,11 @@ impl GenaiExecutor {
 impl AgentExecutor for GenaiExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         let client = self.client.clone();
-        let model = self.model.clone();
+        // 支持 model_override 覆盖默认模型
+        let model = request.model_override
+            .as_ref()
+            .unwrap_or(&self.model)
+            .clone();
 
         Box::pin(async move {
             debug!(
