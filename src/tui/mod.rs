@@ -6,7 +6,7 @@ pub mod status;
 use crossbeam_channel::{Receiver, Sender};
 use tracing::{debug, trace};
 
-use crate::domain::{ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, UserAction};
+use crate::domain::{EngineEvent, EventTarget, Frontend, FrontendKind, UserAction};
 
 pub use app::App;
 
