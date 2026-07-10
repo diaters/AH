@@ -142,7 +142,7 @@ fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> En
         .spawn((
             ToolExecutionResultMessage {
                 result: execution_result,
-                tool_name: "knowledge_search".to_string(),
+                tool_name: "shell_exec".to_string(),
                 tool_output: Ok(tool_output),
                 tool_call_id: Some("call-1".to_string()),
                 processed: false,

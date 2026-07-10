@@ -138,7 +138,7 @@ log_info("on_tool_called: observing, no deny");
         id
     };
 
-    spawn_tool_request(app.world_mut(), "knowledge_search", task_id);
+    spawn_tool_request(app.world_mut(), "shell_exec", task_id);
 
     // 推一帧：Dispatch 之前 companion 系统派发 hook，再由 tool_dispatch_system 处理。
     app.update();
@@ -198,7 +198,7 @@ tool_deny("blocked by test");
                         task_id,
                         agent_id: uuid::Uuid::nil(),
                         request_kind: AgentRequestKind::ToolExecution {
-                            tool_name: "knowledge_search".to_string(),
+                            tool_name: "shell_exec".to_string(),
                         },
                         prompt: String::new(),
                         system_prompt: None,
@@ -206,8 +206,8 @@ tool_deny("blocked by test");
                         conversation: None,
                         work_item_id: None,
                     },
-                    tool_name: "knowledge_search".to_string(),
-                    tool_input: serde_json::json!({"query":"x"}),
+                    tool_name: "shell_exec".to_string(),
+                    tool_input: serde_json::json!({"command": "echo x"}),
                     pending_confirmation_id: None,
                     tool_call_id: Some("deny-call-id".to_string()),
                     pending_confirmation_options: None,

@@ -48,7 +48,10 @@ docs/wiki/
 
 # Logs (not tracked)
 logs/
-.harness/
+.harness/*
+!.harness/assets/
+!.harness/knowledge/
+
 skills-lock.json
 
 # Local channel/trigger config (not tracked)

@@ -33,9 +33,9 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    ChatWithAgentTool, CreateTasksTool, KnowledgeSearchTool, ListExperienceCandidatesTool,
-    ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool,
-    ShellStopTool, SubmitExperienceCandidateTool, WaitTasksTool,
+    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ScheduleTaskTool,
+    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
+    SubmitExperienceCandidateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -44,32 +44,6 @@ pub fn register_builtin_tools(
     registry: &mut SpaceToolRegistry,
     executors: &mut BuiltinToolExecutors,
 ) {
-    registry.register(ToolDefinition {
-        name: "knowledge_search".to_string(),
-        description: "Search for relevant information in the shared knowledge base. Use this when you need to access global knowledge, user preferences, or context that is not in your personal memory.".to_string(),
-        parameters: ToolSchema {
-            schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query or keywords to look for"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return (default: 3)",
-                        "default": 3
-                    }
-                },
-                "required": ["query"]
-            }),
-        },
-        default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("knowledge_search".to_string()),
-        required_tag: None,
-    });
-    executors.register(Box::new(KnowledgeSearchTool));
-
     registry.register(ToolDefinition {
         name: "create_tasks".to_string(),
         description: "Create sub-tasks to delegate work to specialized child agents. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete.".to_string(),
@@ -504,10 +478,7 @@ pub fn register_plugin_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, BuiltinTool,
-        ExperienceStore, SharedKnowledgeBase, SharedKnowledgeEntry, ToolContext,
-    };
+    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
 
     #[allow(dead_code)]
     fn test_agent() -> crate::domain::Agent {
@@ -529,47 +500,6 @@ mod tests {
     }
 
     #[test]
-    fn executor_knowledge_search() {
-        let mut knowledge = SharedKnowledgeBase::default();
-        knowledge
-            .entries
-            .push(SharedKnowledgeEntry::approved_from_user_input(
-                "The project uses Rust and Bevy framework",
-            ));
-        knowledge
-            .entries
-            .push(SharedKnowledgeEntry::approved_from_user_input(
-                "The system follows ECS architecture",
-            ));
-        let experience_store = ExperienceStore::default();
-
-        let ctx = ToolContext {
-            knowledge: &knowledge,
-            experience_store: &experience_store,
-            default_wait_tasks_timeout_secs: 300,
-            shell_default_tail_lines: 50,
-            shell_max_tail_lines: 500,
-            shell_default_exec_timeout_secs: 60,
-            shell_default_stop_timeout_secs: 5,
-            current_task_id: uuid::Uuid::nil(),
-            current_agent_id: uuid::Uuid::nil(),
-            current_origin_channel: None,
-        };
-        let executor = builtin::KnowledgeSearchTool;
-
-        // Search for "rust"
-        let input = serde_json::json!({"query": "rust"});
-        let result = executor.execute(&input, &ctx);
-        assert!(result.is_ok());
-        match result.unwrap() {
-            crate::domain::ToolAction::Direct(value) => {
-                assert_eq!(value["count"], 1);
-            }
-            other => panic!("expected Direct action, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn agent_tool_permissions_default_is_confirm() {
         let perms = AgentToolPermissions::default();
         assert_eq!(
@@ -586,12 +516,9 @@ mod tests {
         };
         perms
             .overrides
-            .insert("knowledge_search".to_string(), ToolPermission::Allow);
+            .insert("shell_exec".to_string(), ToolPermission::Allow);
 
-        assert_eq!(
-            perms.get_permission("knowledge_search"),
-            ToolPermission::Allow
-        );
+        assert_eq!(perms.get_permission("shell_exec"), ToolPermission::Allow);
         assert_eq!(perms.get_permission("other"), ToolPermission::Deny);
     }
 }

@@ -51,3 +51,14 @@ description = "经验收敛专家，负责从任务终态材料中提炼经验�
 default_permission = "Deny"
 submit_experience_candidate = "Allow"
 
+[[agent]]
+name = "knowledge-manager"
+model = "gpt-4.1-mini"
+tags = ["knowledge", "management"]
+description = "知识库管理员，负责知识检索与维护"
+
+[agent.tools]
+default_permission = "Deny"
+shell_exec = "Confirm"
+shell_read = "Allow"
+shell_list = "Allow"

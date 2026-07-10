@@ -186,12 +186,12 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "do something",
-                    "tools": ["knowledge_search"]
+                    "tools": ["shell_exec"]
                 },
                 {
                     "name": "task-b",
                     "content": "do something else",
-                    "tools": ["knowledge_search"],
+                    "tools": ["shell_exec"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -217,12 +217,12 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "do something",
-                    "tools": ["knowledge_search"]
+                    "tools": ["shell_exec"]
                 },
                 {
                     "name": "task-b",
                     "content": "do something else",
-                    "tools": ["knowledge_search"],
+                    "tools": ["shell_exec"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -270,7 +270,7 @@ mod tests {
                 {
                     "name": "only-task",
                     "content": "do something",
-                    "tools": ["knowledge_search"],
+                    "tools": ["shell_exec"],
                     "depends_on": ["nonexistent"]
                 }
             ]
@@ -287,13 +287,13 @@ mod tests {
                 {
                     "name": "task-a",
                     "content": "first",
-                    "tools": ["knowledge_search"],
+                    "tools": ["shell_exec"],
                     "depends_on": ["task-b"]
                 },
                 {
                     "name": "task-b",
                     "content": "second",
-                    "tools": ["knowledge_search"],
+                    "tools": ["shell_exec"],
                     "depends_on": ["task-a"]
                 }
             ]
@@ -310,7 +310,7 @@ mod tests {
                 {
                     "name": "self-ref",
                     "content": "bad",
-                    "tools": ["knowledge_search"],
+                    "tools": ["shell_exec"],
                     "depends_on": ["self-ref"]
                 }
             ]
@@ -327,7 +327,7 @@ mod tests {
                 {
                     "name": "minimal",
                     "content": "just content",
-                    "tools": ["knowledge_search"]
+                    "tools": ["shell_exec"]
                 }
             ]
         });

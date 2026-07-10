@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn agent_without_experience_still_grants_permissions() {
         let mut overrides = HashMap::new();
-        overrides.insert("knowledge_search".to_string(), ToolPermission::Allow);
+        overrides.insert("shell_exec".to_string(), ToolPermission::Allow);
 
         let agent = Agent {
             id: uuid::Uuid::nil(),
@@ -130,6 +130,6 @@ mod tests {
             },
         };
 
-        assert!(agent.has_permission("knowledge_search"));
+        assert!(agent.has_permission("shell_exec"));
     }
 }

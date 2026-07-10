@@ -69,6 +69,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 长期记忆已实现淘汰机制：`decay_score < 0.1` 且非 `pin` 非 `Critical` 的条目被移除并归档到 `<agent-name>/archive.jsonl`
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
+- `SharedKnowledgeBase` 已迁移到文件系统管理（`.harness/knowledge/*.md`），通过 `knowledge-manager` Agent 统一治理
+- 知识库管理员 Agent（Persistent 类型）负责检索与维护知识库，复用 `chat_with_agent` + shell 工具
 
 #### 信号触发系统
 
