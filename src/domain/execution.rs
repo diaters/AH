@@ -92,6 +92,9 @@ pub struct AgentExecutionRequest {
     pub conversation: Option<Vec<ConversationMessage>>,
     /// 关联的 WorkItem ID；普通 Task 直发请求时为 None。
     pub work_item_id: Option<Uuid>,
+    /// 覆盖 executor 的默认模型（用于多模型 provider）
+    #[serde(default)]
+    pub model_override: Option<String>,
 }
 
 /// Agent 执行结果
@@ -128,8 +131,27 @@ mod tests {
             tools: vec![],
             conversation: None,
             work_item_id: Some(uuid::Uuid::new_v4()),
+            model_override: None,
         };
 
         assert!(request.work_item_id.is_some());
+        assert!(request.model_override.is_none());
+    }
+
+    #[test]
+    fn agent_execution_request_supports_model_override() {
+        let request = AgentExecutionRequest {
+            task_id: uuid::Uuid::nil(),
+            agent_id: uuid::Uuid::nil(),
+            request_kind: AgentRequestKind::LlmCompletion,
+            prompt: "test".to_string(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+            model_override: Some("gpt-4.1-mini".to_string()),
+        };
+
+        assert_eq!(request.model_override, Some("gpt-4.1-mini".to_string()));
     }
 }

@@ -121,6 +121,7 @@ pub fn brain_decision_system(
                             tools,
                             conversation: None,
                             work_item_id: None,
+                            model_override: None,
                         };
 
                         task.delegate = Some(fallback.id);
@@ -148,6 +149,7 @@ pub fn brain_decision_system(
                         tools,
                         conversation: None,
                         work_item_id: None,
+                        model_override: None,
                     };
 
                     task.delegate = Some(selected_agent.id);

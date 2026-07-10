@@ -242,6 +242,7 @@ pub fn task_dispatch_system(
             tools,
             conversation: None,
             work_item_id: None,
+            model_override: None,
         };
 
         task.mark_waiting_for_agent(agent.id, clock.0);

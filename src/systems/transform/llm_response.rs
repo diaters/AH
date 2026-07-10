@@ -1030,6 +1030,7 @@ pub fn llm_response_system(
                                     tools: vec![],
                                     conversation: None,
                                     work_item_id: None,
+                                    model_override: None,
                                 },
                                 tool_name: call.name.clone(),
                                 tool_input,
@@ -1300,6 +1301,7 @@ pub fn tool_calling_orchestrator_system(
             tools: state.tools.clone(),
             conversation: Some(state.conversation.clone()),
             work_item_id: state.work_item_id,
+            model_override: None,
         };
 
         debug!(

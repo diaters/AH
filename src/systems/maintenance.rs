@@ -349,6 +349,7 @@ fn handle_spawn_request(
         tools: child_tools,
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     commands.spawn((

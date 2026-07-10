@@ -128,6 +128,7 @@ mod tests {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                model_override: None,
             },
         };
         let entity = world.spawn((msg, MessageDispatchedHookPending)).id();
@@ -158,6 +159,7 @@ mod tests {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                model_override: None,
             },
         };
         let entity = world.spawn((msg, MessageDispatchedHookPending)).id();
