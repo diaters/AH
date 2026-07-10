@@ -163,10 +163,7 @@ impl StatusPanel {
                 let (label_text, label_color) = Self::origin_label(&main_task.origin_channel);
                 lines.push(Line::from(vec![
                     Span::styled(format!("{icon} "), Style::default().fg(main_color)),
-                    Span::styled(
-                        format!("[{label_text}] "),
-                        Style::default().fg(label_color),
-                    ),
+                    Span::styled(format!("[{label_text}] "), Style::default().fg(label_color)),
                     Span::styled(
                         format!("{}{}", main_task.name, progress_text),
                         Style::default().fg(main_color).add_modifier(Modifier::BOLD),

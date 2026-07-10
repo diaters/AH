@@ -488,12 +488,12 @@ impl App {
                 origin_channel,
                 ..
             } => {
-                let completed_at = if matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed)
-                {
-                    Some(std::time::Instant::now())
-                } else {
-                    None
-                };
+                let completed_at =
+                    if matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed) {
+                        Some(std::time::Instant::now())
+                    } else {
+                        None
+                    };
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
                     task.status = status;
                     task.result = result;
@@ -536,7 +536,8 @@ impl App {
             .iter()
             .filter(|t| {
                 t.parent_id.is_none()
-                    && t.completed_at.map_or(false, |at| now.duration_since(at) > CLEANUP_DELAY)
+                    && t.completed_at
+                        .is_some_and(|at| now.duration_since(at) > CLEANUP_DELAY)
             })
             .map(|t| t.id)
             .collect();
@@ -548,7 +549,8 @@ impl App {
         // 移除过期主任务及其子任务
         self.tasks.retain(|t| {
             !expired_main_ids.contains(&t.id)
-                && !t.parent_id.map_or(false, |pid| expired_main_ids.contains(&pid))
+                && !t.parent_id
+                    .is_some_and(|pid| expired_main_ids.contains(&pid))
         });
     }
 

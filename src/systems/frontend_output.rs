@@ -918,9 +918,9 @@ mod tests {
         let origin = events
             .iter()
             .find_map(|e| match e {
-                EngineEvent::TaskStatusChanged {
-                    origin_channel, ..
-                } => Some(origin_channel.clone()),
+                EngineEvent::TaskStatusChanged { origin_channel, .. } => {
+                    Some(origin_channel.clone())
+                }
                 _ => None,
             })
             .expect("should emit TaskStatusChanged with origin_channel");

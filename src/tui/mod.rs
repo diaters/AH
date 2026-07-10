@@ -76,14 +76,14 @@ mod tests {
     use crossbeam_channel::unbounded;
     use uuid::Uuid;
 
-    use crate::domain::{Frontend, MessageRole, TaskStatusKind};
+    use crate::domain::{ChannelId, Frontend, MessageRole, TaskStatusKind};
 
     use super::*;
 
     #[test]
     fn tui_accepts_task_status_from_other_channels() {
         let (event_tx, event_rx) = unbounded();
-        let (action_tx, action_rx) = unbounded();
+        let (_action_tx, action_rx) = unbounded();
         let frontend = TuiFrontend::new(event_tx, action_rx);
 
         // QQ 通道的 TaskStatusChanged 事件
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn tui_still_filters_text_for_other_channels() {
         let (event_tx, event_rx) = unbounded();
-        let (action_tx, action_rx) = unbounded();
+        let (_action_tx, action_rx) = unbounded();
         let frontend = TuiFrontend::new(event_tx, action_rx);
 
         // QQ 通道的 Text 事件应被过滤
