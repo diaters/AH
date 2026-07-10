@@ -63,6 +63,7 @@ api_base = "https://openrouter.ai/api/v1"
 设计决策：
 
 - `api_key_env` 引用环境变量名，不硬编码密钥，与现有 `LlmProviderConfig::from_env` 模式一致
+- 启动时校验 `api_key_env` 指向的环境变量是否存在，缺失则报错退出
 - `api_base` 仅 `openai-compatible` 必填
 - `name` 是 agents.toml 引用 provider 的唯一标识
 - `default_fallback_cooldown_secs` 全局默认冷却期，可被 per-agent 覆盖
@@ -144,6 +145,7 @@ pub struct ModelChainState {
 - `AgentEntry`：新增 `models: Vec<ModelChainEntry>`，保留 `model: String` 做向后兼容解析
 - `AgentProfile`：移除 `model: String` 字段，模型信息改由 `ModelChainState` Component 承载
 - `AgentSummary`：`model: String` → `models: Vec<ModelChainEntry>`
+- 子 Agent 继承逻辑（`maintenance.rs`）：spawn 子 Agent 时，若请求未指定 model chain，则从父 Agent 的 `ModelChainState` 克隆整条链
 
 ## Executor Registry
 
