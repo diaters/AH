@@ -50,6 +50,7 @@ docs/wiki/
 logs/
 .harness/*
 !.harness/assets/
+!.harness/knowledge/
 
 skills-lock.json
 
