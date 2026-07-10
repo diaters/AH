@@ -180,7 +180,7 @@ mod tests {
                 task_id,
                 agent_id: uuid::Uuid::nil(),
                 request_kind: AgentRequestKind::ToolExecution {
-                    tool_name: "knowledge_search".to_string(),
+                    tool_name: "shell_exec".to_string(),
                 },
                 result: Ok(crate::domain::AgentExecutionOutput {
                     content: crate::domain::OutputContent::Text("result".to_string()),
@@ -192,7 +192,7 @@ mod tests {
                 reasoning_content: None,
                 work_item_id: None,
             },
-            tool_name: "knowledge_search".to_string(),
+            tool_name: "shell_exec".to_string(),
             tool_output: Ok(serde_json::json!({"count": 1})),
             tool_call_id: Some("call-1".to_string()),
             processed: false,

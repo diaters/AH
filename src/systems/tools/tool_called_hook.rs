@@ -205,7 +205,7 @@ mod tests {
                 task_id,
                 agent_id: uuid::Uuid::nil(),
                 request_kind: AgentRequestKind::ToolExecution {
-                    tool_name: "knowledge_search".to_string(),
+                    tool_name: "shell_exec".to_string(),
                 },
                 prompt: String::new(),
                 system_prompt: None,
@@ -213,7 +213,7 @@ mod tests {
                 conversation: None,
                 work_item_id: None,
             },
-            tool_name: "knowledge_search".to_string(),
+            tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({}),
             pending_confirmation_id: None,
             tool_call_id: None,
