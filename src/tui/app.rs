@@ -525,8 +525,36 @@ impl App {
         }
     }
 
+    /// 清理已超过 5 秒的终态任务及其子任务
+    pub fn cleanup_completed_tasks(&mut self) {
+        const CLEANUP_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+        let now = std::time::Instant::now();
+
+        // 找出需要清理的主任务 ID
+        let expired_main_ids: Vec<Uuid> = self
+            .tasks
+            .iter()
+            .filter(|t| {
+                t.parent_id.is_none()
+                    && t.completed_at.map_or(false, |at| now.duration_since(at) > CLEANUP_DELAY)
+            })
+            .map(|t| t.id)
+            .collect();
+
+        if expired_main_ids.is_empty() {
+            return;
+        }
+
+        // 移除过期主任务及其子任务
+        self.tasks.retain(|t| {
+            !expired_main_ids.contains(&t.id)
+                && !t.parent_id.map_or(false, |pid| expired_main_ids.contains(&pid))
+        });
+    }
+
     /// 渲染 TUI
     pub fn render(&mut self, frame: &mut Frame) {
+        self.cleanup_completed_tasks();
         let area = frame.area();
 
         let main_layout = Layout::default()
@@ -1027,5 +1055,96 @@ mod tests {
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].status, TaskStatusKind::Done);
+    }
+
+    #[test]
+    fn cleanup_removes_expired_completed_tasks() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+        let sub_id = Uuid::new_v4();
+
+        // 添加已完成的主任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "old done".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        // 添加已完成的子任务
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: sub_id,
+            name: "sub done".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: Some(main_id),
+            origin_channel: None,
+        });
+
+        // 手动将 completed_at 设为 6 秒前（超过 5 秒阈值）
+        let six_secs_ago = std::time::Instant::now() - std::time::Duration::from_secs(6);
+        for task in &mut app.tasks {
+            task.completed_at = Some(six_secs_ago);
+        }
+
+        app.cleanup_completed_tasks();
+        assert!(
+            app.tasks.is_empty(),
+            "expired completed tasks should be removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_recent_completed_tasks() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "fresh done".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+
+        // completed_at 刚设置，不会超过 5 秒
+        app.cleanup_completed_tasks();
+        assert_eq!(
+            app.tasks.len(),
+            1,
+            "recently completed tasks should be kept"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_active_tasks() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "running task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+
+        app.cleanup_completed_tasks();
+        assert_eq!(
+            app.tasks.len(),
+            1,
+            "active tasks should never be cleaned up"
+        );
     }
 }
