@@ -79,6 +79,13 @@ impl ExecutionError {
             Self::EmptyResponse => "empty response from model",
         }
     }
+
+    /// 判断错误是否应触发模型降级。
+    /// 仅 429（限流）和 402（配额耗尽）触发降级。
+    /// 401/403（认证/权限错误）不降级，因为同一环境下降级无效。
+    pub fn is_fallback_eligible(&self) -> bool {
+        matches!(self, Self::RateLimited { .. } | Self::QuotaExhausted(_))
+    }
 }
 
 /// Tool 执行错误
@@ -106,4 +113,33 @@ pub enum FailureReason {
     AgentError,
     UserCancelled,
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_fallback_eligible_for_429_and_402() {
+        let rate_limited = ExecutionError::RateLimited {
+            message: "too many requests".to_string(),
+            retry_after_secs: Some(60),
+        };
+        assert!(rate_limited.is_fallback_eligible());
+
+        let quota_exhausted = ExecutionError::QuotaExhausted("insufficient quota".to_string());
+        assert!(quota_exhausted.is_fallback_eligible());
+    }
+
+    #[test]
+    fn is_fallback_eligible_false_for_other_errors() {
+        let auth = ExecutionError::Authentication("invalid key".to_string());
+        assert!(!auth.is_fallback_eligible());
+
+        let timeout = ExecutionError::Timeout("timed out".to_string());
+        assert!(!timeout.is_fallback_eligible());
+
+        let transport = ExecutionError::Transport("network error".to_string());
+        assert!(!transport.is_fallback_eligible());
+    }
 }
