@@ -26,14 +26,6 @@ impl TuiFrontend {
             action_rx,
         }
     }
-
-    fn my_channels(&self) -> Vec<ChannelId> {
-        vec![ChannelId {
-            frontend: FrontendKind::Tui,
-            user_id: self.user_id.clone(),
-            thread_id: None,
-        }]
-    }
 }
 
 impl Frontend for TuiFrontend {
@@ -42,11 +34,14 @@ impl Frontend for TuiFrontend {
     }
 
     fn push_event(&self, event: EngineEvent) {
-        let my_channels = self.my_channels();
-        let for_me = match event.target() {
-            EventTarget::Broadcast => true,
-            EventTarget::Directed(targets) => targets.iter().any(|t| my_channels.contains(t)),
-        };
+        // TaskStatusChanged 始终接收（全局任务概览）
+        let for_me = matches!(event, EngineEvent::TaskStatusChanged { .. })
+            || match event.target() {
+                EventTarget::Broadcast => true,
+                EventTarget::Directed(targets) => targets
+                    .iter()
+                    .any(|t| t.frontend == FrontendKind::Tui && t.user_id == self.user_id),
+            };
         if for_me {
             debug!(
                 event = "TuiFrontendPushEvent",
@@ -73,5 +68,75 @@ impl Frontend for TuiFrontend {
             actions.push(action);
         }
         actions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossbeam_channel::unbounded;
+    use uuid::Uuid;
+
+    use crate::domain::{Frontend, MessageRole, TaskStatusKind};
+
+    use super::*;
+
+    #[test]
+    fn tui_accepts_task_status_from_other_channels() {
+        let (event_tx, event_rx) = unbounded();
+        let (action_tx, action_rx) = unbounded();
+        let frontend = TuiFrontend::new(event_tx, action_rx);
+
+        // QQ 通道的 TaskStatusChanged 事件
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq_user".to_string(),
+            thread_id: None,
+        };
+        frontend.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![qq_channel]),
+            task_id: Uuid::new_v4(),
+            name: "qq task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: Some(ChannelId {
+                frontend: FrontendKind::QQ,
+                user_id: "qq_user".to_string(),
+                thread_id: None,
+            }),
+        });
+
+        let received = event_rx.try_recv();
+        assert!(
+            received.is_ok(),
+            "TUI should accept TaskStatusChanged from QQ channel"
+        );
+    }
+
+    #[test]
+    fn tui_still_filters_text_for_other_channels() {
+        let (event_tx, event_rx) = unbounded();
+        let (action_tx, action_rx) = unbounded();
+        let frontend = TuiFrontend::new(event_tx, action_rx);
+
+        // QQ 通道的 Text 事件应被过滤
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq_user".to_string(),
+            thread_id: None,
+        };
+        frontend.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![qq_channel]),
+            role: MessageRole::Agent,
+            content: "hello".to_string(),
+            task_id: None,
+        });
+
+        let received = event_rx.try_recv();
+        assert!(
+            received.is_err(),
+            "TUI should filter Text events for other channels"
+        );
     }
 }
