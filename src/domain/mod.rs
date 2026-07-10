@@ -14,6 +14,7 @@ mod execution;
 mod frontend;
 mod memory;
 mod message;
+mod model_chain;
 mod session;
 mod signal_trigger;
 mod space;
@@ -108,6 +109,9 @@ pub use message::{
     ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage, UserOutputMessage,
     WaitingReason,
 };
+
+// model_chain
+pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, ProvidersConfig};
 
 // signal_trigger
 pub use signal_trigger::{EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger};
