@@ -42,7 +42,7 @@ impl AgentExecutor for ToolCallingMockExecutor {
                 content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
                     id: "call_test123".to_string(),
                     name: "shell_exec".to_string(),
-                    arguments: r#"{"query":"hello"}"#.to_string(),
+                    arguments: r#"{"command":"echo hello"}"#.to_string(),
                 }]),
                 reasoning_content: None,
             }
@@ -71,7 +71,7 @@ impl AgentExecutor for InfiniteToolCallExecutor {
                 content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
                     id: call_id,
                     name: "shell_exec".to_string(),
-                    arguments: r#"{"query":"loop"}"#.to_string(),
+                    arguments: r#"{"command":"echo loop"}"#.to_string(),
                 }]),
                 reasoning_content: None,
             })
@@ -116,7 +116,7 @@ impl AgentExecutor for BudgetAwareMockExecutor {
                     content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
                         id: call_id,
                         name: "shell_exec".to_string(),
-                        arguments: r#"{"query":"loop"}"#.to_string(),
+                        arguments: r#"{"command":"echo loop"}"#.to_string(),
                     }]),
                     reasoning_content: None,
                 })

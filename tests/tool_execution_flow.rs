@@ -435,7 +435,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
         tool_name: "shell_exec".to_string(),
-        tool_input: serde_json::json!({"query": "hello"}),
+        tool_input: serde_json::json!({"command": "echo hello"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -646,7 +646,7 @@ fn user_allows_tool_once() {
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
         tool_name: "shell_exec".to_string(),
-        tool_input: serde_json::json!({"query": "test"}),
+        tool_input: serde_json::json!({"command": "echo test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -831,7 +831,7 @@ fn child_agent_confirm_routes_to_parent() {
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
         tool_name: "shell_exec".to_string(),
-        tool_input: serde_json::json!({"query": "test"}),
+        tool_input: serde_json::json!({"command": "echo test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -974,7 +974,7 @@ fn confirmation_denied_rejects_tool() {
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
         tool_name: "shell_exec".to_string(),
-        tool_input: serde_json::json!({"query": "test"}),
+        tool_input: serde_json::json!({"command": "echo test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -1085,7 +1085,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
         tool_name: "shell_exec".to_string(),
-        tool_input: serde_json::json!({"query": "test"}),
+        tool_input: serde_json::json!({"command": "echo test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
@@ -1166,7 +1166,7 @@ fn user_allows_tool_always() {
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
         tool_name: "shell_exec".to_string(),
-        tool_input: serde_json::json!({"query": "test"}),
+        tool_input: serde_json::json!({"command": "echo test"}),
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,

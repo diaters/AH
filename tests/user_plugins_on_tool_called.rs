@@ -207,7 +207,7 @@ tool_deny("blocked by test");
                         work_item_id: None,
                     },
                     tool_name: "shell_exec".to_string(),
-                    tool_input: serde_json::json!({"query":"x"}),
+                    tool_input: serde_json::json!({"command": "echo x"}),
                     pending_confirmation_id: None,
                     tool_call_id: Some("deny-call-id".to_string()),
                     pending_confirmation_options: None,
