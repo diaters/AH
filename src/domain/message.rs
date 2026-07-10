@@ -4,6 +4,7 @@
 
 use crate::prelude::{Component, Entity};
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use uuid::Uuid;
 
 use super::{
@@ -520,7 +521,7 @@ pub struct ReloadPluginsMessage;
 #[derive(Debug, Clone, Component)]
 pub struct ReloadTriggersMessage;
 
-/// 待发送的通道消息，由 channel_send_dispatch_system 消费。
+/// 待发送的通道消息,由 channel_send_dispatch_system 消费。
 #[derive(Debug, Clone, Component)]
 pub struct PendingChannelSend {
     pub channel: String,
@@ -532,6 +533,16 @@ pub struct PendingChannelSend {
     pub task_id: TaskId,
     pub agent_id: AgentId,
     pub request_entity: Entity,
+}
+
+/// ModelChainState 状态更新消息（从 async 任务回写）
+#[derive(Debug, Clone, Component)]
+pub struct ModelChainStateUpdate {
+    pub agent_id: AgentId,
+    pub new_active_index: usize,
+    pub cooldown_until: Option<Instant>,
+    pub previous_model: String,
+    pub new_model: String,
 }
 
 #[cfg(test)]
