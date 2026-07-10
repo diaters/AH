@@ -14,7 +14,7 @@ use crate::{
         RetryReadyMessage, SharedKnowledgeBase, Signal, Task, TaskTerminatedMessage,
         ToolCallingState, UserInputMessage, UserOutputMessage,
     },
-    llm::LlmProviderConfig,
+    llm::{ExecutorRegistry, LlmProviderConfig},
     plugins::DefaultRuntimePluginGroup,
     systems::{HarnessSet, agent_factory_system, load_agents_system},
 };
@@ -52,6 +52,8 @@ pub struct HarnessConfig {
     pub channels_config_path: Option<String>,
     /// 触发器配置文件路径（用于 webhook/timer 事件路由）
     pub triggers_config_path: Option<String>,
+    /// providers 配置文件路径（用于多 provider 注册）
+    pub providers_config_path: String,
 }
 
 impl HarnessConfig {
@@ -136,6 +138,8 @@ impl HarnessConfig {
             },
             channels_config_path: std::env::var("HARNESS_CHANNELS_CONFIG").ok(),
             triggers_config_path: std::env::var("HARNESS_TRIGGERS_CONFIG").ok(),
+            providers_config_path: std::env::var("HARNESS_PROVIDERS_CONFIG")
+                .unwrap_or_else(|_| "providers.toml".to_string()),
         })
     }
 }
@@ -164,6 +168,7 @@ impl Default for HarnessConfig {
             channels: crate::channels::config::ChannelConfigs::default(),
             channels_config_path: None,
             triggers_config_path: None,
+            providers_config_path: "providers.toml".to_string(),
         }
     }
 }
@@ -240,7 +245,7 @@ impl Default for MemoryConfig {
 pub fn build_harness_app(
     config: HarnessConfig,
     runtime: Arc<Runtime>,
-    executor: Arc<dyn AgentExecutor>,
+    executor_registry: ExecutorRegistry,
     input_rx: Receiver<crate::domain::ExternalInput>,
     frontends: Vec<Box<dyn Frontend>>,
     channel_manager: crate::channels::ChannelManager,
@@ -248,11 +253,19 @@ pub fn build_harness_app(
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
 
+    // 创建一个默认的 executor 用于 ExecutorHandle（向后兼容）
+    // 注意：在 Task 11 中，当执行系统改造完成后，ExecutorHandle 将被移除
+    let default_executor = executor_registry
+        .get("default")
+        .or_else(|| executor_registry.executors.values().next().cloned())
+        .expect("ExecutorRegistry should have at least one executor");
+
     // 基础 Resource
     app.insert_resource(InputReceiver(input_rx));
     app.insert_resource(FrontendRegistry { frontends });
     app.insert_resource(AsyncRuntime(runtime));
-    app.insert_resource(ExecutorHandle(executor));
+    app.insert_resource(executor_registry);
+    app.insert_resource(ExecutorHandle(default_executor)); // 临时保留用于向后兼容
     app.insert_resource(ExecutionResultSender(result_tx));
     app.insert_resource(ExecutionResultReceiver(result_rx));
     app.insert_resource(HarnessSettings(config));

@@ -12,6 +12,7 @@ use harness::domain::{
 };
 use harness::{
     AgentExecutionRequest, AgentExecutor, ExecutorFuture, HarnessConfig, build_harness_app,
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -48,12 +49,13 @@ fn disabled_approval_channel_marks_event_task_failed() {
     let (_input_tx, input_rx) = unbounded();
     let runtime = Arc::new(Runtime::new().expect("runtime"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = harness::channels::ChannelManager::empty();
 
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(MockTelegramFrontend {
             events: events.clone(),

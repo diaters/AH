@@ -16,7 +16,7 @@ use tokio::runtime::Runtime;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     FrontendKind, HarnessConfig, ToolCalledHookPending, ToolExecutionResultMessage,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -66,7 +66,9 @@ script = "hooks/hook.rhai"
 /// `ToolExecutionRequestMessage`，便于在不需要走 LLM 的前提下测试
 /// companion 系统的 hook 派发路径。
 fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::TaskId) {
-    use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+    use harness::{
+        AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage, llm::ExecutorRegistry,
+    };
 
     world.spawn((
         ToolExecutionRequestMessage {
@@ -81,6 +83,7 @@ fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::Task
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                model_override: None,
             },
             tool_name: tool_name.to_string(),
             tool_input: serde_json::json!({}),
@@ -96,11 +99,12 @@ fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::Task
 fn build_app(_dir: &tempfile::TempDir) -> App {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -181,7 +185,10 @@ tool_deny("blocked by test");
     let mut app = build_app(&dir);
 
     let request_entity = {
-        use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+        use harness::{
+            AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage,
+            llm::ExecutorRegistry,
+        };
         let task_id = {
             use harness::Task;
             let channel = default_channel();
@@ -205,6 +212,7 @@ tool_deny("blocked by test");
                         tools: vec![],
                         conversation: None,
                         work_item_id: None,
+                        model_override: None,
                     },
                     tool_name: "shell_exec".to_string(),
                     tool_input: serde_json::json!({"command": "echo x"}),

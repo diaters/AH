@@ -3,7 +3,7 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, Task, build_harness_app,
+    ExternalInput, FrontendKind, HarnessConfig, Task, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -43,6 +43,7 @@ fn test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
+        providers_config_path: "providers.toml".to_string(),
     }
 }
 
@@ -51,11 +52,12 @@ fn test_config() -> HarnessConfig {
 fn tui_input_preserves_origin_channel() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -95,11 +97,12 @@ fn tui_input_preserves_origin_channel() {
 fn telegram_input_preserves_origin_channel() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

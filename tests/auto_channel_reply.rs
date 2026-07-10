@@ -5,6 +5,7 @@ use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     ExternalInput, FrontendKind, HarnessConfig, OutputContent, build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use wiremock::matchers::{body_string_contains, method, path};
@@ -67,11 +68,12 @@ fn auto_channel_reply() {
 
         let config = HarnessConfig::default();
         let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+        let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
 
         let mut app = build_harness_app(
             config,
             rt.clone(),
-            executor,
+            executor_registry,
             input_rx,
             channel_frontends,
             channel_manager,
@@ -139,11 +141,12 @@ fn multi_task_channel_reply_has_different_short_ids() {
 
         let config = HarnessConfig::default();
         let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+        let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
 
         let mut app = build_harness_app(
             config,
             rt.clone(),
-            executor,
+            executor_registry,
             input_rx,
             channel_frontends,
             channel_manager,

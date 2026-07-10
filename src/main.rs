@@ -8,7 +8,7 @@ use harness::{
     EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState,
     UserAction, app_is_idle, build_harness_app,
     channels::{Channel, ChannelManager, QqChannel, TelegramChannel},
-    create_executor_from_config,
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
@@ -97,7 +97,25 @@ fn main() -> Result<()> {
 
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);
     let config = HarnessConfig::from_env()?;
-    let executor = create_executor_from_config(&config.llm)?;
+
+    // 加载 providers.toml 或从环境变量构建
+    let executor_registry = if std::path::Path::new(&config.providers_config_path).exists() {
+        let providers_toml = std::fs::read_to_string(&config.providers_config_path)
+            .with_context(|| format!("failed to read {}", config.providers_config_path))?;
+        let providers_config: harness::domain::ProvidersConfig =
+            toml::from_str(&providers_toml).with_context(|| "failed to parse providers.toml")?;
+
+        info!(
+            path = %config.providers_config_path,
+            provider_count = providers_config.provider.len(),
+            "providers config loaded"
+        );
+
+        ExecutorRegistry::from_config(&providers_config)?
+    } else {
+        info!("providers.toml not found, using global env config as single provider");
+        ExecutorRegistry::from_env()?
+    };
 
     // 创建 Frontend channel
     let (event_tx, event_rx) = unbounded::<EngineEvent>();
@@ -151,7 +169,7 @@ fn main() -> Result<()> {
     let mut app = build_harness_app(
         config,
         runtime.clone(),
-        executor,
+        executor_registry,
         input_rx,
         frontends,
         channel_manager,

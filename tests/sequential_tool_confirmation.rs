@@ -13,7 +13,7 @@ use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ApprovalOption,
     ChannelId, EngineEvent, EventTarget, ExecutorFuture, ExternalInput, Frontend, FrontendKind,
     HarnessConfig, LlmToolCall, OutputContent, ToolConfirmationResponseMessage,
-    ToolExecutionResultMessage, build_harness_app,
+    ToolExecutionResultMessage, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -138,6 +138,7 @@ fn build_test_app() -> App {
     let (input_tx, input_rx) = crossbeam_channel::unbounded();
     let runtime = test_runtime();
     let executor = Arc::new(CannedExecutor::new(Vec::new()));
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let events = Arc::new(Mutex::new(Vec::new()));
 
     let frontend: Box<dyn Frontend> = Box::new(CapturingFrontend {
@@ -147,7 +148,7 @@ fn build_test_app() -> App {
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor.clone(),
+        executor_registry,
         input_rx,
         vec![frontend],
         harness::channels::ChannelManager::empty().0,

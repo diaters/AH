@@ -536,6 +536,7 @@ pub struct PendingChannelSend {
 }
 
 /// ModelChainState 状态更新消息（从 async 任务回写）
+#[allow(dead_code)]
 #[derive(Debug, Clone, Component)]
 pub struct ModelChainStateUpdate {
     pub agent_id: AgentId,

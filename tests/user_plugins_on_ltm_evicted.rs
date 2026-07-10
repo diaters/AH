@@ -13,7 +13,7 @@ use tokio::runtime::Runtime;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ExecutorFuture, HarnessConfig,
-    LtmEvictedHookPending, build_harness_app,
+    LtmEvictedHookPending, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn make_agent() -> Agent {
@@ -86,11 +86,12 @@ fn on_ltm_evicted_removes_marker() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

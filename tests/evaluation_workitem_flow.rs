@@ -7,7 +7,7 @@ use harness::{
     AgentExecutor, AgentRequestKind, ChannelId, EngineEvent, EntryMetadata, EntryRole,
     ExecutorFuture, FailureReason, Frontend, FrontendKind, HarnessConfig, OffTrackPolicy,
     ShortTermMemory, Task, TaskStatus, UserAction, WaitingReason, WorkItem, WorkItemType,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -80,11 +80,12 @@ impl Frontend for MockFrontend {
 fn turn_limit_creates_evaluation_workitem() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -196,11 +197,12 @@ fn setup_eval_test_app(
 ) -> (App, uuid::Uuid) {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -257,6 +259,7 @@ fn setup_manual_eval_scenario(
 ) -> (App, uuid::Uuid, uuid::Uuid, MockFrontend) {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     // 使用不存在的 agents 配置，避免加载默认 agent 干扰测试
     let mut cfg = test_config();
@@ -265,7 +268,7 @@ fn setup_manual_eval_scenario(
     let mut app = build_harness_app(
         cfg,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(mock_frontend.clone())],
         harness::channels::ChannelManager::empty().0,

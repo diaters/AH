@@ -7,7 +7,7 @@ use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, ExecutorFuture,
     FrontendKind, HarnessConfig, SessionBackend, ShortTermMemory, Task,
-    ToolExecutionRequestMessage, build_harness_app,
+    ToolExecutionRequestMessage, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -65,11 +65,12 @@ fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
 fn shell_registry_only_exposes_six_simplified_tools() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -107,11 +108,12 @@ fn shell_registry_only_exposes_six_simplified_tools() {
 fn shell_read_returns_status_and_latest_snapshot() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -140,6 +142,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "printf 'hello\\n'; sleep 1" }),
@@ -172,6 +175,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id, "tail_lines": 20 }),
@@ -197,11 +201,12 @@ fn shell_read_returns_status_and_latest_snapshot() {
 fn shell_list_returns_only_active_sessions() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -230,6 +235,7 @@ fn shell_list_returns_only_active_sessions() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),
@@ -251,6 +257,7 @@ fn shell_list_returns_only_active_sessions() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_list".to_string(),
         tool_input: serde_json::json!({}),
@@ -277,11 +284,12 @@ fn shell_list_returns_only_active_sessions() {
 fn shell_exec_returns_result_message() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -310,6 +318,7 @@ fn shell_exec_returns_result_message() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -352,11 +361,12 @@ fn shell_exec_returns_result_message() {
 fn shell_exec_passes_env_to_child_process() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -386,6 +396,7 @@ fn shell_exec_passes_env_to_child_process() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({
@@ -418,11 +429,12 @@ fn shell_exec_passes_env_to_child_process() {
 fn shell_start_returns_running_handle() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -451,6 +463,7 @@ fn shell_start_returns_running_handle() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -486,11 +499,12 @@ fn shell_start_returns_running_handle() {
 fn shell_start_passes_env_to_child_process() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -520,6 +534,7 @@ fn shell_start_passes_env_to_child_process() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
@@ -562,6 +577,7 @@ fn shell_start_passes_env_to_child_process() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({
@@ -595,11 +611,12 @@ fn shell_start_passes_env_to_child_process() {
 fn shell_exec_with_exit_code_error() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -628,6 +645,7 @@ fn shell_exec_with_exit_code_error() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -666,11 +684,12 @@ fn shell_exec_with_exit_code_error() {
 fn shell_stop_transitions_a_running_session_to_stopped() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -699,6 +718,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -736,6 +756,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -803,11 +824,12 @@ fn shell_input_returns_backend_backed_status() {
 fn shell_input_returns_error_when_stdin_is_unavailable() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -836,6 +858,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
@@ -871,6 +894,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({
@@ -940,11 +964,12 @@ fn shell_read_backend_returns_latest_snapshot() {
 fn shell_exec_and_shell_start_share_core_result_fields() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -973,6 +998,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1014,11 +1040,12 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
 fn shell_exec_timeout_returns_stopped_and_timed_out() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1047,6 +1074,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1078,11 +1106,12 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
 fn shell_read_returns_output_text() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1111,6 +1140,7 @@ fn shell_read_returns_output_text() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1152,6 +1182,7 @@ fn shell_read_returns_output_text() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1182,11 +1213,12 @@ fn shell_read_returns_output_text() {
 fn shell_exec_times_out_returns_stopped_with_tail_output() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1215,6 +1247,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1265,11 +1298,12 @@ fn shell_exec_uses_default_timeout_when_omitted() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         config,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1298,6 +1332,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 2" }),
@@ -1390,11 +1425,12 @@ fn shell_input_and_stop_follow_simplified_contract() {
 fn shell_list_only_returns_sessions_for_current_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1426,6 +1462,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1457,6 +1494,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_list".to_string(),
         tool_input: serde_json::json!({}),
@@ -1488,11 +1526,12 @@ fn shell_list_only_returns_sessions_for_current_task() {
 fn shell_list_only_returns_active_sessions_after_task_cleanup() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1526,6 +1565,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                model_override: None,
             },
             tool_name: "shell_start".to_string(),
             tool_input: serde_json::json!({ "command": command }),
@@ -1617,11 +1657,12 @@ fn backend_session_handle_uses_snapshot_output_shape() {
 fn shell_read_rejects_session_owned_by_another_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1653,6 +1694,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1700,6 +1742,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id }),
@@ -1736,11 +1779,12 @@ fn shell_read_rejects_session_owned_by_another_task() {
 fn shell_input_rejects_session_owned_by_another_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1772,6 +1816,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "cat" }),
@@ -1819,6 +1864,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id, "input": "hello" }),
@@ -1854,11 +1900,12 @@ fn shell_input_rejects_session_owned_by_another_task() {
 fn shell_stop_rejects_session_owned_by_another_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1890,6 +1937,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1937,6 +1985,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_stop".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id }),
@@ -1972,11 +2021,12 @@ fn shell_stop_rejects_session_owned_by_another_task() {
 fn task_termination_stops_owned_shell_sessions() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -2008,6 +2058,7 @@ fn task_termination_stops_owned_shell_sessions() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),
@@ -2049,11 +2100,12 @@ fn task_termination_stops_owned_shell_sessions() {
 fn failed_task_also_stops_owned_shell_sessions() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -2085,6 +2137,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),

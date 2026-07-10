@@ -9,7 +9,7 @@ use tracing::{debug, info};
 /// 全局 executor 注册表，按 provider name 索引
 #[derive(Resource)]
 pub struct ExecutorRegistry {
-    executors: HashMap<String, Arc<dyn crate::domain::AgentExecutor>>,
+    pub(crate) executors: HashMap<String, Arc<dyn crate::domain::AgentExecutor>>,
     default_fallback_cooldown_secs: u64,
 }
 
@@ -26,10 +26,14 @@ impl ExecutorRegistry {
                 api_base: entry.api_base.clone(),
             };
 
-            let executor = GenaiExecutor::new(&llm_config)
-                .with_context(|| format!("failed to create executor for provider '{}'", entry.name))?;
+            let executor = GenaiExecutor::new(&llm_config).with_context(|| {
+                format!("failed to create executor for provider '{}'", entry.name)
+            })?;
 
-            executors.insert(entry.name.clone(), Arc::new(executor) as Arc<dyn crate::domain::AgentExecutor>);
+            executors.insert(
+                entry.name.clone(),
+                Arc::new(executor) as Arc<dyn crate::domain::AgentExecutor>,
+            );
 
             debug!(
                 provider = %entry.name,
@@ -60,11 +64,14 @@ impl ExecutorRegistry {
         let config = crate::llm::LlmProviderConfig::from_env("gpt-4.1-mini")?;
         let executor = GenaiExecutor::new(&config)?;
 
-        let provider_name = std::env::var("HARNESS_LLM_PROVIDER")
-            .unwrap_or_else(|_| "default".to_string());
+        let provider_name =
+            std::env::var("HARNESS_LLM_PROVIDER").unwrap_or_else(|_| "default".to_string());
 
         let mut executors = HashMap::new();
-        executors.insert(provider_name.clone(), Arc::new(executor) as Arc<dyn crate::domain::AgentExecutor>);
+        executors.insert(
+            provider_name.clone(),
+            Arc::new(executor) as Arc<dyn crate::domain::AgentExecutor>,
+        );
 
         info!(
             provider = %provider_name,
@@ -80,5 +87,19 @@ impl ExecutorRegistry {
     /// 全局默认冷却期
     pub fn default_cooldown_secs(&self) -> u64 {
         self.default_fallback_cooldown_secs
+    }
+
+    /// Create a single-provider registry from an existing executor
+    pub fn from_single_executor(
+        executor: Arc<dyn crate::domain::AgentExecutor>,
+        provider_name: &str,
+    ) -> Self {
+        let mut executors = HashMap::new();
+        executors.insert(provider_name.to_string(), executor);
+
+        Self {
+            executors,
+            default_fallback_cooldown_secs: 60,
+        }
     }
 }

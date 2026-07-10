@@ -19,7 +19,7 @@ use harness::{
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
-use harness::{AgentExecutor, ExecutorFuture, build_harness_app};
+use harness::{AgentExecutor, ExecutorFuture, build_harness_app, llm::ExecutorRegistry};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -295,11 +295,12 @@ fn test_config() -> HarnessConfig {
 fn experience_governance_confirmation_skips_tool_execution() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -334,6 +335,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "experience_governance".to_string(),
         tool_input: serde_json::json!({}),
@@ -380,11 +382,12 @@ fn experience_governance_confirmation_skips_tool_execution() {
 fn approved_candidate_spawns_writeback_request() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -468,6 +471,7 @@ fn approved_candidate_spawns_writeback_request() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "experience_governance".to_string(),
         tool_input: serde_json::json!({}),
@@ -503,6 +507,7 @@ fn approved_candidate_spawns_writeback_request() {
 fn approval_to_writeback_completes_in_same_frame() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let agents_dir = tempfile::TempDir::new().unwrap();
     let mut cfg = test_config();
@@ -515,7 +520,7 @@ fn approval_to_writeback_completes_in_same_frame() {
     let mut app = build_harness_app(
         cfg,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -589,6 +594,7 @@ fn approval_to_writeback_completes_in_same_frame() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "experience_governance".to_string(),
         tool_input: serde_json::json!({}),
@@ -622,6 +628,7 @@ fn approval_to_writeback_completes_in_same_frame() {
 fn multiple_candidates_same_proposal_deduplicate_writeback() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let agents_dir = tempfile::TempDir::new().unwrap();
     let mut cfg = test_config();
@@ -634,7 +641,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
     let mut app = build_harness_app(
         cfg,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -708,6 +715,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                model_override: None,
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({}),
@@ -755,6 +763,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
 fn aggregated_child_candidates_writeback_idempotently() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let agents_dir = tempfile::TempDir::new().unwrap();
     let mut cfg = test_config();
@@ -767,7 +776,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
     let mut app = build_harness_app(
         cfg,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -883,6 +892,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                model_override: None,
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({}),

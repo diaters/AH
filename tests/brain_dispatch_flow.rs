@@ -4,6 +4,7 @@ use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, BrainConfig, ChannelId,
     ExecutorFuture, FrontendKind, HarnessConfig, Task, TaskStatus, build_harness_app,
+    llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -86,6 +87,7 @@ fn brain_test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
+        providers_config_path: "providers.toml".to_string(),
     }
 }
 
@@ -94,11 +96,12 @@ fn brain_test_config() -> HarnessConfig {
 fn completes_brain_dispatch_flow() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         brain_test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -132,6 +135,7 @@ fn completes_brain_dispatch_flow() {
 fn mvp_flow_unchanged_when_brain_disabled() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
 
     let mut no_brain_config = brain_test_config();
@@ -139,7 +143,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     let mut app = build_harness_app(
         no_brain_config,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

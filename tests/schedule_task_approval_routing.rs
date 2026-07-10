@@ -13,7 +13,7 @@ use harness::triggers::{ScheduledTaskInfo, ScheduledTaskRegistry};
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
     EngineEvent, EventTarget, ExecutorFuture, Frontend, FrontendKind, HarnessConfig, LlmToolCall,
-    OutputContent, Task, TaskStatus, TaskTrigger, build_harness_app,
+    OutputContent, Task, TaskStatus, TaskTrigger, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -102,12 +102,13 @@ fn scheduled_task_approval_request_routes_to_output_channel() {
         Arc::new(CannedExecutor::new(vec![tool_calls_output(vec![
             shell_exec_call("call_1", "echo scheduled"),
         ])]));
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = harness::channels::ChannelManager::empty();
 
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(CapturingQQFrontend {
             events: events.clone(),
