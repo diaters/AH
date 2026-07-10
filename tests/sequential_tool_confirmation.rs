@@ -235,9 +235,7 @@ fn collect_qq_approval_requests(app: &mut App) -> Vec<CapturedApprovalRequest> {
         .iter()
         .filter_map(|event| match event {
             EngineEvent::ApprovalRequest {
-                target,
-                options,
-                ..
+                target, options, ..
             } => {
                 if let EventTarget::Directed(channels) = target {
                     channels
