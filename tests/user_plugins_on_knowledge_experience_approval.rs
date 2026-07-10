@@ -146,7 +146,7 @@ fn on_experience_hook_drains_pending_queue() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -224,7 +224,7 @@ fn on_approval_requested_removes_marker() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -305,7 +305,7 @@ log_info("on_approval_resolved: task count = " + ids.len());
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");

@@ -105,7 +105,7 @@ fn loads_persistent_agents_from_config() {
 fn selects_agent_by_tags_match() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -149,7 +149,7 @@ fn selects_agent_by_tags_match() {
 fn task_scoped_agent_lifecycle() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");

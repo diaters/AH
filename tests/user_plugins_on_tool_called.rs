@@ -66,9 +66,7 @@ script = "hooks/hook.rhai"
 /// `ToolExecutionRequestMessage`，便于在不需要走 LLM 的前提下测试
 /// companion 系统的 hook 派发路径。
 fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::TaskId) {
-    use harness::{
-        AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage, llm::ExecutorRegistry,
-    };
+    use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
 
     world.spawn((
         ToolExecutionRequestMessage {
@@ -185,10 +183,7 @@ tool_deny("blocked by test");
     let mut app = build_app(&dir);
 
     let request_entity = {
-        use harness::{
-            AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage,
-            llm::ExecutorRegistry,
-        };
+        use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
         let task_id = {
             use harness::Task;
             let channel = default_channel();

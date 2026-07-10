@@ -157,10 +157,7 @@ tool_deny("test deny reason");
 
     // spawn 一个带 ToolCalledHookPending 的请求
     let request_entity = {
-        use harness::{
-            AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage,
-            llm::ExecutorRegistry,
-        };
+        use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
         let task_id = {
             let channel = default_channel();
             let task = Task::from_user_input("deny-test-task", 0, channel);

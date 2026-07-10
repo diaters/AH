@@ -91,7 +91,7 @@ fn task_completion_triggers_summarization() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
-    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -170,7 +170,7 @@ fn task_completion_triggers_summarization() {
 fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
-    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let summarization_called = executor.summarization_called.clone();
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
@@ -305,7 +305,7 @@ fn summarization_preserves_terminal_task_status() {
 fn execution_populates_memory_and_triggers_summarization() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
-    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let summarization_called = executor.summarization_called.clone();
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();

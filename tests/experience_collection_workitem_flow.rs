@@ -172,7 +172,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
 
 #[test]
 fn experience_collection_context_excludes_original_system_prompt() {
-    use harness::{EntryMetadata, EntryRole, ShortTermMemory, llm::ExecutorRegistry};
+    use harness::{EntryMetadata, EntryRole, ShortTermMemory};
 
     let task = Task::from_user_input_ready("test task", 3, default_channel());
     let mut stm = ShortTermMemory::default();
@@ -262,7 +262,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
 
 #[test]
 fn child_task_experience_still_aggregates_into_parent_inbox() {
-    use harness::{ExperienceStore, TaskId, llm::ExecutorRegistry};
+    use harness::{ExperienceStore, TaskId};
 
     let mut store = ExperienceStore::default();
     let parent_task_id: TaskId = uuid::Uuid::new_v4();
