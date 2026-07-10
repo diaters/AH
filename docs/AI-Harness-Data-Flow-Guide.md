@@ -55,7 +55,7 @@ graph LR
 |---------|---------|-----------|---------|
 | __Task__ | `user_message_to_task_system` | 用户意图的载体，贯穿全流程的主实体 | 创建 → 状态流转 → Done/Failed |
 | __ShortTermMemory__ | 随 Task 同时创建 | 记录 Task 的对话历史（User/LLM/Tool 条目） | 随 Task 同生同灭 |
-| __Agent__ | `load_agents_system` / `agent_factory_system` | LLM 执行载体（Persistent/TaskScoped） | Persistent 永久；TaskScoped 随 Task 销毁 |
+| __Agent__ | `load_agents_system` / `agent_factory_system` | LLM 执行能力的载体 | Persistent 永久；TaskScoped 随 Task 销毁 |
 | __LongTermMemory__ | `init_agent_memory_system` | Agent 的跨任务知识沉淀，含衰退淘汰机制 | 随 Agent 持久化 |
 | __ToolCallingState__ | `llm_response_system` | 跟踪 LLM 一次返回的多条 Tool 调用进度 | 跨帧存活，结果到齐后 despawn |
 | __WorkItem__ | 治理触发 System | 摘要/评估/经验收集等内部治理工作的统一执行单元 | 创建 → 分发 → 执行 → 写回 |
