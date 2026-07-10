@@ -21,9 +21,16 @@ pub(crate) fn load_agents_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
     agents: Query<(Entity, &Agent)>,
-    registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
+    registry: Res<crate::llm::ExecutorRegistry>,
+    plugin_registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
 ) {
-    load_persistent_agents(&mut commands, &settings, &agents, registry.as_deref());
+    load_persistent_agents(
+        &mut commands,
+        &settings,
+        &agents,
+        &registry,
+        plugin_registry.as_deref(),
+    );
 }
 
 /// 运行时系统：处理 Agent 创建和销毁
@@ -59,6 +66,7 @@ fn load_persistent_agents(
     commands: &mut Commands,
     settings: &HarnessSettings,
     agents: &Query<(Entity, &Agent)>,
+    registry: &crate::llm::ExecutorRegistry,
     plugin_registry: Option<&crate::user_plugins::registry::PluginRegistry>,
 ) {
     let config_path = &settings.0.agents_config_path;
@@ -127,7 +135,7 @@ fn load_persistent_agents(
 
     // 从配置文件加载
     for entry in &config.agent {
-        spawn_persistent_agent_from_entry(commands, entry);
+        spawn_persistent_agent_from_entry(commands, entry, registry);
     }
 
     // 合并插件贡献的 Agent
@@ -137,7 +145,7 @@ fn load_persistent_agents(
             agent_name = %entry.name,
             "spawning plugin-contributed persistent agent"
         );
-        spawn_persistent_agent_from_entry(commands, entry);
+        spawn_persistent_agent_from_entry(commands, entry, registry);
     }
 
     if !plugin_agent_entries.is_empty() {
@@ -150,25 +158,49 @@ fn load_persistent_agents(
 }
 
 /// 从配置条目生成持久化 Agent
-fn spawn_persistent_agent_from_entry(commands: &mut Commands, entry: &crate::domain::AgentEntry) {
+fn spawn_persistent_agent_from_entry(
+    commands: &mut Commands,
+    entry: &crate::domain::AgentEntry,
+    registry: &crate::llm::ExecutorRegistry,
+) {
     let id = Uuid::new_v4();
 
-    // 向后兼容：优先使用 model 字段，若为 None 则从 models[0] 提取
-    // 后续 Task 11 会实现完整的模型链解析逻辑
-    let model_str = entry.model.clone().unwrap_or_else(|| {
-        entry
-            .models
-            .first()
-            .map(|m| format!("{}:{}", m.provider, m.model))
-            .unwrap_or_else(|| "unknown".to_string())
-    });
+    // 确定模型链
+    let models = if !entry.models.is_empty() {
+        entry.models.clone()
+    } else if let Some(model) = &entry.model {
+        // 向后兼容：从单 model 字段生成单元素链
+        // 使用默认 provider（第一个注册的）
+        let default_provider = registry
+            .executors
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+
+        vec![crate::domain::ModelChainEntry {
+            provider: default_provider,
+            model: model.clone(),
+            fallback_cooldown_secs: None,
+        }]
+    } else {
+        vec![]
+    };
+
+    let (profile_model, model_chain_state) = if !models.is_empty() {
+        let first_model = models[0].model.clone();
+        let state = crate::domain::ModelChainState::new(models, registry.default_cooldown_secs());
+        (first_model, Some(state))
+    } else {
+        ("gpt-4.1-mini".to_string(), None) // fallback
+    };
 
     debug!(
         event = "PersistentAgentSpawned",
         agent_id = %id,
         agent_name = %entry.name,
-        agent_model = %model_str,
-        agent_tags = ?entry.tags,
+        agent_model = %profile_model,
+        has_model_chain = model_chain_state.is_some(),
         "spawning persistent agent"
     );
 
@@ -178,11 +210,11 @@ fn spawn_persistent_agent_from_entry(commands: &mut Commands, entry: &crate::dom
         .map(AgentToolPermissions::from)
         .unwrap_or_default();
 
-    commands.spawn(Agent {
+    let mut entity_commands = commands.spawn(Agent {
         id,
         profile: AgentProfile {
             name: entry.name.clone(),
-            model: model_str,
+            model: profile_model,
         },
         capabilities: AgentCapabilities {
             tags: entry.tags.clone(),
@@ -193,6 +225,11 @@ fn spawn_persistent_agent_from_entry(commands: &mut Commands, entry: &crate::dom
         bound_task_id: None,
         tool_permissions,
     });
+
+    // 附加 ModelChainState Component
+    if let Some(state) = model_chain_state {
+        entity_commands.insert(state);
+    }
 }
 
 /// 从 PluginRegistry 收集所有插件贡献的 AgentEntry，
