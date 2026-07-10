@@ -46,6 +46,10 @@ pub struct TaskState {
     pub parent_id: Option<uuid::Uuid>,
     pub subtask_count: u32,
     pub completed_count: u32,
+    /// 任务来源的前端通道
+    pub origin_channel: Option<ChannelId>,
+    /// 任务进入终态的时刻
+    pub completed_at: Option<std::time::Instant>,
 }
 
 /// 待处理审批
@@ -481,12 +485,25 @@ impl App {
                 status,
                 result,
                 parent_id,
+                origin_channel,
                 ..
             } => {
+                let completed_at = if matches!(status, TaskStatusKind::Done | TaskStatusKind::Failed)
+                {
+                    Some(std::time::Instant::now())
+                } else {
+                    None
+                };
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
                     task.status = status;
                     task.result = result;
                     task.parent_id = parent_id;
+                    if task.origin_channel.is_none() {
+                        task.origin_channel = origin_channel;
+                    }
+                    if completed_at.is_some() {
+                        task.completed_at = completed_at;
+                    }
                 } else {
                     self.tasks.push(TaskState {
                         id: task_id,
@@ -496,6 +513,8 @@ impl App {
                         parent_id,
                         subtask_count: 0,
                         completed_count: 0,
+                        origin_channel,
+                        completed_at,
                     });
                 }
 
@@ -533,7 +552,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::domain::{
-        AgentStatusKind, ApprovalOption, EngineEvent, EventTarget, MessageRole, TaskStatusKind,
+        AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, FrontendKind,
+        MessageRole, TaskStatusKind,
     };
     use crate::tui::chat::{ApprovalCardState, ChatMessage};
 
@@ -939,5 +959,73 @@ mod tests {
         let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
         assert_eq!(main_task.subtask_count, 0);
         assert_eq!(main_task.completed_count, 0);
+    }
+
+    #[test]
+    fn task_state_origin_channel_from_event() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq_user".to_string(),
+            thread_id: None,
+        };
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "qq task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: Some(qq_channel.clone()),
+        });
+        assert_eq!(app.tasks[0].origin_channel, Some(qq_channel));
+        assert_eq!(app.tasks[0].completed_at, None);
+    }
+
+    #[test]
+    fn task_completed_at_set_on_terminal_status() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "done task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        assert!(app.tasks[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn same_task_id_does_not_duplicate() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+        });
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].status, TaskStatusKind::Done);
     }
 }
