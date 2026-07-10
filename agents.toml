@@ -1,8 +1,17 @@
 [[agent]]
 name = "default-llm-agent"
-model = "gpt-4.1-mini"
 tags = ["llm", "default", "general"]
 description = "默认 LLM Agent，处理通用任务"
+
+# 多模型降级链示例
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+fallback_cooldown_secs = 120
 
 [agent.tools]
 default_permission = "Confirm"

@@ -1,0 +1,21 @@
+# Provider 配置示例
+# 每个 provider 需要对应的环境变量（如 OPENAI_API_KEY）
+
+default_fallback_cooldown_secs = 60
+default_provider = "openai"
+
+[[provider]]
+name = "openai"
+kind = "openai"
+api_key_env = "OPENAI_API_KEY"
+
+[[provider]]
+name = "deepseek"
+kind = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[provider]]
+name = "openrouter"
+kind = "openai-compatible"
+api_key_env = "OPENROUTER_API_KEY"
+api_base = "https://openrouter.ai/api/v1"
