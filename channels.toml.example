@@ -1,0 +1,16 @@
+# IM 通道配置示例
+# 通过 HARNESS_CHANNELS_CONFIG 指向此文件启用
+# 复制此文件为 channels.toml 并填入实际凭证
+
+[telegram]
+# 也可通过 TELEGRAM_BOT_TOKEN 环境变量提供
+bot_token = "your-bot-token-here"
+allowed_users = ["your-username"]
+pairing_enabled = false
+
+[qq]
+# app_id 和 app_secret 也可通过 QQ_APP_ID / QQ_APP_SECRET 环境变量提供
+app_id = "your-app-id"
+app_secret = "your-app-secret"
+allowed_users = []
+pairing_enabled = false

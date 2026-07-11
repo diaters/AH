@@ -1,0 +1,169 @@
+# Agent 配置示例
+# 通过 HARNESS_AGENTS_CONFIG 指向此文件启用
+# 复制此文件为 agents.toml 并根据需要修改
+
+[[agent]]
+name = "default-llm-agent"
+tags = ["llm", "default", "general"]
+description = "默认 LLM Agent，处理通用任务"
+
+# 多模型降级链示例：按顺序声明，第一个为最高优先级
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+fallback_cooldown_secs = 120
+
+[agent.tools]
+default_permission = "Confirm"
+spawn_agent = "Deny"
+execute_code = "Deny"
+read_file = "Allow"
+write_file = "Confirm"
+search_web = "Allow"
+
+[[agent]]
+name = "brain"
+tags = ["brain", "dispatcher"]
+description = "Brain Agent，负责调度决策"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+spawn_agent = "Deny"
+read_file = "Allow"
+
+[[agent]]
+name = "summarizer"
+tags = ["summarization", "memory"]
+description = "记忆摘要专家，负责压缩对话历史"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+
+[[agent]]
+name = "evaluator"
+tags = ["evaluation"]
+description = "任务评估专家，负责评估任务执行状态"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+
+[[agent]]
+name = "collector"
+tags = ["collect", "experience"]
+description = "经验收敛专家，负责从任务终态材料中提炼经验候选"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+submit_experience_candidate = "Allow"
+
+[[agent]]
+name = "knowledge-manager"
+tags = ["knowledge", "management"]
+description = "知识库管理员，负责知识检索与维护"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+shell_exec = "Confirm"
+shell_read = "Allow"
+shell_list = "Allow"
+# Agent 配置示例
+# 通过 HARNESS_AGENTS_CONFIG 指向此文件启用
+# 复制此文件为 agents.toml 并根据需要修改
+
+[[agent]]
+name = "default-llm-agent"
+tags = ["llm", "default", "general"]
+description = "默认 LLM Agent，处理通用任务"
+
+# 多模型降级链示例
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+fallback_cooldown_secs = 120
+
+[agent.tools]
+default_permission = "Confirm"
+spawn_agent = "Deny"
+execute_code = "Deny"
+read_file = "Allow"
+write_file = "Confirm"
+search_web = "Allow"
+
+[[agent]]
+name = "brain"
+model = "gpt-4.1-mini"
+tags = ["brain", "dispatcher"]
+description = "Brain Agent，负责调度决策"
+
+[agent.tools]
+default_permission = "Deny"
+spawn_agent = "Deny"
+read_file = "Allow"
+
+[[agent]]
+name = "summarizer"
+model = "gpt-4.1-mini"
+tags = ["summarization", "memory"]
+description = "记忆摘要专家，负责压缩对话历史"
+
+[agent.tools]
+default_permission = "Deny"
+
+[[agent]]
+name = "evaluator"
+model = "gpt-4.1-mini"
+tags = ["evaluation"]
+description = "任务评估专家，负责评估任务执行状态"
+
+[agent.tools]
+default_permission = "Deny"
+
+[[agent]]
+name = "collector"
+model = "gpt-4.1-mini"
+tags = ["collect", "experience"]
+description = "经验收敛专家，负责从任务终态材料中提炼经验候选"
+
+[agent.tools]
+default_permission = "Deny"
+submit_experience_candidate = "Allow"
+
+[[agent]]
+name = "knowledge-manager"
+model = "gpt-4.1-mini"
+tags = ["knowledge", "management"]
+description = "知识库管理员，负责知识检索与维护"
+
+[agent.tools]
+default_permission = "Deny"
+shell_exec = "Confirm"
+shell_read = "Allow"
+shell_list = "Allow"
