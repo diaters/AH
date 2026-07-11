@@ -68,7 +68,8 @@ fn auto_channel_reply() {
 
         let config = HarnessConfig::default();
         let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-        let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+        // 注册 providers.toml 中配置的 provider 名称
+        let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(
             config,
@@ -141,7 +142,8 @@ fn multi_task_channel_reply_has_different_short_ids() {
 
         let config = HarnessConfig::default();
         let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-        let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+        // 注册 providers.toml 中配置的 provider 名称
+        let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(
             config,
