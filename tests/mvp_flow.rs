@@ -2,8 +2,9 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
+    HarnessConfig, LongTermMemory, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -38,7 +39,7 @@ fn test_config() -> HarnessConfig {
             api_base: None,
         },
         brain: None,
-        agents_config_path: "agents.toml".to_string(),
+        agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
@@ -51,8 +52,30 @@ fn test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
-        providers_config_path: "providers.toml".to_string(),
+        providers_config_path: "/nonexistent_providers.toml".to_string(),
     }
+}
+
+/// Helper function to spawn a default agent for tests
+fn spawn_default_agent(app: &mut bevy_app::App) {
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 }
 
 /// 验证单轮输入可以沿着 MVP 主链路完成闭环。
@@ -73,6 +96,7 @@ fn completes_single_turn_conversation_flow() {
 
     // 初始化应用
     app.update();
+    spawn_default_agent(&mut app);
 
     // 创建一个 Ready 状态的任务（单轮场景）
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
