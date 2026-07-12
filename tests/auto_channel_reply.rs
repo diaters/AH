@@ -164,9 +164,11 @@ fn multi_task_channel_reply_has_different_short_ids() {
         let (channel_manager, _channel_handle, channel_frontends) =
             ChannelManager::new(vec![channel], input_tx.clone());
 
-        let config = HarnessConfig::default();
+        let config = HarnessConfig {
+            agents_config_path: "/nonexistent_agents.toml".to_string(),
+            ..Default::default()
+        };
         let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
-        // 注册 providers.toml 中配置的 provider 名称
         let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(
@@ -179,6 +181,26 @@ fn multi_task_channel_reply_has_different_short_ids() {
         );
 
         app.update();
+
+        // 手动 spawn 一个默认 agent（因为 agents.toml 不存在）
+        app.world_mut().spawn((
+            Agent {
+                id: Uuid::new_v4(),
+                profile: AgentProfile {
+                    name: "default-llm-agent".to_string(),
+                    model: "gpt-4.1-mini".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["llm".to_string(), "default".to_string()],
+                    description: "默认 Agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+            },
+            harness::LongTermMemory::default(),
+        ));
 
         let origin = ChannelId {
             frontend: FrontendKind::Telegram,
