@@ -1,0 +1,70 @@
+# 测试用 Agent 配置
+# 供集成测试使用，provider 名称与测试中 ExecutorRegistry::from_single_executor(executor, "default") 匹配
+
+[[agent]]
+name = "default-llm-agent"
+tags = ["llm", "default", "general"]
+description = "默认 LLM Agent，处理通用任务"
+
+[[agent.models]]
+provider = "default"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Confirm"
+spawn_agent = "Deny"
+execute_code = "Deny"
+read_file = "Allow"
+write_file = "Confirm"
+search_web = "Allow"
+
+[[agent]]
+name = "brain"
+tags = ["brain", "dispatcher"]
+description = "Brain Agent，负责调度决策"
+
+[[agent.models]]
+provider = "default"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+spawn_agent = "Deny"
+read_file = "Allow"
+
+[[agent]]
+name = "summarizer"
+tags = ["summarization", "memory"]
+description = "记忆摘要专家，负责压缩对话历史"
+
+[[agent.models]]
+provider = "default"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+
+[[agent]]
+name = "evaluator"
+tags = ["evaluation"]
+description = "任务评估专家，负责评估任务执行状态"
+
+[[agent.models]]
+provider = "default"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+
+[[agent]]
+name = "collector"
+tags = ["collect", "experience"]
+description = "经验收敛专家，负责从任务终态材料中提炼经验候选"
+
+[[agent.models]]
+provider = "default"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+submit_experience_candidate = "Allow"

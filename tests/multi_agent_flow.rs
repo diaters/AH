@@ -40,7 +40,7 @@ fn multi_agent_config() -> HarnessConfig {
             api_base: None,
         },
         brain: None,
-        agents_config_path: "agents.toml".to_string(),
+        agents_config_path: "tests/fixtures/test_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
