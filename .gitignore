@@ -54,6 +54,8 @@ logs/
 
 skills-lock.json
 
-# Local channel/trigger config (not tracked)
+# Local config files (not tracked — use .example files as templates)
 channels.toml
 triggers.toml
+agents.toml
+providers.toml

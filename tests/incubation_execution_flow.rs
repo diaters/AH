@@ -17,7 +17,8 @@ fn incubated_agent_appended_to_agents_toml() {
     let initial = harness::domain::AgentConfig {
         agent: vec![harness::domain::AgentEntry {
             name: "default".to_string(),
-            model: "gpt-4".to_string(),
+            model: Some("gpt-4".to_string()),
+            models: vec![],
             tags: vec!["default".to_string()],
             description: "default agent".to_string(),
             tools: None,
@@ -58,7 +59,8 @@ fn duplicate_incubation_skips_if_name_exists() {
     let initial = harness::domain::AgentConfig {
         agent: vec![harness::domain::AgentEntry {
             name: "existing".to_string(),
-            model: "gpt-4".to_string(),
+            model: Some("gpt-4".to_string()),
+            models: vec![],
             tags: vec![],
             description: "existing".to_string(),
             tools: None,
@@ -84,7 +86,7 @@ fn duplicate_incubation_skips_if_name_exists() {
     let config: harness::domain::AgentConfig =
         toml::from_str(&std::fs::read_to_string(&toml_path).unwrap()).unwrap();
     assert_eq!(config.agent.len(), 1);
-    assert_eq!(config.agent[0].model, "gpt-4");
+    assert_eq!(config.agent[0].model, Some("gpt-4".to_string()));
 }
 
 /// 验证写回成功后 proposal 状态为 Executed。

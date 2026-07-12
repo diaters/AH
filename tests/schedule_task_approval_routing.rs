@@ -11,9 +11,11 @@ use std::{
 use crossbeam_channel::unbounded;
 use harness::triggers::{ScheduledTaskInfo, ScheduledTaskRegistry};
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
-    EngineEvent, EventTarget, ExecutorFuture, Frontend, FrontendKind, HarnessConfig, LlmToolCall,
-    OutputContent, Task, TaskStatus, TaskTrigger, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EngineEvent,
+    EventTarget, ExecutorFuture, Frontend, FrontendKind, HarnessConfig, LlmToolCall,
+    LongTermMemory, OutputContent, Task, TaskStatus, TaskTrigger, build_harness_app,
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -46,6 +48,55 @@ fn shell_exec_call(id: &str, command: &str) -> LlmToolCall {
         name: "shell_exec".to_string(),
         arguments: serde_json::json!({ "command": command }).to_string(),
     }
+}
+
+fn test_config() -> HarnessConfig {
+    HarnessConfig {
+        max_retries: 3,
+        llm: harness::LlmProviderConfig {
+            provider: harness::LlmProviderKind::OpenAi,
+            model: "gpt-4.1-mini".to_string(),
+            api_key: Some("test-api-key".to_string()),
+            api_base: None,
+        },
+        brain: None,
+        agents_config_path: "/nonexistent_agents.toml".to_string(),
+        default_wait_tasks_timeout_secs: 300,
+        max_tool_iterations: 5,
+        shell_default_tail_lines: 200,
+        shell_max_tail_lines: 500,
+        shell_default_exec_timeout_secs: 300,
+        shell_default_stop_timeout_secs: 10,
+        shell_max_buffer_bytes_per_stream: 64 * 1024,
+        active_poll_ms: 16,
+        idle_poll_ms: 150,
+        channels: Default::default(),
+        channels_config_path: None,
+        triggers_config_path: None,
+        providers_config_path: "/nonexistent_providers.toml".to_string(),
+    }
+}
+
+/// Helper function to spawn a default agent for tests
+fn spawn_default_agent(app: &mut bevy_app::App) {
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 }
 
 /// 按顺序返回预设 LLM 输出的执行器。
@@ -102,18 +153,23 @@ fn scheduled_task_approval_request_routes_to_output_channel() {
         Arc::new(CannedExecutor::new(vec![tool_calls_output(vec![
             shell_exec_call("call_1", "echo scheduled"),
         ])]));
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = harness::channels::ChannelManager::empty();
 
     let mut app = build_harness_app(
-        HarnessConfig::default(),
+        test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(CapturingQQFrontend {
             events: events.clone(),
         })],
         channel_manager,
     );
+
+    // Initialize app
+    app.update();
+    spawn_default_agent(&mut app);
 
     let task_id = Uuid::new_v4();
     let kind = format!("scheduled:{}", task_id);

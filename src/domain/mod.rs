@@ -14,6 +14,7 @@ mod execution;
 mod frontend;
 mod memory;
 mod message;
+mod model_chain;
 mod session;
 mod signal_trigger;
 mod space;
@@ -99,15 +100,18 @@ pub use message::{
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ContinueTaskMessage,
     CreateTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage,
-    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending, OutputKind,
-    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
-    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
-    Signal, SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
-    SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage, UserOutputMessage,
-    WaitingReason,
+    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
+    ModelChainStateUpdate, OutputKind, OutputMessage, PendingChannelSend, ReloadPluginsMessage,
+    ReloadTriggersMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
+    SessionStartedMessage, Signal, SignalPayload, SubTaskBatchCreatedMessage,
+    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
+    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage,
+    UserOutputMessage, WaitingReason,
 };
+
+// model_chain
+pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, ProvidersConfig};
 
 // signal_trigger
 pub use signal_trigger::{EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger};
@@ -168,7 +172,12 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEntry {
     pub name: String,
-    pub model: String,
+    /// 向后兼容：单模型声明，自动生成单元素 models 链
+    #[serde(default)]
+    pub model: Option<String>,
+    /// 有序模型链，第一个为最高优先级
+    #[serde(default)]
+    pub models: Vec<ModelChainEntry>,
     pub tags: Vec<String>,
     pub description: String,
     /// Tool 权限配置
@@ -241,5 +250,44 @@ mod tests {
         agent.grant_permission("new_tool".to_string());
 
         assert!(agent.has_permission("new_tool"));
+    }
+
+    #[test]
+    fn agent_entry_backward_compat_single_model() {
+        let toml_str = r#"
+[[agent]]
+name = "test-agent"
+model = "gpt-4.1-mini"
+tags = ["test"]
+description = "test"
+"#;
+        let config: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.len(), 1);
+        assert_eq!(config.agent[0].model, Some("gpt-4.1-mini".to_string()));
+        assert!(config.agent[0].models.is_empty());
+    }
+
+    #[test]
+    fn agent_entry_with_models_chain() {
+        let toml_str = r#"
+[[agent]]
+name = "test-agent"
+tags = ["test"]
+description = "test"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+"#;
+        let config: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.len(), 1);
+        assert!(config.agent[0].model.is_none());
+        assert_eq!(config.agent[0].models.len(), 2);
+        assert_eq!(config.agent[0].models[0].provider, "openai");
+        assert_eq!(config.agent[0].models[1].provider, "deepseek");
     }
 }

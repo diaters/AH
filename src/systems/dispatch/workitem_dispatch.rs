@@ -136,6 +136,7 @@ pub(crate) fn workitem_dispatch_system(
                     tools: work_item.input.context.tools.clone(),
                     conversation: work_item.input.context.conversation.clone(),
                     work_item_id: Some(work_item.id),
+                    model_override: None,
                 },
             },
             MessageDispatchedHookPending,

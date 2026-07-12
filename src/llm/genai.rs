@@ -87,7 +87,12 @@ impl GenaiExecutor {
 impl AgentExecutor for GenaiExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         let client = self.client.clone();
-        let model = self.model.clone();
+        // 支持 model_override 覆盖默认模型
+        let model = request
+            .model_override
+            .as_ref()
+            .unwrap_or(&self.model)
+            .clone();
 
         Box::pin(async move {
             debug!(
@@ -315,11 +320,12 @@ fn classify_genai_error(error: genai::Error) -> ExecutionError {
             let message = error.to_string();
             match status.as_u16() {
                 401 => ExecutionError::Authentication(message),
+                402 => ExecutionError::QuotaExhausted(message), // 降级
+                403 => ExecutionError::Authentication(message), // 不降级
                 429 => ExecutionError::RateLimited {
                     message,
                     retry_after_secs: Some(5),
                 },
-                402 | 403 => ExecutionError::QuotaExhausted(message),
                 408 | 504 => ExecutionError::Timeout(message),
                 _ => ExecutionError::Unknown(message),
             }
@@ -332,5 +338,35 @@ fn classify_genai_error(error: genai::Error) -> ExecutionError {
         genai::Error::NoChatResponse { .. } => ExecutionError::EmptyResponse,
 
         _ => ExecutionError::Unknown(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_403_as_authentication() {
+        // 403 应映射为 Authentication，不触发降级
+        let error = genai::Error::HttpError {
+            status: reqwest_013::StatusCode::FORBIDDEN,
+            canonical_reason: "Forbidden".to_string(),
+            body: String::new(),
+        };
+        let classified = classify_genai_error(error);
+        assert!(matches!(classified, ExecutionError::Authentication(_)));
+    }
+
+    #[test]
+    fn classify_402_as_quota_exhausted() {
+        // 402 应映射为 QuotaExhausted，触发降级
+        let error = genai::Error::HttpError {
+            status: reqwest_013::StatusCode::PAYMENT_REQUIRED,
+            canonical_reason: "Payment Required".to_string(),
+            body: String::new(),
+        };
+        let classified = classify_genai_error(error);
+        assert!(matches!(classified, ExecutionError::QuotaExhausted(_)));
+        assert!(classified.is_fallback_eligible());
     }
 }

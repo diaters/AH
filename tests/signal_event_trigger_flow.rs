@@ -7,7 +7,7 @@ use harness::domain::{
     EventTaskRoute, ExecutorFuture, ExternalInput, Frontend, FrontendKind, Signal, SignalSource,
     SignalTriggerRegistry, Task, ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
 };
-use harness::{AgentExecutor, HarnessConfig, build_harness_app};
+use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
 use uuid::Uuid;
 
 struct MockFrontend {
@@ -42,11 +42,12 @@ fn registered_webhook_creates_task_and_routes_approval() {
     let (input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = ChannelManager::empty();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(MockFrontend {
             events: events.clone(),
@@ -120,11 +121,12 @@ fn registered_timer_creates_task_without_output_channel() {
     let (_input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = ChannelManager::empty();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(MockFrontend { events })],
         channel_manager,
@@ -165,11 +167,12 @@ fn unregistered_webhook_is_dropped_without_creating_task() {
     let (input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = ChannelManager::empty();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![Box::new(MockFrontend { events })],
         channel_manager,

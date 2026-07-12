@@ -13,7 +13,7 @@ use tokio::runtime::Runtime;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutor,
     AgentRequestKind, ExecutorFuture, HarnessConfig, MessageDispatchedHookPending,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 struct EchoExecutor;
@@ -68,11 +68,12 @@ fn on_message_dispatched_removes_marker() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -92,6 +93,7 @@ fn on_message_dispatched_removes_marker() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
     };
     let entity = app

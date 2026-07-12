@@ -23,6 +23,7 @@ use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     FrontendKind, HarnessConfig, WorkItem, WorkItemInput, WorkItemLifecycleHookPending,
     WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget, build_harness_app,
+    llm::ExecutorRegistry,
 };
 
 #[allow(dead_code)]
@@ -127,11 +128,12 @@ fn on_workitem_started_dispatches_and_clears_marker() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -184,11 +186,12 @@ fn on_workitem_completed_dispatches_and_clears_marker() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -237,11 +240,12 @@ fn on_workitem_failed_dispatches_and_clears_marker() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

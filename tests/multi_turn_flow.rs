@@ -7,7 +7,7 @@ use harness::{
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole, ExecutorFuture,
     ExperienceCollectionRequestMessage, FrontendKind, HarnessConfig, LongTermMemory,
     ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason, WorkItem,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -33,18 +33,64 @@ impl AgentExecutor for EchoExecutor {
 }
 
 fn test_config() -> HarnessConfig {
-    HarnessConfig::default()
+    HarnessConfig {
+        max_retries: 3,
+        llm: harness::LlmProviderConfig {
+            provider: harness::LlmProviderKind::OpenAi,
+            model: "gpt-4.1-mini".to_string(),
+            api_key: Some("test-api-key".to_string()),
+            api_base: None,
+        },
+        brain: None,
+        agents_config_path: "/nonexistent_agents.toml".to_string(),
+        default_wait_tasks_timeout_secs: 300,
+        max_tool_iterations: 5,
+        shell_default_tail_lines: 200,
+        shell_max_tail_lines: 500,
+        shell_default_exec_timeout_secs: 300,
+        shell_default_stop_timeout_secs: 10,
+        shell_max_buffer_bytes_per_stream: 64 * 1024,
+        active_poll_ms: 16,
+        idle_poll_ms: 150,
+        channels: Default::default(),
+        channels_config_path: None,
+        triggers_config_path: None,
+        providers_config_path: "/nonexistent_providers.toml".to_string(),
+    }
+}
+
+/// Helper function to spawn a default agent for tests
+fn spawn_default_agent(app: &mut bevy_app::App) {
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 }
 
 #[test]
 fn multi_turn_task_lifecycle() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -52,6 +98,7 @@ fn multi_turn_task_lifecycle() {
 
     // 初始化 app
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a task in Waiting(User) state
     let task_id = uuid::Uuid::new_v4();
@@ -135,17 +182,19 @@ fn multi_turn_task_lifecycle() {
 fn short_term_memory_tracks_turns() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a task with short-term memory
     let task_id = uuid::Uuid::new_v4();
@@ -212,11 +261,12 @@ fn short_term_memory_tracks_turns() {
 fn agent_has_long_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -224,6 +274,7 @@ fn agent_has_long_term_memory() {
 
     // Run one frame to initialize the app and load persistent agents from config
     app.update();
+    spawn_default_agent(&mut app);
 
     // Spawn a persistent agent manually
     let agent_id = uuid::Uuid::new_v4();
@@ -263,11 +314,12 @@ fn agent_has_long_term_memory() {
 fn experience_collection_triggered_on_agent_termination() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -275,6 +327,7 @@ fn experience_collection_triggered_on_agent_termination() {
 
     // Initialize the app first
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create parent agent with memory
     let parent_id = uuid::Uuid::new_v4();
@@ -404,17 +457,19 @@ fn experience_collection_triggered_on_agent_termination() {
 fn multi_turn_memory_records_user_and_assistant() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 创建 Waiting(User) 状态的任务和 ShortTermMemory
     let task_id = uuid::Uuid::new_v4();
@@ -475,17 +530,19 @@ fn multi_turn_memory_records_user_and_assistant() {
 fn multi_turn_full_conversation_flow() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 通过 CreateTaskMessage 创建任务，走完整系统流程
     app.world_mut().spawn(harness::CreateTaskMessage {
@@ -572,18 +629,20 @@ fn prompt_includes_conversation_history() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(CapturingExecutor {
         captured: captured.clone(),
     });
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
 
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 创建带历史对话的任务
     let task_id = uuid::Uuid::new_v4();
@@ -663,17 +722,19 @@ fn prompt_includes_conversation_history() {
 fn initial_user_input_recorded_in_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 通过 CreateTaskMessage 创建任务，走 user_message_to_task_system 流程
     app.world_mut().spawn(harness::CreateTaskMessage {
@@ -723,17 +784,19 @@ fn initial_user_input_recorded_in_short_term_memory() {
 fn three_turn_conversation_maintains_correct_order() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 第一轮：通过 CreateTaskMessage 创建任务
     app.world_mut().spawn(harness::CreateTaskMessage {
@@ -843,17 +906,19 @@ fn second_dispatch_prompt_includes_correct_history() {
     let executor: Arc<dyn AgentExecutor> = Arc::new(HistoryCapturingExecutor {
         captured: captured.clone(),
     });
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 创建 Waiting(User) 状态的任务，并预填充对话历史
     let task_id = uuid::Uuid::new_v4();
@@ -945,17 +1010,19 @@ fn second_dispatch_prompt_includes_correct_history() {
 fn task_content_updates_on_continue() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
 
     app.update();
+    spawn_default_agent(&mut app);
 
     // 创建 Waiting(User) 状态的任务
     let task_id = uuid::Uuid::new_v4();

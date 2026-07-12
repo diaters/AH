@@ -27,7 +27,7 @@ pub(crate) use dispatch::{
     workitem_lifecycle_hook_system,
 };
 pub(crate) use evaluation::evaluation_trigger_system;
-pub(crate) use execution::agent_execution_system;
+pub(crate) use execution::{agent_execution_system, model_chain_state_update_system};
 pub(crate) use experience::{
     experience_approval_result_system, experience_collection_completion_system,
     experience_collection_workitem_system, experience_consolidation_trigger_system,

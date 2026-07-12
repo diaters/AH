@@ -6,9 +6,10 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, ExecutorFuture,
+    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy,
+    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -68,7 +69,7 @@ fn test_config() -> HarnessConfig {
             api_base: None,
         },
         brain: None,
-        agents_config_path: "agents.toml".to_string(),
+        agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
@@ -81,7 +82,51 @@ fn test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
+        providers_config_path: "/nonexistent_providers.toml".to_string(),
     }
+}
+
+/// Helper function to spawn a default agent for tests
+fn spawn_default_agent(app: &mut bevy_app::App) {
+    // Spawn default LLM agent
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
+
+    // Spawn summarizer agent for summarization work items
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "summarizer".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["summarization".to_string(), "memory".to_string()],
+                description: "Summarizer Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 }
 
 /// Test: Task completion triggers summarization when ShortTermMemory has entries
@@ -90,11 +135,13 @@ fn task_completion_triggers_summarization() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor.clone(),
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -102,6 +149,7 @@ fn task_completion_triggers_summarization() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a single-turn task with ShortTermMemory containing entries
     let task_id = uuid::Uuid::new_v4();
@@ -144,9 +192,9 @@ fn task_completion_triggers_summarization() {
         .id();
 
     // Run until task completes
-    for _ in 0..15 {
+    for _ in 0..25 {
         app.update();
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(30));
     }
 
     // Verify task is done
@@ -167,12 +215,14 @@ fn task_completion_triggers_summarization() {
 fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let summarization_called = executor.summarization_called.clone();
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -180,6 +230,7 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a multi-turn task in Waiting(User) state
     let task_id = uuid::Uuid::new_v4();
@@ -235,11 +286,12 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
 fn summarization_preserves_terminal_task_status() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -247,6 +299,7 @@ fn summarization_preserves_terminal_task_status() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a task that will complete (single-turn)
     let entity_id = app
@@ -263,7 +316,7 @@ fn summarization_preserves_terminal_task_status() {
         .id();
 
     // Run until task completes and summarization finishes
-    for _ in 0..20 {
+    for _ in 0..30 {
         app.update();
         thread::sleep(Duration::from_millis(30));
 
@@ -299,12 +352,14 @@ fn summarization_preserves_terminal_task_status() {
 fn execution_populates_memory_and_triggers_summarization() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
+    let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let summarization_called = executor.summarization_called.clone();
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor.clone(),
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -312,6 +367,7 @@ fn execution_populates_memory_and_triggers_summarization() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a single-turn task with pre-populated ShortTermMemory
     // (simulating what happens after llm_response_system runs)
@@ -332,7 +388,7 @@ fn execution_populates_memory_and_triggers_summarization() {
         .id();
 
     // Run until task completes
-    for _ in 0..20 {
+    for _ in 0..30 {
         app.update();
         thread::sleep(Duration::from_millis(30));
     }
@@ -355,11 +411,12 @@ fn execution_populates_memory_and_triggers_summarization() {
 fn summarization_request_creates_workitem_instead_of_execution_request() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
+    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

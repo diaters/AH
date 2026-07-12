@@ -32,6 +32,16 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 任务分解通过 `create_tasks` + DAG 调度 + `wait_tasks` 实现
 - 子任务结果可以回传父任务，支持继续执行
 
+#### 多模型与降级
+
+- Per-Agent 多模型/多提供商差异化调度
+- `ExecutorRegistry` 管理多个 provider executor
+- `ModelChainState` Component 追踪降级状态
+- 429（限流）/402（配额耗尽）错误自动降级到下一优先级
+- 冷却期自动恢复到原优先级
+- `providers.toml` 配置文件支持多 provider 实例
+- 向后兼容：现有 `model` 字段和环境变量配置继续工作
+
 #### 工具与会话
 
 - 工具调用软限制：单轮用户输入内达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，让 LLM 总结并询问用户；绝对硬上限（HARD_LIMIT_MULTIPLIER × max_iterations）时强制失败

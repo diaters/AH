@@ -9,7 +9,7 @@ use crate::systems::{
     experience_collection_completion_system, experience_collection_workitem_system,
     experience_consolidation_trigger_system, experience_governance_system,
     experience_writeback_system, ingest_execution_results_system, llm_response_system,
-    on_experience_hook_system, on_llm_response_hook_system,
+    model_chain_state_update_system, on_experience_hook_system, on_llm_response_hook_system,
     task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
 };
 
@@ -39,6 +39,8 @@ impl Plugin for ExecutionPlugin {
                     .after(crate::systems::sub_task_batch_block_system),
                 // Agent 执行
                 agent_execution_system.in_set(HarnessSet::Execution),
+                // ModelChainState 状态更新
+                model_chain_state_update_system.in_set(HarnessSet::Execution),
                 // 经验收集：任务终态触发收集请求
                 task_terminated_experience_trigger_system.in_set(HarnessSet::Execution),
                 // 经验收集：将请求转换为 WorkItem

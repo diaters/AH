@@ -11,7 +11,7 @@ use harness::{
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, FrontendKind,
     HarnessConfig, LlmToolCall, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus,
     ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -188,11 +188,12 @@ fn spawn_task_with_stm(world: &mut World) -> (Entity, Task) {
 fn llm_tool_calling_complete_loop() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(ToolCallingMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -223,6 +224,7 @@ fn llm_tool_calling_complete_loop() {
         tools,
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
@@ -254,11 +256,12 @@ fn llm_tool_calling_complete_loop() {
 fn tool_calling_exceeds_max_iterations() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(InfiniteToolCallExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -289,6 +292,7 @@ fn tool_calling_exceeds_max_iterations() {
         tools,
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
@@ -317,11 +321,12 @@ fn tool_calling_exceeds_max_iterations() {
 fn tool_calling_records_to_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(ToolCallingMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -352,6 +357,7 @@ fn tool_calling_records_to_short_term_memory() {
         tools,
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
@@ -377,11 +383,12 @@ fn tool_calling_records_to_short_term_memory() {
 fn tool_calling_soft_limit_returns_synthetic_result() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(BudgetAwareMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -418,6 +425,7 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
         tools,
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
@@ -440,11 +448,12 @@ fn tool_calling_hard_limit_forces_failure() {
     let runtime = Arc::new(Runtime::new().unwrap());
     // InfiniteToolCallExecutor 始终返回 ToolCalls，即使收到 TOOL_BUDGET_EXHAUSTED 也不产出 Text
     let executor: Arc<dyn AgentExecutor> = Arc::new(InfiniteToolCallExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(), // max_tool_iterations: 3, hard limit = 6
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -475,6 +484,7 @@ fn tool_calling_hard_limit_forces_failure() {
         tools,
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });

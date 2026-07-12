@@ -4,7 +4,7 @@ use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus, WorkItemType,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -37,11 +37,12 @@ impl AgentExecutor for NoOpExecutor {
 fn persistent_task_termination_creates_experience_collection_workitem() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -83,11 +84,12 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
 fn experience_collection_workitem_completes_on_candidate_submission() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -193,11 +195,12 @@ fn experience_collection_context_excludes_original_system_prompt() {
 fn experience_collection_completion_uses_governing_agent_not_collector() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -292,11 +295,12 @@ fn child_task_experience_still_aggregates_into_parent_inbox() {
 fn finish_command_triggers_experience_collection_via_proper_chain() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

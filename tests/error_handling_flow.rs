@@ -6,10 +6,13 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutionError,
-    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutionError, ExecutorFuture,
+    ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, Task, TaskRoutingPolicy,
+    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
+use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -18,7 +21,6 @@ fn default_channel() -> ChannelId {
         thread_id: None,
     }
 }
-use tokio::runtime::Runtime;
 
 fn test_config() -> HarnessConfig {
     HarnessConfig {
@@ -30,7 +32,7 @@ fn test_config() -> HarnessConfig {
             api_base: None,
         },
         brain: None,
-        agents_config_path: "agents.toml".to_string(),
+        agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
@@ -43,7 +45,30 @@ fn test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
+        providers_config_path: "/nonexistent_providers.toml".to_string(),
     }
+}
+
+/// Helper function to spawn a default agent for tests
+fn spawn_default_agent(app: &mut bevy_app::App) {
+    app.world_mut().spawn((
+        Agent {
+            id: Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 }
 
 /// Test: Task enters RetryBackoff on retryable errors
@@ -64,11 +89,12 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(RateLimitExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -76,6 +102,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a task
     let entity_id = app
@@ -127,11 +154,12 @@ fn non_retryable_error_causes_immediate_failure() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NonRetryableErrorExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -139,6 +167,7 @@ fn non_retryable_error_causes_immediate_failure() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a task
     let entity_id = app
@@ -189,12 +218,13 @@ fn empty_user_input_creates_task() {
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
 
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -202,6 +232,7 @@ fn empty_user_input_creates_task() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Send empty input
     input_tx
@@ -251,12 +282,13 @@ fn large_input_is_handled() {
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
 
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -264,6 +296,7 @@ fn large_input_is_handled() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);
@@ -319,12 +352,13 @@ fn multiple_concurrent_tasks_are_handled() {
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
 
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -332,6 +366,7 @@ fn multiple_concurrent_tasks_are_handled() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create multiple tasks simultaneously
     let task_count = 5;
@@ -385,12 +420,13 @@ fn waiting_task_waits_for_user_input() {
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
 
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -398,6 +434,7 @@ fn waiting_task_waits_for_user_input() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a multi-turn task in Waiting(User) state
     let task_id = uuid::Uuid::new_v4();
@@ -465,11 +502,12 @@ fn task_failure_sets_error_message() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(FailExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -477,6 +515,7 @@ fn task_failure_sets_error_message() {
 
     // Initialize
     app.update();
+    spawn_default_agent(&mut app);
 
     // Create a task
     let entity_id = app

@@ -10,7 +10,7 @@ use harness::{
     ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend, SharedKnowledgeBase,
     ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
     ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind,
-    ToolPermission, ToolSchema, WaitingReason, build_harness_app,
+    ToolPermission, ToolSchema, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -112,11 +112,12 @@ fn create_test_tool_registry(world: &mut World) {
 fn allowed_tool_executes_directly() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -159,6 +160,7 @@ fn allowed_tool_executes_directly() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -191,11 +193,12 @@ fn allowed_tool_executes_directly() {
 fn app_only_inserts_minimal_space_resources() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -212,11 +215,12 @@ fn app_only_inserts_minimal_space_resources() {
 fn denied_tool_does_not_execute() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -259,6 +263,7 @@ fn denied_tool_does_not_execute() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -292,11 +297,12 @@ fn denied_tool_does_not_execute() {
 fn confirm_tool_requires_user_confirmation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -339,6 +345,7 @@ fn confirm_tool_requires_user_confirmation() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -384,11 +391,12 @@ fn confirm_tool_requires_user_confirmation() {
 fn tool_call_is_recorded_to_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -431,6 +439,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -494,11 +503,12 @@ fn agent_tool_permissions_override_works() {
 fn user_denies_tool_confirmation() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -541,6 +551,7 @@ fn user_denies_tool_confirmation() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -595,11 +606,12 @@ fn user_denies_tool_confirmation() {
 fn user_allows_tool_once() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -642,6 +654,7 @@ fn user_allows_tool_once() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -712,11 +725,12 @@ fn user_allows_tool_once() {
 fn child_agent_confirm_routes_to_parent() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -823,6 +837,7 @@ fn child_agent_confirm_routes_to_parent() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -855,11 +870,12 @@ fn child_agent_confirm_routes_to_parent() {
 fn confirmation_denied_rejects_tool() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -966,6 +982,7 @@ fn confirmation_denied_rejects_tool() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -998,11 +1015,12 @@ fn confirmation_denied_rejects_tool() {
 fn child_agent_confirm_no_parent_permission_routes_to_user() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1077,6 +1095,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1111,11 +1130,12 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
 fn user_allows_tool_always() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -1158,6 +1178,7 @@ fn user_allows_tool_always() {
         tools: vec![],
         conversation: None,
         work_item_id: None,
+        model_override: None,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,

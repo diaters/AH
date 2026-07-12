@@ -4,7 +4,7 @@ use crossbeam_channel::unbounded;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     ExternalInput, FrontendKind, HarnessConfig, OutputContent, ShortTermMemory, Task,
-    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app,
+    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -72,11 +72,12 @@ fn make_waiting_task(channel: ChannelId) -> Task {
 fn cross_channel_plain_text_does_not_takeover_waiting_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -128,11 +129,12 @@ fn cross_channel_plain_text_does_not_takeover_waiting_task() {
 fn cross_channel_btw_does_not_pick_other_channel_parent() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -206,11 +208,12 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
 fn cross_channel_finish_does_not_finish_other_channel_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

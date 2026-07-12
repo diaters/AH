@@ -65,7 +65,8 @@ impl IncubatedAgentRegistry {
         // 追加新条目
         config.agent.push(AgentEntry {
             name: record.name.clone(),
-            model: record.model.clone(),
+            model: Some(record.model.clone()),
+            models: vec![],
             tags: record.tags.clone(),
             description: record.description.clone(),
             tools: record.tools.clone(),
@@ -123,7 +124,7 @@ mod tests {
         let config: AgentConfig = toml::from_str(&content).unwrap();
         assert_eq!(config.agent.len(), 1);
         assert_eq!(config.agent[0].name, "physics-specialist");
-        assert_eq!(config.agent[0].model, "gpt-4.1-mini");
+        assert_eq!(config.agent[0].model, Some("gpt-4.1-mini".to_string()));
     }
 
     #[test]
@@ -135,7 +136,8 @@ mod tests {
         let initial = AgentConfig {
             agent: vec![AgentEntry {
                 name: "default".to_string(),
-                model: "gpt-4".to_string(),
+                model: Some("gpt-4".to_string()),
+                models: vec![],
                 tags: vec!["default".to_string()],
                 description: "default agent".to_string(),
                 tools: None,
@@ -174,7 +176,8 @@ mod tests {
         let initial = AgentConfig {
             agent: vec![AgentEntry {
                 name: "existing".to_string(),
-                model: "gpt-4".to_string(),
+                model: Some("gpt-4".to_string()),
+                models: vec![],
                 tags: vec![],
                 description: "existing".to_string(),
                 tools: None,
@@ -200,7 +203,7 @@ mod tests {
 
         let config: AgentConfig = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(config.agent.len(), 1);
-        assert_eq!(config.agent[0].model, "gpt-4");
+        assert_eq!(config.agent[0].model, Some("gpt-4".to_string()));
     }
 
     #[test]
@@ -210,7 +213,8 @@ mod tests {
         let config = AgentConfig {
             agent: vec![AgentEntry {
                 name: "test-agent".to_string(),
-                model: "gpt-4".to_string(),
+                model: Some("gpt-4".to_string()),
+                models: vec![],
                 tags: vec!["incubated".to_string()],
                 description: "test".to_string(),
                 tools: Some(crate::domain::AgentToolsConfig {

@@ -7,6 +7,7 @@ use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
     HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, ToolPermission, build_harness_app,
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -55,6 +56,7 @@ fn test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
+        providers_config_path: "providers.toml".to_string(),
     }
 }
 
@@ -63,11 +65,12 @@ fn test_config() -> HarnessConfig {
 fn chat_with_agent_creates_chat_subtask() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -158,6 +161,7 @@ fn chat_with_agent_creates_chat_subtask() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "chat_with_agent".to_string(),
         tool_input: serde_json::json!({
@@ -216,11 +220,12 @@ fn chat_with_agent_creates_chat_subtask() {
 fn chat_with_agent_multi_round_via_handle() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -313,6 +318,7 @@ fn chat_with_agent_multi_round_via_handle() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "chat_with_agent".to_string(),
         tool_input: serde_json::json!({
@@ -350,6 +356,7 @@ fn chat_with_agent_multi_round_via_handle() {
             tools: vec![],
             conversation: None,
             work_item_id: None,
+            model_override: None,
         },
         tool_name: "chat_with_agent".to_string(),
         tool_input: serde_json::json!({
@@ -393,11 +400,12 @@ fn chat_with_agent_multi_round_via_handle() {
 fn chat_round_completion_preserves_parent_waiting_status() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

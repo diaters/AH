@@ -1,0 +1,25 @@
+# Provider 配置示例
+# 通过 HARNESS_PROVIDERS_CONFIG 指向此文件启用
+# 复制此文件为 providers.toml 并填入实际 API Key
+#
+# 每个 provider 通过 api_key_env 指定从哪个环境变量读取 API Key，
+# 避免在配置文件中明文存储密钥。
+
+default_fallback_cooldown_secs = 60
+default_provider = "openai"
+
+[[provider]]
+name = "openai"
+kind = "OpenAi"
+api_key_env = "OPENAI_API_KEY"
+
+[[provider]]
+name = "deepseek"
+kind = "DeepSeek"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[provider]]
+name = "openrouter"
+kind = "OpenAiCompatible"
+api_key_env = "OPENROUTER_API_KEY"
+api_base = "https://openrouter.ai/api/v1"

@@ -18,7 +18,7 @@ use tokio::runtime::Runtime;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
     ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus,
-    build_harness_app,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -102,11 +102,12 @@ fn on_task_completed_dispatches_on_finish_command() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -172,11 +173,12 @@ fn on_task_failed_dispatches_on_direct_failure_mutation() {
 
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig::default(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,

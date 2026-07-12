@@ -2,9 +2,13 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, BrainConfig, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, Task, TaskStatus, build_harness_app,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentKind, AgentProfile, AgentToolPermissions, BrainConfig, ChannelId, ExecutorFuture,
+    FrontendKind, HarnessConfig, LongTermMemory, Task, TaskStatus, build_harness_app,
+    llm::ExecutorRegistry,
 };
+use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -13,7 +17,6 @@ fn default_channel() -> ChannelId {
         thread_id: None,
     }
 }
-use tokio::runtime::Runtime;
 
 struct BrainMockExecutor;
 
@@ -73,7 +76,7 @@ fn brain_test_config() -> HarnessConfig {
             api_base: None,
         },
         brain: Some(BrainConfig { enabled: true }),
-        agents_config_path: "agents.toml".to_string(),
+        agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
@@ -86,6 +89,7 @@ fn brain_test_config() -> HarnessConfig {
         channels: Default::default(),
         channels_config_path: None,
         triggers_config_path: None,
+        providers_config_path: "/nonexistent_providers.toml".to_string(),
     }
 }
 
@@ -94,11 +98,12 @@ fn brain_test_config() -> HarnessConfig {
 fn completes_brain_dispatch_flow() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         brain_test_config(),
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -106,6 +111,48 @@ fn completes_brain_dispatch_flow() {
 
     // 初始化应用
     app.update();
+
+    // 手动创建 Brain Agent
+    let brain_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Agent {
+            id: brain_id,
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string(), "dispatcher".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
+
+    // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
+    let default_agent_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Agent {
+            id: default_agent_id,
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 
     // 创建一个 Ready 状态的任务
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
@@ -132,6 +179,7 @@ fn completes_brain_dispatch_flow() {
 fn mvp_flow_unchanged_when_brain_disabled() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainMockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
 
     let mut no_brain_config = brain_test_config();
@@ -139,7 +187,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     let mut app = build_harness_app(
         no_brain_config,
         runtime,
-        executor,
+        executor_registry,
         input_rx,
         vec![],
         harness::channels::ChannelManager::empty().0,
@@ -147,6 +195,48 @@ fn mvp_flow_unchanged_when_brain_disabled() {
 
     // 初始化应用
     app.update();
+
+    // 手动创建 Brain Agent
+    let brain_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Agent {
+            id: brain_id,
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string(), "dispatcher".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
+
+    // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
+    let default_agent_id = Uuid::new_v4();
+    app.world_mut().spawn((
+        Agent {
+            id: default_agent_id,
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+        },
+        LongTermMemory::default(),
+    ));
 
     // 创建一个 Ready 状态的任务
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
