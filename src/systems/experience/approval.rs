@@ -322,6 +322,7 @@ mod tests {
                 kind: ProfileGenerationKind::Incubation,
                 retry_count: 0,
                 existing_profile: None,
+                generated_profile: None,
             },
         );
 
@@ -387,6 +388,7 @@ mod tests {
                 kind: ProfileGenerationKind::Incubation,
                 retry_count: 2,
                 existing_profile: None,
+                generated_profile: None,
             },
         );
 
@@ -431,6 +433,7 @@ mod tests {
                 kind: ProfileGenerationKind::Incubation,
                 retry_count: MAX_PROFILE_GENERATION_RETRIES,
                 existing_profile: None,
+                generated_profile: None,
             },
         );
 

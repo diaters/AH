@@ -222,6 +222,8 @@ pub struct ExperienceStore {
     /// 由 `profile_generation_workitem_system` 写入，
     /// 由 orchestrator 的 SubmitProfileUpdate/SkipProfileUpdate 分支读取后清理。
     pub profile_generation_context: std::collections::HashMap<TaskId, ProfileGenerationContext>,
+    /// 已触发 profile 更新评估的候选 ID 集合，避免重复触发。
+    pub profile_update_triggered: std::collections::HashSet<uuid::Uuid>,
 }
 
 /// profile 生成运行时上下文：在 ExperienceStore 中暂存，
@@ -233,6 +235,9 @@ pub struct ProfileGenerationContext {
     pub retry_count: u32,
     /// 更新场景下保存现有 profile，供拒绝并反馈重试时重新构建请求。
     pub existing_profile: Option<ExistingAgentProfile>,
+    /// LLM 生成的 profile；更新场景下由 completion_system 写入，
+    /// 供 profile_update_writeback_system 在审批通过后读取。
+    pub generated_profile: Option<GeneratedProfile>,
 }
 
 impl ExperienceStore {
@@ -484,7 +489,7 @@ pub struct ExistingAgentProfile {
 
 /// LLM 生成的 Agent profile。
 #[allow(dead_code)] // 任务 6 起使用
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeneratedProfile {
     pub name: String,
     pub tags: Vec<String>,

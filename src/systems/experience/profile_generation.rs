@@ -56,6 +56,7 @@ pub(crate) fn profile_generation_workitem_system(
                 kind: request.kind.clone(),
                 retry_count: request.retry_count,
                 existing_profile: request.existing_profile.clone(),
+                generated_profile: None,
             },
         );
 
@@ -355,13 +356,22 @@ fn handle_update_profile_completed(
     let retry_count = ctx.map(|c| c.retry_count).unwrap_or(0);
 
     if let Some(generated) = &msg.generated_profile {
+        // 将 LLM 生成的 profile 存入 context，供 profile_update_writeback_system 读取
+        if let Some(context) = store.profile_generation_context.get_mut(&msg.task_id) {
+            context.generated_profile = Some(generated.clone());
+        }
+
         info!(
             event = "ProfileUpdateProposed",
             task_id = %msg.task_id,
             "profile update proposed, awaiting approval"
         );
         // 发起更新审批（复用 spawn_profile_approval）
-        let sanitized_tags = crate::domain::sanitize_tags(generated.tags.clone(), &generated.tags);
+        let existing_tags = ctx
+            .and_then(|c| c.existing_profile.as_ref())
+            .map(|p| p.tags.clone())
+            .unwrap_or_default();
+        let sanitized_tags = crate::domain::sanitize_tags(generated.tags.clone(), &existing_tags);
         spawn_profile_approval(
             commands,
             store,
@@ -378,6 +388,8 @@ fn handle_update_profile_completed(
             task_id = %msg.task_id,
             "profile update skipped by LLM"
         );
+        // skip 时清理 context
+        store.profile_generation_context.remove(&msg.task_id);
     }
     // TODO(任务 14): 派发 on_agent_profile_generated hook
 }
@@ -402,11 +414,13 @@ fn spawn_profile_approval(
 ) {
     let request_id = uuid::Uuid::new_v4();
 
-    // 绑定到第一个候选（若存在）
+    // 绑定到任务的一个候选（若存在）。
+    // 孵化场景候选为 ProfileGenerationPending，更新场景候选为 Persisted，
+    // 因此使用 candidates_by_producer_task 而非 governance_candidates_for_task。
     if let Some(candidate_id) = store
-        .governance_candidates_for_task(task_id)
+        .candidates_by_producer_task(task_id)
         .first()
-        .copied()
+        .map(|c| c.candidate_id)
     {
         store.bind_approval_request(request_id, candidate_id);
     }
@@ -744,9 +758,11 @@ mod tests {
             kind: ProfileGenerationKind::Incubation,
             retry_count: 2,
             existing_profile: None,
+            generated_profile: None,
         };
         assert_eq!(ctx.kind, ProfileGenerationKind::Incubation);
         assert_eq!(ctx.retry_count, 2);
         assert!(ctx.existing_profile.is_none());
+        assert!(ctx.generated_profile.is_none());
     }
 }
