@@ -1,1 +1,6 @@
 docs/superpowers
+.harness
+.trae
+logs
+AGENTS.md
+MANUAL_TEST_CASES.md
