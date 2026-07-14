@@ -343,6 +343,7 @@ fn writeback_incubation_proposal(
     let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
         name: profile.name.clone(),
         model: profile.model.clone(),
+        models: vec![],
         tags: vec!["incubated".to_string()],
         description,
         tools: None,

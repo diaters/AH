@@ -33,6 +33,7 @@ fn incubated_agent_appended_to_agents_toml() {
             &IncubatedAgentRecord {
                 name: "physics-specialist".to_string(),
                 model: "gpt-4.1-mini".to_string(),
+                models: vec![],
                 tags: vec!["incubated".to_string(), "physics".to_string()],
                 description: "derived from top-level proposal".to_string(),
                 tools: None,
@@ -75,6 +76,7 @@ fn duplicate_incubation_skips_if_name_exists() {
             &IncubatedAgentRecord {
                 name: "existing".to_string(),
                 model: "other".to_string(),
+                models: vec![],
                 tags: vec![],
                 description: "duplicate".to_string(),
                 tools: None,
