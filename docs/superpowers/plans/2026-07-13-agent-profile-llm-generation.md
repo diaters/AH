@@ -1589,7 +1589,7 @@ Self::OnAgentIncubated => "on_agent_incubated",
 运行：`cargo clippy --all-targets --all-features -- -D warnings`
 预期：无错误
 
-- [ ] **步骤 4：Commit**
+- [x] **步骤 4：Commit**
 
 ```bash
 git add src/systems/experience/experience_hook.rs src/user_plugins/hook_point.rs src/systems/experience/profile_generation.rs src/systems/experience/profile_update.rs src/systems/experience/writeback.rs
@@ -1603,7 +1603,7 @@ git commit -m "feat(hooks): add on_agent_profile_generated, updated, incubated h
 **文件：**
 - 创建：`tests/profile_generation_flow.rs`、`tests/profile_update_flow.rs`、`tests/profile_reject_feedback_flow.rs`
 
-- [ ] **步骤 1：编写孵化端到端测试**
+- [x] **步骤 1：编写孵化端到端测试**
 
 创建 `tests/profile_generation_flow.rs`：
 - 模拟 default Agent 经验 → 收集 → 治理 → profile generation → 审批 approve → 写回
@@ -1644,7 +1644,7 @@ impl AgentExecutor for ProfileDesignerMockExecutor {
 
 通过 `ExecutorRegistry::from_single_executor` 注册 mock，传入 `build_harness_app`。审批通过插入 `ToolConfirmationResponseMessage` 模拟用户选择 `approve` 选项。
 
-- [ ] **步骤 2：编写拒绝并反馈测试**
+- [x] **步骤 2：编写拒绝并反馈测试**
 
 创建 `tests/profile_reject_feedback_flow.rs`：
 - 首次生成 → 用户选择 reject_with_feedback 并提供反馈
@@ -1654,7 +1654,7 @@ impl AgentExecutor for ProfileDesignerMockExecutor {
 
 **LLM 模拟：** mock executor 根据 `request.conversation` 中 tool 消息数量判断当前 retry_count，返回不同的 profile 内容以验证反馈注入。审批通过插入 `ToolConfirmationResponseMessage { selected_option: "reject_with_feedback", feedback: Some("...") }` 模拟用户反馈。
 
-- [ ] **步骤 3：编写更新流程测试**
+- [x] **步骤 3：编写更新流程测试**
 
 创建 `tests/profile_update_flow.rs`：
 - 持久型 Agent LTM 写回 → profile 更新评估 → LLM 提议更新 → 审批 → 验证 ECS 和 agents.toml 同步
@@ -1662,12 +1662,12 @@ impl AgentExecutor for ProfileDesignerMockExecutor {
 
 **LLM 模拟：** 提议更新场景使用首轮返回 `submit_profile_update` ToolCalls 的 mock；skip 场景使用首轮返回 `skip_profile_update` ToolCalls 的 mock。
 
-- [ ] **步骤 4：运行全部测试**
+- [x] **步骤 4：运行全部测试**
 
 运行：`cargo test --all-features`
 预期：PASS
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add tests/profile_generation_flow.rs tests/profile_update_flow.rs tests/profile_reject_feedback_flow.rs
