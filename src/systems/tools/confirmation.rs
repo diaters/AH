@@ -76,12 +76,19 @@ pub fn tool_confirmation_result_system(
             continue;
         };
 
-        // experience_governance 特判：销毁执行占位实体，不执行工具，不销毁响应
-        if tool_request.tool_name == "experience_governance" {
+        // experience_governance / profile_generation 特判：
+        // 销毁执行占位实体，不执行工具，不销毁响应。
+        // 这两种工具的审批由 experience_approval_result_system 统一处理
+        // （通过 store.bind_approval_request 绑定 candidate_id）。
+        if tool_request.tool_name == "experience_governance"
+            || tool_request.tool_name == "profile_generation"
+        {
             debug!(
-                event = "ExperienceGovernanceConfirmationSkipped",
+                event = "ConfirmationHandledByDedicatedSystem",
                 request_id = %response.request_id,
-                "experience_governance confirmation handled by dedicated system"
+                tool_name = %tool_request.tool_name,
+                "{} confirmation handled by dedicated system",
+                tool_request.tool_name,
             );
             commands.entity(request_entity).despawn();
             // 不 despawn response entity，留给 experience_approval_result_system

@@ -12,11 +12,12 @@ use crate::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentProfile, AgentRequestKind, ConfirmationOption,
-    ConfirmationSource, ExperienceCandidatePayload, ExperienceStore, PendingExperienceHooks,
-    ProfileGenerationCompletedMessage, ProfileGenerationContext, ProfileGenerationKind,
-    ProfileGenerationRequestMessage, SpaceToolRegistry, TaskId, ToolCalledHookPending,
-    ToolConfirmationRequestMessage, ToolExecutionRequestMessage, WorkItem,
+    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentProfile, AgentRequestKind,
+    ConfirmationOption, ConfirmationSource, ExperienceCandidatePayload, ExperienceStore,
+    MessageDispatchedHookPending, PendingExperienceHooks, ProfileGenerationCompletedMessage,
+    ProfileGenerationContext, ProfileGenerationKind, ProfileGenerationRequestMessage,
+    SpaceToolRegistry, TaskId, ToolCalledHookPending, ToolConfirmationRequestMessage,
+    ToolExecutionRequestMessage, WorkItem, WorkItemLifecycleHookPending,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -76,7 +77,8 @@ pub(crate) fn profile_generation_workitem_system(
         // 5. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
         let conversation = Vec::new();
 
-        // 6. 创建 WorkItem 并分配给 profile-designer
+        // 6. 创建 WorkItem 并分配给 profile-designer，直接启动并派发执行请求
+        //    （workitem_dispatch_system 不处理 ProfileGeneration 类型，故在此直接调度）
         let mut work_item = WorkItem::profile_generation(
             request.task_id,
             prompt,
@@ -86,6 +88,13 @@ pub(crate) fn profile_generation_workitem_system(
             request.kind.clone(),
         );
         work_item.assign(profile_designer_id);
+        work_item.start();
+
+        let work_item_id = work_item.id;
+        let exec_prompt = work_item.input.prompt.clone();
+        let exec_system_prompt = work_item.input.context.system_prompt.clone();
+        let exec_tools = work_item.input.context.tools.clone();
+        let exec_conversation = work_item.input.context.conversation.clone();
 
         debug!(
             event = "ProfileGenerationWorkItemCreated",
@@ -97,7 +106,26 @@ pub(crate) fn profile_generation_workitem_system(
             "spawning profile generation work item"
         );
 
-        commands.spawn(work_item);
+        commands.spawn((
+            work_item,
+            WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted),
+        ));
+        commands.spawn((
+            AgentExecutionRequestMessage {
+                request: AgentExecutionRequest {
+                    task_id: request.task_id,
+                    agent_id: profile_designer_id,
+                    request_kind: AgentRequestKind::LlmCompletion,
+                    prompt: exec_prompt,
+                    system_prompt: exec_system_prompt,
+                    tools: exec_tools,
+                    conversation: exec_conversation,
+                    work_item_id: Some(work_item_id),
+                    model_override: None,
+                },
+            },
+            MessageDispatchedHookPending,
+        ));
         commands.entity(entity).despawn();
     }
 }
@@ -319,12 +347,14 @@ fn handle_incubation_profile_completed(
             .map(|a| a.profile.model.clone())
             .unwrap_or_default(),
     };
-    // merge_into_proposal 需要 candidate，从 store 中查找该 task 的候选
-    if let Some(candidate_id) = store
-        .governance_candidates_for_task(task_id)
-        .first()
-        .copied()
-        && let Some(candidate) = store.candidates.get(&candidate_id).cloned()
+    // merge_into_proposal 需要 candidate，从 store 中查找该 task 的候选。
+    // 注意：此时候选状态为 ProfileGenerationPending（由 governance 系统标记），
+    // 不能用 governance_candidates_for_task（它过滤 GovernancePending）。
+    if let Some(candidate) = store
+        .candidates_by_producer_task(task_id)
+        .into_iter()
+        .next()
+        .cloned()
     {
         store.merge_into_proposal(task_id, agent_id, agent_profile, &candidate);
     }

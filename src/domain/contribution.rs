@@ -410,16 +410,20 @@ impl ExperienceStore {
     /// 查找或创建任务级孵化提案。
     ///
     /// 同一任务最多一个活跃 proposal，后续候选 merge 到已有 proposal。
+    /// 若 proposal 已存在，更新 `proposed_agent_profile` 以反映最新的 LLM 生成结果
+    /// （支持拒绝并反馈后的重新生成场景）。
     pub fn find_or_create_proposal(
         &mut self,
         task_id: TaskId,
         agent_id: AgentId,
         profile: super::AgentProfile,
     ) -> &mut IncubationProposal {
-        self.proposals
+        let proposal = self
+            .proposals
             .entry(task_id)
-            .or_insert_with(|| IncubationProposal::new(task_id, agent_id, profile));
-        self.proposals.get_mut(&task_id).unwrap()
+            .or_insert_with(|| IncubationProposal::new(task_id, agent_id, profile.clone()));
+        proposal.proposed_agent_profile = profile;
+        proposal
     }
 
     /// 将候选合并到任务级提案中。若不存在则创建。

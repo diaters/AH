@@ -18,7 +18,5 @@ pub(crate) use governance::experience_governance_system;
 pub(crate) use profile_generation::{
     profile_generation_completion_system, profile_generation_workitem_system,
 };
-pub(crate) use profile_update::{
-    profile_update_trigger_system, profile_update_writeback_system,
-};
+pub(crate) use profile_update::{profile_update_trigger_system, profile_update_writeback_system};
 pub(crate) use writeback::experience_writeback_system;

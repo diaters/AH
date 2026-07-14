@@ -114,7 +114,12 @@ impl App {
                 feedback_buffer,
                 cursor_position,
             } => {
-                self.handle_feedback_key(key, *request_id, feedback_buffer.clone(), *cursor_position);
+                self.handle_feedback_key(
+                    key,
+                    *request_id,
+                    feedback_buffer.clone(),
+                    *cursor_position,
+                );
             }
         }
     }
@@ -189,7 +194,11 @@ impl App {
         mut cursor_position: usize,
     ) {
         match key.code {
-            KeyCode::Char('q') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            KeyCode::Char('q')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
                 self.should_quit = true;
             }
             KeyCode::Enter => {

@@ -240,7 +240,10 @@ impl ChatPanel {
         }
 
         // Feedback 模式渲染：标题行 + 提示文本 + 输入行
-        if let crate::tui::app::AppMode::Feedback { feedback_buffer, .. } = &app.mode {
+        if let crate::tui::app::AppMode::Feedback {
+            feedback_buffer, ..
+        } = &app.mode
+        {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled(
@@ -262,10 +265,7 @@ impl ChatPanel {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 Span::styled("\u{276f} ", Style::default().fg(Color::Magenta)),
-                Span::styled(
-                    feedback_buffer.clone(),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(feedback_buffer.clone(), Style::default().fg(Color::White)),
                 Span::styled(
                     if feedback_buffer.is_empty() {
                         "输入评审建议..."

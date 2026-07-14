@@ -769,52 +769,55 @@ impl QqChannel {
 
         // 尝试解析 "N feedback" 格式：数字 + 空格 + 反馈文本
         // 仅当首字符为数字时才尝试拆分
-        let (numeric_part, feedback_part) =
-            if normalized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                // 找到数字部分的结束位置
-                let digit_end = normalized
-                    .char_indices()
-                    .take_while(|(_, c)| c.is_ascii_digit())
-                    .last()
-                    .map(|(i, c)| i + c.len_utf8())
-                    .unwrap_or(0);
-                let after_digits = &normalized[digit_end..];
-                if after_digits.is_empty() {
+        let (numeric_part, feedback_part) = if normalized
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            // 找到数字部分的结束位置
+            let digit_end = normalized
+                .char_indices()
+                .take_while(|(_, c)| c.is_ascii_digit())
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            let after_digits = &normalized[digit_end..];
+            if after_digits.is_empty() {
+                (normalized, None)
+            } else if let Some(stripped) = after_digits.strip_prefix(' ') {
+                let feedback = stripped.trim();
+                if feedback.is_empty() {
                     (normalized, None)
-                } else if let Some(stripped) = after_digits.strip_prefix(' ') {
-                    let feedback = stripped.trim();
-                    if feedback.is_empty() {
-                        (normalized, None)
-                    } else {
-                        (normalized[..digit_end].trim(), Some(feedback))
-                    }
                 } else {
-                    (normalized, None)
+                    (normalized[..digit_end].trim(), Some(feedback))
                 }
             } else {
                 (normalized, None)
-            };
-
-        let matched = if numeric_part.chars().all(|c| c.is_ascii_digit()) && !numeric_part.is_empty()
-        {
-            // 数字匹配
-            numeric_part.parse::<usize>().ok().and_then(|n| {
-                if n >= 1 && n <= pending.options.len() {
-                    Some(&pending.options[n - 1])
-                } else {
-                    None
-                }
-            })
+            }
         } else {
-            None
-        }
-        .or_else(|| pending.options.iter().find(|opt| opt.id == numeric_part))
-        .or_else(|| {
-            pending
-                .options
-                .iter()
-                .find(|opt| opt.label == numeric_part || opt.label.contains(numeric_part))
-        });
+            (normalized, None)
+        };
+
+        let matched =
+            if numeric_part.chars().all(|c| c.is_ascii_digit()) && !numeric_part.is_empty() {
+                // 数字匹配
+                numeric_part.parse::<usize>().ok().and_then(|n| {
+                    if n >= 1 && n <= pending.options.len() {
+                        Some(&pending.options[n - 1])
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+            .or_else(|| pending.options.iter().find(|opt| opt.id == numeric_part))
+            .or_else(|| {
+                pending
+                    .options
+                    .iter()
+                    .find(|opt| opt.label == numeric_part || opt.label.contains(numeric_part))
+            });
 
         if let Some(opt) = matched {
             let mut map = self.pending_approvals.write().await;

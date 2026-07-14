@@ -71,7 +71,8 @@ fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::Ta
 /// - 更新场景：spawn skip ProfileGenerationCompletedMessage（None）
 ///
 /// kind 从 ExperienceStore.profile_generation_context 读取；
-/// 若找不到 context，默认使用 Incubation。
+/// 若找不到 context（已被前序完成消息消费，如 skip/submit 流程已完成），
+/// 直接清理 WorkItem，不再 spawn 完成消息，避免误触发孵化回退审批。
 fn handle_profile_generation_no_tool_call(
     commands: &mut Commands,
     experience_store: &ExperienceStore,
@@ -81,12 +82,27 @@ fn handle_profile_generation_no_tool_call(
 ) {
     use crate::domain::{ProfileGenerationCompletedMessage, ProfileGenerationKind};
 
-    let kind = experience_store
+    let Some(ctx) = experience_store
         .profile_generation_context
         .get(&work_item.task_id)
-        .map(|c| c.kind.clone())
-        .unwrap_or(ProfileGenerationKind::Incubation);
+    else {
+        // context 已被前序 ProfileGenerationCompletedMessage 消费
+        // （例如 skip_profile_update 或 submit_profile_update 已完成流程），
+        // 无需再次 spawn 完成消息，直接清理 WorkItem
+        warn!(
+            event = "ProfileGenerationContextMissing",
+            task_id = %work_item.task_id,
+            "profile generation context already consumed, cleaning up work item without spawning completion message"
+        );
+        commands
+            .entity(work_item_entity)
+            .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+        commands.entity(work_item_entity).despawn();
+        commands.entity(result_entity).despawn();
+        return;
+    };
 
+    let kind = ctx.kind.clone();
     let governing_agent_id = work_item.governing_agent_id.unwrap_or(uuid::Uuid::nil());
 
     match kind {

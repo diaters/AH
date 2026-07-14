@@ -421,9 +421,7 @@ fn writeback_incubation_proposal(
             );
 
             // 派发 on_agent_incubated hook（写入 agents.toml 成功后触发）
-            pending_hooks
-                .0
-                .push((HookPoint::OnAgentIncubated, task_id));
+            pending_hooks.0.push((HookPoint::OnAgentIncubated, task_id));
 
             Ok(())
         }
@@ -560,9 +558,7 @@ mod tests {
 
     #[test]
     fn incubation_writeback_uses_llm_profile_when_context_present() {
-        use crate::domain::{
-            GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind,
-        };
+        use crate::domain::{GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind};
 
         let memory_dir = TempDir::new().unwrap();
         let proposal_dir = TempDir::new().unwrap();
@@ -642,9 +638,7 @@ mod tests {
 
     #[test]
     fn incubation_writeback_renames_on_duplicate() {
-        use crate::domain::{
-            GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind,
-        };
+        use crate::domain::{GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind};
 
         let memory_dir = TempDir::new().unwrap();
         let proposal_dir = TempDir::new().unwrap();
@@ -723,6 +717,11 @@ description = "existing"
         // 应有两个 agent：原有的 + 重命名后的
         assert_eq!(config.agent.len(), 2);
         // 新 agent 应被重命名为 physics-specialist-2
-        assert!(config.agent.iter().any(|a| a.name == "physics-specialist-2"));
+        assert!(
+            config
+                .agent
+                .iter()
+                .any(|a| a.name == "physics-specialist-2")
+        );
     }
 }

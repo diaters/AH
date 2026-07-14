@@ -10,9 +10,8 @@ use crate::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::domain::{
-    Agent, AgentCapabilities, ExistingAgentProfile, ExperienceCandidateStatus,
-    ExperienceStore, PendingExperienceHooks, ProfileGenerationKind,
-    ProfileGenerationRequestMessage, sanitize_tags,
+    Agent, AgentCapabilities, ExistingAgentProfile, ExperienceCandidateStatus, ExperienceStore,
+    PendingExperienceHooks, ProfileGenerationKind, ProfileGenerationRequestMessage, sanitize_tags,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -37,7 +36,10 @@ pub(crate) fn profile_update_trigger_system(
         if candidate.status != ExperienceCandidateStatus::Persisted {
             continue;
         }
-        if store.profile_update_triggered.contains(&candidate.candidate_id) {
+        if store
+            .profile_update_triggered
+            .contains(&candidate.candidate_id)
+        {
             continue;
         }
 
@@ -249,9 +251,9 @@ pub(crate) fn profile_update_writeback_system(
 mod tests {
     use super::*;
     use crate::domain::{
-        AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ExperienceCandidate,
-        ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceKindHint,
-        ExperienceStore, GeneratedProfile, ExistingAgentProfile, ProfileGenerationContext,
+        AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ExistingAgentProfile,
+        ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
+        ExperienceKindHint, ExperienceStore, GeneratedProfile, ProfileGenerationContext,
         ProfileGenerationKind,
     };
     use bevy_ecs::system::RunSystemOnce;
@@ -311,7 +313,8 @@ mod tests {
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate = make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::Persisted);
+        let candidate =
+            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::Persisted);
         store.candidates.insert(candidate.candidate_id, candidate);
 
         let agent = make_test_agent("physics-specialist", &["physics"], agent_id);
@@ -342,7 +345,8 @@ mod tests {
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate = make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::Persisted);
+        let candidate =
+            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::Persisted);
         store.candidates.insert(candidate.candidate_id, candidate);
 
         let agent = make_test_agent("default", &["default"], agent_id);
@@ -356,7 +360,10 @@ mod tests {
             .query::<&ProfileGenerationRequestMessage>()
             .iter(&world)
             .count();
-        assert_eq!(count, 0, "should not spawn update request for default agent");
+        assert_eq!(
+            count, 0,
+            "should not spawn update request for default agent"
+        );
     }
 
     /// profile_update_trigger_system：已触发的候选不重复触发
@@ -366,8 +373,11 @@ mod tests {
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate = make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::Persisted);
-        store.profile_update_triggered.insert(candidate.candidate_id);
+        let candidate =
+            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::Persisted);
+        store
+            .profile_update_triggered
+            .insert(candidate.candidate_id);
         store.candidates.insert(candidate.candidate_id, candidate);
 
         let agent = make_test_agent("physics-specialist", &["physics"], agent_id);
@@ -381,7 +391,10 @@ mod tests {
             .query::<&ProfileGenerationRequestMessage>()
             .iter(&world)
             .count();
-        assert_eq!(count, 0, "should not retrigger already processed candidates");
+        assert_eq!(
+            count, 0,
+            "should not retrigger already processed candidates"
+        );
     }
 
     /// profile_update_trigger_system：非 Persisted 候选不触发
@@ -391,8 +404,11 @@ mod tests {
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate =
-            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::WritebackPending);
+        let candidate = make_test_candidate(
+            task_id,
+            agent_id,
+            ExperienceCandidateStatus::WritebackPending,
+        );
         store.candidates.insert(candidate.candidate_id, candidate);
 
         let agent = make_test_agent("physics-specialist", &["physics"], agent_id);
@@ -431,8 +447,11 @@ description = "old description"
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate =
-            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::WritebackPending);
+        let candidate = make_test_candidate(
+            task_id,
+            agent_id,
+            ExperienceCandidateStatus::WritebackPending,
+        );
         let candidate_id = candidate.candidate_id;
         store.candidates.insert(candidate_id, candidate);
 
@@ -460,12 +479,10 @@ description = "old description"
         world.insert_resource(store);
         world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
-        world.insert_resource(crate::app::HarnessSettings(
-            crate::app::HarnessConfig {
-                agents_config_path: config_path.to_str().unwrap().to_string(),
-                ..Default::default()
-            }
-        ));
+        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
+            agents_config_path: config_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        }));
         world.spawn(agent);
 
         world
@@ -506,8 +523,11 @@ description = "old description"
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate =
-            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::WritebackPending);
+        let candidate = make_test_candidate(
+            task_id,
+            agent_id,
+            ExperienceCandidateStatus::WritebackPending,
+        );
         let candidate_id = candidate.candidate_id;
         store.candidates.insert(candidate_id, candidate);
 
@@ -534,12 +554,10 @@ description = "old description"
         world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
         // 使用不存在的配置路径
-        world.insert_resource(crate::app::HarnessSettings(
-            crate::app::HarnessConfig {
-                agents_config_path: "/nonexistent/path/agents.toml".to_string(),
-                ..Default::default()
-            }
-        ));
+        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
+            agents_config_path: "/nonexistent/path/agents.toml".to_string(),
+            ..Default::default()
+        }));
 
         world
             .run_system_once(profile_update_writeback_system)
@@ -562,8 +580,11 @@ description = "old description"
         let agent_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
-        let candidate =
-            make_test_candidate(task_id, agent_id, ExperienceCandidateStatus::WritebackPending);
+        let candidate = make_test_candidate(
+            task_id,
+            agent_id,
+            ExperienceCandidateStatus::WritebackPending,
+        );
         let candidate_id = candidate.candidate_id;
         store.candidates.insert(candidate_id, candidate);
 
@@ -573,7 +594,7 @@ description = "old description"
         world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
         world.insert_resource(crate::app::HarnessSettings(
-            crate::app::HarnessConfig::default()
+            crate::app::HarnessConfig::default(),
         ));
 
         world

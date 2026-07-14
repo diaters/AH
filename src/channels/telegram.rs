@@ -710,7 +710,8 @@ impl Channel for TelegramChannel {
                                     PendingFeedback {
                                         request_id,
                                         chat_id: message.chat.id.to_string(),
-                                        thread_id: message.message_thread_id
+                                        thread_id: message
+                                            .message_thread_id
                                             .map(|id| id.to_string()),
                                     },
                                 );
