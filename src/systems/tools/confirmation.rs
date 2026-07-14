@@ -392,6 +392,7 @@ mod tests {
         world.spawn(ToolConfirmationResponseMessage {
             request_id,
             selected_option: "deny".to_string(),
+            feedback: None,
         });
 
         world
@@ -420,6 +421,7 @@ mod tests {
         world.spawn(ToolConfirmationResponseMessage {
             request_id,
             selected_option: "allow_once".to_string(),
+            feedback: None,
         });
 
         // No executor registered, so the system will emit an error result and

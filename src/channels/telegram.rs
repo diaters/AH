@@ -722,6 +722,7 @@ impl Channel for TelegramChannel {
                                     request_id,
                                     option,
                                     label: None,
+                                    feedback: None,
                                 }),
                             };
                             let _ = tx.send(inbound);

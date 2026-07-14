@@ -348,6 +348,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
         selected_option: "approve".to_string(),
+        feedback: None,
     });
 
     app.update();
@@ -482,6 +483,7 @@ fn approved_candidate_spawns_writeback_request() {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
         selected_option: "approve".to_string(),
+        feedback: None,
     });
 
     app.update();
@@ -605,6 +607,7 @@ fn approval_to_writeback_completes_in_same_frame() {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
         selected_option: "approve".to_string(),
+        feedback: None,
     });
 
     app.update();
@@ -730,6 +733,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
         app.world_mut().spawn(ToolConfirmationResponseMessage {
             request_id: *req_id,
             selected_option: "approve".to_string(),
+            feedback: None,
         });
         app.update();
     }
@@ -907,6 +911,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
         app.world_mut().spawn(ToolConfirmationResponseMessage {
             request_id: *req_id,
             selected_option: "approve".to_string(),
+            feedback: None,
         });
         app.update();
     }

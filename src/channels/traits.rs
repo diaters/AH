@@ -23,6 +23,8 @@ pub struct InboundConfirmation {
     pub request_id: Uuid,
     pub option: String,
     pub label: Option<String>,
+    /// 拒绝并反馈场景：用户评审反馈文本。
+    pub feedback: Option<String>,
 }
 
 impl ChannelInboundMessage {
@@ -31,6 +33,7 @@ impl ChannelInboundMessage {
             return crate::domain::ExternalInput::Confirmation {
                 request_id: confirmation.request_id,
                 option: confirmation.option.clone(),
+                feedback: confirmation.feedback.clone(),
             };
         }
 
@@ -235,5 +238,29 @@ mod tests {
             json.get("InlineKeyboard").is_none(),
             "must not use Rust variant name as key"
         );
+    }
+
+    #[test]
+    fn to_external_input_propagates_feedback() {
+        let msg = ChannelInboundMessage {
+            channel_name: "telegram".to_string(),
+            sender_id: "u1".to_string(),
+            chat_id: "c1".to_string(),
+            thread_id: None,
+            content: String::new(),
+            timestamp_secs: 0,
+            confirmation: Some(InboundConfirmation {
+                request_id: Uuid::nil(),
+                option: "reject_with_feedback".to_string(),
+                label: None,
+                feedback: Some("name should be more specific".to_string()),
+            }),
+        };
+        match msg.to_external_input() {
+            crate::domain::ExternalInput::Confirmation { feedback, .. } => {
+                assert_eq!(feedback.as_deref(), Some("name should be more specific"));
+            }
+            _ => panic!("expected Confirmation"),
+        }
     }
 }

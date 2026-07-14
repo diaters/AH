@@ -135,6 +135,8 @@ pub enum ExternalInput {
     Confirmation {
         request_id: Uuid,
         option: String,
+        /// 拒绝并反馈场景：用户评审反馈文本。
+        feedback: Option<String>,
     },
     /// Webhook 事件
     Webhook {
@@ -343,6 +345,8 @@ pub struct ToolConfirmationRequestMessage {
 pub struct ToolConfirmationResponseMessage {
     pub request_id: Uuid,
     pub selected_option: String,
+    /// 拒绝并反馈场景：用户评审反馈文本。
+    pub feedback: Option<String>,
 }
 
 /// 审批请求消息

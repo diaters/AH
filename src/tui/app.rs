@@ -325,6 +325,7 @@ impl App {
                         channel,
                         request_id,
                         option_id: option.id.clone(),
+                        feedback: None,
                     });
 
                     // 更新消息列表中的审批卡片状态

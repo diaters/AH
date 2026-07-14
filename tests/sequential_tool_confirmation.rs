@@ -254,6 +254,7 @@ fn inject_confirmation(app: &mut App, request_id: &Uuid, option: &str) {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id: *request_id,
         selected_option: option.to_string(),
+        feedback: None,
     });
 }
 

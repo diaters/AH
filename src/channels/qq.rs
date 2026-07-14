@@ -781,6 +781,7 @@ impl QqChannel {
                 request_id: pending.request_id,
                 option: opt.id.clone(),
                 label: Some(opt.label.clone()),
+                feedback: None,
             })
         } else {
             None
