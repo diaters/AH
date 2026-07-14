@@ -53,7 +53,8 @@
 
 #### 决策 2：专用 profile-designer Agent
 
-新增 `profile-designer` Agent，在 `agents.toml` 中预配置，类似 `collector`、`evaluator` 等角色 Agent。其 system prompt 专门优化为"根据经验候选生成 Agent 角色名、核心能力标签和职责描述"。
+新增 `profile-designer` Agent，在 `agents.toml` 中预配置，类似 `collector`、`evaluator` 等角色 Agent。
+其 system prompt 专门优化为"根据经验候选生成 Agent 角色名、核心能力标签和职责描述"。
 
 同时服务孵化（生成新 profile）和更新（评估 + 生成更新后 profile）两个场景。
 
@@ -61,11 +62,12 @@
 
 审批界面展示 LLM 生成的 profile（name/tags/description），用户可以：
 
-- **批准**：直接批准 LLM 生成的 profile
-- **拒绝**：终止孵化/更新流程
-- **拒绝并反馈**：提供评审建议，反馈注入 LLM 上下文，驱动重新生成，进入新一轮审批
+- __批准__：直接批准 LLM 生成的 profile
+- __拒绝__：终止孵化/更新流程
+- __拒绝并反馈__：提供评审建议，反馈注入 LLM 上下文，驱动重新生成，进入新一轮审批
 
-“拒绝并反馈”是一个通用机制，不针对 profile 审批定制 UI。用户只需输入文本反馈，由 LLM 理解反馈后重新生成。设有重试上限（`MAX_PROFILE_GENERATION_RETRIES = 3`），达到上限后不再允许反馈，用户必须做出终局决策。详见 3.7 节。
+"拒绝并反馈"是一个通用机制，不针对 profile 审批定制 UI。用户只需输入文本反馈，由 LLM 理解反馈后重新生成。
+设有重试上限（`MAX_PROFILE_GENERATION_RETRIES = 3`），达到上限后不再允许反馈，用户必须做出终局决策。详见 3.7 节。
 
 ### 2.2 更新流程：已有 Agent 的 tags/description 演进
 
@@ -75,7 +77,7 @@
 
 两条写回路径对称触发，统一由 `profile-designer` Agent 执行评估。
 
-**频率控制**：为避免高频写回导致过多 LLM 调用，代码中预留冷却期接口（`ProfileUpdateCooldown` Resource），默认不启用。后续可通过配置启用，如同一 Agent 在 N 分钟内最多触发一次更新评估。首次实现先每次触发，但接口已就位。
+__频率控制__：为避免高频写回导致过多 LLM 调用，代码中预留冷却期接口（`ProfileUpdateCooldown` Resource），默认不启用。后续可通过配置启用，如同一 Agent 在 N 分钟内最多触发一次更新评估。首次实现先每次触发，但接口已就位。
 
 #### 决策 5：tags 更新语义
 
@@ -94,10 +96,11 @@
 
 #### 决策 7：立即生效与原子性
 
-profile 更新被用户批准后，采用**先文件后 ECS** 的两阶段提交：
+profile 更新被用户批准后，采用__先文件后 ECS__ 的两阶段提交：
 
-1. **第一阶段**：写入 `agents.toml`（修改已有条目，非追加）。若写入失败，终止流程并标记候选为 `WritebackFailed`，不影响 ECS 状态。
-2. **第二阶段**：文件写入成功后，通过 `Commands::entity(...).insert()` 更新 ECS 中对应 Agent 实体的 `AgentCapabilities` 组件。若 ECS 更新失败（实体不存在等），记录 `warn!` 告警并标记为不一致状态——文件已是最新值，下次重启后自动恢复一致。
+1. __第一阶段__：写入 `agents.toml`（修改已有条目，非追加）。若写入失败，终止流程并标记候选为 `WritebackFailed`，不影响 ECS 状态。
+2. __第二阶段__：文件写入成功后，通过 `Commands::entity(...).insert()` 更新 ECS 中对应 Agent 实体的 `AgentCapabilities` 组件。
+   若 ECS 更新失败（实体不存在等），记录 `warn!` 告警并标记为不一致状态——文件已是最新值，下次重启后自动恢复一致。
 
 Brain 调度时立即使用新的 tags。短暂不一致（文件已更新但 ECS 未更新）只会导致当前帧使用旧 tags，影响可忽略。
 
@@ -114,15 +117,17 @@ Brain 调度时立即使用新的 tags。短暂不一致（文件已更新但 EC
 
 #### 决策 9：name 唯一性双重保障
 
-1. **Prompt 注入**：profile generation WorkItem 的 prompt 中注入现有 Agent name 列表，指示 LLM 不要使用已存在的名字。当前 Agent 数量通常为个位数，全部注入不影响 token 预算；若未来 Agent 数量增长，可限制为最近 N 个或按 tag 分组注入。
-2. **写回兜底**：`writeback_incubation_proposal` 中检查 LLM 生成的 name 是否已存在，重名时自动追加数字后缀（如 `physics-specialist-2`）。需新增 `append_or_rename` 方法（见 3.6），现有 `append` 方法的静默跳过行为不满足需求。
+1. __Prompt 注入__：profile generation WorkItem 的 prompt 中注入现有 Agent name 列表，指示 LLM 不要使用已存在的名字。
+   当前 Agent 数量通常为个位数，全部注入不影响 token 预算；若未来 Agent 数量增长，可限制为最近 N 个或按 tag 分组注入。
+2. __写回兜底__：`writeback_incubation_proposal` 中检查 LLM 生成的 name 是否已存在，重名时自动追加数字后缀（如 `physics-specialist-2`）。
+   需新增 `append_or_rename` 方法（见 3.6），现有 `append` 方法的静默跳过行为不满足需求。
 
 #### 决策 10：受保护标签集合
 
 系统标签 `{"incubated", "default"}` 受保护：
 
-- **`incubated`**：孵化时系统自动注入到 LLM 生成的 tags 中；profile 更新时，即使 LLM 全量替换的输出中不包含 `incubated`，系统也会自动补回
-- **`default`**：LLM 不得生成此标签；写回时从 LLM 输出中过滤；现有 Agent 的 `default` 状态在更新时不可被改变（有则保留，无则不可添加）
+- __`incubated`__：孵化时系统自动注入到 LLM 生成的 tags 中；profile 更新时，即使 LLM 全量替换的输出中不包含 `incubated`，系统也会自动补回
+- __`default`__：LLM 不得生成此标签；写回时从 LLM 输出中过滤；现有 Agent 的 `default` 状态在更新时不可被改变（有则保留，无则不可添加）
 
 实现为统一的 `protected_tags` 集合，在写入前统一过滤。
 
@@ -248,7 +253,9 @@ submit_profile_update = "Allow"
 skip_profile_update = "Allow"
 ```
 
-**孵化 Agent 的 model 继承**：孵化时继承 default Agent 的完整 `models` 链（而非单 `model` 字符串），确保孵化出的 Agent 具备多模型降级能力。`IncubatedAgentRecord` 需扩展为携带 `models: Vec<ModelChainEntry>`，写回时同时写入 `models` 链。若 default Agent 使用单 `model` 字段（向后兼容），则自动转换为单元素 `models` 链。
+__孵化 Agent 的 model 继承__：孵化时继承 default Agent 的完整 `models` 链（而非单 `model` 字符串），确保孵化出的 Agent 具备多模型降级能力。
+`IncubatedAgentRecord` 需扩展为携带 `models: Vec<ModelChainEntry>`，写回时同时写入 `models` 链。
+若 default Agent 使用单 `model` 字段（向后兼容），则自动转换为单元素 `models` 链。
 
 ### 3.4 管线变更
 
@@ -330,7 +337,8 @@ impl IncubatedAgentRegistry {
 
 - `append_or_rename`：读取 `agents.toml` 检查 name 是否已存在。若重名，追加 `-2`、`-3` 后缀直到唯一，然后写入。record 的 name 字段会被就地修改为最终写入的 name。
 - `update` 方法读取 `agents.toml`，按 name 查找条目，替换 tags 和 description，原子写回。model、models、tools、skills 等其他字段不变。
-- `IncubatedAgentRecord` 扩展：新增 `models: Vec<ModelChainEntry>` 字段，与现有 `model` 字段并存。写回时优先写入 `models` 链；若 `models` 为空则回退到 `model` 字符串。
+- `IncubatedAgentRecord` 扩展：新增 `models: Vec<ModelChainEntry>` 字段，与现有 `model` 字段并存。
+  写回时优先写入 `models` 链；若 `models` 为空则回退到 `model` 字符串。
 
 ### 3.7 审批“拒绝并反馈”机制
 
@@ -338,9 +346,9 @@ impl IncubatedAgentRegistry {
 
 #### 设计原则
 
-- **通用机制**：不针对 profile 审批定制 UI，任何审批均可选择“拒绝并反馈”
-- **LLM 重新思考**：用户不直接编辑字段，而是提供文本反馈，由 LLM 理解反馈后重新生成
-- **`ConfirmationOption` 不变**：现有 struct 无需修改，通过新增标准选项 `id = "reject_with_feedback"` 实现
+- __通用机制__：不针对 profile 审批定制 UI，任何审批均可选择“拒绝并反馈”
+- __LLM 重新思考__：用户不直接编辑字段，而是提供文本反馈，由 LLM 理解反馈后重新生成
+- __`ConfirmationOption` 不变__：现有 struct 无需修改，通过新增标准选项 `id = "reject_with_feedback"` 实现
 
 #### 数据流
 
@@ -461,14 +469,14 @@ profile 审批的选项列表：
 
 #### IM 通道交互（Telegram / QQ）
 
-IM 通道的审批当前是“点击=立即确认”模式（Telegram Inline Keyboard / QQ 编号回复），不支持点击后再输入文本。需要引入**两步交互**：
+IM 通道的审批当前是“点击=立即确认”模式（Telegram Inline Keyboard / QQ 编号回复），不支持点击后再输入文本。需要引入__两步交互__：
 
-**步骤 1**：用户选择“Reject & Feedback”选项
+__步骤 1__：用户选择“Reject & Feedback”选项
 
 - Telegram：点击 `Reject & Feedback` 按钮，`callback_data = "{request_id}:reject_with_feedback"`
 - QQ：回复数字编号（如 `3`）或选项名称
 
-**步骤 2**：通道进入“等待反馈”状态，提示用户输入
+__步骤 2__：通道进入“等待反馈”状态，提示用户输入
 
 ```text
 📝 请输入评审建议：
@@ -490,14 +498,15 @@ pending_feedback: Arc<RwLock<HashMap<String, PendingFeedback>>>,
 // key 为 recipient（如 "user:12345" 或 "group:67890"）
 ```
 
-**步骤 3**：用户发送文本消息，通道捕获为 feedback
+__步骤 3__：用户发送文本消息，通道捕获为 feedback
 
 - 通道检测到 `pending_feedback` 中有该 recipient 的记录
-- 将用户发送的文本作为 `feedback`，与 `request_id` 和 `option = "reject_with_feedback"` 组装为 `InboundConfirmation { feedback: Some(text) }`
+- 将用户发送的文本作为 `feedback`，与 `request_id` 和 `option = "reject_with_feedback"`
+  组装为 `InboundConfirmation { feedback: Some(text) }`
 - 清除 `pending_feedback` 记录
 - 如果用户发送 `/cancel` 或超时（如 5 分钟），取消反馈，视为普通拒绝
 
-**QQ 通道简化方案**：QQ 已支持文本回复匹配，用户可在选择“拒绝并反馈”后直接在同一消息中追加反馈文本，格式为 `3 反馈内容`（编号 + 空格 + 反馈）。通道解析后直接携带 feedback，无需两步交互。
+__QQ 通道简化方案__：QQ 已支持文本回复匹配，用户可在选择“拒绝并反馈”后直接在同一消息中追加反馈文本，格式为 `3 反馈内容`（编号 + 空格 + 反馈）。通道解析后直接携带 feedback，无需两步交互。
 
 #### 重试上限
 
@@ -588,7 +597,7 @@ WorkItem 构建模式与经验收集 WorkItem 一致：
 - Prompt 包含所有候选的 title + payload
 - 孵化场景：prompt 中额外注入现有 Agent name 列表（避免重名）
 - 更新场景：prompt 中注入当前 profile（name/tags/description）+ 新增经验条目
-- **重试场景**（`feedback` 存在时）：prompt 中额外注入上一次生成的 profile + 用户反馈文本 + 指令“根据用户反馈重新生成 profile”
+- __重试场景__（`feedback` 存在时）：prompt 中额外注入上一次生成的 profile + 用户反馈文本 + 指令“根据用户反馈重新生成 profile”
 
 ### 4.3 错误处理
 
@@ -599,11 +608,11 @@ profile generation WorkItem 可能遇到以下失败路径：
 | LLM 未调用任何工具 | 超时后标记候选为 `WritebackFailed`，记录 `warn!` 日志。孵化场景回退到硬编码 `incubated-{task_id}` name，确保流程不中断 |
 | LLM 调用了非允许工具 | WorkItem 的 `default_permission = Deny` 会拦截未授权工具调用，LLM 重试后仍未调用正确工具则同上超时处理 |
 | LLM 调用超时或 Provider 错误 | WorkItem 的 LLM 调用失败重试机制（现有）处理后仍失败，标记 `WritebackFailed`。孵化场景回退硬编码 name |
-| 生成的 profile 字段校验失败（name 为空、tags 为空） | `profile_generation_completion_system` 中校验，校验失败标记 `WritebackFailed`，孵化场景回退硬编码 name |
+| 生成的 profile 字段校验失败（name 为空、tags 为空） | `completion_system` 校验失败标记 `WritebackFailed`，孵化场景回退硬编码 name |
 | `skip_profile_update` 返回的 profile 为空（更新场景） | 正常路径，不是错误——表示不需要更新 |
 | 用户拒绝并反馈达到重试上限 | 选项列表不再包含“Reject & Feedback”，用户必须 Approve 或 Reject |
 
-**回退策略**：仅孵化场景有回退（硬编码 name + 空描述），更新场景失败不影响 Agent 现有 profile，仅记录日志。
+__回退策略__：仅孵化场景有回退（硬编码 name + 空描述），更新场景失败不影响 Agent 现有 profile，仅记录日志。
 
 ### 4.4 插件 Hook
 
@@ -611,8 +620,8 @@ profile generation WorkItem 可能遇到以下失败路径：
 
 | Hook 名称 | 触发时机 | 参数 |
 |-----------|----------|------|
-| `on_agent_profile_generated` | profile generation WorkItem 完成 | `agent_name`, `tags`, `description`, `kind`(incubation/update) |
-| `on_agent_profile_updated` | profile 更新写回成功（用户审批后） | `agent_name`, `old_tags`, `new_tags`, `old_description`, `new_description` |
+| `on_agent_profile_generated` | profile generation WorkItem 完成 | `agent_name`, `tags`, `description`, `kind` |
+| `on_agent_profile_updated` | profile 更新写回成功（用户审批后） | `agent_name`, `old_tags`, `new_tags`, `old_desc`, `new_desc` |
 | `on_agent_incubated` | 孵化 Agent 写入 agents.toml 成功 | `agent_name`, `tags`, `description` |
 
 `on_agent_profile_generated` 在 LLM 生成后、用户审批前触发，允许插件观察但不阻止。`on_agent_profile_updated` 和 `on_agent_incubated` 在写回成功后触发。
@@ -625,24 +634,24 @@ profile generation WorkItem 可能遇到以下失败路径：
 
 | 文件 | 变更内容 |
 |------|----------|
-| `src/domain/contribution.rs` | 新增 `ProfileGenerationRequestMessage`、`ProfileGenerationCompletedMessage`、`GeneratedProfile`、`ProfileGenerationKind`；`ExperienceCandidateStatus` 新增 `ProfileGenerationPending` |
+| `src/domain/contribution.rs` | 新增 profile generation 相关类型；`ExperienceCandidateStatus` 新增 `ProfileGenerationPending` |
 | `src/domain/agent.rs` | `AgentProfile` 可选扩展（或复用现有） |
-| `src/systems/experience/governance.rs` | `spawn_incubation_confirmation` 改为 spawn profile generation request，不再直接构造 profile |
+| `src/systems/experience/governance.rs` | `spawn_incubation_confirmation` 改为 spawn profile generation request |
 | `src/systems/experience/writeback.rs` | `writeback_incubation_proposal` 使用 LLM 生成的 profile；写回时 name 唯一性兜底 |
 | `src/systems/experience/mod.rs` | 新增 `profile_generation` 模块 |
 | `src/systems/experience/profile_generation.rs` | 新文件：WorkItem 创建 + 完成处理系统 |
 | `src/systems/experience/profile_update.rs` | 新文件：更新触发 + 更新写回系统 |
-| `src/infrastructure/incubation/agent_registry.rs` | 新增 `append_or_rename`、`update` 方法；`IncubatedAgentRecord` 新增 `models` 字段 |
+| `src/infrastructure/incubation/agent_registry.rs` | 新增 `append_or_rename`、`update`；`IncubatedAgentRecord` 加 `models` |
 | `src/plugins/execution.rs` | 注册新系统 |
 | `src/domain/tool_*` | 新增 `submit_profile_update` / `skip_profile_update` 工具定义与处理 |
 | `src/domain/frontend.rs` | `UserAction::Confirmation` 新增 `feedback: Option<String>` 字段 |
 | `src/domain/message.rs` | `ToolConfirmationResponseMessage` 新增 `feedback: Option<String>` 字段 |
-| `src/channels/traits.rs` | `InboundConfirmation` 和 `ExternalInput::Confirmation` 新增 `feedback: Option<String>` 字段；`to_external_input()` 传递 feedback |
+| `src/channels/traits.rs` | `InboundConfirmation`/`ExternalInput::Confirmation` 加 `feedback`；`to_external_input()` 传递 |
 | `src/channels/telegram.rs` | 新增 `pending_feedback` 状态；两步交互（点击按钮 → 提示输入 → 捕获文本） |
 | `src/channels/qq.rs` | `try_match_approval_reply` 支持 `编号 + 反馈文本` 格式解析 |
 | `src/channels/frontend.rs` | `ApprovalRequest` 出向消息包含 `Reject & Feedback` 选项 |
-| `src/systems/experience/experience_hook.rs` | 新增 `on_agent_profile_generated`、`on_agent_profile_updated`、`on_agent_incubated` hook 派发 |
-| `src/systems/experience/approval.rs` | 检测 `reject_with_feedback` 选项，携带 feedback 重新 spawn `ProfileGenerationRequestMessage` |
+| `src/systems/experience/experience_hook.rs` | 新增 `on_agent_profile_generated`/`updated`/`incubated` hook 派发 |
+| `src/systems/experience/approval.rs` | 检测 `reject_with_feedback`，携带 feedback 重 spawn 生成请求 |
 | `src/tui/` | 审批选项新增“Reject & Feedback”，选择后进入文本输入模式 |
 | `agents.toml.example` | 新增 `profile-designer` Agent 配置 |
 
@@ -670,19 +679,20 @@ profile generation WorkItem 可能遇到以下失败路径：
 
 ### 6.2 集成测试
 
-- **孵化端到端**：default Agent 经验 → 收集 → 治理 → profile generation → 审批 → 写回，验证 agents.toml 中新增条目的 name/tags/description 为 LLM 生成值，且包含 `models` 链
-- **name 唯一性兜底**：LLM 生成重名时 `append_or_rename` 自动追加后缀
-- **受保护标签**：LLM 输出含 `default` 时被过滤；孵化结果包含 `incubated`；LLM 输出重复标签时被去重
-- **更新评估-需要更新**：持久型 Agent LTM 写回 → profile 更新评估 → LLM 提议更新 → 审批 → 验证 ECS 组件和 agents.toml 同步更新
-- **更新评估-不需要更新**：LLM 调用 `skip_profile_update` → 静默结束，无审批请求
-- **拒绝并反馈**：用户拒绝并提供反馈 → LLM 根据反馈重新生成 → 验证新 profile 反映了反馈内容 → 第二轮审批通过
-- **重试上限**：连续 3 次拒绝并反馈后，选项列表不再包含“Reject & Feedback”
-- **IM 通道拒绝并反馈-Telegram**：用户点击“Reject & Feedback”按钮 → Bot 提示输入 → 用户发送文本 → 验证 `InboundConfirmation` 携带 feedback → LLM 重新生成
-- **IM 通道拒绝并反馈-QQ**：用户回复 `3 name 太笼统` → 验证 feedback 被正确解析 → LLM 重新生成
-- **IM 通道反馈取消**：用户点击“Reject & Feedback”后发送 `/cancel` → 验证视为普通拒绝
-- **name 不可更新**：更新场景下 LLM 生成的 name 被系统忽略，写回时使用原 name
-- **孵化失败回退**：LLM 超时未调用工具 → 回退硬编码 name → agents.toml 仍写入条目
-- **更新原子性**：agents.toml 写入成功但 ECS 更新失败 → 记录告警日志，下次启动恢复一致
+- __孵化端到端__：default Agent 经验 → 收集 → 治理 → profile generation → 审批 → 写回，
+  验证 agents.toml 中新增条目的 name/tags/description 为 LLM 生成值，且包含 `models` 链
+- __name 唯一性兜底__：LLM 生成重名时 `append_or_rename` 自动追加后缀
+- __受保护标签__：LLM 输出含 `default` 时被过滤；孵化结果包含 `incubated`；LLM 输出重复标签时被去重
+- __更新评估-需要更新__：持久型 Agent LTM 写回 → profile 更新评估 → LLM 提议更新 → 审批 → 验证 ECS 组件和 agents.toml 同步更新
+- __更新评估-不需要更新__：LLM 调用 `skip_profile_update` → 静默结束，无审批请求
+- __拒绝并反馈__：用户拒绝并提供反馈 → LLM 根据反馈重新生成 → 验证新 profile 反映了反馈内容 → 第二轮审批通过
+- __重试上限__：连续 3 次拒绝并反馈后，选项列表不再包含“Reject & Feedback”
+- __IM 通道拒绝并反馈-Telegram__：用户点击“Reject & Feedback”按钮 → Bot 提示输入 → 用户发送文本 → 验证 `InboundConfirmation` 携带 feedback → LLM 重新生成
+- __IM 通道拒绝并反馈-QQ__：用户回复 `3 name 太笼统` → 验证 feedback 被正确解析 → LLM 重新生成
+- __IM 通道反馈取消__：用户点击“Reject & Feedback”后发送 `/cancel` → 验证视为普通拒绝
+- __name 不可更新__：更新场景下 LLM 生成的 name 被系统忽略，写回时使用原 name
+- __孵化失败回退__：LLM 超时未调用工具 → 回退硬编码 name → agents.toml 仍写入条目
+- __更新原子性__：agents.toml 写入成功但 ECS 更新失败 → 记录告警日志，下次启动恢复一致
 
 ---
 
