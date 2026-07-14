@@ -64,8 +64,8 @@ pub use contribution::{
     ExperienceInboxStatus, ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
     ExperienceWritebackRequestMessage, GeneratedProfile, IncubationProposal,
     IncubationProposalStatus, MAX_PROFILE_GENERATION_RETRIES, PendingExperienceHooks,
-    ProfileGenerationCompletedMessage, ProfileGenerationKind, ProfileGenerationRequestMessage,
-    SkillFileRef, SkillFileRole, sanitize_tags,
+    ProfileGenerationCompletedMessage, ProfileGenerationContext, ProfileGenerationKind,
+    ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole, sanitize_tags,
 };
 
 // error

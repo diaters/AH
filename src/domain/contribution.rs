@@ -218,6 +218,18 @@ pub struct ExperienceStore {
     pub proposals: std::collections::HashMap<TaskId, IncubationProposal>,
     /// 审批请求 ID 到候选 ID 的精确绑定。
     approval_bindings: std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
+    /// profile 生成上下文：以 task_id 为 key 暂存 kind 与 retry_count，
+    /// 由 `profile_generation_workitem_system` 写入，
+    /// 由 orchestrator 的 SubmitProfileUpdate/SkipProfileUpdate 分支读取后清理。
+    pub profile_generation_context: std::collections::HashMap<TaskId, ProfileGenerationContext>,
+}
+
+/// profile 生成运行时上下文：在 ExperienceStore 中暂存，
+/// 用于在 orchestrator（工具执行）与 completion_system（完成处理）之间传递 kind/retry_count。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileGenerationContext {
+    pub kind: ProfileGenerationKind,
+    pub retry_count: u32,
 }
 
 impl ExperienceStore {

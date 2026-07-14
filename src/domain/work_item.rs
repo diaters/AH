@@ -22,6 +22,8 @@ pub enum WorkItemType {
     Evaluation,
     /// 经验收集工作项
     ExperienceCollection,
+    /// profile 生成工作项（孵化场景生成新 profile，更新场景评估并生成更新后 profile）
+    ProfileGeneration,
 }
 
 /// 工作项状态
@@ -257,6 +259,50 @@ impl WorkItem {
             WorkItemWritebackTarget::ExperienceInbox,
         );
         wi.parent_task_id = parent_task_id;
+        wi.governing_agent_id = Some(governing_agent_id);
+        wi
+    }
+
+    /// 创建 profile 生成工作项
+    ///
+    /// `kind` 决定 system_prompt 内容（孵化 vs 更新）。
+    /// 实际的 kind 与 retry_count 通过 ExperienceStore 临时字段传递到 completion 阶段，
+    /// 因 WorkItem 结构不承载 profile 生成元数据。
+    pub fn profile_generation(
+        task_id: TaskId,
+        prompt: String,
+        conversation: Vec<ConversationMessage>,
+        tools: Vec<ToolDefinition>,
+        governing_agent_id: AgentId,
+        kind: crate::domain::ProfileGenerationKind,
+    ) -> Self {
+        let tags = TagSet::from_tags(["profile"]);
+        let system_prompt = match kind {
+            crate::domain::ProfileGenerationKind::Incubation => {
+                "你是一名 Agent 元信息设计师。请根据提供的经验候选，生成一个新 Agent 的角色名、能力标签和职责描述。\
+                 必须调用 submit_profile_update 提交结果，或调用 skip_profile_update 表示无法生成。"
+                    .to_string()
+            }
+            crate::domain::ProfileGenerationKind::Update => {
+                "你是一名 Agent 元信息设计师。请评估现有 Agent profile 是否需要根据新经验更新 tags/description。\
+                 若需要更新，调用 submit_profile_update 提交新 profile；若不需要，调用 skip_profile_update。"
+                    .to_string()
+            }
+        };
+        let context = WorkItemContext {
+            conversation: Some(conversation),
+            tools,
+            system_prompt: Some(system_prompt),
+        };
+        let input = WorkItemInput { prompt, context };
+        let mut wi = Self::new(
+            task_id,
+            WorkItemType::ProfileGeneration,
+            input,
+            tags,
+            WorkItemOrigin::ExperienceCollection,
+            WorkItemWritebackTarget::ExperienceInbox,
+        );
         wi.governing_agent_id = Some(governing_agent_id);
         wi
     }
