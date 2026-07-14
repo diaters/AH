@@ -14,6 +14,7 @@
 | `2026-05-24-genai-migration-design.md` | 当前有效（决策背景） | 记录 `genai` 替换方案与 provider 设计原因 | 适合理解当前 LLM 接入来源 |
 | `2026-05-14-brain-agent-design.md` | 历史背景 | Brain 调度早期设计 | 当前能力仍有效，但表述使用旧阶段语境 |
 | `2026-05-17-multi-turn-memory-design.md` | 历史背景 | 多轮对话与记忆管理设计 | 当前记忆链路已结合 summarization 与 WorkItem 演进 |
+| `2026-07-13-agent-profile-llm-generation-design.md` | 当前有效 | Agent 元信息 LLM 生成与动态更新 | 孵化时 LLM 生成 name/tags/description，持久型 Agent 经验积累后自动评估更新 |
 
 ## 推荐阅读顺序
 
