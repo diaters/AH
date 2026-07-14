@@ -318,6 +318,11 @@ fn handle_incubation_profile_completed(
         store.merge_into_proposal(task_id, agent_id, agent_profile, &candidate);
     }
 
+    // 将 LLM 生成的 profile 存入 context，供 writeback_incubation_proposal 读取
+    if let Some(context) = store.profile_generation_context.get_mut(&task_id) {
+        context.generated_profile = Some(generated.clone());
+    }
+
     // 4. 发起审批（选项包含 Approve、Reject、Reject & Feedback）
     spawn_profile_approval(
         commands,
