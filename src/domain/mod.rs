@@ -58,14 +58,15 @@ pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource,
 
 // contribution
 pub use contribution::{
-    ExistingAgentProfile, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-    ExperienceCandidateStatus as ExperienceStatus, ExperienceCollectionRequestMessage,
-    ExperienceGovernanceDecision, ExperienceGovernanceRequestMessage, ExperienceInbox,
-    ExperienceInboxStatus, ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, GeneratedProfile, IncubationProposal,
-    IncubationProposalStatus, MAX_PROFILE_GENERATION_RETRIES, PendingExperienceHooks,
-    ProfileGenerationCompletedMessage, ProfileGenerationContext, ProfileGenerationKind,
-    ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole, sanitize_tags,
+    ExistingAgentProfile, ExperienceCandidate, ExperienceCandidatePayload,
+    ExperienceCandidateStatus, ExperienceCandidateStatus as ExperienceStatus,
+    ExperienceCollectionRequestMessage, ExperienceGovernanceDecision,
+    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint,
+    ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
+    GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_GENERATION_RETRIES,
+    PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
+    ProfileGenerationKind, ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole,
+    sanitize_tags,
 };
 
 // error

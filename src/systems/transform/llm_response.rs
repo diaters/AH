@@ -115,9 +115,9 @@ fn handle_profile_generation_no_tool_call(
     }
 
     // 标记 WorkItem 失败并 despawn
-    commands.entity(work_item_entity).insert(WorkItemLifecycleHookPending(
-        HookPoint::OnWorkItemFailed,
-    ));
+    commands
+        .entity(work_item_entity)
+        .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
     commands.entity(work_item_entity).despawn();
     commands.entity(result_entity).despawn();
 }

@@ -13,10 +13,10 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentProfile, AgentRequestKind, ConfirmationOption,
-    ConfirmationSource, ExperienceCandidatePayload, ExperienceStore, ProfileGenerationContext,
-    ProfileGenerationKind, ProfileGenerationRequestMessage, ProfileGenerationCompletedMessage,
-    SpaceToolRegistry, TaskId, ToolCalledHookPending, ToolConfirmationRequestMessage,
-    ToolExecutionRequestMessage, WorkItem,
+    ConfirmationSource, ExperienceCandidatePayload, ExperienceStore,
+    ProfileGenerationCompletedMessage, ProfileGenerationContext, ProfileGenerationKind,
+    ProfileGenerationRequestMessage, SpaceToolRegistry, TaskId, ToolCalledHookPending,
+    ToolConfirmationRequestMessage, ToolExecutionRequestMessage, WorkItem,
 };
 
 /// profile 生成 WorkItem 创建系统：将生成请求转换为独立 WorkItem 分配给 profile-designer。
@@ -48,12 +48,14 @@ pub(crate) fn profile_generation_workitem_system(
             }
         };
 
-        // 2. 暂存 kind 与 retry_count 到 ExperienceStore，供 orchestrator/completion 读取
+        // 2. 暂存 kind/retry_count/existing_profile 到 ExperienceStore，
+        //    供 orchestrator/completion/approval 读取
         store.profile_generation_context.insert(
             request.task_id,
             ProfileGenerationContext {
                 kind: request.kind.clone(),
                 retry_count: request.retry_count,
+                existing_profile: request.existing_profile.clone(),
             },
         );
 
@@ -237,8 +239,9 @@ pub(crate) fn profile_generation_completion_system(
     messages: Query<(Entity, &ProfileGenerationCompletedMessage)>,
 ) {
     for (entity, msg) in &messages {
-        // 从 store 取出暂存的 context（kind, retry_count）
-        let ctx = store.profile_generation_context.remove(&msg.task_id);
+        // 从 store 读取暂存的 context（kind, retry_count, existing_profile）
+        // 注意：不 remove，因为审批阶段（reject_with_feedback）仍需读取此上下文
+        let ctx = store.profile_generation_context.get(&msg.task_id).cloned();
 
         match msg.kind {
             ProfileGenerationKind::Incubation => {
@@ -305,7 +308,10 @@ fn handle_incubation_profile_completed(
             .unwrap_or_default(),
     };
     // merge_into_proposal 需要 candidate，从 store 中查找该 task 的候选
-    if let Some(candidate_id) = store.governance_candidates_for_task(task_id).first().copied()
+    if let Some(candidate_id) = store
+        .governance_candidates_for_task(task_id)
+        .first()
+        .copied()
         && let Some(candidate) = store.candidates.get(&candidate_id).cloned()
     {
         store.merge_into_proposal(task_id, agent_id, agent_profile, &candidate);
@@ -355,8 +361,7 @@ fn handle_update_profile_completed(
             "profile update proposed, awaiting approval"
         );
         // 发起更新审批（复用 spawn_profile_approval）
-        let sanitized_tags =
-            crate::domain::sanitize_tags(generated.tags.clone(), &generated.tags);
+        let sanitized_tags = crate::domain::sanitize_tags(generated.tags.clone(), &generated.tags);
         spawn_profile_approval(
             commands,
             store,
@@ -398,7 +403,11 @@ fn spawn_profile_approval(
     let request_id = uuid::Uuid::new_v4();
 
     // 绑定到第一个候选（若存在）
-    if let Some(candidate_id) = store.governance_candidates_for_task(task_id).first().copied() {
+    if let Some(candidate_id) = store
+        .governance_candidates_for_task(task_id)
+        .first()
+        .copied()
+    {
         store.bind_approval_request(request_id, candidate_id);
     }
 
@@ -734,8 +743,10 @@ mod tests {
         let ctx = ProfileGenerationContext {
             kind: ProfileGenerationKind::Incubation,
             retry_count: 2,
+            existing_profile: None,
         };
         assert_eq!(ctx.kind, ProfileGenerationKind::Incubation);
         assert_eq!(ctx.retry_count, 2);
+        assert!(ctx.existing_profile.is_none());
     }
 }

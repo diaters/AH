@@ -40,10 +40,14 @@ impl BuiltinTool for SubmitProfileUpdateTool {
             .to_string();
 
         if name.is_empty() {
-            return Err(ToolError::InvalidInput("name must not be empty".to_string()));
+            return Err(ToolError::InvalidInput(
+                "name must not be empty".to_string(),
+            ));
         }
         if tags.is_empty() {
-            return Err(ToolError::InvalidInput("tags must not be empty".to_string()));
+            return Err(ToolError::InvalidInput(
+                "tags must not be empty".to_string(),
+            ));
         }
         if description.is_empty() {
             return Err(ToolError::InvalidInput(

@@ -225,11 +225,14 @@ pub struct ExperienceStore {
 }
 
 /// profile 生成运行时上下文：在 ExperienceStore 中暂存，
-/// 用于在 orchestrator（工具执行）与 completion_system（完成处理）之间传递 kind/retry_count。
+/// 用于在 orchestrator（工具执行）、completion_system（完成处理）与
+/// approval_system（拒绝并反馈重试）之间传递 kind/retry_count/existing_profile。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileGenerationContext {
     pub kind: ProfileGenerationKind,
     pub retry_count: u32,
+    /// 更新场景下保存现有 profile，供拒绝并反馈重试时重新构建请求。
+    pub existing_profile: Option<ExistingAgentProfile>,
 }
 
 impl ExperienceStore {
@@ -472,7 +475,7 @@ pub const MAX_PROFILE_GENERATION_RETRIES: u32 = 3;
 
 /// 现有 Agent profile：更新场景下作为 LLM 评估输入。
 #[allow(dead_code)] // 任务 6 起使用
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExistingAgentProfile {
     pub name: String,
     pub tags: Vec<String>,
@@ -813,7 +816,13 @@ mod tests {
         // incubated 从 existing 中补回
         assert!(result.contains(&"incubated".to_string()));
         // 去重
-        assert_eq!(result.iter().filter(|t| t == &&"physics".to_string()).count(), 1);
+        assert_eq!(
+            result
+                .iter()
+                .filter(|t| t == &&"physics".to_string())
+                .count(),
+            1
+        );
         // 保留非保护标签
         assert!(result.contains(&"calculation".to_string()));
     }

@@ -155,7 +155,11 @@ impl IncubatedAgentRegistry {
             .iter_mut()
             .find(|a| a.name == agent_name)
             .ok_or_else(|| {
-                anyhow::anyhow!("agent '{}' not found in {}", agent_name, config_path.display())
+                anyhow::anyhow!(
+                    "agent '{}' not found in {}",
+                    agent_name,
+                    config_path.display()
+                )
             })?;
 
         entry.tags = new_tags.to_vec();
