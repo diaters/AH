@@ -178,12 +178,22 @@ pub fn sanitize_tags(llm_tags: Vec<String>, existing_tags: &[String]) -> Vec<Str
 
 在 `ExperienceCandidateStatus` 枚举中添加 `ProfileGenerationPending` 变体。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [ ] **步骤 4：更新现有状态机测试**
 
-运行：`cargo test --lib sanitize_tags`
+`candidate_status_machine_has_required_states` 测试硬编码 `assert_eq!(statuses.len(), 12);`（[contribution.rs](../../src/domain/contribution.rs) 的 `#[cfg(test)]` 模块）。添加 `ProfileGenerationPending` 后变 13，需同步更新：
+
+```rust
+assert_eq!(statuses.len(), 13);
+```
+
+并在 `statuses` 数组中添加 `ExperienceCandidateStatus::ProfileGenerationPending`。
+
+- [ ] **步骤 5：运行测试验证通过**
+
+运行：`cargo test --lib sanitize_tags && cargo test --lib candidate_status_machine`
 预期：PASS
 
-- [ ] **步骤 5：Commit**
+- [ ] **步骤 6：Commit**
 
 ```bash
 git add src/domain/contribution.rs
@@ -235,17 +245,11 @@ fn to_external_input_propagates_feedback() {
 
 - [ ] **步骤 3：扩展类型**
 
-在 `src/channels/traits.rs` 中为 `InboundConfirmation` 添加：
-```rust
-pub feedback: Option<String>,
-```
+需要修改 4 个文件中的类型（参考设计文档 3.7 节类型扩展）：
 
-在 `ExternalInput::Confirmation` 中添加：
-```rust
-pub feedback: Option<String>,
-```
-
-更新 `to_external_input()` 传递 `feedback`：
+**文件 1：`src/channels/traits.rs`**
+- 为 `InboundConfirmation` 添加 `pub feedback: Option<String>,`
+- `ExternalInput::Confirmation` 定义在 `src/domain/message.rs`（不在 traits.rs），但 `to_external_input()` 在此文件中构造它，需更新：
 ```rust
 if let Some(ref confirmation) = self.confirmation {
     return crate::domain::ExternalInput::Confirmation {
@@ -256,17 +260,18 @@ if let Some(ref confirmation) = self.confirmation {
 }
 ```
 
-在 `src/domain/frontend.rs` 中为 `UserAction::Confirmation` 添加：
-```rust
-pub feedback: Option<String>,
-```
+**文件 2：`src/domain/message.rs`**
+- 为 `ExternalInput::Confirmation` 添加 `pub feedback: Option<String>,`（[message.rs:135-138](../../src/domain/message.rs)）
+- 为 `ToolConfirmationResponseMessage` 添加 `pub feedback: Option<String>,`（[message.rs:343-346](../../src/domain/message.rs)）
 
-在 `src/domain/message.rs` 中为 `ToolConfirmationResponseMessage` 添加：
-```rust
-pub feedback: Option<String>,
-```
+**文件 3：`src/domain/frontend.rs`**
+- 为 `UserAction::Confirmation` 添加 `pub feedback: Option<String>,`（[frontend.rs:165-169](../../src/domain/frontend.rs)）
 
-全局搜索所有构造 `UserAction::Confirmation`、`ToolConfirmationResponseMessage`、`InboundConfirmation`、`ExternalInput::Confirmation` 的位置，添加 `feedback: None`。
+**构造点补全：**
+全局搜索（`grep -rn "ExternalInput::Confirmation\|UserAction::Confirmation\|ToolConfirmationResponseMessage\|InboundConfirmation" src/`）所有构造这些类型的位置，添加 `feedback: None`。重点检查：
+- `src/channels/telegram.rs`、`src/channels/qq.rs`、`src/channels/frontend.rs` 中 `InboundConfirmation` 构造点
+- `src/systems/input/` 中 `ExternalInput::Confirmation` 和 `UserAction::Confirmation` 构造点
+- `src/systems/tools/confirmation.rs` 或类似位置中 `ToolConfirmationResponseMessage` 构造点
 
 - [ ] **步骤 4：编译并运行测试**
 
@@ -385,37 +390,81 @@ git commit -m "feat(infra): add append_or_rename and update to IncubatedAgentReg
 
 **文件：**
 - 创建：`src/systems/tools/builtin/submit_profile_update.rs`、`src/systems/tools/builtin/skip_profile_update.rs`
-- 修改：`src/systems/tools/builtin/mod.rs`、`src/systems/tools/mod.rs`
+- 修改：`src/systems/tools/builtin/mod.rs`、`src/systems/tools/mod.rs`、`src/domain/space.rs`
 
-- [ ] **步骤 1：实现 submit_profile_update 工具执行器**
+**参考现有模式：** `submit_experience_candidate.rs` 使用 `BuiltinTool` trait（非 `ToolExecutor`），签名 `execute(&self, input: &serde_json::Value, ctx: &ToolContext) -> Result<ToolAction, ToolError>`。`ToolAction` 枚举定义在 [space.rs:188](../../src/domain/space.rs)。
+
+- [ ] **步骤 1：在 ToolAction 枚举中添加变体**
+
+在 `src/domain/space.rs` 的 `ToolAction` 枚举中添加：
+
+```rust
+/// 提交 profile 更新（孵化场景生成新 profile，更新场景提议新 tags/description）
+SubmitProfileUpdate {
+    name: String,
+    tags: Vec<String>,
+    description: String,
+},
+/// 跳过 profile 更新（更新场景下 LLM 认为不需要更新）
+SkipProfileUpdate,
+```
+
+- [ ] **步骤 2：实现 submit_profile_update 工具执行器**
 
 创建 `src/systems/tools/builtin/submit_profile_update.rs`：
 
 ```rust
-use crate::domain::{AgentExecutionOutput, OutputContent, ToolAction, ToolExecutor};
-use crate::prelude::*;
+//! profile 提交工具
 
+use crate::domain::{ToolAction, ToolContext, ToolError};
+use crate::domain::BuiltinTool;
+
+/// 提交 profile 更新工具
+///
+/// 由 profile-designer Agent 调用，提交生成或更新后的 Agent profile。
 pub struct SubmitProfileUpdateTool;
 
-impl ToolExecutor for SubmitProfileUpdateTool {
+impl BuiltinTool for SubmitProfileUpdateTool {
+    fn name(&self) -> &str {
+        "submit_profile_update"
+    }
+
     fn execute(
         &self,
-        input: serde_json::Value,
-    ) -> Result<ToolAction, Box<dyn std::error::Error + Send + Sync>> {
-        let name = input["name"]
-            .as_str()
-            .ok_or("missing name")?
+        input: &serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolAction, ToolError> {
+        let name = input
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidInput("missing name".to_string()))?
             .to_string();
-        let tags: Vec<String> = input["tags"]
-            .as_array()
-            .ok_or("missing tags")?
+
+        let tags: Vec<String> = input
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::InvalidInput("missing tags".to_string()))?
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
-        let description = input["description"]
-            .as_str()
-            .ok_or("missing description")?
+
+        let description = input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidInput("missing description".to_string()))?
             .to_string();
+
+        if name.is_empty() {
+            return Err(ToolError::InvalidInput("name must not be empty".to_string()));
+        }
+        if tags.is_empty() {
+            return Err(ToolError::InvalidInput("tags must not be empty".to_string()));
+        }
+        if description.is_empty() {
+            return Err(ToolError::InvalidInput(
+                "description must not be empty".to_string(),
+            ));
+        }
 
         Ok(ToolAction::SubmitProfileUpdate {
             name,
@@ -426,52 +475,114 @@ impl ToolExecutor for SubmitProfileUpdateTool {
 }
 ```
 
+- [ ] **步骤 3：实现 skip_profile_update 工具执行器**
+
 创建 `src/systems/tools/builtin/skip_profile_update.rs`：
 
 ```rust
-use crate::domain::{ToolAction, ToolExecutor};
-use crate::prelude::*;
+//! profile 跳过工具
 
+use crate::domain::{BuiltinTool, ToolAction, ToolContext, ToolError};
+
+/// 跳过 profile 更新工具
+///
+/// 由 profile-designer Agent 调用，明确表示现有 Agent profile 不需要更新。
 pub struct SkipProfileUpdateTool;
 
-impl ToolExecutor for SkipProfileUpdateTool {
+impl BuiltinTool for SkipProfileUpdateTool {
+    fn name(&self) -> &str {
+        "skip_profile_update"
+    }
+
     fn execute(
         &self,
-        _input: serde_json::Value,
-    ) -> Result<ToolAction, Box<dyn std::error::Error + Send + Sync>> {
+        _input: &serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolAction, ToolError> {
         Ok(ToolAction::SkipProfileUpdate)
     }
 }
 ```
 
-- [ ] **步骤 2：在 ToolAction 枚举中添加变体**
+- [ ] **步骤 4：在 mod.rs 中声明模块和 re-export**
 
-在 `src/domain/` 中找到 `ToolAction` 枚举，添加：
+在 `src/systems/tools/builtin/mod.rs` 中添加：
 
 ```rust
-SubmitProfileUpdate {
-    name: String,
-    tags: Vec<String>,
-    description: String,
-},
-SkipProfileUpdate,
+mod submit_profile_update;
+mod skip_profile_update;
+
+pub use submit_profile_update::SubmitProfileUpdateTool;
+pub use skip_profile_update::SkipProfileUpdateTool;
 ```
 
-- [ ] **步骤 3：注册工具**
+- [ ] **步骤 5：注册工具**
 
-在 `src/systems/tools/builtin/mod.rs` 中添加模块声明和 re-export。
+在 `src/systems/tools/mod.rs` 的 `register_builtin_tools` 中添加两个工具的注册（参照 [mod.rs:237-308](../../src/systems/tools/mod.rs) 的 `submit_experience_candidate` 注册模式），schema 参照设计文档 3.2 节。`required_tag` 设为 `Some("profile")` 以限制仅 profile-designer 可用。
 
-在 `src/systems/tools/mod.rs` 的 `register_builtin_tools` 中添加两个工具的注册，schema 参照设计文档 3.2 节。`required_tag` 设为 `Some("profile")` 以限制仅 profile-designer 可用。
+```rust
+// Profile update tools (仅 profile-designer 可用)
+registry.register(ToolDefinition {
+    name: "submit_profile_update".to_string(),
+    description: "提交生成或更新后的 Agent profile。孵化场景 name 作为最终 Agent 名称；更新场景 name 仅作参考，系统会强制使用原 name（不可变更）。".to_string(),
+    parameters: ToolSchema {
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Agent 角色名，简洁有力"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "核心能力标签列表"},
+                "description": {"type": "string", "description": "Agent 职责描述，一到两句话概括"}
+            },
+            "required": ["name", "tags", "description"]
+        }),
+    },
+    default_permission: ToolPermission::Allow,
+    executor: ToolExecutorKind::Builtin("submit_profile_update".to_string()),
+    required_tag: Some("profile".to_string()),
+});
+executors.register(Box::new(SubmitProfileUpdateTool));
 
-- [ ] **步骤 4：编译验证**
+registry.register(ToolDefinition {
+    name: "skip_profile_update".to_string(),
+    description: "明确表示现有 Agent profile 不需要更新。".to_string(),
+    parameters: ToolSchema {
+        schema: serde_json::json!({"type": "object", "properties": {}, "required": []}),
+    },
+    default_permission: ToolPermission::Allow,
+    executor: ToolExecutorKind::Builtin("skip_profile_update".to_string()),
+    required_tag: Some("profile".to_string()),
+});
+executors.register(Box::new(SkipProfileUpdateTool));
+```
+
+同时在文件顶部的 `use self::builtin::{...}` 导入中添加 `SubmitProfileUpdateTool, SkipProfileUpdateTool`。
+
+- [ ] **步骤 6：处理 ToolAction::SubmitProfileUpdate 和 SkipProfileUpdate 的分发**
+
+`ToolAction` 的分发在 `src/systems/tools/dispatch.rs` 或 `orchestrator.rs` 中。需搜索 `match tool_action` 或 `ToolAction::` 的位置，为新变体添加处理分支。由于这两个工具的执行结果是生成 `ProfileGenerationCompletedMessage`（在任务 6 的 completion 系统中处理），dispatch 层应直接返回成功结果（不需要执行副作用），例如：
+
+```rust
+ToolAction::SubmitProfileUpdate { name, tags, description } => {
+    // profile 数据由 profile_generation_completion_system 从 LLM 响应中提取
+    // dispatch 层只需返回确认结果
+    Ok(serde_json::json!({"status": "submitted", "name": name, "tags": tags, "description": description}))
+}
+ToolAction::SkipProfileUpdate => {
+    Ok(serde_json::json!({"status": "skipped"}))
+}
+```
+
+**注意：** 实际的 profile 提取逻辑在任务 6 的 `profile_generation_completion_system` 中实现，此步骤只需保证 dispatch 层能编译通过且返回合理结果。
+
+- [ ] **步骤 7：编译验证**
 
 运行：`cargo clippy --all-targets --all-features -- -D warnings`
 预期：无错误
 
-- [ ] **步骤 5：Commit**
+- [ ] **步骤 8：Commit**
 
 ```bash
-git add src/systems/tools/builtin/submit_profile_update.rs src/systems/tools/builtin/skip_profile_update.rs src/systems/tools/builtin/mod.rs src/systems/tools/mod.rs src/domain/
+git add src/domain/space.rs src/systems/tools/builtin/submit_profile_update.rs src/systems/tools/builtin/skip_profile_update.rs src/systems/tools/builtin/mod.rs src/systems/tools/mod.rs src/systems/tools/dispatch.rs src/systems/tools/orchestrator.rs
 git commit -m "feat(tools): add submit_profile_update and skip_profile_update tools"
 ```
 
@@ -515,48 +626,604 @@ git commit -m "feat(config): add profile-designer agent configuration"
 
 **文件：**
 - 创建：`src/systems/experience/profile_generation.rs`
-- 修改：`src/systems/experience/mod.rs`
+- 修改：`src/systems/experience/mod.rs`、`src/domain/work_item.rs`、`src/systems/transform/llm_response.rs`
 
-- [ ] **步骤 1：实现 profile_generation_workitem_system**
+**参考现有模式：**
+- WorkItem 工厂方法：`WorkItem::experience_collection(...)` 在 [work_item.rs:235](../../src/domain/work_item.rs)
+- LLM 响应处理：`llm_response_system` 在 [llm_response.rs](../../src/systems/transform/llm_response.rs) 中根据 `work_item.work_type` 分发到不同 handler（如 `handle_evaluation_work_item_result`、`handle_summarization_work_item_result`）
+- WorkItemType 枚举在 [work_item.rs:16](../../src/domain/work_item.rs)
+
+### 步骤概览
+
+本任务分为 5 个子步骤：
+1. 在 `WorkItemType` 中添加 `ProfileGeneration` 变体 + `WorkItem::profile_generation(...)` 工厂方法
+2. 实现 `profile_generation_workitem_system`（消费请求消息，创建 WorkItem）
+3. 在 `llm_response_system` 中添加 `handle_profile_generation_work_item_result` handler
+4. 实现 `profile_generation_completion_system`（消费完成消息，创建 proposal + 发起审批）
+5. 在 `mod.rs` 中声明模块和导出
+
+- [ ] **步骤 1：添加 WorkItemType 变体和工厂方法**
+
+在 `src/domain/work_item.rs` 的 `WorkItemType` 枚举中添加：
+
+```rust
+/// profile 生成工作项（孵化场景生成新 profile，更新场景评估并生成更新后 profile）
+ProfileGeneration,
+```
+
+在 `impl WorkItem` 中添加工厂方法（参照 `experience_collection` 模式）：
+
+```rust
+/// 创建 profile 生成工作项
+pub fn profile_generation(
+    task_id: TaskId,
+    prompt: String,
+    conversation: Vec<ConversationMessage>,
+    tools: Vec<ToolDefinition>,
+    governing_agent_id: AgentId,
+    kind: crate::domain::ProfileGenerationKind,
+) -> Self {
+    let tags = TagSet::from_tags(["profile"]);
+    let system_prompt = match kind {
+        crate::domain::ProfileGenerationKind::Incubation => {
+            "你是一名 Agent 元信息设计师。请根据提供的经验候选，生成一个新 Agent 的角色名、能力标签和职责描述。\
+             必须调用 submit_profile_update 提交结果，或调用 skip_profile_update 表示无法生成。".to_string()
+        }
+        crate::domain::ProfileGenerationKind::Update => {
+            "你是一名 Agent 元信息设计师。请评估现有 Agent profile 是否需要根据新经验更新 tags/description。\
+             若需要更新，调用 submit_profile_update 提交新 profile；若不需要，调用 skip_profile_update。".to_string()
+        }
+    };
+    let context = WorkItemContext {
+        conversation: Some(conversation),
+        tools,
+        system_prompt: Some(system_prompt),
+    };
+    let input = WorkItemInput { prompt, context };
+    let mut wi = Self::new(
+        task_id,
+        WorkItemType::ProfileGeneration,
+        input,
+        tags,
+        WorkItemOrigin::ExperienceCollection, // 复用，或新增变体
+        WorkItemWritebackTarget::ExperienceInbox,
+    );
+    wi.governing_agent_id = Some(governing_agent_id);
+    wi
+}
+```
+
+**注意：** `WorkItemOrigin` 和 `WorkItemWritebackTarget` 枚举可能需要新增变体，或在现有变体中复用。执行时检查这两个枚举的现有定义，选择最合适的复用方式（参考 `experience_collection` 使用 `WorkItemOrigin::ExperienceCollection` + `WorkItemWritebackTarget::ExperienceInbox`）。
+
+- [ ] **步骤 2：实现 profile_generation_workitem_system**
 
 创建 `src/systems/experience/profile_generation.rs`。
 
-此系统消费 `ProfileGenerationRequestMessage`，创建 WorkItem（与 `experience_collection_workitem_system` 模式一致）：
+此系统消费 `ProfileGenerationRequestMessage`，参照 [collection.rs:55-113](../../src/systems/experience/collection.rs) 的 `experience_collection_workitem_system` 模式：
 
-- 查找 profile-designer Agent
-- 构建 prompt：
-  - 孵化场景：候选 title + payload + 现有 Agent name 列表
-  - 更新场景：现有 profile + 新增经验条目
-  - 重试场景：上一次 profile + 用户反馈 + "根据反馈重新生成"
-- 只暴露 `submit_profile_update` 和 `skip_profile_update` 两个工具
-- Spawn `WorkItem` + `AgentExecutionRequest`
-
-- [ ] **步骤 2：实现 profile_generation_completion_system**
-
-此系统监听 LLM 响应中 `submit_profile_update` / `skip_profile_update` 工具调用结果：
-
-- `submit_profile_update`：解析 name/tags/description，校验非空，spawn `ProfileGenerationCompletedMessage { generated_profile: Some(...) }`
-- `skip_profile_update`：spawn `ProfileGenerationCompletedMessage { generated_profile: None }`
-- 校验失败或超时：标记候选为 `WritebackFailed`，孵化场景回退硬编码 name
-
-完成消息产出后，由后续逻辑创建 proposal + 发起审批（含 Reject & Feedback 选项）。
-
-- [ ] **步骤 3：在 mod.rs 中声明模块**
-
-在 `src/systems/experience/mod.rs` 中添加：
 ```rust
-pub mod profile_generation;
+use crate::prelude::*;
+use tracing::debug;
+
+use crate::domain::{
+    Agent, ExperienceCandidatePayload, ExperienceStore, ProfileGenerationKind,
+    ProfileGenerationRequestMessage, SpaceToolRegistry, WorkItem,
+};
+
+pub(crate) fn profile_generation_workitem_system(
+    mut commands: Commands,
+    requests: Query<(Entity, &ProfileGenerationRequestMessage)>,
+    agents: Query<&Agent>,
+    store: Res<ExperienceStore>,
+    registry: Res<SpaceToolRegistry>,
+) {
+    for (entity, request) in &requests {
+        // 1. 查找 profile-designer Agent（按 tags 匹配 "profile"）
+        let profile_designer = agents.iter().find(|a| {
+            a.capabilities.tags.iter().any(|t| t == "profile")
+        });
+        let profile_designer_id = match profile_designer {
+            Some(a) => a.id,
+            None => {
+                tracing::warn!(
+                    event = "ProfileDesignerNotFound",
+                    task_id = %request.task_id,
+                    "profile-designer agent not found, falling back to incubated-{task_id}"
+                );
+                // 孵化场景回退硬编码 name（设计文档 4.3 错误处理）
+                // 直接 spawn completion 消息，跳过 LLM 调用
+                handle_profile_designer_missing(&mut commands, request);
+                commands.entity(entity).despawn();
+                continue;
+            }
+        };
+
+        // 2. 构建 prompt（根据 kind 和 feedback）
+        let prompt = build_profile_generation_prompt(request, &store, &agents);
+
+        // 3. 收集工具定义（仅 submit_profile_update 和 skip_profile_update）
+        let tools: Vec<crate::domain::ToolDefinition> = registry
+            .iter()
+            .filter(|tool| {
+                tool.name == "submit_profile_update" || tool.name == "skip_profile_update"
+            })
+            .cloned()
+            .collect();
+
+        // 4. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
+        let conversation = Vec::new();
+
+        // 5. 创建 WorkItem 并分配给 profile-designer
+        let mut work_item = WorkItem::profile_generation(
+            request.task_id,
+            prompt,
+            conversation,
+            tools,
+            request.agent_id,
+            request.kind.clone(),
+        );
+        work_item.assign(profile_designer_id);
+
+        debug!(
+            event = "ProfileGenerationWorkItemCreated",
+            task_id = %request.task_id,
+            agent_id = %request.agent_id,
+            kind = ?request.kind,
+            retry_count = request.retry_count,
+            has_feedback = request.feedback.is_some(),
+            "spawning profile generation work item"
+        );
+
+        commands.spawn(work_item);
+        commands.entity(entity).despawn();
+    }
+}
 ```
 
-- [ ] **步骤 4：编译验证**
+`build_profile_generation_prompt` 函数根据 `kind` 和 `feedback` 构建不同 prompt：
+
+```rust
+fn build_profile_generation_prompt(
+    request: &ProfileGenerationRequestMessage,
+    store: &ExperienceStore,
+    agents: &Query<&Agent>,
+) -> String {
+    let mut prompt = String::new();
+
+    match request.kind {
+        ProfileGenerationKind::Incubation => {
+            prompt.push_str("## 任务\n\n根据以下经验候选，为一个新 Agent 生成元信息（name、tags、description）。\n\n");
+
+            // 注入候选材料
+            prompt.push_str("## 经验候选\n\n");
+            for id in &request.candidate_ids {
+                if let Some(candidate) = store.candidates.get(id) {
+                    prompt.push_str(&format!("### {}\n\n", candidate.title));
+                    if let ExperienceCandidatePayload::Knowledge { content } = &candidate.payload {
+                        prompt.push_str(&format!("{}\n\n", content));
+                    } else if let ExperienceCandidatePayload::Skill { name, description, instructions, .. } = &candidate.payload {
+                        prompt.push_str(&format!("技能名：{}\n描述：{}\n指令：{}\n\n", name, description, instructions));
+                    }
+                }
+            }
+
+            // 注入现有 Agent name 列表（避免重名，设计文档决策 9）
+            let existing_names: Vec<&str> = agents.iter().map(|a| a.profile.name.as_str()).collect();
+            prompt.push_str(&format!(
+                "## 现有 Agent 名称（避免重复）\n\n{}\n\n",
+                existing_names.join(", ")
+            ));
+
+            prompt.push_str("## 要求\n\n");
+            prompt.push_str("1. name：简洁有力，使用 kebab-case，如 'physics-specialist'\n");
+            prompt.push_str("2. tags：3-5 个核心能力标签，不含 'incubated' 或 'default'（系统会自动注入）\n");
+            prompt.push_str("3. description：一到两句话概括 Agent 职责\n");
+            prompt.push_str("4. 必须调用 submit_profile_update 提交结果\n");
+        }
+        ProfileGenerationKind::Update => {
+            prompt.push_str("## 任务\n\n评估现有 Agent profile 是否需要根据新经验更新 tags/description。\n\n");
+
+            // 注入现有 profile
+            if let Some(existing) = &request.existing_profile {
+                prompt.push_str("## 当前 Agent profile\n\n");
+                prompt.push_str(&format!("- name: {}\n", existing.name));
+                prompt.push_str(&format!("- tags: {}\n", existing.tags.join(", ")));
+                prompt.push_str(&format!("- description: {}\n\n", existing.description));
+            }
+
+            // 注入新增经验条目
+            prompt.push_str("## 新增经验条目\n\n");
+            for id in &request.candidate_ids {
+                if let Some(candidate) = store.candidates.get(id) {
+                    prompt.push_str(&format!("- {}\n", candidate.title));
+                }
+            }
+            prompt.push_str("\n");
+
+            prompt.push_str("## 要求\n\n");
+            prompt.push_str("1. 若新经验带来了现有 tags/description 未覆盖的新能力，调用 submit_profile_update 提交更新后的完整 profile\n");
+            prompt.push_str("2. name 字段会被系统忽略（name 不可变更），但仍需填写\n");
+            prompt.push_str("3. 若不需要更新，调用 skip_profile_update\n");
+        }
+    }
+
+    // 重试场景：注入用户反馈
+    if let Some(feedback) = &request.feedback {
+        prompt.push_str(&format!(
+            "## 用户评审反馈\n\n用户对上一次生成的 profile 提出以下反馈，请根据反馈重新生成：\n\n{}\n\n",
+            feedback
+        ));
+    }
+
+    prompt
+}
+```
+
+`handle_profile_designer_missing` 函数处理 profile-designer Agent 不存在的情况（设计文档 4.3 错误处理：孵化场景回退硬编码 name）：
+
+```rust
+fn handle_profile_designer_missing(
+    commands: &mut Commands,
+    request: &ProfileGenerationRequestMessage,
+) {
+    // 孵化场景：spawn 回退 profile（硬编码 name）
+    // 更新场景：静默跳过（不更新现有 profile）
+    match request.kind {
+        ProfileGenerationKind::Incubation => {
+            let fallback_profile = crate::domain::GeneratedProfile {
+                name: format!("incubated-{}", request.task_id),
+                tags: vec![],  // 由写回逻辑注入 incubated
+                description: String::new(),
+            };
+            commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
+                task_id: request.task_id,
+                agent_id: request.agent_id,
+                generated_profile: Some(fallback_profile),
+                kind: request.kind.clone(),
+            });
+        }
+        ProfileGenerationKind::Update => {
+            // 静默跳过，不 spawn 完成消息
+            debug!(
+                event = "ProfileUpdateSkippedNoDesigner",
+                task_id = %request.task_id,
+                "profile-designer not found, skipping update evaluation"
+            );
+        }
+    }
+}
+```
+
+- [ ] **步骤 3：在 llm_response_system 中添加 ProfileGeneration handler**
+
+在 `src/systems/transform/llm_response.rs` 的 `llm_response_system` 中，参照 `WorkItemType::ExperienceCollection` 的处理模式（[llm_response.rs:650-711](../../src/systems/transform/llm_response.rs)），为 `WorkItemType::ProfileGeneration` 添加 handler。
+
+在 `match work_item.work_type` 中添加分支：
+
+```rust
+WorkItemType::ProfileGeneration => {
+    match &result.result {
+        Ok(AgentExecutionOutput {
+            content: OutputContent::ToolCalls(_),
+            ..
+        }) => {
+            // 不 continue，让下面的 tool calling loop 处理 tool calls
+            // submit_profile_update / skip_profile_update 工具调用会触发 orchestrator
+            // orchestrator 中的 ToolAction::SubmitProfileUpdate / SkipProfileUpdate 分支
+            // 会 spawn ProfileGenerationCompletedMessage
+        }
+        Ok(_) => {
+            // LLM 返回普通文本（未调用工具）：视为失败
+            // 孵化场景回退硬编码 name，更新场景静默跳过
+            handle_profile_generation_no_tool_call(
+                &mut commands,
+                work_item,
+                entity,
+                work_item_entity,
+            );
+            continue;
+        }
+        Err(_) => {
+            // LLM 调用失败：同上处理
+            handle_profile_generation_no_tool_call(
+                &mut commands,
+                work_item,
+                entity,
+                work_item_entity,
+            );
+            continue;
+        }
+    }
+}
+```
+
+`handle_profile_generation_no_tool_call` 函数处理 LLM 未调用工具的情况：
+
+```rust
+fn handle_profile_generation_no_tool_call(
+    commands: &mut Commands,
+    work_item: &WorkItem,
+    result_entity: Entity,
+    work_item_entity: Entity,
+) {
+    // 孵化场景回退硬编码 name（设计文档 4.3）
+    // 更新场景静默跳过
+    let governing_agent_id = work_item.governing_agent_id.unwrap_or(uuid::Uuid::nil());
+    commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
+        task_id: work_item.task_id,
+        agent_id: governing_agent_id,
+        generated_profile: Some(crate::domain::GeneratedProfile {
+            name: format!("incubated-{}", work_item.task_id),
+            tags: vec![],
+            description: String::new(),
+        }),
+        kind: crate::domain::ProfileGenerationKind::Incubation, // 从 work_item 获取实际 kind
+    });
+    commands.entity(work_item_entity).despawn();
+    commands.entity(result_entity).despawn();
+}
+```
+
+**注意：** `ProfileGenerationKind` 需要从 WorkItem 中获取。可以考虑在 WorkItem 中添加 `metadata` 字段携带 kind，或通过其他方式传递。执行时根据现有 WorkItem 结构选择最合适的传递方式。
+
+- [ ] **步骤 4：在 orchestrator.rs 中处理 ToolAction::SubmitProfileUpdate / SkipProfileUpdate**
+
+在 `src/systems/tools/orchestrator.rs` 中（参照 `ToolAction::SubmitExperienceCandidate` 处理模式 [orchestrator.rs:602](../../src/systems/tools/orchestrator.rs)），为新变体添加处理分支：
+
+```rust
+Ok(ToolAction::SubmitProfileUpdate { name, tags, description }) => {
+    // 从 request 中获取 kind（需通过 work_item_id 查找 WorkItem，或通过其他方式传递）
+    let generated_profile = crate::domain::GeneratedProfile {
+        name,
+        tags,
+        description,
+    };
+    commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
+        task_id: request.request.task_id,
+        agent_id: request.request.agent_id,
+        generated_profile: Some(generated_profile),
+        kind: /* 从 work_item 获取 */,
+    });
+    // spawn 工具结果给 LLM
+    spawn_tool_result(commands, request_entity, request, &serde_json::json!({"status": "submitted"}));
+}
+Ok(ToolAction::SkipProfileUpdate) => {
+    commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
+        task_id: request.request.task_id,
+        agent_id: request.request.agent_id,
+        generated_profile: None,
+        kind: /* 从 work_item 获取 */,
+    });
+    spawn_tool_result(commands, request_entity, request, &serde_json::json!({"status": "skipped"}));
+}
+```
+
+**关键问题：kind 传递。** `ProfileGenerationKind` 需要从 `ProfileGenerationRequestMessage` 传递到 `ProfileGenerationCompletedMessage`。可选方案：
+- 方案 A：在 WorkItem 中添加 `metadata: Option<serde_json::Value>` 字段携带 kind
+- 方案 B：通过 `ExperienceStore` 中间存储（以 task_id 为 key）
+- 方案 C：在 `ProfileGenerationCompletedMessage` 中添加 `kind` 字段时，由 `profile_generation_completion_system` 从 `ExperienceStore` 中查找
+
+执行时选择最简方案。推荐方案 B：在 `profile_generation_workitem_system` 中将 `kind` 存入 `ExperienceStore` 的临时字段（如 `profile_generation_kind: HashMap<TaskId, ProfileGenerationKind>`），`profile_generation_completion_system` 消费时取出。
+
+- [ ] **步骤 5：实现 profile_generation_completion_system**
+
+在 `src/systems/experience/profile_generation.rs` 中添加：
+
+```rust
+pub(crate) fn profile_generation_completion_system(
+    mut commands: Commands,
+    mut store: ResMut<ExperienceStore>,
+    mut pending_hooks: ResMut<crate::domain::PendingExperienceHooks>,
+    agents: Query<&Agent>,
+    messages: Query<(Entity, &crate::domain::ProfileGenerationCompletedMessage)>,
+) {
+    for (entity, msg) in &messages {
+        match msg.kind {
+            crate::domain::ProfileGenerationKind::Incubation => {
+                handle_incubation_profile_completed(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    &agents,
+                    msg,
+                );
+            }
+            crate::domain::ProfileGenerationKind::Update => {
+                handle_update_profile_completed(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    msg,
+                );
+            }
+        }
+        commands.entity(entity).despawn();
+    }
+}
+```
+
+`handle_incubation_profile_completed` 函数（任务 7 步骤 2 会扩展此函数）：
+
+```rust
+fn handle_incubation_profile_completed(
+    commands: &mut Commands,
+    store: &mut ExperienceStore,
+    pending_hooks: &mut crate::domain::PendingExperienceHooks,
+    agents: &Query<&Agent>,
+    msg: &crate::domain::ProfileGenerationCompletedMessage,
+) {
+    let task_id = msg.task_id;
+    let agent_id = msg.agent_id;
+
+    let Some(generated) = &msg.generated_profile else {
+        // skip_profile_update 或回退：孵化场景必须有 profile
+        // 若为 None，使用硬编码回退
+        tracing::warn!(
+            event = "IncubationProfileMissing",
+            task_id = %task_id,
+            "incubation completed without profile, using fallback"
+        );
+        return;
+    };
+
+    // 1. 对 tags 执行 sanitize_tags，孵化场景手动注入 incubated
+    let mut sanitized_tags = crate::domain::sanitize_tags(generated.tags.clone(), &[]);
+    if !sanitized_tags.contains(&"incubated".to_string()) {
+        sanitized_tags.push("incubated".to_string());
+    }
+
+    // 2. 查找 default Agent 以继承 models 链
+    let default_agent = agents.iter().find(|a| {
+        a.capabilities.tags.iter().any(|t| t == "default")
+    });
+
+    // 3. 调用 store.merge_into_proposal 使用 LLM 生成的 name/tags/description
+    let agent_profile = crate::domain::AgentProfile {
+        name: generated.name.clone(),
+        model: default_agent
+            .map(|a| a.profile.model.clone())
+            .unwrap_or_default(),
+    };
+    // merge_into_proposal 需要 candidate，从 store 中查找该 task 的候选
+    if let Some(candidate_id) = store.governance_candidates_for_task(task_id).first().copied() {
+        if let Some(candidate) = store.candidates.get(&candidate_id).cloned() {
+            store.merge_into_proposal(task_id, agent_id, agent_profile, &candidate);
+        }
+    }
+
+    // 4. 发起审批（选项包含 Approve、Reject、Reject & Feedback）
+    // retry_count < MAX 时包含 Reject & Feedback
+    spawn_profile_approval(commands, store, task_id, agent_id, &generated.name, &sanitized_tags, &generated.description, 0);
+
+    // 5. 派发 on_agent_profile_generated hook
+    pending_hooks.0.push((
+        crate::user_plugins::hook_point::HookPoint::OnAgentProfileGenerated,
+        task_id, // 注：实际应传递 candidate_id，执行时调整
+    ));
+
+    tracing::info!(
+        event = "ProfileGenerationCompleted",
+        task_id = %task_id,
+        name = %generated.name,
+        tags = ?sanitized_tags,
+        "incubation profile generated, awaiting approval"
+    );
+}
+```
+
+`spawn_profile_approval` 函数发起审批（参照 [governance.rs:161-222](../../src/systems/experience/governance.rs) 的 `spawn_experience_confirmation` 模式）：
+
+```rust
+fn spawn_profile_approval(
+    commands: &mut Commands,
+    store: &mut ExperienceStore,
+    task_id: TaskId,
+    agent_id: AgentId,
+    name: &str,
+    tags: &[String],
+    description: &str,
+    retry_count: u32,
+) {
+    let request_id = uuid::Uuid::new_v4();
+    // 绑定到第一个候选（执行时根据实际候选绑定逻辑调整）
+    if let Some(candidate_id) = store.governance_candidates_for_task(task_id).first().copied() {
+        store.bind_approval_request(request_id, candidate_id);
+    }
+
+    // 构建审批选项
+    let mut options = vec![
+        crate::domain::ConfirmationOption {
+            id: "approve".to_string(),
+            label: "批准".to_string(),
+            description: "批准 LLM 生成的 profile".to_string(),
+        },
+        crate::domain::ConfirmationOption {
+            id: "reject".to_string(),
+            label: "拒绝".to_string(),
+            description: "拒绝此 profile，终止孵化".to_string(),
+        },
+    ];
+    if retry_count < crate::domain::MAX_PROFILE_GENERATION_RETRIES {
+        options.push(crate::domain::ConfirmationOption {
+            id: "reject_with_feedback".to_string(),
+            label: "拒绝并反馈".to_string(),
+            description: "拒绝并提供评审建议，LLM 将重新生成".to_string(),
+        });
+    }
+
+    commands.spawn(crate::domain::ToolConfirmationRequestMessage {
+        request_id,
+        task_id,
+        agent_id,
+        tool_name: "profile_generation".to_string(),
+        tool_input: serde_json::json!({
+            "name": name,
+            "tags": tags,
+            "description": description,
+            "retry_count": retry_count,
+        }),
+        options,
+        source: crate::domain::ConfirmationSource::User,
+        parent_agent_id: None,
+        approval_context: Some(format!("Agent profile generation for task {}", task_id)),
+    });
+}
+```
+
+`handle_update_profile_completed` 函数（任务 9 步骤 2 会扩展此函数）：
+
+```rust
+fn handle_update_profile_completed(
+    commands: &mut Commands,
+    _store: &mut ExperienceStore,
+    pending_hooks: &mut crate::domain::PendingExperienceHooks,
+    msg: &crate::domain::ProfileGenerationCompletedMessage,
+) {
+    // 更新场景：若有 generated_profile，发起审批；若无（skip），静默结束
+    if let Some(generated) = &msg.generated_profile {
+        // 发起更新审批（复用 spawn_profile_approval，但 kind=Update）
+        tracing::info!(
+            event = "ProfileUpdateProposed",
+            task_id = %msg.task_id,
+            "profile update proposed, awaiting approval"
+        );
+        // 具体审批逻辑在任务 9 中实现
+    } else {
+        tracing::info!(
+            event = "ProfileUpdateSkipped",
+            task_id = %msg.task_id,
+            "profile update skipped by LLM"
+        );
+    }
+    // 派发 on_agent_profile_generated hook
+    pending_hooks.0.push((
+        crate::user_plugins::hook_point::HookPoint::OnAgentProfileGenerated,
+        msg.task_id,
+    ));
+}
+```
+
+- [ ] **步骤 6：在 mod.rs 中声明模块和导出**
+
+在 `src/systems/experience/mod.rs` 中添加：
+
+```rust
+pub mod profile_generation;
+
+pub(crate) use profile_generation::{
+    profile_generation_completion_system, profile_generation_workitem_system,
+};
+```
+
+- [ ] **步骤 7：编译验证**
 
 运行：`cargo clippy --all-targets --all-features -- -D warnings`
-预期：无错误
+预期：无错误（可能有 warning 提示未使用的函数，任务 7/9 会使用它们）
 
-- [ ] **步骤 5：Commit**
+- [ ] **步骤 8：Commit**
 
 ```bash
-git add src/systems/experience/profile_generation.rs src/systems/experience/mod.rs
+git add src/systems/experience/profile_generation.rs src/systems/experience/mod.rs src/domain/work_item.rs src/systems/transform/llm_response.rs src/systems/tools/orchestrator.rs
 git commit -m "feat(experience): add profile generation workitem and completion systems"
 ```
 
@@ -577,12 +1244,15 @@ git commit -m "feat(experience): add profile generation workitem and completion 
 
 - [ ] **步骤 2：在 profile_generation_completion_system 中创建 proposal 和审批**
 
-完成系统收到 `GeneratedProfile` 后：
+**修改任务 6 创建的 `src/systems/experience/profile_generation.rs` 中的 `handle_incubation_profile_completed` 函数**（任务 6 仅写了骨架，此步骤完成具体实现）：
 
 1. 对 tags 执行 `sanitize_tags`，孵化场景手动注入 `incubated`
 2. 调用 `store.merge_into_proposal` 使用 LLM 生成的 name/tags/description
-3. 发起审批，选项包含 `Approve`、`Reject`、`Reject & Feedback`（若 retry_count < MAX）
+3. 发起审批（调用任务 6 已声明的 `spawn_profile_approval` 函数），选项包含 `Approve`、`Reject`、`Reject & Feedback`（若 retry_count < MAX）
 4. 审批 `tool_input` 中展示完整 profile 供用户审阅
+5. 派发 `OnAgentProfileGenerated` hook（任务 14 完成具体派发）
+
+**注意：** 任务 6 已声明 `handle_incubation_profile_completed` 和 `spawn_profile_approval` 的骨架代码，此步骤填充实际逻辑。
 
 - [ ] **步骤 3：编译验证**
 
@@ -674,7 +1344,17 @@ git commit -m "feat(experience): handle reject_with_feedback in approval system"
 2. 第二阶段：通过 `Commands::entity(...).insert()` 更新 ECS `AgentCapabilities` 组件
 3. 失败处理：文件写入失败标记 `WritebackFailed`；ECS 更新失败记录 `warn!`
 
-- [ ] **步骤 3：在 mod.rs 中声明模块**
+- [ ] **步骤 3：在 mod.rs 中声明模块和导出**
+
+在 `src/systems/experience/mod.rs` 中添加：
+
+```rust
+pub mod profile_update;
+
+pub(crate) use profile_update::{
+    profile_update_trigger_system, profile_update_writeback_system,
+};
+```
 
 - [ ] **步骤 4：编译验证**
 
@@ -866,12 +1546,37 @@ git commit -m "feat(channels): add reject & feedback support for Telegram and QQ
 
 - [ ] **步骤 1：新增 HookPoint 变体**
 
-在 `HookPoint` 枚举中添加：
+在 `src/user_plugins/hook_point.rs` 的 `HookPoint` 枚举中添加（参照 [hook_point.rs:11-35](../../src/user_plugins/hook_point.rs)）：
 ```rust
 OnAgentProfileGenerated,
 OnAgentProfileUpdated,
 OnAgentIncubated,
 ```
+
+**同时更新 3 处配套实现（参考 [hook_point.rs:43-72](../../src/user_plugins/hook_point.rs)、[hook_point.rs:81-106](../../src/user_plugins/hook_point.rs)、[hook_point.rs:113-139](../../src/user_plugins/hook_point.rs)）：**
+
+1. **`FromStr` 实现**（`from_str` 方法）— 添加 3 个匹配分支：
+```rust
+"on_agent_profile_generated" => Ok(Self::OnAgentProfileGenerated),
+"on_agent_profile_updated" => Ok(Self::OnAgentProfileUpdated),
+"on_agent_incubated" => Ok(Self::OnAgentIncubated),
+```
+
+2. **`as_serialized` 方法** — 添加 3 个匹配分支：
+```rust
+Self::OnAgentProfileGenerated => "on_agent_profile_generated",
+Self::OnAgentProfileUpdated => "on_agent_profile_updated",
+Self::OnAgentIncubated => "on_agent_incubated",
+```
+
+3. **`parses_all_known_points` 测试**（[hook_point.rs:113](../../src/user_plugins/hook_point.rs)）— 在测试数组中添加 3 个字符串：
+```rust
+"on_agent_profile_generated",
+"on_agent_profile_updated",
+"on_agent_incubated",
+```
+
+**注意：** `#[serde(rename_all = "snake_case")]` 已自动处理序列化，无需额外 Serde 配置。
 
 - [ ] **步骤 2：在对应系统派发 hook**
 
@@ -906,6 +1611,39 @@ git commit -m "feat(hooks): add on_agent_profile_generated, updated, incubated h
 - 验证包含 `models` 链
 - 验证包含 `incubated` 标签
 
+**LLM 模拟机制（参照 [llm_tool_calling_flow.rs](../../tests/llm_tool_calling_flow.rs)、[experience_collection_workitem_flow.rs](../../tests/experience_collection_workitem_flow.rs)）：**
+
+实现 `AgentExecutor` trait 的 mock struct，根据 `request.conversation` 是否存在判断调用轮次，首轮返回 `OutputContent::ToolCalls` 触发 `submit_profile_update` 工具调用，后续轮次返回 `OutputContent::Text`。模式：
+
+```rust
+struct ProfileDesignerMockExecutor;
+
+impl AgentExecutor for ProfileDesignerMockExecutor {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+        let response = if request.conversation.is_some() {
+            // 后续轮次：返回普通文本结束 loop
+            AgentExecutionOutput {
+                content: harness::OutputContent::Text("profile submitted".to_string()),
+                reasoning_content: None,
+            }
+        } else {
+            // 首轮：触发 submit_profile_update 工具调用
+            AgentExecutionOutput {
+                content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
+                    id: "call_profile".to_string(),
+                    name: "submit_profile_update".to_string(),
+                    arguments: r#"{"name":"physics-specialist","tags":["physics","calculation"],"description":"Physics specialist agent"}"#.to_string(),
+                }]),
+                reasoning_content: None,
+            }
+        };
+        Box::pin(async move { Ok(response) })
+    }
+}
+```
+
+通过 `ExecutorRegistry::from_single_executor` 注册 mock，传入 `build_harness_app`。审批通过插入 `ToolConfirmationResponseMessage` 模拟用户选择 `approve` 选项。
+
 - [ ] **步骤 2：编写拒绝并反馈测试**
 
 创建 `tests/profile_reject_feedback_flow.rs`：
@@ -914,11 +1652,15 @@ git commit -m "feat(hooks): add on_agent_profile_generated, updated, incubated h
 - 验证 retry_count 递增
 - 验证重试上限：连续 3 次后选项不含 Reject & Feedback
 
+**LLM 模拟：** mock executor 根据 `request.conversation` 中 tool 消息数量判断当前 retry_count，返回不同的 profile 内容以验证反馈注入。审批通过插入 `ToolConfirmationResponseMessage { selected_option: "reject_with_feedback", feedback: Some("...") }` 模拟用户反馈。
+
 - [ ] **步骤 3：编写更新流程测试**
 
 创建 `tests/profile_update_flow.rs`：
 - 持久型 Agent LTM 写回 → profile 更新评估 → LLM 提议更新 → 审批 → 验证 ECS 和 agents.toml 同步
 - skip_profile_update → 静默结束
+
+**LLM 模拟：** 提议更新场景使用首轮返回 `submit_profile_update` ToolCalls 的 mock；skip 场景使用首轮返回 `skip_profile_update` ToolCalls 的 mock。
 
 - [ ] **步骤 4：运行全部测试**
 
