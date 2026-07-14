@@ -888,6 +888,84 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::SubmitProfileUpdate {
+            name,
+            tags,
+            description,
+        }) => {
+            // profile 数据由 profile_generation_completion_system（任务 6）从 LLM 响应中提取
+            // dispatch 层只需返回确认结果，WorkItem 完成 handler 会读取 ToolExecutionResultMessage
+            let output = serde_json::json!({
+                "status": "submitted",
+                "name": name,
+                "tags": tags,
+                "description": description,
+            });
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!(
+                        "profile submitted: {}",
+                        name
+                    )),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "submit_profile_update".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            commands.entity(request_entity).despawn();
+        }
+        Ok(ToolAction::SkipProfileUpdate) => {
+            let output = serde_json::json!({"status": "skipped"});
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text("profile update skipped".to_string()),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "skip_profile_update".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            commands.entity(request_entity).despawn();
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
