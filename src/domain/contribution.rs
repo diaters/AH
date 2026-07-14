@@ -42,6 +42,8 @@ pub enum ExperienceCandidateStatus {
     Rejected,
     Persisted,
     WritebackFailed,
+    /// profile 生成中：治理决议为孵化后，等待 LLM 生成 Agent profile。
+    ProfileGenerationPending,
 }
 
 /// 经验写回目标：治理决议后的唯一最终去向。
@@ -442,6 +444,90 @@ pub struct ExperienceGovernanceRequestMessage {
     pub agent_id: AgentId,
 }
 
+/// profile 生成场景：孵化时生成新 profile，或对持久型 Agent 评估更新。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileGenerationKind {
+    /// 孵化场景：根据经验候选为新 Agent 生成 name/tags/description。
+    Incubation,
+    /// 更新场景：评估现有 Agent profile 是否需要根据新经验更新。
+    Update,
+}
+
+/// profile 生成重试上限。
+#[allow(dead_code)] // 任务 6 起使用
+pub const MAX_PROFILE_GENERATION_RETRIES: u32 = 3;
+
+/// 现有 Agent profile：更新场景下作为 LLM 评估输入。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExistingAgentProfile {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub description: String,
+}
+
+/// LLM 生成的 Agent profile。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedProfile {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub description: String,
+}
+
+/// profile 生成请求消息：由治理系统（孵化）或更新触发系统发起。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, Component)]
+pub struct ProfileGenerationRequestMessage {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub candidate_ids: Vec<uuid::Uuid>,
+    pub existing_profile: Option<ExistingAgentProfile>,
+    pub kind: ProfileGenerationKind,
+    /// 拒绝并反馈场景：用户评审反馈，注入 LLM 上下文驱动重新生成。
+    pub feedback: Option<String>,
+    pub retry_count: u32,
+}
+
+/// profile 生成完成消息：由 profile-designer 工具调用完成后触发。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, Component)]
+pub struct ProfileGenerationCompletedMessage {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    /// LLM 生成的 profile；None 表示 LLM 调用了 skip_profile_update 或回退。
+    pub generated_profile: Option<GeneratedProfile>,
+    pub kind: ProfileGenerationKind,
+}
+
+/// 受保护标签：LLM 不可直接生成，由系统注入。
+#[allow(dead_code)] // 任务 7 起使用
+const PROTECTED_TAGS: &[&str] = &["incubated", "default"];
+
+/// 过滤 LLM 生成的 tags：
+/// - 移除受保护标签（incubated、default）
+/// - 从 existing_tags 中补回受保护标签
+/// - 去重并排序
+#[allow(dead_code)] // 任务 7 起使用
+pub fn sanitize_tags(llm_tags: Vec<String>, existing_tags: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = llm_tags
+        .into_iter()
+        .filter(|t| !PROTECTED_TAGS.contains(&t.as_str()))
+        .collect();
+
+    for tag in existing_tags {
+        if PROTECTED_TAGS.contains(&tag.as_str()) && !result.contains(tag) {
+            result.push(tag.clone());
+        }
+    }
+
+    result.sort_unstable();
+    result.dedup();
+
+    result
+}
+
 /// 孵化提案状态。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum IncubationProposalStatus {
@@ -552,8 +638,9 @@ mod tests {
             ExperienceCandidateStatus::Rejected,
             ExperienceCandidateStatus::Persisted,
             ExperienceCandidateStatus::WritebackFailed,
+            ExperienceCandidateStatus::ProfileGenerationPending,
         ];
-        assert_eq!(statuses.len(), 12);
+        assert_eq!(statuses.len(), 13);
     }
 
     #[test]
@@ -692,5 +779,41 @@ mod tests {
             store.candidates.get(&candidate_id).unwrap().status,
             ExperienceCandidateStatus::NeedsUserApproval
         );
+    }
+
+    #[test]
+    fn sanitize_tags_filters_protected_and_deduplicates() {
+        use super::sanitize_tags;
+        // LLM 输出包含受保护标签和重复标签
+        let llm_tags = vec![
+            "physics".to_string(),
+            "default".to_string(),
+            "incubated".to_string(),
+            "physics".to_string(),
+            "calculation".to_string(),
+        ];
+        let existing_tags = vec!["incubated".to_string()];
+
+        let result = sanitize_tags(llm_tags, &existing_tags);
+
+        // 受保护标签从 LLM 输出中过滤
+        assert!(!result.contains(&"default".to_string()));
+        // incubated 从 existing 中补回
+        assert!(result.contains(&"incubated".to_string()));
+        // 去重
+        assert_eq!(result.iter().filter(|t| t == &&"physics".to_string()).count(), 1);
+        // 保留非保护标签
+        assert!(result.contains(&"calculation".to_string()));
+    }
+
+    #[test]
+    fn sanitize_tags_empty_existing_for_incubation() {
+        use super::sanitize_tags;
+        let llm_tags = vec!["physics".to_string(), "calculation".to_string()];
+        let result = sanitize_tags(llm_tags, &[]);
+        assert!(result.contains(&"physics".to_string()));
+        assert!(result.contains(&"calculation".to_string()));
+        assert!(!result.contains(&"incubated".to_string()));
+        // incubated 由写回逻辑注入，不在 sanitize_tags 中
     }
 }
