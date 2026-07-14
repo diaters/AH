@@ -239,6 +239,44 @@ impl ChatPanel {
             )));
         }
 
+        // Feedback 模式渲染：标题行 + 提示文本 + 输入行
+        if let crate::tui::app::AppMode::Feedback { feedback_buffer, .. } = &app.mode {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " FEEDBACK ".to_string(),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " 请输入评审反馈".to_string(),
+                    Style::default().fg(Color::Magenta),
+                ),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "  Enter 提交 · Esc 返回选项列表".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("\u{276f} ", Style::default().fg(Color::Magenta)),
+                Span::styled(
+                    feedback_buffer.clone(),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    if feedback_buffer.is_empty() {
+                        "输入评审建议..."
+                    } else {
+                        ""
+                    },
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
         let paragraph = Paragraph::new(lines)
             .block(Block::default().borders(Borders::NONE))
             .wrap(Wrap { trim: false })

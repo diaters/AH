@@ -26,6 +26,12 @@ pub enum AppMode {
         selected_index: usize,
         options: Vec<ApprovalOption>,
     },
+    /// 拒绝并反馈输入模式：用户选择 "reject_with_feedback" 后输入反馈文本
+    Feedback {
+        request_id: Uuid,
+        feedback_buffer: String,
+        cursor_position: usize,
+    },
 }
 
 /// Agent 前端状态
@@ -103,14 +109,33 @@ impl App {
             } => {
                 self.handle_approval_key(key, *request_id, *selected_index, options.clone());
             }
+            AppMode::Feedback {
+                request_id,
+                feedback_buffer,
+                cursor_position,
+            } => {
+                self.handle_feedback_key(key, *request_id, feedback_buffer.clone(), *cursor_position);
+            }
         }
     }
 
     /// 处理粘贴事件（IME 输入提交的中文等多字节文本）
     pub fn handle_paste(&mut self, text: &str) {
-        if matches!(self.mode, AppMode::Chat) {
-            self.input_buffer.insert_str(self.byte_index(), text);
-            self.cursor_position += text.chars().count();
+        match &mut self.mode {
+            AppMode::Chat => {
+                self.input_buffer.insert_str(self.byte_index(), text);
+                self.cursor_position += text.chars().count();
+            }
+            AppMode::Feedback {
+                feedback_buffer,
+                cursor_position,
+                ..
+            } => {
+                let bi = feedback_byte_index(feedback_buffer, *cursor_position);
+                feedback_buffer.insert_str(bi, text);
+                *cursor_position += text.chars().count();
+            }
+            _ => {}
         }
     }
 
@@ -153,6 +178,129 @@ impl App {
             .nth(self.cursor_position)
             .map(|(i, _)| i)
             .unwrap_or(self.input_buffer.len())
+    }
+
+    /// 处理 Feedback 模式按键
+    fn handle_feedback_key(
+        &mut self,
+        key: KeyEvent,
+        request_id: Uuid,
+        mut feedback_buffer: String,
+        mut cursor_position: usize,
+    ) {
+        match key.code {
+            KeyCode::Char('q') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                self.should_quit = true;
+            }
+            KeyCode::Enter => {
+                let feedback = feedback_buffer.clone();
+                self.send_feedback_confirmation(request_id, feedback);
+            }
+            KeyCode::Esc => {
+                // 取消反馈，回到审批选项列表
+                self.restore_approval_mode(request_id);
+            }
+            KeyCode::Char(c) => {
+                let bi = feedback_byte_index(&feedback_buffer, cursor_position);
+                feedback_buffer.insert(bi, c);
+                cursor_position += 1;
+                self.mode = AppMode::Feedback {
+                    request_id,
+                    feedback_buffer,
+                    cursor_position,
+                };
+            }
+            KeyCode::Backspace if cursor_position > 0 => {
+                cursor_position -= 1;
+                let bi = feedback_byte_index(&feedback_buffer, cursor_position);
+                if let Some((char_byte_len, _)) = feedback_buffer[bi..].char_indices().nth(1) {
+                    feedback_buffer.drain(bi..bi + char_byte_len);
+                } else {
+                    feedback_buffer.drain(bi..);
+                }
+                self.mode = AppMode::Feedback {
+                    request_id,
+                    feedback_buffer,
+                    cursor_position,
+                };
+            }
+            KeyCode::Left if cursor_position > 0 => {
+                cursor_position -= 1;
+                self.mode = AppMode::Feedback {
+                    request_id,
+                    feedback_buffer,
+                    cursor_position,
+                };
+            }
+            KeyCode::Right if cursor_position < feedback_buffer.chars().count() => {
+                cursor_position += 1;
+                self.mode = AppMode::Feedback {
+                    request_id,
+                    feedback_buffer,
+                    cursor_position,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    /// 发送 reject_with_feedback 确认
+    fn send_feedback_confirmation(&mut self, request_id: Uuid, feedback: String) {
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "default".to_string(),
+            thread_id: None,
+        };
+        let _ = self.action_tx.send(UserAction::Confirmation {
+            channel,
+            request_id,
+            option_id: "reject_with_feedback".to_string(),
+            feedback: Some(feedback),
+        });
+
+        // 更新消息列表中的审批卡片状态
+        for msg in &mut self.messages {
+            if let ChatMessage::ApprovalCard(state) = msg
+                && state.is_active_for(request_id)
+            {
+                state.mark_done("拒绝并反馈".to_string());
+            }
+        }
+
+        // 移除已处理的审批
+        self.pending_approvals
+            .retain(|a| a.request_id != request_id);
+
+        // 切换到下一个审批或回到 Chat 模式
+        let next = self.pending_approvals.first().cloned();
+        if let Some(next) = next {
+            self.mode = AppMode::Approval {
+                request_id: next.request_id,
+                selected_index: 0,
+                options: next.options.clone(),
+            };
+            self.promote_queued_card(&next);
+        } else {
+            self.mode = AppMode::Chat;
+        }
+    }
+
+    /// 取消反馈，回到审批选项列表
+    fn restore_approval_mode(&mut self, request_id: Uuid) {
+        if let Some(pending) = self
+            .pending_approvals
+            .iter()
+            .find(|a| a.request_id == request_id)
+            .cloned()
+        {
+            self.mode = AppMode::Approval {
+                request_id,
+                selected_index: 0,
+                options: pending.options,
+            };
+        } else {
+            self.mode = AppMode::Chat;
+        }
     }
 
     /// 更新所有主任务的子任务进度
@@ -316,6 +464,16 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(option) = options.get(selected_index) {
+                    // 检测 reject_with_feedback 选项：切换到 Feedback 模式而非直接发送
+                    if option.id == "reject_with_feedback" {
+                        self.mode = AppMode::Feedback {
+                            request_id,
+                            feedback_buffer: String::new(),
+                            cursor_position: 0,
+                        };
+                        return;
+                    }
+
                     let channel = ChannelId {
                         frontend: FrontendKind::Tui,
                         user_id: "default".to_string(),
@@ -575,6 +733,15 @@ impl App {
         StatusPanel::render(self, frame, content_layout[1]);
         InputBar::render(self, frame, main_layout[1]);
     }
+}
+
+/// 将 char 索引转为 byte 索引（Feedback 模式专用，不依赖 App 实例）
+fn feedback_byte_index(buffer: &str, cursor_position: usize) -> usize {
+    buffer
+        .char_indices()
+        .nth(cursor_position)
+        .map(|(i, _)| i)
+        .unwrap_or(buffer.len())
 }
 
 #[cfg(test)]
@@ -1150,5 +1317,137 @@ mod tests {
             1,
             "active tasks should never be cleaned up"
         );
+    }
+
+    #[test]
+    fn reject_with_feedback_option_enters_feedback_mode() {
+        let mut app = test_app();
+        let request_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id,
+            agent_name: "agent".to_string(),
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![
+                ApprovalOption {
+                    id: "approve".to_string(),
+                    label: "批准".to_string(),
+                    description: "批准".to_string(),
+                },
+                ApprovalOption {
+                    id: "reject".to_string(),
+                    label: "拒绝".to_string(),
+                    description: "拒绝".to_string(),
+                },
+                ApprovalOption {
+                    id: "reject_with_feedback".to_string(),
+                    label: "拒绝并反馈".to_string(),
+                    description: "拒绝并反馈".to_string(),
+                },
+            ],
+            approval_context: None,
+        });
+
+        // 移动到 reject_with_feedback（index 2）
+        app.handle_key_event(KeyEvent::from(KeyCode::Down));
+        app.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+        // 按 Enter 应进入 Feedback 模式而非发送确认
+        app.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert!(matches!(
+            app.mode,
+            AppMode::Feedback {
+                request_id: rid,
+                ref feedback_buffer,
+                cursor_position: 0
+            } if rid == request_id && feedback_buffer.is_empty()
+        ));
+    }
+
+    #[test]
+    fn feedback_mode_esc_returns_to_approval() {
+        let mut app = test_app();
+        let request_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id,
+            agent_name: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![ApprovalOption {
+                id: "reject_with_feedback".to_string(),
+                label: "拒绝并反馈".to_string(),
+                description: "拒绝并反馈".to_string(),
+            }],
+            approval_context: None,
+        });
+
+        // 按 Enter 进入 Feedback 模式
+        app.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, AppMode::Feedback { .. }));
+
+        // 按 Esc 应回到 Approval 模式
+        app.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, AppMode::Approval { .. }));
+    }
+
+    #[test]
+    fn feedback_mode_enter_sends_confirmation_with_feedback() {
+        use crossbeam_channel::TryRecvError;
+
+        use crate::domain::UserAction;
+
+        let (action_tx, action_rx) = unbounded();
+        let mut app = App::new(action_tx);
+        let request_id = Uuid::new_v4();
+
+        app.handle_engine_event(EngineEvent::ApprovalRequest {
+            target: EventTarget::Broadcast,
+            request_id,
+            agent_name: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            tool_input: serde_json::json!({}),
+            options: vec![ApprovalOption {
+                id: "reject_with_feedback".to_string(),
+                label: "拒绝并反馈".to_string(),
+                description: "拒绝并反馈".to_string(),
+            }],
+            approval_context: None,
+        });
+
+        // 进入 Feedback 模式
+        app.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        // 输入反馈文本
+        app.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
+        app.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
+        app.handle_key_event(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key_event(KeyEvent::from(KeyCode::Char('e')));
+
+        // 按 Enter 提交
+        app.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        // 应发送 Confirmation with feedback
+        let action = action_rx.try_recv();
+        assert!(!matches!(action, Err(TryRecvError::Empty)));
+        if let Ok(UserAction::Confirmation {
+            option_id,
+            feedback,
+            ..
+        }) = action
+        {
+            assert_eq!(option_id, "reject_with_feedback");
+            assert_eq!(feedback, Some("name".to_string()));
+        } else {
+            panic!("expected Confirmation action with feedback");
+        }
+
+        // 审批应被移除，回到 Chat 模式
+        assert!(app.pending_approvals.is_empty());
+        assert!(matches!(app.mode, AppMode::Chat));
     }
 }
