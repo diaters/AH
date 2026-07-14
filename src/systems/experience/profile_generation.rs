@@ -13,11 +13,12 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentProfile, AgentRequestKind, ConfirmationOption,
-    ConfirmationSource, ExperienceCandidatePayload, ExperienceStore,
+    ConfirmationSource, ExperienceCandidatePayload, ExperienceStore, PendingExperienceHooks,
     ProfileGenerationCompletedMessage, ProfileGenerationContext, ProfileGenerationKind,
     ProfileGenerationRequestMessage, SpaceToolRegistry, TaskId, ToolCalledHookPending,
     ToolConfirmationRequestMessage, ToolExecutionRequestMessage, WorkItem,
 };
+use crate::user_plugins::hook_point::HookPoint;
 
 /// profile 生成 WorkItem 创建系统：将生成请求转换为独立 WorkItem 分配给 profile-designer。
 #[allow(dead_code)] // 任务 11 系统注册时启用
@@ -236,6 +237,7 @@ fn handle_profile_designer_missing(
 pub(crate) fn profile_generation_completion_system(
     mut commands: Commands,
     mut store: ResMut<ExperienceStore>,
+    mut pending_hooks: ResMut<PendingExperienceHooks>,
     agents: Query<&Agent>,
     messages: Query<(Entity, &ProfileGenerationCompletedMessage)>,
 ) {
@@ -249,13 +251,20 @@ pub(crate) fn profile_generation_completion_system(
                 handle_incubation_profile_completed(
                     &mut commands,
                     &mut store,
+                    &mut pending_hooks,
                     &agents,
                     msg,
                     ctx.as_ref(),
                 );
             }
             ProfileGenerationKind::Update => {
-                handle_update_profile_completed(&mut commands, &mut store, msg, ctx.as_ref());
+                handle_update_profile_completed(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    msg,
+                    ctx.as_ref(),
+                );
             }
         }
         commands.entity(entity).despawn();
@@ -268,10 +277,12 @@ pub(crate) fn profile_generation_completion_system(
 /// 2. 查找 default Agent 以继承 models 链
 /// 3. 调用 store.merge_into_proposal 使用 LLM 生成的 name/tags/description
 /// 4. 发起审批（选项包含 Approve、Reject、Reject & Feedback）
+/// 5. 派发 on_agent_profile_generated hook
 #[allow(dead_code)] // 通过 profile_generation_completion_system 调用，但未注册到 schedule 前会触发 dead_code
 fn handle_incubation_profile_completed(
     commands: &mut Commands,
     store: &mut ExperienceStore,
+    pending_hooks: &mut PendingExperienceHooks,
     agents: &Query<&Agent>,
     msg: &ProfileGenerationCompletedMessage,
     ctx: Option<&ProfileGenerationContext>,
@@ -335,8 +346,10 @@ fn handle_incubation_profile_completed(
         retry_count,
     );
 
-    // TODO(任务 14): 派发 on_agent_profile_generated hook
-    // pending_hooks.0.push((HookPoint::OnAgentProfileGenerated, task_id));
+    // 5. 派发 on_agent_profile_generated hook（在 LLM 生成后、用户审批前触发）
+    pending_hooks
+        .0
+        .push((HookPoint::OnAgentProfileGenerated, task_id));
 
     info!(
         event = "ProfileGenerationCompleted",
@@ -355,6 +368,7 @@ fn handle_incubation_profile_completed(
 fn handle_update_profile_completed(
     commands: &mut Commands,
     store: &mut ExperienceStore,
+    pending_hooks: &mut PendingExperienceHooks,
     msg: &ProfileGenerationCompletedMessage,
     ctx: Option<&ProfileGenerationContext>,
 ) {
@@ -387,6 +401,11 @@ fn handle_update_profile_completed(
             &generated.description,
             retry_count,
         );
+
+        // 派发 on_agent_profile_generated hook（更新场景同样在审批前触发）
+        pending_hooks
+            .0
+            .push((HookPoint::OnAgentProfileGenerated, msg.task_id));
     } else {
         info!(
             event = "ProfileUpdateSkipped",
@@ -396,7 +415,6 @@ fn handle_update_profile_completed(
         // skip 时清理 context
         store.profile_generation_context.remove(&msg.task_id);
     }
-    // TODO(任务 14): 派发 on_agent_profile_generated hook
 }
 
 /// 发起 profile 审批：spawn ToolConfirmationRequestMessage 和占位 ToolExecutionRequestMessage。

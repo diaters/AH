@@ -11,8 +11,10 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, AgentCapabilities, ExistingAgentProfile, ExperienceCandidateStatus,
-    ExperienceStore, ProfileGenerationKind, ProfileGenerationRequestMessage, sanitize_tags,
+    ExperienceStore, PendingExperienceHooks, ProfileGenerationKind,
+    ProfileGenerationRequestMessage, sanitize_tags,
 };
+use crate::user_plugins::hook_point::HookPoint;
 
 /// Profile 更新触发系统：检测 LTM/SkillPackage 写回成功后，触发 profile 更新评估。
 ///
@@ -117,6 +119,7 @@ pub(crate) fn profile_update_trigger_system(
 pub(crate) fn profile_update_writeback_system(
     mut store: ResMut<ExperienceStore>,
     mut agents: Query<&mut Agent>,
+    mut pending_hooks: ResMut<PendingExperienceHooks>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
     settings: Res<crate::app::HarnessSettings>,
 ) {
@@ -216,6 +219,11 @@ pub(crate) fn profile_update_writeback_system(
                     tags = ?sanitized_tags,
                     "agent profile updated successfully"
                 );
+
+                // 派发 on_agent_profile_updated hook（写回成功后触发）
+                pending_hooks
+                    .0
+                    .push((HookPoint::OnAgentProfileUpdated, task_id));
             }
             Err(e) => {
                 // 文件写入失败
@@ -450,6 +458,7 @@ description = "old description"
         let agent = make_test_agent("physics-specialist", &["physics"], agent_id);
         let mut world = World::new();
         world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
         world.insert_resource(crate::app::HarnessSettings(
             crate::app::HarnessConfig {
@@ -522,6 +531,7 @@ description = "old description"
 
         let mut world = World::new();
         world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
         // 使用不存在的配置路径
         world.insert_resource(crate::app::HarnessSettings(
@@ -560,6 +570,7 @@ description = "old description"
         // 无 context
         let mut world = World::new();
         world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
         world.insert_resource(crate::app::HarnessSettings(
             crate::app::HarnessConfig::default()

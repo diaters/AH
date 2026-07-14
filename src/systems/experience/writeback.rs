@@ -3,9 +3,10 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, LongTermMemory, TaskId,
+    ExperienceWritebackRequestMessage, LongTermMemory, PendingExperienceHooks, TaskId,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
+use crate::user_plugins::hook_point::HookPoint;
 
 fn build_incubated_agent_description(
     store: &crate::domain::ExperienceStore,
@@ -57,6 +58,7 @@ fn load_default_agent_models_chain(config_path: &str) -> Vec<crate::domain::Mode
 pub(crate) fn experience_writeback_system(
     mut commands: Commands,
     mut store: ResMut<ExperienceStore>,
+    mut pending_hooks: ResMut<PendingExperienceHooks>,
     mut long_memories: Query<&mut LongTermMemory>,
     agents: Query<&Agent>,
     mut service: ResMut<LongTermMemoryService>,
@@ -109,6 +111,7 @@ pub(crate) fn experience_writeback_system(
                 writeback_incubation_proposal(
                     decision.source_task_id,
                     &mut store,
+                    &mut pending_hooks,
                     &proposal_store,
                     &agent_registry,
                     &mut service,
@@ -230,9 +233,11 @@ fn writeback_to_skill_package(
         .map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn writeback_incubation_proposal(
     task_id: TaskId,
     store: &mut ExperienceStore,
+    pending_hooks: &mut PendingExperienceHooks,
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
     service: &mut crate::infrastructure::memory::LongTermMemoryService,
@@ -414,6 +419,12 @@ fn writeback_incubation_proposal(
                 task_id = %task_id,
                 "incubation writeback succeeded"
             );
+
+            // 派发 on_agent_incubated hook（写入 agents.toml 成功后触发）
+            pending_hooks
+                .0
+                .push((HookPoint::OnAgentIncubated, task_id));
+
             Ok(())
         }
         Err(e) => {
@@ -500,6 +511,7 @@ mod tests {
             crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
 
         let mut store = ExperienceStore::default();
+        let mut pending_hooks = PendingExperienceHooks::default();
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
 
@@ -523,6 +535,7 @@ mod tests {
         let result = writeback_incubation_proposal(
             task_id,
             &mut store,
+            &mut pending_hooks,
             &proposal_store,
             &registry,
             &mut memory_service,
@@ -564,6 +577,7 @@ mod tests {
             crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
 
         let mut store = ExperienceStore::default();
+        let mut pending_hooks = PendingExperienceHooks::default();
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
 
@@ -601,6 +615,7 @@ mod tests {
         let result = writeback_incubation_proposal(
             task_id,
             &mut store,
+            &mut pending_hooks,
             &proposal_store,
             &registry,
             &mut memory_service,
@@ -656,6 +671,7 @@ description = "existing"
             crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
 
         let mut store = ExperienceStore::default();
+        let mut pending_hooks = PendingExperienceHooks::default();
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
 
@@ -692,6 +708,7 @@ description = "existing"
         let result = writeback_incubation_proposal(
             task_id,
             &mut store,
+            &mut pending_hooks,
             &proposal_store,
             &registry,
             &mut memory_service,
