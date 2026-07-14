@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -21,6 +21,15 @@ use super::traits::{
     extract_attachments,
 };
 
+/// Telegram 用户待处理反馈记录：用户点击 "reject_with_feedback" 后
+/// 等待用户发送文本反馈。key 为 user_id。
+#[derive(Debug, Clone)]
+struct PendingFeedback {
+    request_id: Uuid,
+    chat_id: String,
+    thread_id: Option<String>,
+}
+
 pub struct TelegramChannel {
     config: TelegramConfig,
     config_path: Option<PathBuf>,
@@ -28,6 +37,8 @@ pub struct TelegramChannel {
     client: Client,
     base_url: String,
     last_update_id: AtomicI64,
+    /// 待处理反馈：用户点击 reject_with_feedback 后等待文本输入
+    pending_feedback: Arc<RwLock<HashMap<String, PendingFeedback>>>,
 }
 
 impl TelegramChannel {
@@ -43,6 +54,7 @@ impl TelegramChannel {
             client: Client::new(),
             base_url: "https://api.telegram.org".to_string(),
             last_update_id: AtomicI64::new(0),
+            pending_feedback: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -690,7 +702,22 @@ impl Channel for TelegramChannel {
 
                         // Optionally reply with a confirmation note
                         if let Some(ref message) = callback_query.message {
-                            let note = format!("已选择：{}", option);
+                            let note = if option == "reject_with_feedback" {
+                                // 拒绝并反馈：不立即发送 Confirmation，而是记录到 pending_feedback
+                                // 等待用户发送文本反馈
+                                self.pending_feedback.write().unwrap().insert(
+                                    callback_query.from.id.to_string(),
+                                    PendingFeedback {
+                                        request_id,
+                                        chat_id: message.chat.id.to_string(),
+                                        thread_id: message.message_thread_id
+                                            .map(|id| id.to_string()),
+                                    },
+                                );
+                                "请输入评审建议（发送 /cancel 取消）：".to_string()
+                            } else {
+                                format!("已选择：{}", option)
+                            };
                             let note_payload = json!({
                                 "chat_id": message.chat.id,
                                 "text": note,
@@ -707,7 +734,10 @@ impl Channel for TelegramChannel {
                             }
                         }
 
-                        if let Some(ref message) = callback_query.message {
+                        // 非 reject_with_feedback 场景：直接发送 InboundConfirmation
+                        if option != "reject_with_feedback"
+                            && let Some(ref message) = callback_query.message
+                        {
                             let inbound = ChannelInboundMessage {
                                 channel_name: self.name().to_string(),
                                 sender_id: callback_query.from.id.to_string(),
@@ -805,6 +835,48 @@ impl Channel for TelegramChannel {
 
                     if let Some(text) = msg.text {
                         let should_ack = !text.starts_with("/bind ");
+
+                        // 检查是否有待处理反馈：若有，将文本作为 feedback 发送 Confirmation
+                        let user_id = msg.from.id.to_string();
+                        let pending = self.pending_feedback.write().unwrap().remove(&user_id);
+                        if let Some(pending) = pending {
+                            if text.trim() == "/cancel" {
+                                // 取消反馈，发送普通拒绝
+                                let _ = tx.send(ChannelInboundMessage {
+                                    channel_name: self.name().to_string(),
+                                    sender_id: user_id,
+                                    chat_id: pending.chat_id,
+                                    thread_id: pending.thread_id,
+                                    content: String::new(),
+                                    timestamp_secs: msg.date as u64,
+                                    confirmation: Some(InboundConfirmation {
+                                        request_id: pending.request_id,
+                                        option: "reject".to_string(),
+                                        label: None,
+                                        feedback: None,
+                                    }),
+                                });
+                                continue;
+                            }
+
+                            let feedback = text.trim().to_string();
+                            let _ = tx.send(ChannelInboundMessage {
+                                channel_name: self.name().to_string(),
+                                sender_id: user_id,
+                                chat_id: pending.chat_id,
+                                thread_id: pending.thread_id,
+                                content: String::new(),
+                                timestamp_secs: msg.date as u64,
+                                confirmation: Some(InboundConfirmation {
+                                    request_id: pending.request_id,
+                                    option: "reject_with_feedback".to_string(),
+                                    label: None,
+                                    feedback: Some(feedback),
+                                }),
+                            });
+                            continue;
+                        }
+
                         let _ = tx.send(ChannelInboundMessage {
                             channel_name: self.name().to_string(),
                             sender_id: msg.from.id.to_string(),

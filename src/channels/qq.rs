@@ -95,6 +95,14 @@ struct PendingApproval {
     created_at: u64,
 }
 
+/// 待处理反馈记录：用户选择 reject_with_feedback 后等待文本输入。
+#[derive(Clone, Debug)]
+struct PendingFeedback {
+    request_id: Uuid,
+    #[allow(dead_code)]
+    recipient: String,
+}
+
 const PENDING_APPROVAL_TTL_SECS: u64 = 300;
 
 /// 根据 marker 字符串与目标路径扩展名映射到 QQMediaFileType。
@@ -333,6 +341,8 @@ pub struct QqChannel {
     api_base: String,
     auth_url: String,
     pending_approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
+    /// 待处理反馈：用户选择 reject_with_feedback 后等待文本输入
+    pending_feedback: Arc<RwLock<HashMap<String, PendingFeedback>>>,
 }
 
 impl QqChannel {
@@ -352,6 +362,7 @@ impl QqChannel {
             api_base: QQ_API_BASE.to_string(),
             auth_url: QQ_AUTH_URL.to_string(),
             pending_approvals: Arc::new(RwLock::new(HashMap::new())),
+            pending_feedback: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -730,6 +741,7 @@ impl QqChannel {
 
     /// 尝试将用户回复匹配到 pending approval。
     /// 匹配优先级：数字 → option id → option label。
+    /// 支持 "N feedback" 格式：数字后跟反馈文本，仅对 reject_with_feedback 选项生效。
     #[allow(dead_code)]
     async fn try_match_approval_reply(
         &self,
@@ -754,9 +766,39 @@ impl QqChannel {
         };
 
         let normalized = content.trim();
-        let matched = if normalized.chars().all(|c| c.is_ascii_digit()) && !normalized.is_empty() {
+
+        // 尝试解析 "N feedback" 格式：数字 + 空格 + 反馈文本
+        // 仅当首字符为数字时才尝试拆分
+        let (numeric_part, feedback_part) =
+            if normalized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                // 找到数字部分的结束位置
+                let digit_end = normalized
+                    .char_indices()
+                    .take_while(|(_, c)| c.is_ascii_digit())
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
+                let after_digits = &normalized[digit_end..];
+                if after_digits.is_empty() {
+                    (normalized, None)
+                } else if let Some(stripped) = after_digits.strip_prefix(' ') {
+                    let feedback = stripped.trim();
+                    if feedback.is_empty() {
+                        (normalized, None)
+                    } else {
+                        (normalized[..digit_end].trim(), Some(feedback))
+                    }
+                } else {
+                    (normalized, None)
+                }
+            } else {
+                (normalized, None)
+            };
+
+        let matched = if numeric_part.chars().all(|c| c.is_ascii_digit()) && !numeric_part.is_empty()
+        {
             // 数字匹配
-            normalized.parse::<usize>().ok().and_then(|n| {
+            numeric_part.parse::<usize>().ok().and_then(|n| {
                 if n >= 1 && n <= pending.options.len() {
                     Some(&pending.options[n - 1])
                 } else {
@@ -766,22 +808,30 @@ impl QqChannel {
         } else {
             None
         }
-        .or_else(|| pending.options.iter().find(|opt| opt.id == normalized))
+        .or_else(|| pending.options.iter().find(|opt| opt.id == numeric_part))
         .or_else(|| {
             pending
                 .options
                 .iter()
-                .find(|opt| opt.label == normalized || opt.label.contains(normalized))
+                .find(|opt| opt.label == numeric_part || opt.label.contains(numeric_part))
         });
 
         if let Some(opt) = matched {
             let mut map = self.pending_approvals.write().await;
             map.remove(recipient);
+
+            // 仅 reject_with_feedback 选项支持 feedback 文本
+            let feedback = if opt.id == "reject_with_feedback" {
+                feedback_part.map(|s| s.to_string())
+            } else {
+                None
+            };
+
             Some(InboundConfirmation {
                 request_id: pending.request_id,
                 option: opt.id.clone(),
                 label: Some(opt.label.clone()),
-                feedback: None,
+                feedback,
             })
         } else {
             None
@@ -1345,8 +1395,83 @@ impl Channel for QqChannel {
                                 continue;
                             }
 
+                            // 检查是否有待处理反馈：若有，将文本作为 feedback 发送 Confirmation
+                            let pending_fb = {
+                                self.pending_feedback.write().await.remove(&recipient)
+                            };
+                            if let Some(pending) = pending_fb {
+                                if content.trim() == "/cancel" {
+                                    // 取消反馈，发送普通拒绝
+                                    let _ = self
+                                        .send_text_markdown(&recipient, "已取消反馈，发送普通拒绝。")
+                                        .await;
+                                    let inbound = ChannelInboundMessage {
+                                        channel_name: self.name().to_string(),
+                                        sender_id: user_openid.clone(),
+                                        chat_id: recipient.clone(),
+                                        thread_id: None,
+                                        content: String::new(),
+                                        timestamp_secs: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0),
+                                        confirmation: Some(InboundConfirmation {
+                                            request_id: pending.request_id,
+                                            option: "reject".to_string(),
+                                            label: None,
+                                            feedback: None,
+                                        }),
+                                    };
+                                    let _ = tx.send(inbound);
+                                    continue;
+                                }
+
+                                let feedback = content.trim().to_string();
+                                let note = format!("已提交反馈：{feedback}");
+                                let _ = self.send_text_markdown(&recipient, &note).await;
+                                let inbound = ChannelInboundMessage {
+                                    channel_name: self.name().to_string(),
+                                    sender_id: user_openid.clone(),
+                                    chat_id: recipient.clone(),
+                                    thread_id: None,
+                                    content: String::new(),
+                                    timestamp_secs: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0),
+                                    confirmation: Some(InboundConfirmation {
+                                        request_id: pending.request_id,
+                                        option: "reject_with_feedback".to_string(),
+                                        label: None,
+                                        feedback: Some(feedback),
+                                    }),
+                                };
+                                let _ = tx.send(inbound);
+                                continue;
+                            }
+
                             // 审批回复匹配
                             if let Some(confirmation) = self.try_match_approval_reply(&recipient, &content).await {
+                                // 检测 reject_with_feedback 且无 feedback：进入两步交互
+                                if confirmation.option == "reject_with_feedback"
+                                    && confirmation.feedback.is_none()
+                                {
+                                    self.pending_feedback.write().await.insert(
+                                        recipient.clone(),
+                                        PendingFeedback {
+                                            request_id: confirmation.request_id,
+                                            recipient: recipient.clone(),
+                                        },
+                                    );
+                                    let _ = self
+                                        .send_text_markdown(
+                                            &recipient,
+                                            "请输入评审建议（发送 /cancel 取消）：",
+                                        )
+                                        .await;
+                                    continue;
+                                }
+
                                 let display = confirmation.label.as_deref().unwrap_or(&content);
                                 let note = format!("已选择：{display}");
                                 let _ = self.send_text_markdown(&recipient, &note).await;
