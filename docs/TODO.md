@@ -53,6 +53,15 @@
 
 ### 中优先级
 
+- [ ] 补齐插件系统的未完整实现链路：
+  - 替换 `tool_executor` stub，实现插件 Tool 的真实 Rhai 执行逻辑并补齐测试
+  - 实现 slash command 的真实 Rhai 脚本派发（当前仅解析加载，执行仅打印 stub 日志）
+  - 实现 `WorldCommand` 中 deferred 的变体：`CreateWorkItem`、`SetApprovalDecision`、
+    `ExperienceSetPinned`、`SetTaskMetadata`、`SetTaskTag`
+  - 将插件 `emit_message` Host API 接入实际消息路由层（当前仅记录日志）
+  - 让 `SkillsSnapshot` 从 `SkillLoader` / `PluginSkillContributions` 真实填充
+    （当前 `list_skills` 返回空）
+  - 实现插件全局 state Host API（当前 `state` 模块为占位）
 - [ ] 梳理并补充当前架构索引，明确哪些设计文档仍是有效真相源
 - [ ] 增加更多真实 provider 场景验证，明确 `openai`、`anthropic`、
   `deepseek` 与 `openai-compatible` 的运行约束

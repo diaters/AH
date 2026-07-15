@@ -42,6 +42,8 @@ pub enum ExperienceCandidateStatus {
     Rejected,
     Persisted,
     WritebackFailed,
+    /// profile 生成中：治理决议为孵化后，等待 LLM 生成 Agent profile。
+    ProfileGenerationPending,
 }
 
 /// 经验写回目标：治理决议后的唯一最终去向。
@@ -216,6 +218,26 @@ pub struct ExperienceStore {
     pub proposals: std::collections::HashMap<TaskId, IncubationProposal>,
     /// 审批请求 ID 到候选 ID 的精确绑定。
     approval_bindings: std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
+    /// profile 生成上下文：以 task_id 为 key 暂存 kind 与 retry_count，
+    /// 由 `profile_generation_workitem_system` 写入，
+    /// 由 orchestrator 的 SubmitProfileUpdate/SkipProfileUpdate 分支读取后清理。
+    pub profile_generation_context: std::collections::HashMap<TaskId, ProfileGenerationContext>,
+    /// 已触发 profile 更新评估的候选 ID 集合，避免重复触发。
+    pub profile_update_triggered: std::collections::HashSet<uuid::Uuid>,
+}
+
+/// profile 生成运行时上下文：在 ExperienceStore 中暂存，
+/// 用于在 orchestrator（工具执行）、completion_system（完成处理）与
+/// approval_system（拒绝并反馈重试）之间传递 kind/retry_count/existing_profile。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileGenerationContext {
+    pub kind: ProfileGenerationKind,
+    pub retry_count: u32,
+    /// 更新场景下保存现有 profile，供拒绝并反馈重试时重新构建请求。
+    pub existing_profile: Option<ExistingAgentProfile>,
+    /// LLM 生成的 profile；更新场景下由 completion_system 写入，
+    /// 供 profile_update_writeback_system 在审批通过后读取。
+    pub generated_profile: Option<GeneratedProfile>,
 }
 
 impl ExperienceStore {
@@ -388,16 +410,20 @@ impl ExperienceStore {
     /// 查找或创建任务级孵化提案。
     ///
     /// 同一任务最多一个活跃 proposal，后续候选 merge 到已有 proposal。
+    /// 若 proposal 已存在，更新 `proposed_agent_profile` 以反映最新的 LLM 生成结果
+    /// （支持拒绝并反馈后的重新生成场景）。
     pub fn find_or_create_proposal(
         &mut self,
         task_id: TaskId,
         agent_id: AgentId,
         profile: super::AgentProfile,
     ) -> &mut IncubationProposal {
-        self.proposals
+        let proposal = self
+            .proposals
             .entry(task_id)
-            .or_insert_with(|| IncubationProposal::new(task_id, agent_id, profile));
-        self.proposals.get_mut(&task_id).unwrap()
+            .or_insert_with(|| IncubationProposal::new(task_id, agent_id, profile.clone()));
+        proposal.proposed_agent_profile = profile;
+        proposal
     }
 
     /// 将候选合并到任务级提案中。若不存在则创建。
@@ -440,6 +466,90 @@ pub struct ExperienceCollectionRequestMessage {
 pub struct ExperienceGovernanceRequestMessage {
     pub task_id: TaskId,
     pub agent_id: AgentId,
+}
+
+/// profile 生成场景：孵化时生成新 profile，或对持久型 Agent 评估更新。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileGenerationKind {
+    /// 孵化场景：根据经验候选为新 Agent 生成 name/tags/description。
+    Incubation,
+    /// 更新场景：评估现有 Agent profile 是否需要根据新经验更新。
+    Update,
+}
+
+/// profile 生成重试上限。
+#[allow(dead_code)] // 任务 6 起使用
+pub const MAX_PROFILE_GENERATION_RETRIES: u32 = 3;
+
+/// 现有 Agent profile：更新场景下作为 LLM 评估输入。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExistingAgentProfile {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub description: String,
+}
+
+/// LLM 生成的 Agent profile。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedProfile {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub description: String,
+}
+
+/// profile 生成请求消息：由治理系统（孵化）或更新触发系统发起。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, Component)]
+pub struct ProfileGenerationRequestMessage {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub candidate_ids: Vec<uuid::Uuid>,
+    pub existing_profile: Option<ExistingAgentProfile>,
+    pub kind: ProfileGenerationKind,
+    /// 拒绝并反馈场景：用户评审反馈，注入 LLM 上下文驱动重新生成。
+    pub feedback: Option<String>,
+    pub retry_count: u32,
+}
+
+/// profile 生成完成消息：由 profile-designer 工具调用完成后触发。
+#[allow(dead_code)] // 任务 6 起使用
+#[derive(Debug, Clone, Component)]
+pub struct ProfileGenerationCompletedMessage {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    /// LLM 生成的 profile；None 表示 LLM 调用了 skip_profile_update 或回退。
+    pub generated_profile: Option<GeneratedProfile>,
+    pub kind: ProfileGenerationKind,
+}
+
+/// 受保护标签：LLM 不可直接生成，由系统注入。
+#[allow(dead_code)] // 任务 7 起使用
+const PROTECTED_TAGS: &[&str] = &["incubated", "default"];
+
+/// 过滤 LLM 生成的 tags：
+/// - 移除受保护标签（incubated、default）
+/// - 从 existing_tags 中补回受保护标签
+/// - 去重并排序
+#[allow(dead_code)] // 任务 7 起使用
+pub fn sanitize_tags(llm_tags: Vec<String>, existing_tags: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = llm_tags
+        .into_iter()
+        .filter(|t| !PROTECTED_TAGS.contains(&t.as_str()))
+        .collect();
+
+    for tag in existing_tags {
+        if PROTECTED_TAGS.contains(&tag.as_str()) && !result.contains(tag) {
+            result.push(tag.clone());
+        }
+    }
+
+    result.sort_unstable();
+    result.dedup();
+
+    result
 }
 
 /// 孵化提案状态。
@@ -552,8 +662,9 @@ mod tests {
             ExperienceCandidateStatus::Rejected,
             ExperienceCandidateStatus::Persisted,
             ExperienceCandidateStatus::WritebackFailed,
+            ExperienceCandidateStatus::ProfileGenerationPending,
         ];
-        assert_eq!(statuses.len(), 12);
+        assert_eq!(statuses.len(), 13);
     }
 
     #[test]
@@ -692,5 +803,47 @@ mod tests {
             store.candidates.get(&candidate_id).unwrap().status,
             ExperienceCandidateStatus::NeedsUserApproval
         );
+    }
+
+    #[test]
+    fn sanitize_tags_filters_protected_and_deduplicates() {
+        use super::sanitize_tags;
+        // LLM 输出包含受保护标签和重复标签
+        let llm_tags = vec![
+            "physics".to_string(),
+            "default".to_string(),
+            "incubated".to_string(),
+            "physics".to_string(),
+            "calculation".to_string(),
+        ];
+        let existing_tags = vec!["incubated".to_string()];
+
+        let result = sanitize_tags(llm_tags, &existing_tags);
+
+        // 受保护标签从 LLM 输出中过滤
+        assert!(!result.contains(&"default".to_string()));
+        // incubated 从 existing 中补回
+        assert!(result.contains(&"incubated".to_string()));
+        // 去重
+        assert_eq!(
+            result
+                .iter()
+                .filter(|t| t == &&"physics".to_string())
+                .count(),
+            1
+        );
+        // 保留非保护标签
+        assert!(result.contains(&"calculation".to_string()));
+    }
+
+    #[test]
+    fn sanitize_tags_empty_existing_for_incubation() {
+        use super::sanitize_tags;
+        let llm_tags = vec!["physics".to_string(), "calculation".to_string()];
+        let result = sanitize_tags(llm_tags, &[]);
+        assert!(result.contains(&"physics".to_string()));
+        assert!(result.contains(&"calculation".to_string()));
+        assert!(!result.contains(&"incubated".to_string()));
+        // incubated 由写回逻辑注入，不在 sanitize_tags 中
     }
 }

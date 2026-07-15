@@ -35,7 +35,7 @@ use crate::domain::{
 use self::builtin::{
     ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SubmitExperienceCandidateTool, WaitTasksTool,
+    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -384,6 +384,39 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ScheduleTaskTool));
+
+    // Profile update tools (仅 profile-designer 可用)
+    registry.register(ToolDefinition {
+        name: "submit_profile_update".to_string(),
+        description: "提交生成或更新后的 Agent profile。孵化场景 name 作为最终 Agent 名称；更新场景 name 仅作参考，系统会强制使用原 name（不可变更）。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Agent 角色名，简洁有力"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "核心能力标签列表"},
+                    "description": {"type": "string", "description": "Agent 职责描述，一到两句话概括"}
+                },
+                "required": ["name", "tags", "description"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("submit_profile_update".to_string()),
+        required_tag: Some("profile".to_string()),
+    });
+    executors.register(Box::new(SubmitProfileUpdateTool));
+
+    registry.register(ToolDefinition {
+        name: "skip_profile_update".to_string(),
+        description: "明确表示现有 Agent profile 不需要更新。仅在更新场景下使用。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({"type": "object", "properties": {}, "required": []}),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("skip_profile_update".to_string()),
+        required_tag: Some("profile".to_string()),
+    });
+    executors.register(Box::new(SkipProfileUpdateTool));
 }
 
 /// 注册插件贡献的 Tool

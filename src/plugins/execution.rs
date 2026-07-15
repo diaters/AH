@@ -10,6 +10,8 @@ use crate::systems::{
     experience_consolidation_trigger_system, experience_governance_system,
     experience_writeback_system, ingest_execution_results_system, llm_response_system,
     model_chain_state_update_system, on_experience_hook_system, on_llm_response_hook_system,
+    profile_generation_completion_system, profile_generation_workitem_system,
+    profile_update_trigger_system, profile_update_writeback_system,
     task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
 };
 
@@ -60,6 +62,15 @@ impl Plugin for ExecutionPlugin {
                 experience_governance_system
                     .in_set(HarnessSet::Execution)
                     .after(experience_collection_completion_system),
+                // profile 生成：消费治理产出的 ProfileGenerationRequestMessage，创建 WorkItem
+                profile_generation_workitem_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_governance_system),
+                // profile 生成完成：消费 LLM 响应，创建 proposal 并发起审批
+                profile_generation_completion_system
+                    .in_set(HarnessSet::Execution)
+                    .after(crate::systems::llm_response_system)
+                    .before(experience_approval_result_system),
                 // 统一写回：执行治理决议的实际持久化
                 experience_writeback_system
                     .in_set(HarnessSet::Execution)
@@ -70,6 +81,14 @@ impl Plugin for ExecutionPlugin {
                     .after(crate::systems::tool_confirmation_result_system)
                     .after(experience_governance_system)
                     .before(experience_writeback_system),
+                // profile 更新触发：LTM/SkillPackage 写回成功后触发 Update 类型 profile 生成
+                profile_update_trigger_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_writeback_system),
+                // profile 更新写回：审批通过后更新 agents.toml 和 ECS Agent.capabilities
+                profile_update_writeback_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_approval_result_system),
                 // 经验候选相关 hook companion 系统
                 on_experience_hook_system
                     .in_set(HarnessSet::Execution)

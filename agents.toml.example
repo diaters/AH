@@ -90,3 +90,17 @@ default_permission = "Deny"
 shell_exec = "Confirm"
 shell_read = "Allow"
 shell_list = "Allow"
+
+[[agent]]
+name = "profile-designer"
+tags = ["profile", "design"]
+description = "Agent 元信息设计师，负责根据经验候选生成 Agent 角色名、能力标签和职责描述"
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+
+[agent.tools]
+default_permission = "Deny"
+submit_profile_update = "Allow"
+skip_profile_update = "Allow"

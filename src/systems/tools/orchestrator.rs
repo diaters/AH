@@ -888,6 +888,130 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::SubmitProfileUpdate {
+            name,
+            tags,
+            description,
+        }) => {
+            // 从 ExperienceStore 读取 kind（由 profile_generation_workitem_system 暂存）
+            let kind = experience_store
+                .profile_generation_context
+                .get(&request.request.task_id)
+                .map(|c| c.kind.clone())
+                .unwrap_or(crate::domain::ProfileGenerationKind::Incubation);
+
+            // spawn ProfileGenerationCompletedMessage 供 profile_generation_completion_system 消费
+            commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                generated_profile: Some(crate::domain::GeneratedProfile {
+                    name: name.clone(),
+                    tags: tags.clone(),
+                    description: description.clone(),
+                }),
+                kind: kind.clone(),
+            });
+
+            // 返回工具执行结果给 LLM
+            let output = serde_json::json!({
+                "status": "submitted",
+                "name": name,
+                "tags": tags,
+                "description": description,
+            });
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!("profile submitted: {}", name)),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "submit_profile_update".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            debug!(
+                event = "ProfileUpdateSubmitted",
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                kind = ?kind,
+                "profile update submitted by LLM"
+            );
+
+            commands.entity(request_entity).despawn();
+        }
+        Ok(ToolAction::SkipProfileUpdate) => {
+            // 从 ExperienceStore 读取 kind
+            let kind = experience_store
+                .profile_generation_context
+                .get(&request.request.task_id)
+                .map(|c| c.kind.clone())
+                .unwrap_or(crate::domain::ProfileGenerationKind::Update);
+
+            // spawn ProfileGenerationCompletedMessage（None 表示 skip）
+            commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                generated_profile: None,
+                kind: kind.clone(),
+            });
+
+            let output = serde_json::json!({"status": "skipped"});
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text("profile update skipped".to_string()),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "skip_profile_update".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            debug!(
+                event = "ProfileUpdateSkipped",
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                kind = ?kind,
+                "profile update skipped by LLM"
+            );
+
+            commands.entity(request_entity).despawn();
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }

@@ -225,27 +225,53 @@ fn spawn_incubation_confirmation(
     commands: &mut Commands,
     store: &mut ExperienceStore,
     request: &ExperienceGovernanceRequestMessage,
-    agent: &Agent,
+    _agent: &Agent,
     candidate_id: &uuid::Uuid,
 ) {
+    // 将候选标记为 ProfileGenerationPending，等待 profile 生成完成后再发起审批
     if let Some(c) = store.candidates.get_mut(candidate_id) {
-        c.status = ExperienceCandidateStatus::NeedsUserApproval;
+        c.status = ExperienceCandidateStatus::ProfileGenerationPending;
     }
-    let candidate = store.candidates.get(candidate_id).cloned();
-    if let Some(candidate) = candidate {
-        // 合并到任务级提案（查找已有或新建）
-        store.merge_into_proposal(
-            request.task_id,
-            request.agent_id,
-            crate::domain::AgentProfile {
-                name: format!("incubated-{}", request.task_id),
-                model: agent.profile.model.clone(),
-            },
-            &candidate,
-        );
 
-        spawn_experience_confirmation(commands, store, request, candidate_id, &candidate);
+    // 收集该任务所有 ProfileGenerationPending 候选，作为 LLM 输入
+    let candidate_ids: Vec<uuid::Uuid> = store
+        .candidates
+        .values()
+        .filter(|c| {
+            c.status == ExperienceCandidateStatus::ProfileGenerationPending
+                && c.producer_task_id == request.task_id
+        })
+        .map(|c| c.candidate_id)
+        .collect();
+
+    if candidate_ids.is_empty() {
+        debug!(
+            event = "IncubationConfirmationNoCandidates",
+            task_id = %request.task_id,
+            "no ProfileGenerationPending candidates, skipping profile generation request"
+        );
+        return;
     }
+
+    // Spawn ProfileGenerationRequestMessage（孵化场景）
+    // 实际 profile 由 profile-designer Agent 生成，由 profile_generation_completion_system
+    // 创建 proposal 并发起审批
+    commands.spawn(crate::domain::ProfileGenerationRequestMessage {
+        task_id: request.task_id,
+        agent_id: request.agent_id,
+        candidate_ids,
+        existing_profile: None,
+        kind: crate::domain::ProfileGenerationKind::Incubation,
+        feedback: None,
+        retry_count: 0,
+    });
+
+    debug!(
+        event = "IncubationProfileGenerationRequested",
+        task_id = %request.task_id,
+        agent_id = %request.agent_id,
+        "spawned profile generation request for incubation"
+    );
 }
 
 #[cfg(test)]

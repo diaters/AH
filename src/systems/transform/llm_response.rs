@@ -64,6 +64,80 @@ fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::Ta
         .is_some_and(|inbox| !inbox.candidate_ids.is_empty())
 }
 
+/// 处理 ProfileGeneration WorkItem 未调用工具的情况。
+///
+/// 当 LLM 返回普通文本或调用失败时：
+/// - 孵化场景：spawn 回退 ProfileGenerationCompletedMessage（硬编码 name）
+/// - 更新场景：spawn skip ProfileGenerationCompletedMessage（None）
+///
+/// kind 从 ExperienceStore.profile_generation_context 读取；
+/// 若找不到 context（已被前序完成消息消费，如 skip/submit 流程已完成），
+/// 直接清理 WorkItem，不再 spawn 完成消息，避免误触发孵化回退审批。
+fn handle_profile_generation_no_tool_call(
+    commands: &mut Commands,
+    experience_store: &ExperienceStore,
+    work_item: &WorkItem,
+    result_entity: Entity,
+    work_item_entity: Entity,
+) {
+    use crate::domain::{ProfileGenerationCompletedMessage, ProfileGenerationKind};
+
+    let Some(ctx) = experience_store
+        .profile_generation_context
+        .get(&work_item.task_id)
+    else {
+        // context 已被前序 ProfileGenerationCompletedMessage 消费
+        // （例如 skip_profile_update 或 submit_profile_update 已完成流程），
+        // 无需再次 spawn 完成消息，直接清理 WorkItem
+        warn!(
+            event = "ProfileGenerationContextMissing",
+            task_id = %work_item.task_id,
+            "profile generation context already consumed, cleaning up work item without spawning completion message"
+        );
+        commands
+            .entity(work_item_entity)
+            .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+        commands.entity(work_item_entity).despawn();
+        commands.entity(result_entity).despawn();
+        return;
+    };
+
+    let kind = ctx.kind.clone();
+    let governing_agent_id = work_item.governing_agent_id.unwrap_or(uuid::Uuid::nil());
+
+    match kind {
+        ProfileGenerationKind::Incubation => {
+            // 孵化场景回退硬编码 name（设计文档 4.3）
+            commands.spawn(ProfileGenerationCompletedMessage {
+                task_id: work_item.task_id,
+                agent_id: governing_agent_id,
+                generated_profile: Some(crate::domain::GeneratedProfile {
+                    name: format!("incubated-{}", work_item.task_id),
+                    tags: vec![],
+                    description: String::new(),
+                }),
+                kind: ProfileGenerationKind::Incubation,
+            });
+        }
+        ProfileGenerationKind::Update => {
+            // 更新场景静默跳过（spawn skip 消息）
+            commands.spawn(ProfileGenerationCompletedMessage {
+                task_id: work_item.task_id,
+                agent_id: governing_agent_id,
+                generated_profile: None,
+                kind: ProfileGenerationKind::Update,
+            });
+        }
+    }
+
+    // 标记 WorkItem 失败并 despawn
+    commands
+        .entity(work_item_entity)
+        .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+    commands.entity(work_item_entity).despawn();
+    commands.entity(result_entity).despawn();
+}
+
 /// 处理 Evaluation WorkItem 的执行结果
 #[allow(clippy::too_many_arguments, clippy::drop_non_drop)]
 fn handle_evaluation_work_item_result(
@@ -703,6 +777,42 @@ pub fn llm_response_system(
                             }
                             commands.entity(work_item_entity).despawn();
                             commands.entity(entity).despawn();
+                            continue;
+                        }
+                    }
+                }
+                WorkItemType::ProfileGeneration => {
+                    match &result.result {
+                        Ok(AgentExecutionOutput {
+                            content: OutputContent::ToolCalls(_),
+                            ..
+                        }) => {
+                            // 不 continue，让下面的 tool calling loop 处理 tool calls
+                            // submit_profile_update / skip_profile_update 工具调用会触发 orchestrator
+                            // orchestrator 中的 ToolAction::SubmitProfileUpdate / SkipProfileUpdate 分支
+                            // 会 spawn ProfileGenerationCompletedMessage
+                        }
+                        Ok(_) => {
+                            // LLM 返回普通文本（未调用工具）：视为失败
+                            // 孵化场景回退硬编码 name，更新场景静默跳过
+                            handle_profile_generation_no_tool_call(
+                                &mut commands,
+                                &experience_store,
+                                work_item,
+                                entity,
+                                work_item_entity,
+                            );
+                            continue;
+                        }
+                        Err(_) => {
+                            // LLM 调用失败：同上处理
+                            handle_profile_generation_no_tool_call(
+                                &mut commands,
+                                &experience_store,
+                                work_item,
+                                entity,
+                                work_item_entity,
+                            );
                             continue;
                         }
                     }

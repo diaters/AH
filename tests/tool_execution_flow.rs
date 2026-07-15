@@ -581,6 +581,7 @@ fn user_denies_tool_confirmation() {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
         selected_option: "deny".to_string(),
+        feedback: None,
     });
 
     // 运行让响应处理
@@ -684,6 +685,7 @@ fn user_allows_tool_once() {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
         selected_option: "allow_once".to_string(),
+        feedback: None,
     });
 
     // 运行让响应处理
@@ -1208,6 +1210,7 @@ fn user_allows_tool_always() {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
         selected_option: "allow_always".to_string(),
+        feedback: None,
     });
 
     // 运行让响应处理

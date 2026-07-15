@@ -32,6 +32,9 @@ pub enum HookPoint {
     OnExperienceCandidateRejected,
     OnApprovalRequested,
     OnApprovalResolved,
+    OnAgentProfileGenerated,
+    OnAgentProfileUpdated,
+    OnAgentIncubated,
 }
 
 #[derive(Debug, Error)]
@@ -66,6 +69,9 @@ impl FromStr for HookPoint {
             "on_experience_candidate_rejected" => Ok(Self::OnExperienceCandidateRejected),
             "on_approval_requested" => Ok(Self::OnApprovalRequested),
             "on_approval_resolved" => Ok(Self::OnApprovalResolved),
+            "on_agent_profile_generated" => Ok(Self::OnAgentProfileGenerated),
+            "on_agent_profile_updated" => Ok(Self::OnAgentProfileUpdated),
+            "on_agent_incubated" => Ok(Self::OnAgentIncubated),
             other => Err(HookPointParseError::Unknown(other.to_string())),
         }
     }
@@ -101,6 +107,9 @@ impl HookPoint {
             Self::OnExperienceCandidateRejected => "on_experience_candidate_rejected",
             Self::OnApprovalRequested => "on_approval_requested",
             Self::OnApprovalResolved => "on_approval_resolved",
+            Self::OnAgentProfileGenerated => "on_agent_profile_generated",
+            Self::OnAgentProfileUpdated => "on_agent_profile_updated",
+            Self::OnAgentIncubated => "on_agent_incubated",
         }
     }
 }
@@ -133,6 +142,9 @@ mod tests {
             "on_experience_candidate_rejected",
             "on_approval_requested",
             "on_approval_resolved",
+            "on_agent_profile_generated",
+            "on_agent_profile_updated",
+            "on_agent_incubated",
         ] {
             assert!(HookPoint::from_str(s).is_ok(), "failed to parse {s}");
         }

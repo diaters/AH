@@ -47,6 +47,7 @@ impl StatusPanel {
         let (mode_label, mode_color) = match &app.mode {
             crate::tui::app::AppMode::Chat => ("CHAT", Color::Green),
             crate::tui::app::AppMode::Approval { .. } => ("REVIEW", Color::Yellow),
+            crate::tui::app::AppMode::Feedback { .. } => ("FEEDBACK", Color::Magenta),
         };
         lines.push(Line::from(vec![Span::styled(
             format!(" {mode_label} "),
@@ -239,6 +240,16 @@ impl StatusPanel {
                 )));
                 lines.push(Line::from(Span::styled(
                     "Esc    跳过",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            crate::tui::app::AppMode::Feedback { .. } => {
+                lines.push(Line::from(Span::styled(
+                    "Enter  提交反馈",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "Esc    返回选项",
                     Style::default().fg(Color::DarkGray),
                 )));
             }

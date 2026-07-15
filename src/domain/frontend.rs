@@ -166,6 +166,8 @@ pub enum UserAction {
         channel: ChannelId,
         request_id: Uuid,
         option_id: String,
+        /// 拒绝并反馈场景：用户评审反馈文本。
+        feedback: Option<String>,
     },
 }
 

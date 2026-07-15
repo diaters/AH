@@ -4,7 +4,8 @@ use tracing::debug;
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
-    PendingExperienceHooks, ToolConfirmationResponseMessage,
+    MAX_PROFILE_GENERATION_RETRIES, PendingExperienceHooks, ProfileGenerationRequestMessage,
+    ToolConfirmationResponseMessage,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -137,7 +138,62 @@ pub(crate) fn experience_approval_result_system(
                 );
             }
         } else {
-            // 用户拒绝
+            // 检测 reject_with_feedback：在通用拒绝处理之前拦截，触发 LLM 重新生成
+            if response.selected_option == "reject_with_feedback"
+                && let Some(feedback) = response.feedback.as_ref()
+                && let Some(task_id) = store
+                    .candidates
+                    .get(&candidate_id)
+                    .map(|c| c.producer_task_id)
+                && let Some(ctx) = store.profile_generation_context.get(&task_id).cloned()
+                && ctx.retry_count < MAX_PROFILE_GENERATION_RETRIES
+            {
+                // 候选回到 ProfileGenerationPending，等待重新生成
+                if let Some(c) = store.candidates.get_mut(&candidate_id) {
+                    c.status = ExperienceCandidateStatus::ProfileGenerationPending;
+                }
+
+                // 收集该任务所有 ProfileGenerationPending 候选
+                let candidate_ids: Vec<uuid::Uuid> = store
+                    .candidates
+                    .values()
+                    .filter(|c| {
+                        c.status == ExperienceCandidateStatus::ProfileGenerationPending
+                            && c.producer_task_id == task_id
+                    })
+                    .map(|c| c.candidate_id)
+                    .collect();
+
+                let agent_id = store
+                    .candidates
+                    .get(&candidate_id)
+                    .map(|c| c.producer_agent_id)
+                    .unwrap_or_default();
+
+                // Spawn 重新生成请求，retry_count 递增
+                commands.spawn(ProfileGenerationRequestMessage {
+                    task_id,
+                    agent_id,
+                    candidate_ids,
+                    existing_profile: ctx.existing_profile.clone(),
+                    kind: ctx.kind.clone(),
+                    feedback: Some(feedback.clone()),
+                    retry_count: ctx.retry_count + 1,
+                });
+
+                debug!(
+                    event = "ProfileRegenerationRequested",
+                    task_id = %task_id,
+                    candidate_id = %candidate_id,
+                    retry_count = ctx.retry_count + 1,
+                    "user rejected with feedback, spawning regeneration request"
+                );
+
+                commands.entity(entity).despawn();
+                continue;
+            }
+
+            // 通用拒绝处理
             if let Some(c) = store.candidates.get_mut(&candidate_id) {
                 c.status = ExperienceCandidateStatus::Rejected;
             }
@@ -179,10 +235,14 @@ pub(crate) fn experience_approval_result_system(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::domain::{
         ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-        ExperienceKindHint, ExperienceStore,
+        ExperienceKindHint, ExperienceStore, MAX_PROFILE_GENERATION_RETRIES,
+        PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationKind,
+        ProfileGenerationRequestMessage, ToolConfirmationResponseMessage,
     };
+    use bevy_ecs::system::RunSystemOnce;
 
     #[test]
     fn approved_skill_becomes_persisted() {
@@ -214,6 +274,240 @@ mod tests {
             store.candidates.get(&candidate_id).unwrap().status,
             ExperienceCandidateStatus::Approved,
             "approved skill should be marked Approved"
+        );
+    }
+
+    /// 构建测试用 World：插入 ExperienceStore 和 PendingExperienceHooks 资源。
+    fn make_test_world(store: ExperienceStore) -> World {
+        let mut world = World::new();
+        world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
+        world
+    }
+
+    /// 构建测试用候选：处于 NeedsUserApproval 状态。
+    fn make_test_candidate(task_id: uuid::Uuid, agent_id: uuid::Uuid) -> ExperienceCandidate {
+        ExperienceCandidate {
+            candidate_id: uuid::Uuid::new_v4(),
+            producer_task_id: task_id,
+            producer_agent_id: agent_id,
+            title: "test knowledge".to_string(),
+            kind_hint: ExperienceKindHint::Knowledge,
+            payload: ExperienceCandidatePayload::Knowledge {
+                content: "test content".to_string(),
+            },
+            dependency_refs: vec![],
+            status: ExperienceCandidateStatus::NeedsUserApproval,
+            governing_agent_id: None,
+            derived_from_candidate_ids: vec![],
+        }
+    }
+
+    #[test]
+    fn reject_with_feedback_spawns_regeneration_request() {
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+        let request_id = uuid::Uuid::new_v4();
+
+        let mut store = ExperienceStore::default();
+        let candidate = make_test_candidate(task_id, agent_id);
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+        store.bind_approval_request(request_id, candidate_id);
+
+        // 存入 profile 生成上下文（retry_count = 0）
+        store.profile_generation_context.insert(
+            task_id,
+            ProfileGenerationContext {
+                kind: ProfileGenerationKind::Incubation,
+                retry_count: 0,
+                existing_profile: None,
+                generated_profile: None,
+            },
+        );
+
+        let mut world = make_test_world(store);
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "reject_with_feedback".to_string(),
+            feedback: Some("name 太长了".to_string()),
+        });
+
+        world
+            .run_system_once(experience_approval_result_system)
+            .unwrap();
+
+        // 验证：spawn 了 ProfileGenerationRequestMessage
+        let regen_msgs: Vec<&ProfileGenerationRequestMessage> = world
+            .query::<&ProfileGenerationRequestMessage>()
+            .iter(&world)
+            .collect();
+        assert_eq!(regen_msgs.len(), 1, "should spawn one regeneration request");
+        let regen = regen_msgs[0];
+        assert_eq!(regen.task_id, task_id);
+        assert_eq!(
+            regen.retry_count, 1,
+            "retry_count should increment from 0 to 1"
+        );
+        assert_eq!(regen.kind, ProfileGenerationKind::Incubation);
+        assert_eq!(
+            regen.feedback.as_deref(),
+            Some("name 太长了"),
+            "feedback should be propagated"
+        );
+        assert!(
+            regen.candidate_ids.contains(&candidate_id),
+            "candidate_ids should include the original candidate"
+        );
+
+        // 验证：候选回到 ProfileGenerationPending
+        let store = world.resource::<ExperienceStore>();
+        assert_eq!(
+            store.candidates.get(&candidate_id).unwrap().status,
+            ExperienceCandidateStatus::ProfileGenerationPending,
+            "candidate should be back to ProfileGenerationPending"
+        );
+    }
+
+    #[test]
+    fn reject_with_feedback_increments_retry_count() {
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+        let request_id = uuid::Uuid::new_v4();
+
+        let mut store = ExperienceStore::default();
+        let candidate = make_test_candidate(task_id, agent_id);
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+        store.bind_approval_request(request_id, candidate_id);
+
+        // 存入 profile 生成上下文（retry_count = 2）
+        store.profile_generation_context.insert(
+            task_id,
+            ProfileGenerationContext {
+                kind: ProfileGenerationKind::Incubation,
+                retry_count: 2,
+                existing_profile: None,
+                generated_profile: None,
+            },
+        );
+
+        let mut world = make_test_world(store);
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "reject_with_feedback".to_string(),
+            feedback: Some("tags 不够精确".to_string()),
+        });
+
+        world
+            .run_system_once(experience_approval_result_system)
+            .unwrap();
+
+        let regen_msgs: Vec<&ProfileGenerationRequestMessage> = world
+            .query::<&ProfileGenerationRequestMessage>()
+            .iter(&world)
+            .collect();
+        assert_eq!(regen_msgs.len(), 1);
+        assert_eq!(
+            regen_msgs[0].retry_count, 3,
+            "retry_count should increment from 2 to 3"
+        );
+    }
+
+    #[test]
+    fn reject_with_feedback_at_max_falls_to_plain_reject() {
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+        let request_id = uuid::Uuid::new_v4();
+
+        let mut store = ExperienceStore::default();
+        let candidate = make_test_candidate(task_id, agent_id);
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+        store.bind_approval_request(request_id, candidate_id);
+
+        // 存入 profile 生成上下文（retry_count 已达上限）
+        store.profile_generation_context.insert(
+            task_id,
+            ProfileGenerationContext {
+                kind: ProfileGenerationKind::Incubation,
+                retry_count: MAX_PROFILE_GENERATION_RETRIES,
+                existing_profile: None,
+                generated_profile: None,
+            },
+        );
+
+        let mut world = make_test_world(store);
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "reject_with_feedback".to_string(),
+            feedback: Some("still not good".to_string()),
+        });
+
+        world
+            .run_system_once(experience_approval_result_system)
+            .unwrap();
+
+        // 验证：未 spawn 重新生成请求
+        let regen_count = world
+            .query::<&ProfileGenerationRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            regen_count, 0,
+            "should not spawn regeneration at max retries"
+        );
+
+        // 验证：候选被标记为 Rejected（回退到通用拒绝路径）
+        let store = world.resource::<ExperienceStore>();
+        assert_eq!(
+            store.candidates.get(&candidate_id).unwrap().status,
+            ExperienceCandidateStatus::Rejected,
+            "candidate should be Rejected when at max retries"
+        );
+    }
+
+    #[test]
+    fn reject_with_feedback_without_context_falls_to_plain_reject() {
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+        let request_id = uuid::Uuid::new_v4();
+
+        let mut store = ExperienceStore::default();
+        let candidate = make_test_candidate(task_id, agent_id);
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+        store.bind_approval_request(request_id, candidate_id);
+
+        // 不存入 profile 生成上下文（模拟上下文缺失）
+
+        let mut world = make_test_world(store);
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "reject_with_feedback".to_string(),
+            feedback: Some("feedback".to_string()),
+        });
+
+        world
+            .run_system_once(experience_approval_result_system)
+            .unwrap();
+
+        // 验证：未 spawn 重新生成请求
+        let regen_count = world
+            .query::<&ProfileGenerationRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            regen_count, 0,
+            "should not spawn regeneration without context"
+        );
+
+        // 验证：候选被标记为 Rejected
+        let store = world.resource::<ExperienceStore>();
+        assert_eq!(
+            store.candidates.get(&candidate_id).unwrap().status,
+            ExperienceCandidateStatus::Rejected,
+            "candidate should be Rejected when context is missing"
         );
     }
 }

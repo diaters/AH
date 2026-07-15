@@ -245,6 +245,17 @@ pub enum ToolAction {
         /// 输出通道（显式指定或从当前任务继承）
         output_channel: Option<ChannelId>,
     },
+    /// 提交 profile 更新（孵化场景生成新 profile，更新场景提议新 tags/description）
+    ///
+    /// 由 profile-designer Agent 调用，实际 profile 提取与 proposal 创建
+    /// 在 `profile_generation_completion_system`（任务 6）中完成。
+    SubmitProfileUpdate {
+        name: String,
+        tags: Vec<String>,
+        description: String,
+    },
+    /// 跳过 profile 更新（更新场景下 LLM 认为不需要更新）
+    SkipProfileUpdate,
 }
 
 /// 经验候选提交数据

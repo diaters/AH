@@ -3,9 +3,10 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, LongTermMemory, TaskId,
+    ExperienceWritebackRequestMessage, LongTermMemory, PendingExperienceHooks, TaskId,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
+use crate::user_plugins::hook_point::HookPoint;
 
 fn build_incubated_agent_description(
     store: &crate::domain::ExperienceStore,
@@ -33,11 +34,31 @@ fn build_incubated_agent_description(
     }
 }
 
+/// 从 agents.toml 读取 default Agent 的 models 链。
+///
+/// Agent 组件不存储 models 链（只有单 model 字符串），因此需要从配置文件读取。
+/// 若文件不存在、解析失败或没有 default Agent，返回空链。
+fn load_default_agent_models_chain(config_path: &str) -> Vec<crate::domain::ModelChainEntry> {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return Vec::new();
+    };
+    let Ok(config) = toml::from_str::<crate::domain::AgentConfig>(&content) else {
+        return Vec::new();
+    };
+    config
+        .agent
+        .into_iter()
+        .find(|a| a.tags.iter().any(|t| t == "default"))
+        .map(|a| a.models)
+        .unwrap_or_default()
+}
+
 /// 统一写回执行系统：根据治理决议执行正式写回。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn experience_writeback_system(
     mut commands: Commands,
     mut store: ResMut<ExperienceStore>,
+    mut pending_hooks: ResMut<PendingExperienceHooks>,
     mut long_memories: Query<&mut LongTermMemory>,
     agents: Query<&Agent>,
     mut service: ResMut<LongTermMemoryService>,
@@ -90,6 +111,7 @@ pub(crate) fn experience_writeback_system(
                 writeback_incubation_proposal(
                     decision.source_task_id,
                     &mut store,
+                    &mut pending_hooks,
                     &proposal_store,
                     &agent_registry,
                     &mut service,
@@ -211,9 +233,11 @@ fn writeback_to_skill_package(
         .map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn writeback_incubation_proposal(
     task_id: TaskId,
     store: &mut ExperienceStore,
+    pending_hooks: &mut PendingExperienceHooks,
     proposal_store: &crate::infrastructure::incubation::proposal_store::IncubationProposalStore,
     agent_registry: &crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry,
     service: &mut crate::infrastructure::memory::LongTermMemoryService,
@@ -339,11 +363,39 @@ fn writeback_incubation_proposal(
     }
 
     // 创建新 Agent 记录
-    let description = build_incubated_agent_description(store, &proposal);
-    let record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
+    // 从 ProfileGenerationContext 获取 LLM 生成的 profile（tags/description）；
+    // 若 context 不存在（回退场景），使用硬编码 tags 和基于候选标题的 description。
+    let generated_profile = store
+        .profile_generation_context
+        .get(&task_id)
+        .and_then(|ctx| ctx.generated_profile.clone());
+
+    // 从 agents.toml 读取 default Agent 的 models 链（Agent 组件不存储 models 链）
+    let models_chain = load_default_agent_models_chain(config_path);
+
+    let (tags, description) = match &generated_profile {
+        Some(generated) => {
+            // LLM 生成场景：tags 经 sanitize_tags 过滤后注入 incubated
+            let mut sanitized_tags = crate::domain::sanitize_tags(generated.tags.clone(), &[]);
+            if !sanitized_tags.contains(&"incubated".to_string()) {
+                sanitized_tags.push("incubated".to_string());
+            }
+            (sanitized_tags, generated.description.clone())
+        }
+        None => {
+            // 回退场景：硬编码 tags，基于候选标题的 description
+            (
+                vec!["incubated".to_string()],
+                build_incubated_agent_description(store, &proposal),
+            )
+        }
+    };
+
+    let mut record = crate::infrastructure::incubation::agent_registry::IncubatedAgentRecord {
         name: profile.name.clone(),
         model: profile.model.clone(),
-        tags: vec!["incubated".to_string()],
+        models: models_chain,
+        tags,
         description,
         tools: None,
         skills: if skill_paths.is_empty() {
@@ -353,7 +405,7 @@ fn writeback_incubation_proposal(
         },
     };
     let result = agent_registry
-        .append(config_path, &record)
+        .append_or_rename(config_path, &mut record)
         .map_err(|e| e.to_string());
 
     match result {
@@ -367,6 +419,10 @@ fn writeback_incubation_proposal(
                 task_id = %task_id,
                 "incubation writeback succeeded"
             );
+
+            // 派发 on_agent_incubated hook（写入 agents.toml 成功后触发）
+            pending_hooks.0.push((HookPoint::OnAgentIncubated, task_id));
+
             Ok(())
         }
         Err(e) => {
@@ -453,6 +509,7 @@ mod tests {
             crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
 
         let mut store = ExperienceStore::default();
+        let mut pending_hooks = PendingExperienceHooks::default();
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
 
@@ -476,6 +533,7 @@ mod tests {
         let result = writeback_incubation_proposal(
             task_id,
             &mut store,
+            &mut pending_hooks,
             &proposal_store,
             &registry,
             &mut memory_service,
@@ -496,5 +554,174 @@ mod tests {
         assert_eq!(config.agent[0].name, profile.name);
         assert_eq!(config.agent[0].model, Some(profile.model));
         assert_eq!(config.agent[0].description, "天体表面重力加速度计算流程");
+    }
+
+    #[test]
+    fn incubation_writeback_uses_llm_profile_when_context_present() {
+        use crate::domain::{GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind};
+
+        let memory_dir = TempDir::new().unwrap();
+        let proposal_dir = TempDir::new().unwrap();
+        let config_dir = TempDir::new().unwrap();
+        let asset_dir = TempDir::new().unwrap();
+        let config_path = config_dir.path().join("agents.toml");
+
+        let mut memory_service = make_memory_service(&memory_dir);
+        let proposal_store = IncubationProposalStore::new(proposal_dir.path().join("proposals"));
+        let registry = IncubatedAgentRegistry;
+        let asset_service =
+            crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
+
+        let mut store = ExperienceStore::default();
+        let mut pending_hooks = PendingExperienceHooks::default();
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+
+        let candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "量子态测量".to_string(),
+            "测量会影响量子态".to_string(),
+        );
+        store.stage_root_candidate(candidate.clone());
+
+        let profile = AgentProfile {
+            name: "quantum-specialist".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        };
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
+        store.proposals.get_mut(&task_id).unwrap().status = IncubationProposalStatus::Approved;
+
+        // 设置 ProfileGenerationContext，包含 LLM 生成的 profile
+        store.profile_generation_context.insert(
+            task_id,
+            ProfileGenerationContext {
+                kind: ProfileGenerationKind::Incubation,
+                retry_count: 0,
+                existing_profile: None,
+                generated_profile: Some(GeneratedProfile {
+                    name: "quantum-specialist".to_string(),
+                    tags: vec!["physics".to_string(), "quantum".to_string()],
+                    description: "量子物理专家，擅长量子态测量与分析".to_string(),
+                }),
+            },
+        );
+
+        let result = writeback_incubation_proposal(
+            task_id,
+            &mut store,
+            &mut pending_hooks,
+            &proposal_store,
+            &registry,
+            &mut memory_service,
+            &asset_service,
+            config_path.to_str().unwrap(),
+        );
+
+        assert!(result.is_ok(), "writeback failed: {:?}", result);
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: crate::domain::AgentConfig = toml::from_str(&content).unwrap();
+        assert_eq!(config.agent.len(), 1);
+        assert_eq!(config.agent[0].name, "quantum-specialist");
+        // tags 经 sanitize 后应包含 incubated + LLM 生成的 tags
+        assert!(config.agent[0].tags.contains(&"incubated".to_string()));
+        assert!(config.agent[0].tags.contains(&"physics".to_string()));
+        assert!(config.agent[0].tags.contains(&"quantum".to_string()));
+        // description 应为 LLM 生成的，而非候选标题拼接
+        assert_eq!(
+            config.agent[0].description,
+            "量子物理专家，擅长量子态测量与分析"
+        );
+    }
+
+    #[test]
+    fn incubation_writeback_renames_on_duplicate() {
+        use crate::domain::{GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind};
+
+        let memory_dir = TempDir::new().unwrap();
+        let proposal_dir = TempDir::new().unwrap();
+        let config_dir = TempDir::new().unwrap();
+        let asset_dir = TempDir::new().unwrap();
+        let config_path = config_dir.path().join("agents.toml");
+
+        // 预写入一个同名 Agent
+        std::fs::write(
+            &config_path,
+            r#"[[agent]]
+name = "physics-specialist"
+model = "gpt-4.1-mini"
+tags = ["default"]
+description = "existing"
+"#,
+        )
+        .unwrap();
+
+        let mut memory_service = make_memory_service(&memory_dir);
+        let proposal_store = IncubationProposalStore::new(proposal_dir.path().join("proposals"));
+        let registry = IncubatedAgentRegistry;
+        let asset_service =
+            crate::infrastructure::assets::AgentAssetService::new(asset_dir.path().join("agents"));
+
+        let mut store = ExperienceStore::default();
+        let mut pending_hooks = PendingExperienceHooks::default();
+        let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
+
+        let candidate = ExperienceCandidate::knowledge(
+            uuid::Uuid::new_v4(),
+            task_id,
+            agent_id,
+            "物理知识".to_string(),
+            "内容".to_string(),
+        );
+        store.stage_root_candidate(candidate.clone());
+
+        let profile = AgentProfile {
+            name: "physics-specialist".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        };
+        store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
+        store.proposals.get_mut(&task_id).unwrap().status = IncubationProposalStatus::Approved;
+
+        store.profile_generation_context.insert(
+            task_id,
+            ProfileGenerationContext {
+                kind: ProfileGenerationKind::Incubation,
+                retry_count: 0,
+                existing_profile: None,
+                generated_profile: Some(GeneratedProfile {
+                    name: "physics-specialist".to_string(),
+                    tags: vec!["physics".to_string()],
+                    description: "物理专家".to_string(),
+                }),
+            },
+        );
+
+        let result = writeback_incubation_proposal(
+            task_id,
+            &mut store,
+            &mut pending_hooks,
+            &proposal_store,
+            &registry,
+            &mut memory_service,
+            &asset_service,
+            config_path.to_str().unwrap(),
+        );
+
+        assert!(result.is_ok(), "writeback failed: {:?}", result);
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: crate::domain::AgentConfig = toml::from_str(&content).unwrap();
+        // 应有两个 agent：原有的 + 重命名后的
+        assert_eq!(config.agent.len(), 2);
+        // 新 agent 应被重命名为 physics-specialist-2
+        assert!(
+            config
+                .agent
+                .iter()
+                .any(|a| a.name == "physics-specialist-2")
+        );
     }
 }

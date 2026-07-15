@@ -54,6 +54,7 @@ pub(crate) fn user_input_routing_system(
                     commands.spawn(ToolConfirmationResponseMessage {
                         request_id: pending_id,
                         selected_option: option_id,
+                        feedback: None,
                     });
                 }
                 None => {

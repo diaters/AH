@@ -23,6 +23,7 @@ pub(crate) fn frontend_input_system(registry: Res<FrontendRegistry>, mut command
                     channel: _,
                     request_id,
                     option_id,
+                    feedback,
                 } => {
                     debug!(
                         event = "FrontendInputConfirmation",
@@ -33,6 +34,7 @@ pub(crate) fn frontend_input_system(registry: Res<FrontendRegistry>, mut command
                     commands.spawn(ToolConfirmationResponseMessage {
                         request_id,
                         selected_option: option_id,
+                        feedback,
                     });
                 }
             }

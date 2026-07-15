@@ -59,7 +59,11 @@ pub(crate) fn input_ingress_system(
                 );
                 shutdown.requested = true;
             }
-            ExternalInput::Confirmation { request_id, option } => {
+            ExternalInput::Confirmation {
+                request_id,
+                option,
+                feedback,
+            } => {
                 debug!(
                     event = "ExternalInputReceived",
                     kind = "Confirmation",
@@ -71,6 +75,7 @@ pub(crate) fn input_ingress_system(
                     ToolConfirmationResponseMessage {
                         request_id,
                         selected_option: option,
+                        feedback,
                     },
                     MessageReceivedHookPending,
                 ));
