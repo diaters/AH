@@ -263,7 +263,7 @@ fn spawn_incubation_confirmation(
         existing_profile: None,
         kind: crate::domain::ProfileGenerationKind::Incubation,
         feedback: None,
-        retry_count: 0,
+        exception_count: 0,
     });
 
     debug!(
@@ -295,6 +295,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: crate::domain::AgentToolPermissions::default(),
+            system_prompt: None,
         };
 
         assert!(is_default_agent(&default_agent));

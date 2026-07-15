@@ -67,7 +67,7 @@
 - __拒绝并反馈__：提供评审建议，反馈注入 LLM 上下文，驱动重新生成，进入新一轮审批
 
 "拒绝并反馈"是一个通用机制，不针对 profile 审批定制 UI。用户只需输入文本反馈，由 LLM 理解反馈后重新生成。
-设有重试上限（`MAX_PROFILE_GENERATION_RETRIES = 3`），达到上限后不再允许反馈，用户必须做出终局决策。详见 3.7 节。
+`reject_with_feedback` 不占用异常计数，且不再有上限约束，用户可多次反馈直到满意。LLM 异常的计数与失败路径详见 3.7 节与 4.3 节。
 
 ### 2.2 更新流程：已有 Agent 的 tags/description 演进
 
@@ -150,11 +150,12 @@ pub struct ProfileGenerationRequestMessage {
     pub kind: ProfileGenerationKind,
     /// 用户拒绝时的评审反馈，用于 LLM 重新生成。None 表示首次生成。
     pub feedback: Option<String>,
-    /// 重试次数，防止无限循环。达到上限后拒绝不再允许反馈。
-    pub retry_count: u32,
+    /// 异常计数器，仅累计 LLM 异常（未调工具 / 互斥冲突 / Err / 调用非相关工具）。
+    /// LLM 成功调工具后由 orchestrator 归 0。reject_with_feedback 不占用计数。
+    pub exception_count: u32,
 }
 
-const MAX_PROFILE_GENERATION_RETRIES: u32 = 3;
+const MAX_PROFILE_EXCEPTIONS: u32 = 3;
 
 /// profile 生成场景。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +233,11 @@ pub struct GeneratedProfile {
   }
 }
 ```
+
+__工具约束__：
+
+- 两个工具互斥，LLM 同时调用 `submit_profile_update` 和 `skip_profile_update` 触发重试（`exception_count +1`）
+- ProfileGeneration WorkItem 只允许调用 `submit_profile_update` 或 `skip_profile_update`，调用其他工具即违规，触发重试（`exception_count +1`）
 
 ### 3.3 新增 profile-designer Agent 配置
 
@@ -370,7 +376,7 @@ experience_approval_result_system 检测到 reject_with_feedback
     ↓
 重新 spawn ProfileGenerationRequestMessage {
     feedback: Some("..."),
-    retry_count: prev + 1,
+    exception_count: prev,  // reject_with_feedback 不占用计数
 }
     ↓
 profile generation WorkItem prompt 包含：
@@ -508,12 +514,13 @@ __步骤 3__：用户发送文本消息，通道捕获为 feedback
 
 __QQ 通道简化方案__：QQ 已支持文本回复匹配，用户可在选择“拒绝并反馈”后直接在同一消息中追加反馈文本，格式为 `3 反馈内容`（编号 + 空格 + 反馈）。通道解析后直接携带 feedback，无需两步交互。
 
-#### 重试上限
+#### 异常计数器
 
-`MAX_PROFILE_GENERATION_RETRIES = 3`。达到上限后：
+`MAX_PROFILE_EXCEPTIONS = 3`。异常计数器（`exception_count`）仅累计 LLM 异常（未调工具 / 互斥冲突 / Err / 调用非相关工具），达到上限后走失败路径（详见 4.3 节）。
 
-- 选项列表不再包含 “Reject & Feedback”，只保留 “Approve” 和 “Reject”
-- 用户必须做出终局决策
+- LLM 成功调用工具后，由 orchestrator 将 `exception_count` 归 0
+- `reject_with_feedback` 透传不变，不占用 `exception_count`，且不再有上限约束
+- 选项列表始终保留 “Reject & Feedback”，用户可多次反馈直到满意
 
 #### 审批路由
 
@@ -601,18 +608,35 @@ WorkItem 构建模式与经验收集 WorkItem 一致：
 
 ### 4.3 错误处理
 
-profile generation WorkItem 可能遇到以下失败路径：
+#### 异常重试
 
-| 失败场景 | 处理策略 |
-|----------|----------|
-| LLM 未调用任何工具 | 超时后标记候选为 `WritebackFailed`，记录 `warn!` 日志。孵化场景回退到硬编码 `incubated-{task_id}` name，确保流程不中断 |
-| LLM 调用了非允许工具 | WorkItem 的 `default_permission = Deny` 会拦截未授权工具调用，LLM 重试后仍未调用正确工具则同上超时处理 |
-| LLM 调用超时或 Provider 错误 | WorkItem 的 LLM 调用失败重试机制（现有）处理后仍失败，标记 `WritebackFailed`。孵化场景回退硬编码 name |
-| 生成的 profile 字段校验失败（name 为空、tags 为空） | `completion_system` 校验失败标记 `WritebackFailed`，孵化场景回退硬编码 name |
-| `skip_profile_update` 返回的 profile 为空（更新场景） | 正常路径，不是错误——表示不需要更新 |
-| 用户拒绝并反馈达到重试上限 | 选项列表不再包含“Reject & Feedback”，用户必须 Approve 或 Reject |
+以下场景视为 LLM 异常，触发自动重试（`exception_count +1`）：
 
-__回退策略__：仅孵化场景有回退（硬编码 name + 空描述），更新场景失败不影响 Agent 现有 profile，仅记录日志。
+- LLM 未调用任何工具
+- LLM 同时调用 `submit_profile_update` 和 `skip_profile_update`（互斥冲突）
+- LLM 调用工具返回 `Err`（含字段校验失败，如 name 为空、tags 为空）
+- LLM 调用了非相关工具（ProfileGeneration WorkItem 只允许调用 `submit_profile_update` 或 `skip_profile_update`，调用其他工具即违规）
+
+LLM 成功调用工具后，由 orchestrator 将 `exception_count` 归 0。
+
+#### 失败路径
+
+`exception_count` 达到 `MAX_PROFILE_EXCEPTIONS(3)` 后走失败路径：
+
+- __孵化场景__：候选标记为 `ProfileGenerationFailed`，清理 LLM 上下文，删除 proposal，
+  触发 `OnAgentProfileGenerationFailed` hook，通过 `SystemOutputMessage` 通知用户
+- __更新场景__：静默跳过（保持现有 profile 不变），清理 LLM 上下文
+
+#### profile-designer 缺失
+
+`profile-designer` Agent 缺失时直接失败（不再回退）：启动时记录 `warn!` 日志，运行时记录 `error!` 日志，并通过 `SystemOutputMessage` 通知用户检查配置。
+
+#### 正常路径
+
+| 场景 | 处理策略 |
+|------|----------|
+| `skip_profile_update`（更新场景） | 正常路径，不是错误——表示不需要更新 |
+| `reject_with_feedback` | 透传不变，不占用 `exception_count`，且不再有上限约束 |
 
 ### 4.4 插件 Hook
 
@@ -621,10 +645,13 @@ __回退策略__：仅孵化场景有回退（硬编码 name + 空描述），�
 | Hook 名称 | 触发时机 | 参数 |
 |-----------|----------|------|
 | `on_agent_profile_generated` | profile generation WorkItem 完成 | `agent_name`, `tags`, `description`, `kind` |
+| `on_agent_profile_generation_failed` | profile generation 达到异常上限失败 | `agent_id`, `kind` |
 | `on_agent_profile_updated` | profile 更新写回成功（用户审批后） | `agent_name`, `old_tags`, `new_tags`, `old_desc`, `new_desc` |
 | `on_agent_incubated` | 孵化 Agent 写入 agents.toml 成功 | `agent_name`, `tags`, `description` |
 
-`on_agent_profile_generated` 在 LLM 生成后、用户审批前触发，允许插件观察但不阻止。`on_agent_profile_updated` 和 `on_agent_incubated` 在写回成功后触发。
+`on_agent_profile_generated` 在 LLM 生成后、用户审批前触发，允许插件观察但不阻止。
+`on_agent_profile_generation_failed` 在异常计数达到上限后触发，用于通知插件 profile 生成失败。
+`on_agent_profile_updated` 和 `on_agent_incubated` 在写回成功后触发。
 
 ---
 
@@ -650,7 +677,7 @@ __回退策略__：仅孵化场景有回退（硬编码 name + 空描述），�
 | `src/channels/telegram.rs` | 新增 `pending_feedback` 状态；两步交互（点击按钮 → 提示输入 → 捕获文本） |
 | `src/channels/qq.rs` | `try_match_approval_reply` 支持 `编号 + 反馈文本` 格式解析 |
 | `src/channels/frontend.rs` | `ApprovalRequest` 出向消息包含 `Reject & Feedback` 选项 |
-| `src/systems/experience/experience_hook.rs` | 新增 `on_agent_profile_generated`/`updated`/`incubated` hook 派发 |
+| `src/systems/experience/experience_hook.rs` | 新增 profile 相关 hook 派发 |
 | `src/systems/experience/approval.rs` | 检测 `reject_with_feedback`，携带 feedback 重 spawn 生成请求 |
 | `src/tui/` | 审批选项新增“Reject & Feedback”，选择后进入文本输入模式 |
 | `agents.toml.example` | 新增 `profile-designer` Agent 配置 |
@@ -675,7 +702,7 @@ __回退策略__：仅孵化场景有回退（硬编码 name + 空描述），�
 - `IncubatedAgentRegistry::update`：修改已有条目、不存在的 name 返回错误
 - `ProfileGenerationKind`：孵化与更新场景的区分
 - profile 字段校验：name 为空（孵化场景）、tags 为空时返回错误
-- 重试上限逻辑：`retry_count` 达到 `MAX_PROFILE_GENERATION_RETRIES` 后不再允许反馈
+- 异常计数器逻辑：`exception_count` 达到 `MAX_PROFILE_EXCEPTIONS` 后走失败路径；LLM 成功调工具后归 0
 
 ### 6.2 集成测试
 
@@ -686,12 +713,18 @@ __回退策略__：仅孵化场景有回退（硬编码 name + 空描述），�
 - __更新评估-需要更新__：持久型 Agent LTM 写回 → profile 更新评估 → LLM 提议更新 → 审批 → 验证 ECS 组件和 agents.toml 同步更新
 - __更新评估-不需要更新__：LLM 调用 `skip_profile_update` → 静默结束，无审批请求
 - __拒绝并反馈__：用户拒绝并提供反馈 → LLM 根据反馈重新生成 → 验证新 profile 反映了反馈内容 → 第二轮审批通过
-- __重试上限__：连续 3 次拒绝并反馈后，选项列表不再包含“Reject & Feedback”
-- __IM 通道拒绝并反馈-Telegram__：用户点击“Reject & Feedback”按钮 → Bot 提示输入 → 用户发送文本 → 验证 `InboundConfirmation` 携带 feedback → LLM 重新生成
+- __reject_with_feedback 不限次__：连续多次拒绝并反馈，选项列表始终包含 “Reject & Feedback”，`exception_count` 不增加
+- __IM 通道拒绝并反馈-Telegram__：用户点击 “Reject & Feedback” 按钮 → Bot 提示输入 → 用户发送文本 → 验证 `InboundConfirmation` 携带 feedback → LLM 重新生成
 - __IM 通道拒绝并反馈-QQ__：用户回复 `3 name 太笼统` → 验证 feedback 被正确解析 → LLM 重新生成
-- __IM 通道反馈取消__：用户点击“Reject & Feedback”后发送 `/cancel` → 验证视为普通拒绝
+- __IM 通道反馈取消__：用户点击 “Reject & Feedback” 后发送 `/cancel` → 验证视为普通拒绝
 - __name 不可更新__：更新场景下 LLM 生成的 name 被系统忽略，写回时使用原 name
-- __孵化失败回退__：LLM 超时未调用工具 → 回退硬编码 name → agents.toml 仍写入条目
+- __孵化失败重试→删除__：LLM 未调工具达到 `MAX_PROFILE_EXCEPTIONS` → 候选标记
+  `ProfileGenerationFailed` + 清理 context + 删除 proposal + 触发 hook + 通知用户
+- __LLM 没调工具重试成功__：首次未调工具（`exception_count +1`）→ 第二次成功调工具 → `exception_count` 归 0 → 进入审批
+- __LLM 没调工具重试失败__：连续 3 次未调工具 → 走失败路径
+- __互斥冲突重试__：LLM 同时调用两个工具 → `exception_count +1` → 重试
+- __exception_count 归 0__：LLM 异常后成功调工具 → 验证 `exception_count` 归 0
+- __profile-designer 缺失失败__：配置中无 profile-designer → 启动 warn + 运行时 error + 通知用户
 - __更新原子性__：agents.toml 写入成功但 ECS 更新失败 → 记录告警日志，下次启动恢复一致
 
 ---

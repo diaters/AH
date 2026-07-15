@@ -450,6 +450,7 @@ mod tests {
                 default_permission: ToolPermission::Confirm,
                 overrides: HashMap::new(),
             },
+            system_prompt: None,
         });
 
         // spawn 3 个需要确认的工具请求

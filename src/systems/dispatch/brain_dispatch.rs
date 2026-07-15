@@ -391,6 +391,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: Default::default(),
+            system_prompt: None,
         });
 
         let channel = ChannelId {

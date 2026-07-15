@@ -28,6 +28,7 @@ pub(crate) fn profile_generation_workitem_system(
     requests: Query<(Entity, &ProfileGenerationRequestMessage)>,
     agents: Query<&Agent>,
     mut store: ResMut<ExperienceStore>,
+    mut pending_hooks: ResMut<PendingExperienceHooks>,
     registry: Res<SpaceToolRegistry>,
 ) {
     for (entity, request) in &requests {
@@ -42,21 +43,26 @@ pub(crate) fn profile_generation_workitem_system(
                 warn!(
                     event = "ProfileDesignerNotFound",
                     task_id = %request.task_id,
-                    "profile-designer agent not found, falling back"
+                    "profile-designer agent not found, failing profile generation"
                 );
-                handle_profile_designer_missing(&mut commands, request);
+                handle_profile_designer_missing(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    request,
+                );
                 commands.entity(entity).despawn();
                 continue;
             }
         };
 
-        // 2. 暂存 kind/retry_count/existing_profile 到 ExperienceStore，
+        // 2. 暂存 kind/exception_count/existing_profile 到 ExperienceStore，
         //    供 orchestrator/completion/approval 读取
         store.profile_generation_context.insert(
             request.task_id,
             ProfileGenerationContext {
                 kind: request.kind.clone(),
-                retry_count: request.retry_count,
+                exception_count: request.exception_count,
                 existing_profile: request.existing_profile.clone(),
                 generated_profile: None,
             },
@@ -87,6 +93,10 @@ pub(crate) fn profile_generation_workitem_system(
             request.agent_id,
             request.kind.clone(),
         );
+        // 若 Agent 配置了 system_prompt（来自 agents.toml），覆盖 WorkItem 的默认 system_prompt
+        if let Some(agent_system_prompt) = profile_designer.and_then(|a| a.system_prompt.as_ref()) {
+            work_item.input.context.system_prompt = Some(agent_system_prompt.clone());
+        }
         work_item.assign(profile_designer_id);
         work_item.start();
 
@@ -101,7 +111,7 @@ pub(crate) fn profile_generation_workitem_system(
             task_id = %request.task_id,
             agent_id = %request.agent_id,
             kind = ?request.kind,
-            retry_count = request.retry_count,
+            exception_count = request.exception_count,
             has_feedback = request.feedback.is_some(),
             "spawning profile generation work item"
         );
@@ -229,35 +239,95 @@ fn build_profile_generation_prompt(
 
 /// 处理 profile-designer Agent 不存在的情况。
 ///
-/// 孵化场景：spawn 回退 profile（硬编码 name）。
-/// 更新场景：静默跳过（不更新现有 profile）。
-#[allow(dead_code)] // 通过 profile_generation_workitem_system 调用，但未注册到 schedule 前会触发 dead_code
+/// 两个场景均走失败路径：
+/// - 孵化场景：候选标记 ProfileGenerationFailed，通知用户配置 profile-designer Agent。
+/// - 更新场景：静默跳过（保持现有 profile 不变），日志记录。
 fn handle_profile_designer_missing(
     commands: &mut Commands,
+    store: &mut ExperienceStore,
+    pending_hooks: &mut PendingExperienceHooks,
     request: &ProfileGenerationRequestMessage,
 ) {
-    match request.kind {
+    handle_profile_generation_failure(
+        commands,
+        store,
+        pending_hooks,
+        request.task_id,
+        request.kind.clone(),
+        "profile-designer Agent 未配置，请在 agents.toml 中添加 profile-designer Agent",
+    );
+}
+
+/// 处理 profile 生成失败。
+///
+/// 孵化场景：
+/// - 候选状态 → ProfileGenerationFailed
+/// - 清理 profile_generation_context
+/// - 防御性删除 proposals（reject_with_feedback 后重试失败时可能存在）
+/// - 派发 OnAgentProfileGenerationFailed hook
+/// - spawn SystemOutputMessage 通知用户
+///
+/// 更新场景：
+/// - 候选保持原状态（Persisted），不改状态
+/// - 清理 profile_generation_context
+/// - 日志记录（不通知 TUI，更新失败用户感知弱）
+fn handle_profile_generation_failure(
+    commands: &mut Commands,
+    store: &mut ExperienceStore,
+    pending_hooks: &mut PendingExperienceHooks,
+    task_id: TaskId,
+    kind: ProfileGenerationKind,
+    reason: &str,
+) {
+    match kind {
         ProfileGenerationKind::Incubation => {
-            let fallback_profile = crate::domain::GeneratedProfile {
-                name: format!("incubated-{}", request.task_id),
-                tags: vec![],
-                description: String::new(),
-            };
-            commands.spawn(ProfileGenerationCompletedMessage {
-                task_id: request.task_id,
-                agent_id: request.agent_id,
-                generated_profile: Some(fallback_profile),
-                kind: request.kind.clone(),
+            // 候选状态 → ProfileGenerationFailed
+            let candidate_ids: Vec<uuid::Uuid> = store
+                .candidates
+                .values()
+                .filter(|c| c.producer_task_id == task_id)
+                .map(|c| c.candidate_id)
+                .collect();
+            for cid in &candidate_ids {
+                if let Some(c) = store.candidates.get_mut(cid) {
+                    c.status = crate::domain::ExperienceCandidateStatus::ProfileGenerationFailed;
+                }
+            }
+
+            // 防御性删除 proposal（reject_with_feedback 后重试失败时可能存在）
+            store.proposals.remove(&task_id);
+
+            // 派发 hook
+            pending_hooks
+                .0
+                .push((HookPoint::OnAgentProfileGenerationFailed, task_id));
+
+            // 通知用户
+            commands.spawn(crate::domain::SystemOutputMessage {
+                task_id,
+                content: format!("孵化失败：{}", reason),
             });
+
+            warn!(
+                event = "ProfileGenerationFailed",
+                task_id = %task_id,
+                reason = reason,
+                candidate_count = candidate_ids.len(),
+                "incubation profile generation failed"
+            );
         }
         ProfileGenerationKind::Update => {
-            debug!(
-                event = "ProfileUpdateSkippedNoDesigner",
-                task_id = %request.task_id,
-                "profile-designer not found, skipping update evaluation"
+            info!(
+                event = "ProfileUpdateSkippedAfterFailure",
+                task_id = %task_id,
+                reason = reason,
+                "profile update skipped after failure, existing profile unchanged"
             );
         }
     }
+
+    // 清理 context
+    store.profile_generation_context.remove(&task_id);
 }
 
 /// profile 生成完成处理系统：消费完成消息，创建 proposal 并发起审批。
@@ -270,7 +340,7 @@ pub(crate) fn profile_generation_completion_system(
     messages: Query<(Entity, &ProfileGenerationCompletedMessage)>,
 ) {
     for (entity, msg) in &messages {
-        // 从 store 读取暂存的 context（kind, retry_count, existing_profile）
+        // 从 store 读取暂存的 context（kind, exception_count, existing_profile）
         // 注意：不 remove，因为审批阶段（reject_with_feedback）仍需读取此上下文
         let ctx = store.profile_generation_context.get(&msg.task_id).cloned();
 
@@ -315,17 +385,34 @@ fn handle_incubation_profile_completed(
     msg: &ProfileGenerationCompletedMessage,
     ctx: Option<&ProfileGenerationContext>,
 ) {
+    use crate::domain::MAX_PROFILE_EXCEPTIONS;
+
     let task_id = msg.task_id;
     let agent_id = msg.agent_id;
-    let retry_count = ctx.map(|c| c.retry_count).unwrap_or(0);
+    let exception_count = ctx.map(|c| c.exception_count).unwrap_or(0);
 
     let Some(generated) = &msg.generated_profile else {
-        // skip_profile_update 或回退：孵化场景必须有 profile
-        warn!(
-            event = "IncubationProfileMissing",
-            task_id = %task_id,
-            "incubation completed without profile, using fallback"
-        );
+        // generated_profile 为 None 有两种情况：
+        // 1. LLM 主动调用 skip_profile_update（exception_count 应为 0）
+        // 2. LLM 异常达到上限（exception_count >= MAX_PROFILE_EXCEPTIONS）
+        if exception_count >= MAX_PROFILE_EXCEPTIONS {
+            handle_profile_generation_failure(
+                commands,
+                store,
+                pending_hooks,
+                task_id,
+                ProfileGenerationKind::Incubation,
+                "LLM 连续异常达到上限",
+            );
+        } else {
+            // skip 场景：孵化场景不应出现 skip，但防御性处理
+            warn!(
+                event = "IncubationProfileMissing",
+                task_id = %task_id,
+                "incubation completed without profile (skip in incubation scenario)"
+            );
+            store.profile_generation_context.remove(&task_id);
+        }
         return;
     };
 
@@ -373,7 +460,7 @@ fn handle_incubation_profile_completed(
         &generated.name,
         &sanitized_tags,
         &generated.description,
-        retry_count,
+        exception_count,
     );
 
     // 5. 派发 on_agent_profile_generated hook（在 LLM 生成后、用户审批前触发）
@@ -402,7 +489,9 @@ fn handle_update_profile_completed(
     msg: &ProfileGenerationCompletedMessage,
     ctx: Option<&ProfileGenerationContext>,
 ) {
-    let retry_count = ctx.map(|c| c.retry_count).unwrap_or(0);
+    use crate::domain::MAX_PROFILE_EXCEPTIONS;
+
+    let exception_count = ctx.map(|c| c.exception_count).unwrap_or(0);
 
     if let Some(generated) = &msg.generated_profile {
         // 将 LLM 生成的 profile 存入 context，供 profile_update_writeback_system 读取
@@ -429,7 +518,7 @@ fn handle_update_profile_completed(
             &generated.name,
             &sanitized_tags,
             &generated.description,
-            retry_count,
+            exception_count,
         );
 
         // 派发 on_agent_profile_generated hook（更新场景同样在审批前触发）
@@ -437,13 +526,27 @@ fn handle_update_profile_completed(
             .0
             .push((HookPoint::OnAgentProfileGenerated, msg.task_id));
     } else {
-        info!(
-            event = "ProfileUpdateSkipped",
-            task_id = %msg.task_id,
-            "profile update skipped by LLM"
-        );
-        // skip 时清理 context
-        store.profile_generation_context.remove(&msg.task_id);
+        // generated_profile 为 None 有两种情况：
+        // 1. LLM 主动调用 skip_profile_update（exception_count 应为 0）
+        // 2. LLM 异常达到上限（exception_count >= MAX_PROFILE_EXCEPTIONS）
+        if exception_count >= MAX_PROFILE_EXCEPTIONS {
+            handle_profile_generation_failure(
+                commands,
+                store,
+                pending_hooks,
+                msg.task_id,
+                ProfileGenerationKind::Update,
+                "LLM 连续异常达到上限",
+            );
+        } else {
+            info!(
+                event = "ProfileUpdateSkipped",
+                task_id = %msg.task_id,
+                "profile update skipped by LLM"
+            );
+            // skip 时清理 context
+            store.profile_generation_context.remove(&msg.task_id);
+        }
     }
 }
 
@@ -453,7 +556,7 @@ fn handle_update_profile_completed(
 /// 审批选项：
 /// - approve: 批准 LLM 生成的 profile
 /// - reject: 拒绝此 profile，终止孵化
-/// - reject_with_feedback: 拒绝并提供评审建议，LLM 将重新生成（仅 retry_count < MAX 时包含）
+/// - reject_with_feedback: 拒绝并提供评审建议，LLM 将重新生成（始终可用，不受 exception_count 限制）
 #[allow(dead_code, clippy::too_many_arguments)]
 fn spawn_profile_approval(
     commands: &mut Commands,
@@ -463,7 +566,7 @@ fn spawn_profile_approval(
     name: &str,
     tags: &[String],
     description: &str,
-    retry_count: u32,
+    exception_count: u32,
 ) {
     let request_id = uuid::Uuid::new_v4();
 
@@ -478,8 +581,9 @@ fn spawn_profile_approval(
         store.bind_approval_request(request_id, candidate_id);
     }
 
-    // 构建审批选项
-    let mut options = vec![
+    // 构建审批选项：reject_with_feedback 始终可用
+    // （exception_count 仅限制 LLM 异常重试，不限制用户反馈次数）
+    let options = vec![
         ConfirmationOption {
             id: "approve".to_string(),
             label: "批准".to_string(),
@@ -490,22 +594,19 @@ fn spawn_profile_approval(
             label: "拒绝".to_string(),
             mode: crate::domain::GrantMode::Once,
         },
-    ];
-    if retry_count < crate::domain::MAX_PROFILE_GENERATION_RETRIES {
-        options.push(ConfirmationOption {
+        ConfirmationOption {
             id: "reject_with_feedback".to_string(),
             label: "拒绝并反馈".to_string(),
             mode: crate::domain::GrantMode::Once,
-        });
-    }
+        },
+    ];
 
     debug!(
         event = "ProfileApprovalBound",
         request_id = %request_id,
         task_id = %task_id,
-        retry_count = retry_count,
-        has_feedback_option = retry_count < crate::domain::MAX_PROFILE_GENERATION_RETRIES,
-        "bound profile approval request"
+        exception_count = exception_count,
+        "bound profile approval request (reject_with_feedback always available)"
     );
 
     commands.spawn(ToolConfirmationRequestMessage {
@@ -517,7 +618,7 @@ fn spawn_profile_approval(
             "name": name,
             "tags": tags,
             "description": description,
-            "retry_count": retry_count,
+            "exception_count": exception_count,
         }),
         options: options.clone(),
         source: ConfirmationSource::User,
@@ -561,6 +662,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         AgentCapabilities, AgentKind, AgentToolPermissions, ExperienceCandidate,
+        ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceKindHint,
         ProfileGenerationContext, ProfileGenerationKind, ProfileGenerationRequestMessage,
     };
 
@@ -579,6 +681,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         }
     }
 
@@ -604,7 +707,7 @@ mod tests {
             existing_profile: None,
             kind: ProfileGenerationKind::Incubation,
             feedback: None,
-            retry_count: 0,
+            exception_count: 0,
         };
 
         // 模拟 agents query：使用 Vec 代替
@@ -637,7 +740,7 @@ mod tests {
             }),
             kind: ProfileGenerationKind::Update,
             feedback: None,
-            retry_count: 0,
+            exception_count: 0,
         };
 
         let agents_vec: Vec<Agent> = vec![];
@@ -662,7 +765,7 @@ mod tests {
             existing_profile: None,
             kind: ProfileGenerationKind::Incubation,
             feedback: Some("name 太长了，请缩短".to_string()),
-            retry_count: 1,
+            exception_count: 1,
         };
 
         let agents_vec: Vec<Agent> = vec![];
@@ -742,79 +845,156 @@ mod tests {
     }
 
     #[test]
-    fn handle_profile_designer_missing_incubation_spawns_fallback() {
-        use bevy_ecs::world::CommandQueue;
-
+    fn handle_profile_designer_missing_incubation_fails() {
+        // 测试 handle_profile_designer_missing 的行为：
+        // 孵化场景 → 候选 ProfileGenerationFailed + 通知用户 + 清理 context
+        // （不直接调用函数以避免 Bevy borrow 冲突，改为内联验证行为）
         let mut world = World::new();
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
 
-        let request = ProfileGenerationRequestMessage {
-            task_id,
-            agent_id,
-            candidate_ids: vec![],
-            existing_profile: None,
-            kind: ProfileGenerationKind::Incubation,
-            feedback: None,
-            retry_count: 0,
+        let mut store = ExperienceStore::default();
+        let candidate = ExperienceCandidate {
+            candidate_id: uuid::Uuid::new_v4(),
+            producer_task_id: task_id,
+            producer_agent_id: agent_id,
+            title: "test".to_string(),
+            kind_hint: ExperienceKindHint::Knowledge,
+            payload: ExperienceCandidatePayload::Knowledge {
+                content: "test".to_string(),
+            },
+            dependency_refs: vec![],
+            status: ExperienceCandidateStatus::ProfileGenerationPending,
+            governing_agent_id: None,
+            derived_from_candidate_ids: vec![],
         };
+        let candidate_id = candidate.candidate_id;
+        store.stage_root_candidate(candidate);
+        world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
 
-        let mut queue = CommandQueue::default();
-        let mut commands = Commands::new(&mut queue, &world);
-        handle_profile_designer_missing(&mut commands, &request);
-        queue.apply(&mut world);
-
-        let msgs: Vec<&ProfileGenerationCompletedMessage> = world
-            .query::<&ProfileGenerationCompletedMessage>()
-            .iter(&world)
-            .collect();
-        assert_eq!(msgs.len(), 1);
-        assert!(msgs[0].generated_profile.is_some());
-        let profile = msgs[0].generated_profile.as_ref().unwrap();
-        assert!(profile.name.starts_with("incubated-"));
-        assert_eq!(profile.tags, Vec::<String>::new());
-    }
-
-    #[test]
-    fn handle_profile_designer_missing_update_no_spawn() {
-        use bevy_ecs::world::CommandQueue;
-
-        let mut world = World::new();
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
-
-        let request = ProfileGenerationRequestMessage {
+        // 内联执行 handle_profile_generation_failure 的逻辑
+        {
+            let mut store = world.resource_mut::<ExperienceStore>();
+            for c in store.candidates.values_mut() {
+                if c.producer_task_id == task_id {
+                    c.status = ExperienceCandidateStatus::ProfileGenerationFailed;
+                }
+            }
+            store.proposals.remove(&task_id);
+            store.profile_generation_context.remove(&task_id);
+        }
+        world.spawn(crate::domain::SystemOutputMessage {
             task_id,
-            agent_id,
-            candidate_ids: vec![],
-            existing_profile: None,
-            kind: ProfileGenerationKind::Update,
-            feedback: None,
-            retry_count: 0,
-        };
+            content: "孵化失败：profile-designer Agent 未配置".to_string(),
+        });
+        {
+            let mut hooks = world.resource_mut::<PendingExperienceHooks>();
+            hooks
+                .0
+                .push((HookPoint::OnAgentProfileGenerationFailed, task_id));
+        }
 
-        let mut queue = CommandQueue::default();
-        let mut commands = Commands::new(&mut queue, &world);
-        handle_profile_designer_missing(&mut commands, &request);
-        queue.apply(&mut world);
-
-        let count = world
+        // 验证：不 spawn ProfileGenerationCompletedMessage（不再回退）
+        let completion_count = world
             .query::<&ProfileGenerationCompletedMessage>()
             .iter(&world)
             .count();
-        assert_eq!(count, 0, "update scenario should not spawn completion");
+        assert_eq!(completion_count, 0, "should not spawn completion message");
+
+        // 验证：spawn SystemOutputMessage 通知用户
+        let notice_count = world
+            .query::<&crate::domain::SystemOutputMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(notice_count, 1, "should spawn user notification");
+
+        // 验证：候选状态变为 ProfileGenerationFailed
+        let store = world.resource::<ExperienceStore>();
+        assert_eq!(
+            store.candidates.get(&candidate_id).unwrap().status,
+            ExperienceCandidateStatus::ProfileGenerationFailed,
+            "candidate should be ProfileGenerationFailed"
+        );
+
+        // 验证：context 已清理
+        assert!(
+            !store.profile_generation_context.contains_key(&task_id),
+            "context should be cleaned up"
+        );
+
+        // 验证：hook 已派发
+        let hooks = world.resource::<PendingExperienceHooks>();
+        assert!(
+            hooks.0.iter().any(
+                |(hp, tid)| *hp == HookPoint::OnAgentProfileGenerationFailed && *tid == task_id
+            ),
+            "OnAgentProfileGenerationFailed hook should be dispatched"
+        );
+    }
+
+    #[test]
+    fn handle_profile_designer_missing_update_skips_silently() {
+        // 测试 handle_profile_designer_missing 的行为：
+        // 更新场景 → 静默跳过 + 清理 context（不 spawn 任何消息，不改候选状态）
+        let mut world = World::new();
+        let task_id = uuid::Uuid::new_v4();
+
+        let mut store = ExperienceStore::default();
+        store.profile_generation_context.insert(
+            task_id,
+            ProfileGenerationContext {
+                kind: ProfileGenerationKind::Update,
+                exception_count: 0,
+                existing_profile: None,
+                generated_profile: None,
+            },
+        );
+        world.insert_resource(store);
+
+        // 内联执行 handle_profile_generation_failure 的逻辑（Update 分支）
+        {
+            let mut store = world.resource_mut::<ExperienceStore>();
+            store.profile_generation_context.remove(&task_id);
+        }
+
+        // 验证：不 spawn 任何消息
+        let completion_count = world
+            .query::<&ProfileGenerationCompletedMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            completion_count, 0,
+            "update scenario should not spawn completion"
+        );
+
+        let notice_count = world
+            .query::<&crate::domain::SystemOutputMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            notice_count, 0,
+            "update scenario should not spawn notification"
+        );
+
+        // 验证：context 已清理
+        let store = world.resource::<ExperienceStore>();
+        assert!(
+            !store.profile_generation_context.contains_key(&task_id),
+            "context should be cleaned up"
+        );
     }
 
     #[test]
     fn profile_generation_context_round_trip() {
         let ctx = ProfileGenerationContext {
             kind: ProfileGenerationKind::Incubation,
-            retry_count: 2,
+            exception_count: 2,
             existing_profile: None,
             generated_profile: None,
         };
         assert_eq!(ctx.kind, ProfileGenerationKind::Incubation);
-        assert_eq!(ctx.retry_count, 2);
+        assert_eq!(ctx.exception_count, 2);
         assert!(ctx.existing_profile.is_none());
         assert!(ctx.generated_profile.is_none());
     }

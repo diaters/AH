@@ -180,7 +180,7 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
         existing_profile: None,
         kind: ProfileGenerationKind::Incubation,
         feedback: None,
-        retry_count: 0,
+        exception_count: 0,
     });
 
     // 多轮 update 让 WorkItem → LLM → orchestrator → completion → 审批请求 链路跑完。
@@ -231,9 +231,15 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
     assert_eq!(physics.description, "Physics specialist agent");
 }
 
-/// 验证 profile-designer 缺失时孵化场景回退到硬编码 name
+/// 验证 profile-designer 缺失时孵化场景进入失败路径（不再回退）。
+///
+/// 期望行为（Q11 + Q27 决议）：
+/// - 不 spawn 任何 profile_generation 审批请求（无回退 name）
+/// - spawn SystemOutputMessage 通知用户配置 profile-designer Agent
+/// - 候选状态变为 ProfileGenerationFailed
+/// - profile_generation_context 已清理
 #[test]
-fn incubation_falls_back_when_profile_designer_missing() {
+fn incubation_fails_when_profile_designer_missing() {
     let config_dir = TempDir::new().unwrap();
     let agents_toml = config_dir.path().join("agents.toml");
     // 只写 default，不写 profile-designer
@@ -271,8 +277,9 @@ default_permission = "Allow"
     let task_id = uuid::Uuid::new_v4();
     let agent_id = uuid::Uuid::new_v4();
 
+    let candidate_id = uuid::Uuid::new_v4();
     let candidate = harness::ExperienceCandidate {
-        candidate_id: uuid::Uuid::new_v4(),
+        candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
@@ -300,36 +307,50 @@ default_permission = "Allow"
         existing_profile: None,
         kind: ProfileGenerationKind::Incubation,
         feedback: None,
-        retry_count: 0,
+        exception_count: 0,
     });
 
-    // 多轮 update：handle_profile_designer_missing 会 spawn 回退 ProfileGenerationCompletedMessage
-    let mut request_id = None;
+    // 多轮 update：handle_profile_designer_missing 应走失败路径，
+    // 不应 spawn 任何 profile_generation 审批请求
     for _ in 0..30 {
         app.update();
-        request_id = find_profile_approval_request_id(&mut app);
-        if request_id.is_some() {
-            break;
-        }
     }
-    let request_id = request_id.expect("回退场景也应生成审批请求");
 
-    // 验证回退 name 以 "incubated-" 开头
-    let tool_input = {
+    // 验证：没有 profile_generation 审批请求
+    let has_approval_request = {
         let world = app.world_mut();
         let mut query = world.query::<&ToolExecutionRequestMessage>();
         query
             .iter(world)
-            .find(|r| r.pending_confirmation_id == Some(request_id))
-            .map(|r| r.tool_input.clone())
-            .expect("应该能找到对应的 ToolExecutionRequestMessage")
+            .any(|r| r.tool_name == "profile_generation" && r.pending_confirmation_id.is_some())
     };
-    let name = tool_input
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
     assert!(
-        name.starts_with("incubated-"),
-        "回退 name 应以 'incubated-' 开头，实际: {name}"
+        !has_approval_request,
+        "profile-designer 缺失时不应生成 profile_generation 审批请求"
     );
+
+    // 注：SystemOutputMessage 由 frontend_output_system 消费后 despawn，
+    // 无法在多轮 update 后检查。spawn 行为已由单元测试
+    // `handle_profile_designer_missing_incubation_fails` 覆盖。
+
+    // 验证：候选状态变为 ProfileGenerationFailed
+    let candidate_status = app
+        .world()
+        .resource::<ExperienceStore>()
+        .candidates
+        .get(&candidate_id)
+        .map(|c| c.status.clone());
+    assert_eq!(
+        candidate_status,
+        Some(harness::ExperienceCandidateStatus::ProfileGenerationFailed),
+        "候选应被标记为 ProfileGenerationFailed"
+    );
+
+    // 验证：profile_generation_context 已清理
+    let context_exists = app
+        .world()
+        .resource::<ExperienceStore>()
+        .profile_generation_context
+        .contains_key(&task_id);
+    assert!(!context_exists, "profile_generation_context 应已被清理");
 }

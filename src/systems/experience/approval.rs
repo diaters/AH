@@ -4,8 +4,7 @@ use tracing::debug;
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
-    MAX_PROFILE_GENERATION_RETRIES, PendingExperienceHooks, ProfileGenerationRequestMessage,
-    ToolConfirmationResponseMessage,
+    PendingExperienceHooks, ProfileGenerationRequestMessage, ToolConfirmationResponseMessage,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -138,7 +137,10 @@ pub(crate) fn experience_approval_result_system(
                 );
             }
         } else {
-            // 检测 reject_with_feedback：在通用拒绝处理之前拦截，触发 LLM 重新生成
+            // 检测 reject_with_feedback：在通用拒绝处理之前拦截，触发 LLM 重新生成。
+            // 注意：reject_with_feedback 不再受 exception_count 上限约束。
+            // exception_count 仅累计 LLM 异常（未调工具 / 互斥冲突 / Err），
+            // 用户反馈属于正常交互，透传 exception_count 不变。
             if response.selected_option == "reject_with_feedback"
                 && let Some(feedback) = response.feedback.as_ref()
                 && let Some(task_id) = store
@@ -146,7 +148,6 @@ pub(crate) fn experience_approval_result_system(
                     .get(&candidate_id)
                     .map(|c| c.producer_task_id)
                 && let Some(ctx) = store.profile_generation_context.get(&task_id).cloned()
-                && ctx.retry_count < MAX_PROFILE_GENERATION_RETRIES
             {
                 // 候选回到 ProfileGenerationPending，等待重新生成
                 if let Some(c) = store.candidates.get_mut(&candidate_id) {
@@ -170,7 +171,7 @@ pub(crate) fn experience_approval_result_system(
                     .map(|c| c.producer_agent_id)
                     .unwrap_or_default();
 
-                // Spawn 重新生成请求，retry_count 递增
+                // Spawn 重新生成请求，exception_count 透传不变（用户反馈不是 LLM 异常）
                 commands.spawn(ProfileGenerationRequestMessage {
                     task_id,
                     agent_id,
@@ -178,15 +179,15 @@ pub(crate) fn experience_approval_result_system(
                     existing_profile: ctx.existing_profile.clone(),
                     kind: ctx.kind.clone(),
                     feedback: Some(feedback.clone()),
-                    retry_count: ctx.retry_count + 1,
+                    exception_count: ctx.exception_count,
                 });
 
                 debug!(
                     event = "ProfileRegenerationRequested",
                     task_id = %task_id,
                     candidate_id = %candidate_id,
-                    retry_count = ctx.retry_count + 1,
-                    "user rejected with feedback, spawning regeneration request"
+                    exception_count = ctx.exception_count,
+                    "user rejected with feedback, spawning regeneration request (exception_count preserved)"
                 );
 
                 commands.entity(entity).despawn();
@@ -238,9 +239,8 @@ mod tests {
     use super::*;
     use crate::domain::{
         ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-        ExperienceKindHint, ExperienceStore, MAX_PROFILE_GENERATION_RETRIES,
-        PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationKind,
-        ProfileGenerationRequestMessage, ToolConfirmationResponseMessage,
+        ExperienceKindHint, ExperienceStore, PendingExperienceHooks, ProfileGenerationContext,
+        ProfileGenerationKind, ProfileGenerationRequestMessage, ToolConfirmationResponseMessage,
     };
     use bevy_ecs::system::RunSystemOnce;
 
@@ -315,12 +315,12 @@ mod tests {
         store.stage_root_candidate(candidate);
         store.bind_approval_request(request_id, candidate_id);
 
-        // 存入 profile 生成上下文（retry_count = 0）
+        // 存入 profile 生成上下文（exception_count = 0）
         store.profile_generation_context.insert(
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
-                retry_count: 0,
+                exception_count: 0,
                 existing_profile: None,
                 generated_profile: None,
             },
@@ -346,8 +346,8 @@ mod tests {
         let regen = regen_msgs[0];
         assert_eq!(regen.task_id, task_id);
         assert_eq!(
-            regen.retry_count, 1,
-            "retry_count should increment from 0 to 1"
+            regen.exception_count, 0,
+            "exception_count should be preserved (not incremented) for reject_with_feedback"
         );
         assert_eq!(regen.kind, ProfileGenerationKind::Incubation);
         assert_eq!(
@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_with_feedback_increments_retry_count() {
+    fn reject_with_feedback_preserves_exception_count() {
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
         let request_id = uuid::Uuid::new_v4();
@@ -381,12 +381,12 @@ mod tests {
         store.stage_root_candidate(candidate);
         store.bind_approval_request(request_id, candidate_id);
 
-        // 存入 profile 生成上下文（retry_count = 2）
+        // 存入 profile 生成上下文（exception_count = 2，模拟之前有 LLM 异常）
         store.profile_generation_context.insert(
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
-                retry_count: 2,
+                exception_count: 2,
                 existing_profile: None,
                 generated_profile: None,
             },
@@ -409,13 +409,15 @@ mod tests {
             .collect();
         assert_eq!(regen_msgs.len(), 1);
         assert_eq!(
-            regen_msgs[0].retry_count, 3,
-            "retry_count should increment from 2 to 3"
+            regen_msgs[0].exception_count, 2,
+            "exception_count should be preserved at 2 (reject_with_feedback does not increment)"
         );
     }
 
     #[test]
-    fn reject_with_feedback_at_max_falls_to_plain_reject() {
+    fn reject_with_feedback_always_allowed() {
+        // 验证：即使 exception_count 很高，reject_with_feedback 仍触发重新生成
+        // （exception_count 仅限制 LLM 异常重试，不限制用户反馈次数）
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
         let request_id = uuid::Uuid::new_v4();
@@ -426,12 +428,12 @@ mod tests {
         store.stage_root_candidate(candidate);
         store.bind_approval_request(request_id, candidate_id);
 
-        // 存入 profile 生成上下文（retry_count 已达上限）
+        // 存入 profile 生成上下文（exception_count 已达上限值）
         store.profile_generation_context.insert(
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
-                retry_count: MAX_PROFILE_GENERATION_RETRIES,
+                exception_count: crate::domain::MAX_PROFILE_EXCEPTIONS,
                 existing_profile: None,
                 generated_profile: None,
             },
@@ -448,22 +450,22 @@ mod tests {
             .run_system_once(experience_approval_result_system)
             .unwrap();
 
-        // 验证：未 spawn 重新生成请求
+        // 验证：仍 spawn 了重新生成请求（不受 exception_count 上限约束）
         let regen_count = world
             .query::<&ProfileGenerationRequestMessage>()
             .iter(&world)
             .count();
         assert_eq!(
-            regen_count, 0,
-            "should not spawn regeneration at max retries"
+            regen_count, 1,
+            "reject_with_feedback should always be allowed regardless of exception_count"
         );
 
-        // 验证：候选被标记为 Rejected（回退到通用拒绝路径）
+        // 验证：候选回到 ProfileGenerationPending（不是 Rejected）
         let store = world.resource::<ExperienceStore>();
         assert_eq!(
             store.candidates.get(&candidate_id).unwrap().status,
-            ExperienceCandidateStatus::Rejected,
-            "candidate should be Rejected when at max retries"
+            ExperienceCandidateStatus::ProfileGenerationPending,
+            "candidate should be back to ProfileGenerationPending, not Rejected"
         );
     }
 

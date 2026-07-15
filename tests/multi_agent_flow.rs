@@ -191,6 +191,7 @@ fn task_scoped_agent_lifecycle() {
             parent_id: Some(parent_agent_id),
             bound_task_id: Some(task_id),
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         });
     }
 

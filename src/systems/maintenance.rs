@@ -103,6 +103,19 @@ fn load_persistent_agents(
         }
     }
 
+    // 预防性检查：profile-designer Agent 是否存在（孵化流程依赖此 Agent）
+    let has_profile_designer = config
+        .agent
+        .iter()
+        .any(|e| e.tags.iter().any(|t| t == "profile") || e.name == "profile-designer");
+    if !has_profile_designer {
+        warn!(
+            event = "ProfileDesignerAgentMissing",
+            "profile-designer Agent not found in agents.toml; \
+             incubation flow will fail until a profile-designer Agent is configured"
+        );
+    }
+
     // 收集插件贡献的 Agent 名称，一并检查重复
     let plugin_agent_entries = collect_plugin_agent_entries(plugin_registry);
     for (namespaced_name, _) in &plugin_agent_entries {
@@ -224,6 +237,7 @@ fn spawn_persistent_agent_from_entry(
         parent_id: None,
         bound_task_id: None,
         tool_permissions,
+        system_prompt: entry.system_prompt.clone(),
     });
 
     // 附加 ModelChainState Component
@@ -370,6 +384,7 @@ fn handle_spawn_request(
         parent_id: Some(request.parent_agent_id),
         bound_task_id: Some(request.task_id),
         tool_permissions,
+        system_prompt: None,
     });
 
     // 更新 Task 的 delegate 为实际执行的 task-scoped agent

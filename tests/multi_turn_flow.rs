@@ -76,6 +76,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));
@@ -292,6 +293,7 @@ fn agent_has_long_term_memory() {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
     });
 
     // Run another frame to trigger init_agent_memory_system for the new agent
@@ -346,6 +348,7 @@ fn experience_collection_triggered_on_agent_termination() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));
@@ -368,6 +371,7 @@ fn experience_collection_triggered_on_agent_termination() {
             parent_id: Some(parent_id),
             bound_task_id: Some(task_id),
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));

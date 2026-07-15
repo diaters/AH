@@ -63,7 +63,7 @@ pub use contribution::{
     ExperienceCollectionRequestMessage, ExperienceGovernanceDecision,
     ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint,
     ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
-    GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_GENERATION_RETRIES,
+    GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_EXCEPTIONS,
     PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
     ProfileGenerationKind, ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole,
     sanitize_tags,
@@ -188,6 +188,10 @@ pub struct AgentEntry {
     /// Skill 路径列表
     #[serde(default)]
     pub skills: Option<Vec<String>>,
+    /// Agent 级 system prompt：加载时注入 Agent 组件，WorkItem 执行时作为 system_prompt 传递给 LLM。
+    /// 留空（None）时由 WorkItem 自身的 system_prompt 决定（保持向后兼容）。
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 }
 
 // ============ 测试 ============
@@ -224,6 +228,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: perms,
+            system_prompt: None,
         };
 
         assert!(agent.has_permission("test_tool"));
@@ -246,6 +251,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         };
 
         assert!(!agent.has_permission("new_tool"));

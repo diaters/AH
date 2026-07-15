@@ -64,23 +64,32 @@ fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::Ta
         .is_some_and(|inbox| !inbox.candidate_ids.is_empty())
 }
 
-/// 处理 ProfileGeneration WorkItem 未调用工具的情况。
+/// 处理 ProfileGeneration WorkItem LLM 响应无效的情况。
 ///
-/// 当 LLM 返回普通文本或调用失败时：
-/// - 孵化场景：spawn 回退 ProfileGenerationCompletedMessage（硬编码 name）
-/// - 更新场景：spawn skip ProfileGenerationCompletedMessage（None）
+/// 触发条件（均为 LLM 异常，占用 exception_count）：
+/// - 返回普通文本（未调用工具）
+/// - 同时调用 submit_profile_update 和 skip_profile_update（互斥冲突）
+/// - 调用非 submit/skip 的其他工具（违规）
+/// - LLM 调用报错（Err）
 ///
-/// kind 从 ExperienceStore.profile_generation_context 读取；
-/// 若找不到 context（已被前序完成消息消费，如 skip/submit 流程已完成），
-/// 直接清理 WorkItem，不再 spawn 完成消息，避免误触发孵化回退审批。
-fn handle_profile_generation_no_tool_call(
+/// 行为：
+/// - exception_count + 1 < MAX_PROFILE_EXCEPTIONS：spawn 重试请求，feedback 注入系统提示
+/// - exception_count + 1 >= MAX_PROFILE_EXCEPTIONS：spawn 失败完成消息，
+///   由 completion_system 根据 exception_count 判断走失败路径
+///
+/// context 已被前序完成消息消费时（如 skip/submit 已完成），直接清理 WorkItem。
+fn handle_profile_generation_invalid(
     commands: &mut Commands,
     experience_store: &ExperienceStore,
     work_item: &WorkItem,
     result_entity: Entity,
     work_item_entity: Entity,
+    invalid_reason: &str,
 ) {
-    use crate::domain::{ProfileGenerationCompletedMessage, ProfileGenerationKind};
+    use crate::domain::{
+        ExperienceCandidateStatus, MAX_PROFILE_EXCEPTIONS, ProfileGenerationCompletedMessage,
+        ProfileGenerationRequestMessage,
+    };
 
     let Some(ctx) = experience_store
         .profile_generation_context
@@ -102,32 +111,60 @@ fn handle_profile_generation_no_tool_call(
         return;
     };
 
+    let new_exception_count = ctx.exception_count + 1;
     let kind = ctx.kind.clone();
+    let existing_profile = ctx.existing_profile.clone();
     let governing_agent_id = work_item.governing_agent_id.unwrap_or(uuid::Uuid::nil());
 
-    match kind {
-        ProfileGenerationKind::Incubation => {
-            // 孵化场景回退硬编码 name（设计文档 4.3）
-            commands.spawn(ProfileGenerationCompletedMessage {
-                task_id: work_item.task_id,
-                agent_id: governing_agent_id,
-                generated_profile: Some(crate::domain::GeneratedProfile {
-                    name: format!("incubated-{}", work_item.task_id),
-                    tags: vec![],
-                    description: String::new(),
-                }),
-                kind: ProfileGenerationKind::Incubation,
-            });
-        }
-        ProfileGenerationKind::Update => {
-            // 更新场景静默跳过（spawn skip 消息）
-            commands.spawn(ProfileGenerationCompletedMessage {
-                task_id: work_item.task_id,
-                agent_id: governing_agent_id,
-                generated_profile: None,
-                kind: ProfileGenerationKind::Update,
-            });
-        }
+    if new_exception_count < MAX_PROFILE_EXCEPTIONS {
+        // 未达上限：收集候选 ID 并 spawn 重试请求
+        let candidate_ids: Vec<uuid::Uuid> = experience_store
+            .candidates
+            .values()
+            .filter(|c| {
+                c.producer_task_id == work_item.task_id
+                    && c.status == ExperienceCandidateStatus::ProfileGenerationPending
+            })
+            .map(|c| c.candidate_id)
+            .collect();
+
+        let system_notice = format!(
+            "你上一轮未正确调用 submit_profile_update 或 skip_profile_update 工具（{}）。\
+             本轮必须调用其中一个工具提交结果。两个工具不能同时调用。",
+            invalid_reason
+        );
+        commands.spawn(ProfileGenerationRequestMessage {
+            task_id: work_item.task_id,
+            agent_id: governing_agent_id,
+            candidate_ids,
+            existing_profile,
+            kind,
+            feedback: Some(system_notice),
+            exception_count: new_exception_count,
+        });
+        debug!(
+            event = "ProfileGenerationRetryRequested",
+            task_id = %work_item.task_id,
+            exception_count = new_exception_count,
+            reason = invalid_reason,
+            "spawning profile generation retry due to invalid LLM response"
+        );
+    } else {
+        // 达到上限：spawn 失败完成消息（generated_profile: None），
+        // completion_system 会根据 exception_count >= MAX 判断走失败路径
+        commands.spawn(ProfileGenerationCompletedMessage {
+            task_id: work_item.task_id,
+            agent_id: governing_agent_id,
+            generated_profile: None,
+            kind,
+        });
+        warn!(
+            event = "ProfileGenerationMaxExceptionsReached",
+            task_id = %work_item.task_id,
+            exception_count = new_exception_count,
+            reason = invalid_reason,
+            "profile generation failed due to max exceptions reached"
+        );
     }
 
     // 标记 WorkItem 失败并 despawn
@@ -784,34 +821,64 @@ pub fn llm_response_system(
                 WorkItemType::ProfileGeneration => {
                     match &result.result {
                         Ok(AgentExecutionOutput {
-                            content: OutputContent::ToolCalls(_),
+                            content: OutputContent::ToolCalls(calls),
                             ..
                         }) => {
-                            // 不 continue，让下面的 tool calling loop 处理 tool calls
-                            // submit_profile_update / skip_profile_update 工具调用会触发 orchestrator
-                            // orchestrator 中的 ToolAction::SubmitProfileUpdate / SkipProfileUpdate 分支
-                            // 会 spawn ProfileGenerationCompletedMessage
+                            // 互斥检测 + 非相关工具检测
+                            let has_submit =
+                                calls.iter().any(|c| c.name == "submit_profile_update");
+                            let has_skip = calls.iter().any(|c| c.name == "skip_profile_update");
+                            let has_other = calls.iter().any(|c| {
+                                c.name != "submit_profile_update" && c.name != "skip_profile_update"
+                            });
+
+                            if has_submit && has_skip {
+                                // 互斥冲突：两个工具同时调用
+                                handle_profile_generation_invalid(
+                                    &mut commands,
+                                    &experience_store,
+                                    work_item,
+                                    entity,
+                                    work_item_entity,
+                                    "tool_conflict",
+                                );
+                                continue;
+                            }
+                            if has_other || (!has_submit && !has_skip) {
+                                // 调用非相关工具，或未调用任何相关工具
+                                handle_profile_generation_invalid(
+                                    &mut commands,
+                                    &experience_store,
+                                    work_item,
+                                    entity,
+                                    work_item_entity,
+                                    "non_relevant_tool",
+                                );
+                                continue;
+                            }
+                            // 单一工具调用（submit 或 skip）：放行给 orchestrator 处理
                         }
                         Ok(_) => {
-                            // LLM 返回普通文本（未调用工具）：视为失败
-                            // 孵化场景回退硬编码 name，更新场景静默跳过
-                            handle_profile_generation_no_tool_call(
+                            // LLM 返回普通文本（未调用工具）：异常
+                            handle_profile_generation_invalid(
                                 &mut commands,
                                 &experience_store,
                                 work_item,
                                 entity,
                                 work_item_entity,
+                                "no_tool_call",
                             );
                             continue;
                         }
                         Err(_) => {
-                            // LLM 调用失败：同上处理
-                            handle_profile_generation_no_tool_call(
+                            // LLM 调用报错：异常
+                            handle_profile_generation_invalid(
                                 &mut commands,
                                 &experience_store,
                                 work_item,
                                 entity,
                                 work_item_entity,
+                                "llm_error",
                             );
                             continue;
                         }

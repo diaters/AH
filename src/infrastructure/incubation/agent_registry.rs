@@ -73,6 +73,7 @@ impl IncubatedAgentRegistry {
             description: record.description.clone(),
             tools: record.tools.clone(),
             skills: record.skills.clone(),
+            system_prompt: None,
         });
 
         // 序列化
@@ -231,6 +232,7 @@ mod tests {
                 description: "default agent".to_string(),
                 tools: None,
                 skills: None,
+                system_prompt: None,
             }],
         };
         fs::write(&path, toml::to_string(&initial).unwrap()).unwrap();
@@ -272,6 +274,7 @@ mod tests {
                 description: "existing".to_string(),
                 tools: None,
                 skills: None,
+                system_prompt: None,
             }],
         };
         fs::write(&path, toml::to_string(&initial).unwrap()).unwrap();
@@ -320,6 +323,7 @@ mod tests {
                     },
                 }),
                 skills: None,
+                system_prompt: None,
             }],
         };
 

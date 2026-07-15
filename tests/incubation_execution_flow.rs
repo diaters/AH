@@ -23,6 +23,7 @@ fn incubated_agent_appended_to_agents_toml() {
             description: "default agent".to_string(),
             tools: None,
             skills: None,
+            system_prompt: None,
         }],
     };
     std::fs::write(&toml_path, toml::to_string(&initial).unwrap()).unwrap();
@@ -66,6 +67,7 @@ fn duplicate_incubation_skips_if_name_exists() {
             description: "existing".to_string(),
             tools: None,
             skills: None,
+            system_prompt: None,
         }],
     };
     std::fs::write(&toml_path, toml::to_string(&initial).unwrap()).unwrap();

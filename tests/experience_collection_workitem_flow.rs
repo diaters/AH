@@ -225,6 +225,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: harness::AgentToolPermissions::default(),
+        system_prompt: None,
     });
 
     let candidate = harness::ExperienceCandidate::knowledge(
@@ -330,6 +331,7 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
         parent_id: None,
         bound_task_id: None,
         tool_permissions: harness::AgentToolPermissions::default(),
+        system_prompt: None,
     });
     // Give the agent a LongTermMemory
     app.world_mut()

@@ -95,6 +95,12 @@ shell_list = "Allow"
 name = "profile-designer"
 tags = ["profile", "design"]
 description = "Agent 元信息设计师，负责根据经验候选生成 Agent 角色名、能力标签和职责描述"
+system_prompt = """\
+你是一名 Agent 元信息设计师。你必须根据提供的经验候选，生成 Agent 的角色名、能力标签和职责描述。\
+每次响应必须调用 submit_profile_update 或 skip_profile_update 之一提交结果，\
+不能同时调用两个工具，也不能仅返回文本而不调用工具。\
+若无法根据材料生成合理的 profile，调用 skip_profile_update。\
+"""
 
 [[agent.models]]
 provider = "deepseek"

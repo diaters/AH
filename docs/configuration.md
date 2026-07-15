@@ -94,6 +94,20 @@
 | `HARNESS_SHELL_DEFAULT_STOP_TIMEOUT_SECS` | `10` | `shell_stop` 内部停止等待的默认超时时间 |
 | `HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM` | `65536` | 每个 stdout 或 stderr stream 的最大缓存字节数 |
 
+## Agent 配置
+
+Agent 配置通过 `HARNESS_AGENTS_CONFIG` 指定的 TOML 文件加载（默认 `agents.toml`），完整格式参见 `agents.toml.example`。
+
+### system_prompt 字段
+
+| 属性 | 值 |
+|------|-----|
+| 类型 | `Option<String>` |
+| 默认值 | `None` |
+| 作用 | Agent 级 system prompt，加载时注入 Agent 组件，WorkItem 执行时作为 `system_prompt` 传递给 LLM |
+| 向后兼容 | 留空时由 WorkItem 自身的 `system_prompt` 决定，保持向后兼容 |
+| 当前使用方 | 仅 `profile-designer` 使用此字段 |
+
 ## 配置示例
 
 ### OpenAI 兼容 provider

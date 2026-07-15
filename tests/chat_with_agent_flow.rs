@@ -93,6 +93,7 @@ fn chat_with_agent_creates_chat_subtask() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         harness::LongTermMemory::default(),
     ));
@@ -118,6 +119,7 @@ fn chat_with_agent_creates_chat_subtask() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: perms,
+            system_prompt: None,
         },
         harness::LongTermMemory::default(),
     ));
@@ -248,6 +250,7 @@ fn chat_with_agent_multi_round_via_handle() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         harness::LongTermMemory::default(),
     ));
@@ -273,6 +276,7 @@ fn chat_with_agent_multi_round_via_handle() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: perms,
+            system_prompt: None,
         },
         harness::LongTermMemory::default(),
     ));
@@ -427,6 +431,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         harness::LongTermMemory::default(),
     ));
@@ -451,6 +456,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: perms,
+            system_prompt: None,
         },
         harness::LongTermMemory::default(),
     ));
