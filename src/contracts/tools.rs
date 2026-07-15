@@ -124,6 +124,7 @@ mod tests {
                 default_permission: permission,
                 overrides: std::collections::HashMap::new(),
             },
+            system_prompt: None,
         }
     }
 

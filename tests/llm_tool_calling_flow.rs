@@ -148,6 +148,7 @@ fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) 
         parent_id: None,
         bound_task_id: None,
         tool_permissions,
+        system_prompt: None,
     });
     id
 }

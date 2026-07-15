@@ -224,7 +224,7 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
         existing_profile: None,
         kind: ProfileGenerationKind::Incubation,
         feedback: None,
-        retry_count: 0,
+        exception_count: 0,
     });
 
     // 阶段 1：多轮 update 让首轮 WorkItem → LLM → orchestrator → completion → 审批请求 链路跑完，
@@ -249,7 +249,7 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
         });
 
     // 阶段 3：多轮 update 让拒绝反馈 → 候选回到 ProfileGenerationPending →
-    // spawn 新 ProfileGenerationRequestMessage（retry_count=1，feedback=Some）→
+    // spawn 新 ProfileGenerationRequestMessage（exception_count 不变，feedback=Some）→
     // LLM 重新生成 → 新审批请求 链路跑完。
     let mut second_request_id = None;
     for _ in 0..40 {

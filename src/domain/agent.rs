@@ -85,6 +85,9 @@ pub struct Agent {
     pub bound_task_id: Option<TaskId>,
     /// Tool 权限配置：启动加载、父 Agent 授权或后续修正
     pub tool_permissions: AgentToolPermissions,
+    /// Agent 级 system prompt（来自 agents.toml）：WorkItem 执行时作为 system_prompt 传递给 LLM。
+    /// None 表示使用 WorkItem 自身的 system_prompt（保持向后兼容）。
+    pub system_prompt: Option<String>,
 }
 
 impl Agent {
@@ -128,6 +131,7 @@ mod tests {
                 default_permission: ToolPermission::Confirm,
                 overrides,
             },
+            system_prompt: None,
         };
 
         assert!(agent.has_permission("shell_exec"));

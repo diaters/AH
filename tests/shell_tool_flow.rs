@@ -79,6 +79,7 @@ fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
             default_permission: harness::ToolPermission::Allow,
             overrides: Default::default(),
         },
+        system_prompt: None,
     });
     id
 }

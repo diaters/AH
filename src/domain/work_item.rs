@@ -266,7 +266,7 @@ impl WorkItem {
     /// 创建 profile 生成工作项
     ///
     /// `kind` 决定 system_prompt 内容（孵化 vs 更新）。
-    /// 实际的 kind 与 retry_count 通过 ExperienceStore 临时字段传递到 completion 阶段，
+    /// 实际的 kind 与 exception_count 通过 ExperienceStore 临时字段传递到 completion 阶段，
     /// 因 WorkItem 结构不承载 profile 生成元数据。
     pub fn profile_generation(
         task_id: TaskId,

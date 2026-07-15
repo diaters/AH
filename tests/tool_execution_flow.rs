@@ -56,6 +56,7 @@ fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) 
         parent_id: None,
         bound_task_id: None,
         tool_permissions,
+        system_prompt: None,
     });
     id
 }
@@ -813,6 +814,7 @@ fn child_agent_confirm_routes_to_parent() {
                 m
             },
         },
+        system_prompt: None,
     });
 
     // 注册 echo 工具
@@ -958,6 +960,7 @@ fn confirmation_denied_rejects_tool() {
                 m
             },
         },
+        system_prompt: None,
     });
 
     // 注册 echo 工具
@@ -1071,6 +1074,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
                 m
             },
         },
+        system_prompt: None,
     });
 
     // 注册 echo 工具

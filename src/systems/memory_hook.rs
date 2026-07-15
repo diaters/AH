@@ -171,6 +171,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         }
     }
 

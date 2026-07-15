@@ -417,6 +417,7 @@ fn approved_candidate_spawns_writeback_request() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: harness::AgentToolPermissions::default(),
+            system_prompt: None,
         },
         harness::LongTermMemory::with_name(&agent_name),
     ));

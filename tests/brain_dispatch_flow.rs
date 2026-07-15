@@ -129,6 +129,7 @@ fn completes_brain_dispatch_flow() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));
@@ -150,6 +151,7 @@ fn completes_brain_dispatch_flow() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));
@@ -213,6 +215,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));
@@ -234,6 +237,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         },
         LongTermMemory::default(),
     ));

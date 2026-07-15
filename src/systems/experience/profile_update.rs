@@ -91,7 +91,7 @@ pub(crate) fn profile_update_trigger_system(
             existing_profile: Some(existing_profile),
             kind: ProfileGenerationKind::Update,
             feedback: None,
-            retry_count: 0,
+            exception_count: 0,
         });
 
         // 标记候选为已触发
@@ -273,6 +273,7 @@ mod tests {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
         }
     }
 
@@ -331,7 +332,7 @@ mod tests {
         assert_eq!(requests.len(), 1, "should spawn one update request");
         assert_eq!(requests[0].kind, ProfileGenerationKind::Update);
         assert_eq!(requests[0].task_id, task_id);
-        assert_eq!(requests[0].retry_count, 0);
+        assert_eq!(requests[0].exception_count, 0);
         assert!(requests[0].feedback.is_none());
         let existing = requests[0].existing_profile.as_ref().unwrap();
         assert_eq!(existing.name, "physics-specialist");
@@ -460,7 +461,7 @@ description = "old description"
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Update,
-                retry_count: 0,
+                exception_count: 0,
                 existing_profile: Some(ExistingAgentProfile {
                     name: "physics-specialist".to_string(),
                     tags: vec!["physics".to_string()],
@@ -535,7 +536,7 @@ description = "old description"
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Update,
-                retry_count: 0,
+                exception_count: 0,
                 existing_profile: Some(ExistingAgentProfile {
                     name: "nonexistent-agent".to_string(),
                     tags: vec![],

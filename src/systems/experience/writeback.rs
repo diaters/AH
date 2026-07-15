@@ -598,7 +598,7 @@ mod tests {
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
-                retry_count: 0,
+                exception_count: 0,
                 existing_profile: None,
                 generated_profile: Some(GeneratedProfile {
                     name: "quantum-specialist".to_string(),
@@ -689,7 +689,7 @@ description = "existing"
             task_id,
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
-                retry_count: 0,
+                exception_count: 0,
                 existing_profile: None,
                 generated_profile: Some(GeneratedProfile {
                     name: "physics-specialist".to_string(),

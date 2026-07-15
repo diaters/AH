@@ -893,12 +893,16 @@ pub fn handle_tool_action<B: SessionBackend>(
             tags,
             description,
         }) => {
-            // 从 ExperienceStore 读取 kind（由 profile_generation_workitem_system 暂存）
-            let kind = experience_store
+            // 从 ExperienceStore 读取 kind 并重置 exception_count（LLM 成功调用工具，异常计数归 0）
+            let kind = if let Some(ctx) = experience_store
                 .profile_generation_context
-                .get(&request.request.task_id)
-                .map(|c| c.kind.clone())
-                .unwrap_or(crate::domain::ProfileGenerationKind::Incubation);
+                .get_mut(&request.request.task_id)
+            {
+                ctx.exception_count = 0;
+                ctx.kind.clone()
+            } else {
+                crate::domain::ProfileGenerationKind::Incubation
+            };
 
             // spawn ProfileGenerationCompletedMessage 供 profile_generation_completion_system 消费
             commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
@@ -958,12 +962,16 @@ pub fn handle_tool_action<B: SessionBackend>(
             commands.entity(request_entity).despawn();
         }
         Ok(ToolAction::SkipProfileUpdate) => {
-            // 从 ExperienceStore 读取 kind
-            let kind = experience_store
+            // 从 ExperienceStore 读取 kind 并重置 exception_count（LLM 成功调用工具，异常计数归 0）
+            let kind = if let Some(ctx) = experience_store
                 .profile_generation_context
-                .get(&request.request.task_id)
-                .map(|c| c.kind.clone())
-                .unwrap_or(crate::domain::ProfileGenerationKind::Update);
+                .get_mut(&request.request.task_id)
+            {
+                ctx.exception_count = 0;
+                ctx.kind.clone()
+            } else {
+                crate::domain::ProfileGenerationKind::Update
+            };
 
             // spawn ProfileGenerationCompletedMessage（None 表示 skip）
             commands.spawn(crate::domain::ProfileGenerationCompletedMessage {

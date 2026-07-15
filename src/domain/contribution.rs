@@ -44,6 +44,8 @@ pub enum ExperienceCandidateStatus {
     WritebackFailed,
     /// profile 生成中：治理决议为孵化后，等待 LLM 生成 Agent profile。
     ProfileGenerationPending,
+    /// profile 生成失败：LLM 连续异常达到上限，或 profile-designer Agent 缺失。
+    ProfileGenerationFailed,
 }
 
 /// 经验写回目标：治理决议后的唯一最终去向。
@@ -228,11 +230,16 @@ pub struct ExperienceStore {
 
 /// profile 生成运行时上下文：在 ExperienceStore 中暂存，
 /// 用于在 orchestrator（工具执行）、completion_system（完成处理）与
-/// approval_system（拒绝并反馈重试）之间传递 kind/retry_count/existing_profile。
+/// approval_system（拒绝并反馈重试）之间传递 kind/exception_count/existing_profile。
+///
+/// `exception_count` 语义：仅累计 LLM 异常（未调工具 / 互斥冲突 / Err / 调用非相关工具）。
+/// - LLM 成功调用 submit_profile_update 或 skip_profile_update 后，由 orchestrator 归 0。
+/// - reject_with_feedback 不占用计数（透传不变）。
+/// - 达到 `MAX_PROFILE_EXCEPTIONS` 后不再重试，走失败路径。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileGenerationContext {
     pub kind: ProfileGenerationKind,
-    pub retry_count: u32,
+    pub exception_count: u32,
     /// 更新场景下保存现有 profile，供拒绝并反馈重试时重新构建请求。
     pub existing_profile: Option<ExistingAgentProfile>,
     /// LLM 生成的 profile；更新场景下由 completion_system 写入，
@@ -478,9 +485,12 @@ pub enum ProfileGenerationKind {
     Update,
 }
 
-/// profile 生成重试上限。
-#[allow(dead_code)] // 任务 6 起使用
-pub const MAX_PROFILE_GENERATION_RETRIES: u32 = 3;
+/// profile 生成异常计数上限：LLM 连续异常达到此值后不再重试，走失败路径。
+///
+/// 注意：此上限仅针对 LLM 异常（未调工具 / 互斥冲突 / Err / 调用非相关工具），
+/// 不限制用户 reject_with_feedback 次数（reject_with_feedback 不占用异常计数）。
+#[allow(dead_code)]
+pub const MAX_PROFILE_EXCEPTIONS: u32 = 3;
 
 /// 现有 Agent profile：更新场景下作为 LLM 评估输入。
 #[allow(dead_code)] // 任务 6 起使用
@@ -500,7 +510,7 @@ pub struct GeneratedProfile {
     pub description: String,
 }
 
-/// profile 生成请求消息：由治理系统（孵化）或更新触发系统发起。
+/// profile 生成请求消息：由治理系统（孵化）、更新触发系统或异常重试 / 反馈重试发起。
 #[allow(dead_code)] // 任务 6 起使用
 #[derive(Debug, Clone, Component)]
 pub struct ProfileGenerationRequestMessage {
@@ -510,8 +520,11 @@ pub struct ProfileGenerationRequestMessage {
     pub existing_profile: Option<ExistingAgentProfile>,
     pub kind: ProfileGenerationKind,
     /// 拒绝并反馈场景：用户评审反馈，注入 LLM 上下文驱动重新生成。
+    /// 异常重试场景：系统提示（如"上一轮未调用工具"），与用户反馈复用同一字段。
     pub feedback: Option<String>,
-    pub retry_count: u32,
+    /// LLM 异常计数：仅累计 LLM 失误（未调工具 / 互斥冲突 / Err / 调用非相关工具）。
+    /// reject_with_feedback 透传不变；LLM 成功调工具后由 orchestrator 归 0。
+    pub exception_count: u32,
 }
 
 /// profile 生成完成消息：由 profile-designer 工具调用完成后触发。

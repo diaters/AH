@@ -35,6 +35,7 @@ pub enum HookPoint {
     OnAgentProfileGenerated,
     OnAgentProfileUpdated,
     OnAgentIncubated,
+    OnAgentProfileGenerationFailed,
 }
 
 #[derive(Debug, Error)]
@@ -72,6 +73,7 @@ impl FromStr for HookPoint {
             "on_agent_profile_generated" => Ok(Self::OnAgentProfileGenerated),
             "on_agent_profile_updated" => Ok(Self::OnAgentProfileUpdated),
             "on_agent_incubated" => Ok(Self::OnAgentIncubated),
+            "on_agent_profile_generation_failed" => Ok(Self::OnAgentProfileGenerationFailed),
             other => Err(HookPointParseError::Unknown(other.to_string())),
         }
     }
@@ -110,6 +112,7 @@ impl HookPoint {
             Self::OnAgentProfileGenerated => "on_agent_profile_generated",
             Self::OnAgentProfileUpdated => "on_agent_profile_updated",
             Self::OnAgentIncubated => "on_agent_incubated",
+            Self::OnAgentProfileGenerationFailed => "on_agent_profile_generation_failed",
         }
     }
 }
@@ -145,6 +148,7 @@ mod tests {
             "on_agent_profile_generated",
             "on_agent_profile_updated",
             "on_agent_incubated",
+            "on_agent_profile_generation_failed",
         ] {
             assert!(HookPoint::from_str(s).is_ok(), "failed to parse {s}");
         }

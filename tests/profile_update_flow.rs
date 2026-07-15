@@ -205,7 +205,7 @@ fn update_flow_modifies_agents_toml_and_ecs() {
         }),
         kind: ProfileGenerationKind::Update,
         feedback: None,
-        retry_count: 0,
+        exception_count: 0,
     });
 
     // 多轮 update 让 WorkItem → LLM → orchestrator → completion → 审批请求 链路跑完。
@@ -331,7 +331,7 @@ fn skip_profile_update_silently_ends() {
         }),
         kind: ProfileGenerationKind::Update,
         feedback: None,
-        retry_count: 0,
+        exception_count: 0,
     });
 
     // 多轮 update：skip 不应生成审批请求
