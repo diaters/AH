@@ -48,9 +48,7 @@ docs/wiki/
 
 # Logs (not tracked)
 logs/
-.harness/*
-!.harness/assets/
-!.harness/knowledge/
+.harness/
 
 skills-lock.json
 
