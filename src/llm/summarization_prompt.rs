@@ -1,4 +1,7 @@
 /// 构建摘要的系统 prompt，定义记忆摘要专家的角色和要求。
+///
+/// 此函数保留供测试使用；生产环境中 system_prompt 已移至 agents.toml。
+#[allow(dead_code)]
 pub fn summarization_system_prompt() -> String {
     r#"你是一个记忆摘要专家。你的任务是将对话历史压缩为简洁的摘要。
 

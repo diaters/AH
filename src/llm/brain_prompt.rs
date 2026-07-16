@@ -1,6 +1,9 @@
 use crate::domain::{Agent, BrainDecisionError, BrainDecisionOutput, Task};
 
 /// 构建 Brain 决策的 system prompt。
+///
+/// 此函数保留供测试使用；生产环境中 system_prompt 已移至 agents.toml。
+#[allow(dead_code)]
 pub fn brain_system_prompt() -> String {
     r#"You are the Brain Agent, a global dispatcher responsible for deciding which agent should handle a given task.
 
