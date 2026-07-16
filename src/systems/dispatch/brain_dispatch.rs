@@ -19,7 +19,6 @@ use crate::{
         MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, SubTaskBatchState,
         SubTaskConfig, Task, TaskStatus, ToolPermission, WaitingReason,
     },
-    llm::brain_system_prompt,
 };
 
 use super::agent_selection::select_agent_for_sub_task;
@@ -334,7 +333,7 @@ pub fn brain_dispatch_system(
             agent_id: brain_agent.id,
             request_kind: AgentRequestKind::BrainDecision,
             prompt,
-            system_prompt: Some(brain_system_prompt()),
+            system_prompt: brain_agent.system_prompt.clone(),
             tools,
             conversation: None,
             work_item_id: None,

@@ -73,12 +73,12 @@ pub(crate) fn experience_collection_workitem_system(
 
         let prompt = if task.result_summary.is_empty() {
             format!(
-                "用户目标：{}\n\n请只调用 submit_experience_candidate 提交可复用经验候选。",
+                "用户目标：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge",
                 task.content
             )
         } else {
             format!(
-                "用户目标：{}\n\n任务结果摘要：{}\n\n请只调用 submit_experience_candidate 提交可复用经验候选。",
+                "用户目标：{}\n\n任务结果摘要：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge",
                 task.content, task.result_summary
             )
         };

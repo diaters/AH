@@ -197,8 +197,7 @@ impl WorkItem {
         let input = WorkItemInput::new(format!(
             "请对以下内容进行摘要，目标约 {} tokens:\n\n{}",
             target_tokens, content
-        ))
-        .with_system_prompt(crate::llm::summarization_system_prompt());
+        ));
         Self::new(
             task_id,
             WorkItemType::Summarization,
@@ -217,12 +216,7 @@ impl WorkItem {
         } else {
             prompt
         };
-        let input = WorkItemInput::new(full_prompt)
-            .with_system_prompt(
-                "你是一个任务评估专家。请评估当前任务的执行状态，判断是否需要继续、完成、失败或偏航。\
-                 请以 JSON 格式返回评估结果，包含 decision (Continue/Complete/Failed/OffTrack)、reasoning 和 suggested_action (可选) 字段。"
-                    .to_string(),
-            );
+        let input = WorkItemInput::new(full_prompt);
         Self::new(
             task_id,
             WorkItemType::Evaluation,
@@ -243,11 +237,10 @@ impl WorkItem {
         governing_agent_id: AgentId,
     ) -> Self {
         let tags = TagSet::from_tags(["collect"]);
-        let system_prompt = "你是一名经验收敛专家。任务已经结束，请只从提供的材料中提炼可复用经验，并调用 submit_experience_candidate 提交经验候选。".to_string();
         let context = WorkItemContext {
             conversation: Some(conversation),
             tools,
-            system_prompt: Some(system_prompt),
+            system_prompt: None,
         };
         let input = WorkItemInput { prompt, context };
         let mut wi = Self::new(
@@ -274,25 +267,13 @@ impl WorkItem {
         conversation: Vec<ConversationMessage>,
         tools: Vec<ToolDefinition>,
         governing_agent_id: AgentId,
-        kind: crate::domain::ProfileGenerationKind,
+        _kind: crate::domain::ProfileGenerationKind,
     ) -> Self {
         let tags = TagSet::from_tags(["profile"]);
-        let system_prompt = match kind {
-            crate::domain::ProfileGenerationKind::Incubation => {
-                "你是一名 Agent 元信息设计师。请根据提供的经验候选，生成一个新 Agent 的角色名、能力标签和职责描述。\
-                 必须调用 submit_profile_update 提交结果，或调用 skip_profile_update 表示无法生成。"
-                    .to_string()
-            }
-            crate::domain::ProfileGenerationKind::Update => {
-                "你是一名 Agent 元信息设计师。请评估现有 Agent profile 是否需要根据新经验更新 tags/description。\
-                 若需要更新，调用 submit_profile_update 提交新 profile；若不需要，调用 skip_profile_update。"
-                    .to_string()
-            }
-        };
         let context = WorkItemContext {
             conversation: Some(conversation),
             tools,
-            system_prompt: Some(system_prompt),
+            system_prompt: None,
         };
         let input = WorkItemInput { prompt, context };
         let mut wi = Self::new(
@@ -415,9 +396,8 @@ mod tests {
         );
         assert_eq!(work_item.work_type, WorkItemType::Summarization);
         assert!(work_item.tags.tags.contains(&"summarization".to_string()));
-        // Verify system prompt is injected
-        assert!(work_item.input.context.system_prompt.is_some());
-        assert!(!work_item.input.context.system_prompt.unwrap().is_empty());
+        // System prompt is now provided by agents.toml, not WorkItem
+        assert!(work_item.input.context.system_prompt.is_none());
         // Verify prompt contains target_tokens value
         assert!(work_item.input.prompt.contains("500"));
     }
@@ -444,12 +424,8 @@ mod tests {
         assert!(work_item.input.prompt.contains("检查任务是否偏离目标"));
         assert!(work_item.input.prompt.contains("评估提示"));
 
-        // Verify the default system prompt is set
-        assert!(work_item.input.context.system_prompt.is_some());
-        let system_prompt = work_item.input.context.system_prompt.unwrap();
-        assert!(system_prompt.contains("你是一个任务评估专家"));
-        assert!(system_prompt.contains("JSON 格式"));
-        assert!(system_prompt.contains("Continue/Complete/Failed/OffTrack"));
+        // Verify the system prompt is now provided by agents.toml
+        assert!(work_item.input.context.system_prompt.is_none());
     }
 
     #[test]
@@ -460,10 +436,8 @@ mod tests {
         // Verify the prompt is unchanged when no reasoning hint is provided
         assert_eq!(work_item.input.prompt, "请评估当前任务状态");
 
-        // Verify the default system prompt is still set
-        assert!(work_item.input.context.system_prompt.is_some());
-        let system_prompt = work_item.input.context.system_prompt.unwrap();
-        assert!(system_prompt.contains("你是一个任务评估专家"));
+        // Verify the system prompt is now provided by agents.toml (not WorkItem)
+        assert!(work_item.input.context.system_prompt.is_none());
     }
 
     #[test]
@@ -498,7 +472,8 @@ mod tests {
             WorkItemWritebackTarget::ExperienceInbox
         );
         assert!(work_item.tags.tags.contains(&"collect".to_string()));
-        assert!(work_item.input.context.system_prompt.is_some());
+        // System prompt is now provided by agents.toml, not WorkItem
+        assert!(work_item.input.context.system_prompt.is_none());
         assert_eq!(work_item.input.context.tools.len(), 1);
         assert_eq!(
             work_item.input.context.tools[0].name,

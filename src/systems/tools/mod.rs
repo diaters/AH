@@ -236,7 +236,7 @@ pub fn register_builtin_tools(
     // Experience candidate tools
     registry.register(ToolDefinition {
         name: "submit_experience_candidate".to_string(),
-        description: "提交经验候选。knowledge 类提交可复用知识，skill 类提交可复用技能包（对齐 Agent Skills 规范）。".to_string(),
+        description: "提交经验候选。knowledge=事实性知识（知道什么），skill=可复用操作步骤（会做什么，含具体命令/指令/流程）。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -248,15 +248,15 @@ pub fn register_builtin_tools(
                     "kind": {
                         "type": "string",
                         "enum": ["knowledge", "skill"],
-                        "description": "经验类型：knowledge=可复用知识，skill=可复用技能包"
+                        "description": "经验类型：knowledge=纯事实性知识，skill=可复用操作步骤（含命令/指令/SOP）"
                     },
                     "content": {
                         "type": "string",
-                        "description": "knowledge 类的经验正文"
+                        "description": "knowledge 类的事实性知识正文"
                     },
                     "skill_description": {
                         "type": "string",
-                        "description": "skill 类的简要描述，说明做什么+何时触发"
+                        "description": "skill 类的简要描述，说明这个技能做什么+何时触发"
                     },
                     "instructions": {
                         "type": "string",
