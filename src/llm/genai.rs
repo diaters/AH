@@ -160,12 +160,22 @@ impl AgentExecutor for GenaiExecutor {
 }
 
 fn build_chat_request(request: &AgentExecutionRequest) -> Result<ChatRequest, ExecutionError> {
-    let mut chat_req = if let Some(conversation) = &request.conversation {
-        let messages = build_chat_messages(conversation)?;
-        ChatRequest::new(messages)
-    } else {
-        ChatRequest::new(vec![ChatMessage::user(&request.prompt)])
-    };
+    // 组合模式：conversation（历史对话）+ prompt（当前用户消息）
+    // 两者独立可选，拼接为最终消息列表。
+    // 这避免了旧逻辑中 Some(vec![]) 吞掉 prompt 的 bug。
+    let mut messages = Vec::new();
+
+    // 追加历史对话（如果有）
+    if let Some(conversation) = &request.conversation {
+        messages.extend(build_chat_messages(conversation)?);
+    }
+
+    // 追加当前用户消息（如果有）
+    if !request.prompt.is_empty() {
+        messages.push(ChatMessage::user(&request.prompt));
+    }
+
+    let mut chat_req = ChatRequest::new(messages);
 
     if let Some(system_prompt) = &request.system_prompt {
         chat_req = chat_req.with_system(system_prompt.as_str());
