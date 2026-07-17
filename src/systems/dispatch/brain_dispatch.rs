@@ -8,7 +8,8 @@
 //! 这允许灵活配置多个 Brain Agent（如不同模型），同时保持确定性选择。
 
 use crate::prelude::*;
-use tracing::{debug, trace};
+use serde::Deserialize;
+use tracing::{debug, trace, warn};
 
 use crate::{
     app::{Clock, HarnessSettings},
@@ -348,6 +349,49 @@ pub fn brain_dispatch_system(
     }
 }
 
+#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
+#[derive(Deserialize)]
+struct BrainSkillSelection {
+    agent_name: String,
+    skill_name: Option<serde_json::Value>,
+}
+
+/// 解析 brain LLM 的 skill 选择输出
+///
+/// 输入 JSON 格式：`{"agent_name": "agent-a", "skill_name": "coding"}`
+///
+/// 容错策略：
+/// - `skill_name` 字段缺失或为 null：返回 None
+/// - `skill_name` 为字符串 "None"（不区分大小写）或空字符串（trim 后）：返回 None
+/// - `skill_name` 为非字符串类型（数字、布尔、对象、数组）：记录 warn 日志并返回 None
+/// - `agent_name` 字段缺失：返回 Err
+/// - JSON 格式错误：返回 Err
+#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
+pub fn parse_brain_skill_selection(raw: &str) -> Result<(String, Option<String>), String> {
+    let parsed: BrainSkillSelection = serde_json::from_str(raw)
+        .map_err(|e| format!("invalid brain skill selection JSON: {}", e))?;
+    let skill = match parsed.skill_name {
+        None => None,
+        Some(serde_json::Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(other) => {
+            warn!(
+                event = "UnexpectedSkillNameType",
+                value = ?other,
+                "skill_name is not a string, treating as None"
+            );
+            None
+        }
+    };
+    Ok((parsed.agent_name, skill))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +470,60 @@ mod tests {
         };
         assert_eq!(task_after.status, TaskStatus::Ready);
         assert!(task_after.delegate.is_some());
+    }
+
+    mod skill_selection_parse_tests {
+        use super::*;
+
+        #[test]
+        fn parse_standard_json() {
+            let json = r#"{"agent_name": "agent-a", "skill_name": "coding"}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (agent, skill) = result.unwrap();
+            assert_eq!(agent, "agent-a");
+            assert_eq!(skill, Some("coding".to_string()));
+        }
+
+        #[test]
+        fn parse_null_skill_name() {
+            let json = r#"{"agent_name": "agent-a", "skill_name": null}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (_, skill) = result.unwrap();
+            assert_eq!(skill, None);
+        }
+
+        #[test]
+        fn parse_string_none_skill_name() {
+            let json = r#"{"agent_name": "agent-a", "skill_name": "None"}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (_, skill) = result.unwrap();
+            assert_eq!(skill, None);
+        }
+
+        #[test]
+        fn parse_empty_string_skill_name() {
+            let json = r#"{"agent_name": "agent-a", "skill_name": ""}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (_, skill) = result.unwrap();
+            assert_eq!(skill, None);
+        }
+
+        #[test]
+        fn parse_extra_fields_ignored() {
+            let json = r#"{"agent_name": "agent-a", "skill_name": "coding", "reason": "because"}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn parse_invalid_json_errors() {
+            let json = "not a json";
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_err());
+        }
     }
 }
