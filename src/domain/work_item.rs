@@ -292,17 +292,16 @@ impl WorkItem {
 
     /// 创建 skill 更新工作项
     ///
-    /// `skill_id` 标识待更新的 skill；具体的 `SkillUpdateContext` 由调用方
-    /// 作为独立 Component 注入到同一 entity，不存储在 WorkItem 中。
+    /// 具体的 `SkillUpdateContext` 由调用方作为独立 Component 注入到同一 entity，
+    /// 不存储在 WorkItem 中。
     pub fn skill_update(
         task_id: TaskId,
         prompt: String,
         conversation: Vec<ConversationMessage>,
         tools: Vec<ToolDefinition>,
         governing_agent_id: AgentId,
-        _skill_id: crate::infrastructure::skills::SkillId,
     ) -> Self {
-        let tags = TagSet::from_tags(["skill_update"]);
+        let tags = TagSet::from_tags(["skill-update"]);
         let context = WorkItemContext {
             conversation: Some(conversation),
             tools,

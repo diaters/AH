@@ -67,7 +67,7 @@ pub use contribution::{
     GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_EXCEPTIONS,
     PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
     ProfileGenerationKind, ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole,
-    SkillUpdateContext, sanitize_tags,
+    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, sanitize_tags,
 };
 
 // error

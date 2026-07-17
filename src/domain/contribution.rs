@@ -908,61 +908,61 @@ mod tests {
         assert!(!result.contains(&"incubated".to_string()));
         // incubated 由写回逻辑注入，不在 sanitize_tags 中
     }
+}
 
-    mod skill_update_operation_tests {
-        use super::*;
+#[cfg(test)]
+mod skill_update_operation_tests {
+    use super::*;
 
-        #[test]
-        fn serialize_replace_section() {
-            let op = SkillUpdateOperation::ReplaceSection {
-                section: "## Steps".to_string(),
-                content: "new content".to_string(),
-            };
-            let json = serde_json::to_string(&op).expect("serialize ReplaceSection");
-            assert!(
-                json.contains("\"replace_section\""),
-                "expected JSON to contain replace_section tag, got: {json}"
-            );
-            assert!(json.contains("## Steps"));
-            assert!(json.contains("new content"));
-        }
+    #[test]
+    fn serialize_replace_section() {
+        let op = SkillUpdateOperation::ReplaceSection {
+            section: "## Steps".to_string(),
+            content: "new content".to_string(),
+        };
+        let json = serde_json::to_string(&op).expect("serialize ReplaceSection");
+        assert!(
+            json.contains("\"replace_section\""),
+            "expected JSON to contain replace_section tag, got: {json}"
+        );
+        assert!(json.contains("## Steps"));
+        assert!(json.contains("new content"));
+    }
 
-        #[test]
-        fn deserialize_add_section() {
-            let json = "{\"action\":\"add_section\",\"after\":\"## Intro\",\"section\":\"## Tips\",\"content\":\"be careful\"}";
-            let op: SkillUpdateOperation =
-                serde_json::from_str(json).expect("deserialize AddSection");
-            match op {
-                SkillUpdateOperation::AddSection {
-                    after,
-                    section,
-                    content,
-                } => {
-                    assert_eq!(after, "## Intro");
-                    assert_eq!(section, "## Tips");
-                    assert_eq!(content, "be careful");
-                }
-                other => panic!("expected AddSection, got {other:?}"),
+    #[test]
+    fn deserialize_add_section() {
+        let json = "{\"action\":\"add_section\",\"after\":\"## Intro\",\"section\":\"## Tips\",\"content\":\"be careful\"}";
+        let op: SkillUpdateOperation = serde_json::from_str(json).expect("deserialize AddSection");
+        match op {
+            SkillUpdateOperation::AddSection {
+                after,
+                section,
+                content,
+            } => {
+                assert_eq!(after, "## Intro");
+                assert_eq!(section, "## Tips");
+                assert_eq!(content, "be careful");
             }
+            other => panic!("expected AddSection, got {other:?}"),
         }
+    }
 
-        #[test]
-        fn frontmatter_field_whitelist_enforced_at_apply_layer() {
-            // 枚举本身允许任意 field 值；白名单检查应在 apply 层
-            let op = SkillUpdateOperation::ReplaceFrontmatter {
-                field: "arbitrary_field".to_string(),
-                value: "arbitrary_value".to_string(),
-            };
-            let json = serde_json::to_string(&op).expect("serialize ReplaceFrontmatter");
-            let de: SkillUpdateOperation =
-                serde_json::from_str(&json).expect("deserialize ReplaceFrontmatter");
-            match de {
-                SkillUpdateOperation::ReplaceFrontmatter { field, value } => {
-                    assert_eq!(field, "arbitrary_field");
-                    assert_eq!(value, "arbitrary_value");
-                }
-                other => panic!("expected ReplaceFrontmatter, got {other:?}"),
+    #[test]
+    fn frontmatter_field_whitelist_enforced_at_apply_layer() {
+        // 枚举本身允许任意 field 值；白名单检查应在 apply 层
+        let op = SkillUpdateOperation::ReplaceFrontmatter {
+            field: "arbitrary_field".to_string(),
+            value: "arbitrary_value".to_string(),
+        };
+        let json = serde_json::to_string(&op).expect("serialize ReplaceFrontmatter");
+        let de: SkillUpdateOperation =
+            serde_json::from_str(&json).expect("deserialize ReplaceFrontmatter");
+        match de {
+            SkillUpdateOperation::ReplaceFrontmatter { field, value } => {
+                assert_eq!(field, "arbitrary_field");
+                assert_eq!(value, "arbitrary_value");
             }
+            other => panic!("expected ReplaceFrontmatter, got {other:?}"),
         }
     }
 }
