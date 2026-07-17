@@ -292,6 +292,9 @@ pub fn build_harness_app(
 
     // Skill 加载器
     app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
+    // Skill 注册表：由 brain_dispatch / experience_governance 等 system 通过 Res<SkillRegistry> 读取。
+    // 当前以空 registry 启动，后续 startup system 可按需补全（skill loader build_registry 接入后）。
+    app.insert_resource(crate::infrastructure::skills::SkillRegistry::default());
 
     // Signal 触发路由（默认空，由 main.rs 根据 triggers.toml 配置覆盖）
     app.insert_resource(crate::domain::SignalTriggerRegistry::default());

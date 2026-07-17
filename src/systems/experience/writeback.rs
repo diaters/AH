@@ -120,6 +120,19 @@ pub(crate) fn experience_writeback_system(
                 )
             }
             ExperienceWritebackDestination::Rejected => Ok(()),
+            ExperienceWritebackDestination::SkillUpdate => {
+                // TODO(task 20): 任务 20 将在 governance 中将 WritebackRequestMessage spawn
+                // 替换为真正的 SkillUpdateRequestMessage spawn，由 skill_update_workitem_system 接管。
+                // 当前由 governance spawn WritebackRequestMessage 触发本分支作为占位兜底，
+                // 不执行实际写回，候选会被上层标记为 Persisted，任务 20 替换后此分支不再被触发。
+                debug!(
+                    event = "SkillUpdateWritebackPlaceholder",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    "skill update writeback placeholder, awaiting task 20 spawn implementation"
+                );
+                Ok(())
+            }
         };
 
         match result {

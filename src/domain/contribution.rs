@@ -58,6 +58,8 @@ pub enum ExperienceWritebackDestination {
     SkillPackage,
     IncubationProposal,
     Rejected,
+    /// skill-updater 自我迭代：由任务 20 的 skill_update_workitem_system 处理。
+    SkillUpdate,
 }
 
 /// 经验治理决议：顶层治理对单个候选给出的最终判定。
