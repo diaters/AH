@@ -422,7 +422,7 @@ pub fn register_builtin_tools(
     // Skill update tool (仅 skill-updater 可用)
     registry.register(ToolDefinition {
         name: "submit_skill_update".to_string(),
-        description: "提交 skill 更新的结构化 diff 操作。必须基于原 skill 的 instruction 和经验候选，提交 operations 数组。".to_string(),
+        description: "提交 skill 更新的结构化 diff 操作。必须基于原 skill 的 instruction 和经验候选，提交 operations 数组。new_version 必须等于 base_version + 1；operations 支持 replace_section/add_section/remove_section/replace_frontmatter 四种操作；frontmatter 字段仅允许更新 name/description/self_updatable。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -432,7 +432,7 @@ pub fn register_builtin_tools(
                     "new_version": {"type": "integer", "description": "新版本号，必须等于 base_version + 1"},
                     "operations": {
                         "type": "array",
-                        "description": "结构化 diff 操作数组",
+                        "description": "结构化 diff 操作数组，按顺序 apply 到 skill 文件",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -440,6 +440,27 @@ pub fn register_builtin_tools(
                                     "type": "string",
                                     "enum": ["replace_section", "add_section", "remove_section", "replace_frontmatter"],
                                     "description": "操作类型"
+                                },
+                                "section": {
+                                    "type": "string",
+                                    "description": "目标章节标题（完整匹配，如 '## Usage'）。replace_section/add_section/remove_section 必填"
+                                },
+                                "after": {
+                                    "type": "string",
+                                    "description": "新增章节插入位置（在某章节之后）。add_section 必填"
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "新章节或替换内容（markdown 文本）。replace_section/add_section 必填"
+                                },
+                                "field": {
+                                    "type": "string",
+                                    "enum": ["name", "description", "self_updatable"],
+                                    "description": "frontmatter 字段名。replace_frontmatter 必填"
+                                },
+                                "value": {
+                                    "type": "string",
+                                    "description": "frontmatter 字段新值（self_updatable 接受 'true'/'false'）。replace_frontmatter 必填"
                                 }
                             },
                             "required": ["action"]

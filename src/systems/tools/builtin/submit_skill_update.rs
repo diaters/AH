@@ -29,17 +29,25 @@ impl BuiltinTool for SubmitSkillUpdateTool {
             ToolError::InvalidInput(format!("invalid skill_id: {}", skill_id_str))
         })?;
 
-        let base_version = input
-            .get("base_version")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| ToolError::InvalidInput("missing base_version".to_string()))?
-            as u32;
+        let base_version = {
+            let v = input
+                .get("base_version")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| ToolError::InvalidInput("missing base_version".to_string()))?;
+            u32::try_from(v).map_err(|_| {
+                ToolError::InvalidInput(format!("base_version out of u32 range: {}", v))
+            })?
+        };
 
-        let new_version = input
-            .get("new_version")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| ToolError::InvalidInput("missing new_version".to_string()))?
-            as u32;
+        let new_version = {
+            let v = input
+                .get("new_version")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| ToolError::InvalidInput("missing new_version".to_string()))?;
+            u32::try_from(v).map_err(|_| {
+                ToolError::InvalidInput(format!("new_version out of u32 range: {}", v))
+            })?
+        };
 
         let operations: Vec<SkillUpdateOperation> = input
             .get("operations")
