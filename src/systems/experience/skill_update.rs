@@ -63,6 +63,14 @@ pub fn route_persistent_agent_experience(
         .copied()
         .collect();
 
+    // 记录治理者：对保留的候选统一写入 governing_agent_id，便于后续审计与写回链路使用。
+    // 与 governance system 的行为对齐（collection.rs 原有逻辑在分流前设置治理者）。
+    for id in &filtered_ids {
+        if let Some(c) = store.candidates.get_mut(id) {
+            c.governing_agent_id = Some(msg.governing_agent_id);
+        }
+    }
+
     if let Some(skill_id) = injected_skill {
         // 持久Agent + 注入了 skill：按 kind_hint 分流到 skill-updater / LTM。
         for candidate_id in &filtered_ids {
@@ -453,6 +461,88 @@ mod tests {
         assert_eq!(
             governance_msg_count, 1,
             "exactly one ExperienceGovernanceRequestMessage should be spawned"
+        );
+    }
+
+    #[test]
+    fn retained_candidates_record_governing_agent_id() {
+        // 验证：保留下来的候选（未被 kind_filter 丢弃）应统一写入 governing_agent_id，
+        // 与 governance system 的行为对齐，便于后续审计与写回链路使用。
+        let (mut store, ids) = setup_store_with_candidates(&[
+            ExperienceKindHint::Knowledge,
+            ExperienceKindHint::Skill,
+        ]);
+        let knowledge_id = ids[0];
+        let skill_id_candidate = ids[1];
+
+        let task = make_task();
+        let mut msg = make_msg(task.id, None);
+        // 用固定 governing_agent_id 便于断言
+        let governing_agent_id = Uuid::new_v4();
+        msg.governing_agent_id = governing_agent_id;
+
+        let mut world = World::new();
+
+        // policy=None 让所有候选保留
+        run_router(&mut world, &mut store, &msg, &task, None, None, &ids);
+
+        assert_eq!(
+            store
+                .candidates
+                .get(&knowledge_id)
+                .unwrap()
+                .governing_agent_id,
+            Some(governing_agent_id),
+            "knowledge candidate should record governing_agent_id"
+        );
+        assert_eq!(
+            store
+                .candidates
+                .get(&skill_id_candidate)
+                .unwrap()
+                .governing_agent_id,
+            Some(governing_agent_id),
+            "skill candidate should record governing_agent_id"
+        );
+    }
+
+    #[test]
+    fn discarded_candidates_do_not_get_governing_agent_id() {
+        // 验证：被 kind_filter 丢弃的候选不应被写入 governing_agent_id
+        // （governing_agent_id 设置仅对保留候选生效）。
+        let (mut store, ids) = setup_store_with_candidates(&[
+            ExperienceKindHint::Skill, // 将被 KnowledgeOnly 过滤
+            ExperienceKindHint::Knowledge,
+        ]);
+        let skill_candidate_id = ids[0];
+
+        let task = make_task();
+        let mut msg = make_msg(task.id, None);
+        let governing_agent_id = Uuid::new_v4();
+        msg.governing_agent_id = governing_agent_id;
+
+        let mut world = World::new();
+
+        run_router(
+            &mut world,
+            &mut store,
+            &msg,
+            &task,
+            None,
+            Some(ExperienceKindFilter::KnowledgeOnly),
+            &ids,
+        );
+
+        let discarded = store.candidates.get(&skill_candidate_id).unwrap();
+        assert_eq!(
+            discarded.status,
+            ExperienceCandidateStatus::Discarded,
+            "skill candidate should be discarded under KnowledgeOnly filter"
+        );
+        assert_ne!(
+            discarded.governing_agent_id,
+            Some(governing_agent_id),
+            "discarded candidate should not record governing_agent_id"
         );
     }
 
