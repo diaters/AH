@@ -2,10 +2,11 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
-    ConversationMessage, EntryRole, ExperienceCollectionCompletedMessage,
+    Agent, AgentKind, ConversationMessage, EntryRole, ExperienceCollectionCompletedMessage,
     ExperienceCollectionRequestMessage, ExperienceConsolidationRequestMessage,
     ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, ShortTermMemory,
-    SpaceToolRegistry, Task, TaskTerminatedMessage, WorkItem,
+    SpaceToolRegistry, Task, TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage,
+    WorkItem,
 };
 
 /// 任务终态经验收集触发系统：任务进入终态后统一生成经验收集请求。
@@ -157,26 +158,70 @@ fn build_experience_collection_conversation(
 }
 
 /// 经验收集完成处理系统：将非顶层候选标记为已汇聚，顶层候选推进到治理挂起。
+///
+/// 持久Agent吸收分支（ADR-004 §3.1）：当 task 的 delegate 是持久Agent时，
+/// 候选不进入父任务 inbox，而是按 kind_hint 分流到 skill-updater / LTM。
 pub(crate) fn experience_collection_completion_system(
     mut commands: Commands,
     mut store: ResMut<ExperienceStore>,
+    agents: Query<&Agent>,
+    tasks: Query<(
+        &Task,
+        Option<&TaskInjectedSkill>,
+        Option<&TaskExperiencePolicy>,
+    )>,
     messages: Query<(Entity, &ExperienceCollectionCompletedMessage)>,
 ) {
     for (entity, msg) in &messages {
+        let candidate_ids: Vec<uuid::Uuid> = if let Some(parent_task_id) = msg.parent_task_id {
+            store.aggregate_inbox_for_task(parent_task_id)
+        } else {
+            store.collect_top_level_governance_candidates(msg.task_id)
+        };
+
+        let Some((task, injected_skill_component, policy_component)) =
+            tasks.iter().find(|(t, _, _)| t.id == msg.task_id)
+        else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        let delegate_is_persistent = task
+            .delegate
+            .and_then(|aid| agents.iter().find(|a| a.id == aid))
+            .map(|a| a.kind == AgentKind::Persistent)
+            .unwrap_or(false);
+
+        if delegate_is_persistent {
+            let injected_skill = injected_skill_component.and_then(|is| is.skill_id.clone());
+            let policy = policy_component.map(|p| p.kind_filter);
+            crate::systems::experience::skill_update::route_persistent_agent_experience(
+                &mut commands,
+                &mut store,
+                msg,
+                task,
+                injected_skill,
+                policy,
+                &candidate_ids,
+            );
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        // 非持久Agent：保留原聚合 / 顶层治理触发逻辑。
         if let Some(parent_task_id) = msg.parent_task_id {
             // 非顶层：消费父任务 inbox 中的子候选，标记为 Aggregated。
-            let ids = store.aggregate_inbox_for_task(parent_task_id);
             debug!(
                 event = "ExperienceCollectionAggregated",
                 task_id = %msg.task_id,
                 parent_task_id = %parent_task_id,
-                aggregated_count = ids.len(),
+                aggregated_count = candidate_ids.len(),
                 "aggregated child candidates into parent inbox"
             );
 
             // 汇聚后检查是否需要合并
-            if ids.len() > 1 {
-                let candidates: Vec<_> = ids
+            if candidate_ids.len() > 1 {
+                let candidates: Vec<_> = candidate_ids
                     .iter()
                     .filter_map(|id| store.candidates.get(id))
                     .collect();
@@ -215,8 +260,7 @@ pub(crate) fn experience_collection_completion_system(
             }
         } else {
             // 顶层：统一收束 root 候选与子层汇聚候选，推进到 GovernancePending 并触发治理。
-            let ids = store.collect_top_level_governance_candidates(msg.task_id);
-            if !ids.is_empty() {
+            if !candidate_ids.is_empty() {
                 commands.spawn(ExperienceGovernanceRequestMessage {
                     task_id: msg.task_id,
                     agent_id: msg.governing_agent_id,
@@ -225,7 +269,7 @@ pub(crate) fn experience_collection_completion_system(
                     event = "TopLevelExperienceGovernanceRequested",
                     task_id = %msg.task_id,
                     governing_agent_id = %msg.governing_agent_id,
-                    candidate_count = ids.len(),
+                    candidate_count = candidate_ids.len(),
                     "spawned top-level experience governance request"
                 );
             }
