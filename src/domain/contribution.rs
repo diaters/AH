@@ -46,6 +46,8 @@ pub enum ExperienceCandidateStatus {
     ProfileGenerationPending,
     /// profile 生成失败：LLM 连续异常达到上限，或 profile-designer Agent 缺失。
     ProfileGenerationFailed,
+    /// 被 experience_kind_filter 过滤
+    Discarded,
 }
 
 /// 经验写回目标：治理决议后的唯一最终去向。
