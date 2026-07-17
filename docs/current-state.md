@@ -31,6 +31,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Brain 调度与多 Agent 配置加载已接入
 - 任务分解通过 `create_tasks` + DAG 调度 + `wait_tasks` 实现
 - 子任务结果可以回传父任务，支持继续执行
+- Brain 派发子任务时按 `SubTaskConfig.child_agent_name` 选定执行 Agent，并通过 LLM 在该 Agent
+  的 `owner_skills` 中选 0 或 1 个 skill 注入子任务（仅暴露 `name` + `description` 给 LLM），
+  选中后 spawn `TaskInjectedSkill` Component；LLM 选错或 owner_skills 为空时 fallback 到无 skill 路径
 
 #### 多模型与降级
 
@@ -132,6 +135,36 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Skill Package 写回后，Agent 启动时通过 `SkillLoader` 扫描 `skills/` 目录，将 SKILL.md 内容注入系统提示
 - `IncubationProposal` 执行时同时处理 `skill_candidate_ids`，将 Skill 写入新 Agent 的 Skill Package 目录
 
+#### Skill 一等公民与自更新
+
+- `SkillId`（`owner_agent_name` + `skill_name` 复合）+ `SkillEntry`（`name`、`description`、
+  `instructions`、`version`、`self_updatable`）+ `SkillRegistry` Resource 作为 skill 一等公民基础
+- `SkillLoader::build_registry()` 启动时扫描 `.harness/assets/agents/<owner>/skills/<name>/SKILL.md`
+  构造 `SkillRegistry`；SKILL.md frontmatter 支持 `version` 与 `self_updatable` 字段
+- 持久 Agent 直接吸收子任务经验而非向上转发（`route_persistent_agent_experience`）：
+  - `Skill` kind → skill-updater WorkItem 路径
+  - `Knowledge` kind → `WritebackPending`（直接写长期记忆）
+  - 无注入 skill → 转发到顶层治理（`ExperienceGovernanceRequestMessage`）
+  - 临时 Agent 维持原行为：候选进入父任务 `ExperienceInbox`
+- `TaskExperiencePolicy` / `ExperienceKindFilter` Component 支持对候选类型做白名单/黑名单过滤
+- 顶层治理 Skill 分支根据 `self_updatable` 路由：
+  - `self_updatable = true` → `ExperienceWritebackDestination::SkillUpdate`，spawn
+    `SkillUpdateRequestMessage`，候选保持 `GovernanceResolved`
+  - `self_updatable = false` → 降级 `kind_hint` 为 `Knowledge`
+  - `default Agent` 维持 `Skill → IncubationProposal` 路径不变
+- skill-updater Agent 消费 `SkillUpdateRequestMessage`，构造 prompt 后 spawn `WorkItem`（类型为
+  `WorkItemType::SkillUpdate`）+ `SkillUpdateContext` + `AgentExecutionRequestMessage`
+- `submit_skill_update` 工具：LLM 提交结构化 diff 操作（`replace_section` / `add_section` /
+  `remove_section` / `replace_frontmatter`），orchestrator 解析后 spawn
+  `SkillUpdateCompletedMessage`
+- `skill_update_completion_system` 消费 `SkillUpdateCompletedMessage`：
+  - apply diff 到 SKILL.md（任一 section 未找到即整体失败）
+  - 备份旧版本到 `history/v{base}.md`，写入新版本 frontmatter `version: base + 1`
+  - 通过 `SkillLoader` 重建并替换 `SkillRegistry` Resource
+  - 候选推进到 `Persisted`
+- 失败时保留 SKILL.md 原内容不变，候选保持 `GovernanceResolved` 状态；LLM 返回 text/Err 时
+  正确清理 `WorkItem` + `SkillUpdateContext` 并标记 `OnWorkItemFailed`
+
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查
@@ -142,6 +175,13 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 飞书通道仅有占位模块，尚未接入实际 API
 - Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 通道已支持收发媒体附件与审批文本回复匹配；飞书仍为占位模块
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
+- Brain 中 `select_agent_for_sub_task_with_skill` 仍为占位实现，未接入真实 LLM 选 skill 调用，
+  当前仅在 owner_skills 为空时 fallback；接入 LLM 后需要补充 LLM 选错场景的集成测试
+- 治理层将 `kind_hint` 从 `Skill` 降级为 `Knowledge` 时未同步转换候选 payload，导致 writeback 路径失败
+  （候选最终为 `WritebackFailed` 而非 `Persisted`）；需要补 payload 适配层或直接重新构造 Knowledge 候选
+- ADR-004 §4.1 与实现存在语义偏差：`apply_skill_operations` 在 section 未找到时返回 `Err` 并整体回滚，
+  与 ADR 描述的"跳过未找到 section 并继续"不一致；偏差决策待补（更新 ADR 或修正实现）
+- ADR-004 §2.3 错误类型设计待定：`parse_brain_skill_selection` 当前使用 `String` 错误，未使用 typed error（如 `thiserror` 定义的 `BrainSkillSelectionError`）
 
 ### 已收敛或已废弃
 
@@ -211,3 +251,4 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 9. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
 10. `docs/design/README.md` — 设计文档索引
 11. `docs/superpowers/README.md` — 当前活跃计划与规格
+12. `docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md` — Skill 一等公民与经验治理改造
