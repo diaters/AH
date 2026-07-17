@@ -20,6 +20,7 @@ mod signal_trigger;
 mod space;
 mod summarization;
 mod task;
+mod task_experience;
 mod tool_runtime;
 mod work_item;
 mod workflow;
@@ -142,6 +143,9 @@ pub use task::{
     NewlyCreatedTask, Task, TaskRoutingPolicy, TaskStatus, ToolCalledHookPending,
     ToolReturnedHookPending, WaitingForSessionInfo, WaitingForTasksInfo,
 };
+
+// task_experience
+pub use task_experience::{ExperienceKindFilter, TaskExperiencePolicy, TaskInjectedSkill};
 
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
