@@ -173,15 +173,9 @@ pub fn select_agent_for_sub_task_with_skill<'a>(
     task_content: &str,
     skill_registry: &SkillRegistry,
 ) -> Option<(&'a Agent, Option<&'a LongTermMemory>, Option<SkillId>)> {
-    // 复用现有 select_agent_for_sub_task 的候选过滤逻辑，确保两次 filter 幂等
-    let candidates: Vec<_> = agents
-        .filter(|(a, _)| a.kind == AgentKind::Persistent)
-        .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
-        .collect();
-    if candidates.is_empty() {
-        return None;
-    }
-    let selected = select_agent_for_sub_task(candidates.into_iter(), task_content)?;
+    // 复用现有 select_agent_for_sub_task 逻辑选出 agent
+    // 该函数内部已执行 Persistent/brain 过滤和空集 None 返回
+    let selected = select_agent_for_sub_task(agents, task_content)?;
     // 对选中的 agent，从 skill_registry 列出其 skills
     let owner_skills = skill_registry.list_by_owner(&selected.0.profile.name);
     if owner_skills.is_empty() {
@@ -362,6 +356,15 @@ mod tests {
             assert!(result.is_some());
             let (_, _, skill) = result.unwrap();
             assert!(skill.is_none());
+        }
+
+        #[test]
+        fn select_agent_returns_none_when_no_candidates() {
+            // 无候选 agent 时返回 None
+            let agents: Vec<(&Agent, Option<&LongTermMemory>)> = vec![];
+            let reg = SkillRegistry::default();
+            let result = select_agent_for_sub_task_with_skill(agents.into_iter(), "任意任务", &reg);
+            assert!(result.is_none());
         }
     }
 }
