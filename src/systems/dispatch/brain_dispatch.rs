@@ -18,11 +18,12 @@ use crate::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory,
         MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, SubTaskBatchState,
-        SubTaskConfig, Task, TaskStatus, ToolPermission, WaitingReason,
+        SubTaskConfig, Task, TaskInjectedSkill, TaskStatus, ToolPermission, WaitingReason,
     },
+    infrastructure::skills::{SkillId, SkillRegistry},
 };
 
-use super::agent_selection::select_agent_for_sub_task;
+use super::agent_selection::select_agent_for_sub_task_with_skill;
 
 const SUB_TASK_SYSTEM_PROMPT: &str = "\
 你是一个专注于完成特定子任务的 AI Agent。请仔细阅读任务描述，认真完成分配给你的工作。
@@ -106,6 +107,22 @@ fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMe
     )
 }
 
+/// 构建子任务的 system prompt，如选中 skill 则拼接 skill instructions
+fn build_sub_task_system_prompt(
+    skill_id: &Option<SkillId>,
+    skill_registry: &SkillRegistry,
+) -> String {
+    if let Some(skill) = skill_id
+        && let Some(entry) = skill_registry.get(skill)
+    {
+        return format!(
+            "{}\n\n## Skill: {}\n\n{}",
+            SUB_TASK_SYSTEM_PROMPT, entry.name, entry.instructions
+        );
+    }
+    SUB_TASK_SYSTEM_PROMPT.to_string()
+}
+
 /// Brain 分发 System
 ///
 /// 使用 Brain Agent 进行任务分发决策。
@@ -113,14 +130,21 @@ fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMe
 /// ## Brain Agent 选择
 ///
 /// 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的那个。
+#[allow(clippy::too_many_arguments)]
 pub fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     mut commands: Commands,
-    mut tasks: Query<(&mut Task, Option<&ShortTermMemory>, Option<&SubTaskConfig>)>,
+    mut tasks: Query<(
+        Entity,
+        &mut Task,
+        Option<&ShortTermMemory>,
+        Option<&SubTaskConfig>,
+    )>,
     agents: Query<&Agent>,
     batch_states: Query<&SubTaskBatchState>,
     registry: Res<SpaceToolRegistry>,
+    skill_registry: Res<SkillRegistry>,
 ) {
     let Some(brain_config) = &settings.0.brain else {
         return;
@@ -160,7 +184,7 @@ pub fn brain_dispatch_system(
         })
         .collect();
 
-    for (mut task, short_term, sub_task_config) in &mut tasks {
+    for (task_entity, mut task, short_term, sub_task_config) in &mut tasks {
         // Pending 或 Ready 状态都可以被调度
         if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;
@@ -235,12 +259,13 @@ pub fn brain_dispatch_system(
             };
 
             // 选择匹配的 Agent（基于所需工具标签）
-            let child_agent = select_agent_for_sub_task(
+            let child_agent = select_agent_for_sub_task_with_skill(
                 agents.iter().map(|a| (a, None::<&LongTermMemory>)),
                 &task.content,
+                &skill_registry,
             );
 
-            if let Some((agent, _ltm)) = child_agent {
+            if let Some((agent, _ltm, skill_id)) = child_agent {
                 debug!(
                     event = "SubTaskDispatched",
                     task_id = %task.id,
@@ -251,6 +276,19 @@ pub fn brain_dispatch_system(
                 );
 
                 let child_task_id = task.id;
+
+                // 注入 TaskInjectedSkill Component（如果选中了 skill）
+                if let Some(skill) = &skill_id {
+                    commands.entity(task_entity).insert(TaskInjectedSkill {
+                        skill_id: Some(skill.clone()),
+                    });
+                    debug!(
+                        event = "TaskInjectedSkillAttached",
+                        task_id = %task.id,
+                        skill_id = %skill.as_string(),
+                        "attached skill to task"
+                    );
+                }
 
                 commands.spawn(AgentSpawnRequestMessage {
                     parent_agent_id: config.parent_agent_id,
@@ -268,7 +306,10 @@ pub fn brain_dispatch_system(
                     } else {
                         task.content.clone()
                     },
-                    task_system_prompt: Some(SUB_TASK_SYSTEM_PROMPT.to_string()),
+                    task_system_prompt: Some(build_sub_task_system_prompt(
+                        &skill_id,
+                        &skill_registry,
+                    )),
                 });
 
                 if sibling_results.is_some() {
@@ -447,6 +488,7 @@ mod tests {
             ..Default::default()
         }));
         app.insert_resource(SpaceToolRegistry::default());
+        app.insert_resource(SkillRegistry::default());
         app.add_systems(Update, brain_dispatch_system);
         app
     }
