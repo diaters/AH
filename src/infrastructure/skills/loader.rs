@@ -111,11 +111,13 @@ pub fn parse_skill_md(content: &str) -> Option<LoadedSkill> {
     let mut self_updatable: bool = true;
     let mut instructions_lines: Vec<String> = Vec::new();
     let mut in_frontmatter = true;
+    let mut frontmatter_closed = false;
 
     for line in lines {
         if in_frontmatter {
             if line.trim() == "---" {
                 in_frontmatter = false;
+                frontmatter_closed = true;
                 continue;
             }
             if let Some(rest) = line.strip_prefix("name:") {
@@ -136,6 +138,10 @@ pub fn parse_skill_md(content: &str) -> Option<LoadedSkill> {
         } else {
             instructions_lines.push(line.to_string());
         }
+    }
+
+    if !frontmatter_closed {
+        return None;
     }
 
     if name.is_empty() {
@@ -247,6 +253,36 @@ mod version_field_tests {
     #[test]
     fn parse_skill_md_self_updatable_true_explicit() {
         let content = "---\nname: my-skill\ndescription: A skill\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n";
+        let parsed = parse_skill_md(content).unwrap();
+        assert!(parsed.self_updatable);
+    }
+
+    #[test]
+    fn parse_skill_md_rejects_unclosed_frontmatter() {
+        // 缺少闭合 ---
+        let content = "---\nname: my-skill\ndescription: A skill\n\n## Usage\n\nDo it.\n";
+        assert!(parse_skill_md(content).is_none());
+    }
+
+    #[test]
+    fn parse_skill_md_rejects_missing_name() {
+        // name 字段缺失
+        let content = "---\ndescription: A skill\n---\n\n## Usage\n\nDo it.\n";
+        assert!(parse_skill_md(content).is_none());
+    }
+
+    #[test]
+    fn parse_skill_md_invalid_version_falls_back_to_default() {
+        // 无效 version 值，静默回退到默认 1
+        let content = "---\nname: my-skill\nversion: abc\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content).unwrap();
+        assert_eq!(parsed.version, 1);
+    }
+
+    #[test]
+    fn parse_skill_md_invalid_self_updatable_falls_back_to_default() {
+        // 无效 self_updatable 值，静默回退到默认 true
+        let content = "---\nname: my-skill\nself_updatable: maybe\n---\n\n## Usage\n\nDo it.\n";
         let parsed = parse_skill_md(content).unwrap();
         assert!(parsed.self_updatable);
     }
