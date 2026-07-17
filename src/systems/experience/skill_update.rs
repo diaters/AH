@@ -317,6 +317,7 @@ pub(crate) fn skill_update_completion_system(
         else {
             warn!(
                 event = "SkillUpdateContextNotFound",
+                task_id = %msg.task_id,
                 work_item_id = %msg.work_item_id,
                 skill_id = %msg.skill_id.as_string(),
                 error = "no SkillUpdateContext found for work_item_id",
@@ -338,6 +339,7 @@ pub(crate) fn skill_update_completion_system(
         let Ok(content) = std::fs::read_to_string(&skill_path) else {
             warn!(
                 event = "SkillMdReadFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 skill_path = ?skill_path,
                 error = "failed to read SKILL.md",
@@ -352,6 +354,7 @@ pub(crate) fn skill_update_completion_system(
         let Ok(new_content) = apply_skill_operations(&content, &msg.operations) else {
             warn!(
                 event = "SkillUpdateApplyFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 base_version = context.base_version,
                 error = "apply_skill_operations returned Err",
@@ -366,6 +369,7 @@ pub(crate) fn skill_update_completion_system(
         if let Err(e) = std::fs::create_dir_all(&history_dir) {
             warn!(
                 event = "SkillHistoryDirCreateFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 history_dir = ?history_dir,
                 error = %e,
@@ -377,6 +381,7 @@ pub(crate) fn skill_update_completion_system(
         if let Err(e) = std::fs::write(&backup_path, &content) {
             warn!(
                 event = "SkillHistoryBackupFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 backup_path = ?backup_path,
                 error = %e,
@@ -389,6 +394,7 @@ pub(crate) fn skill_update_completion_system(
         if let Err(e) = std::fs::write(&skill_path, &new_content) {
             warn!(
                 event = "SkillMdWriteFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 skill_path = ?skill_path,
                 error = %e,
@@ -403,6 +409,7 @@ pub(crate) fn skill_update_completion_system(
         if let Err(e) = cleanup_skill_history(&history_dir, 3) {
             warn!(
                 event = "SkillHistoryCleanupFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 history_dir = ?history_dir,
                 error = %e,
@@ -429,6 +436,7 @@ pub(crate) fn skill_update_completion_system(
         } else {
             warn!(
                 event = "SkillMdParseFailed",
+                task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 error = "parse_skill_md returned None for new content",
                 error_type = "ParseFailed",
@@ -449,6 +457,7 @@ pub(crate) fn skill_update_completion_system(
 
         debug!(
             event = "SkillUpdateCompleted",
+            task_id = %msg.task_id,
             skill_id = %msg.skill_id.as_string(),
             base_version = context.base_version,
             new_version = msg.new_version,

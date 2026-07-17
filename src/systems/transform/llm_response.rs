@@ -885,12 +885,12 @@ pub fn llm_response_system(
                     }
                 }
                 WorkItemType::SkillUpdate => {
-                    // 参考 ProfileGeneration 模式：
                     // - ToolCalls（submit_skill_update）：fall through，让 tool calling loop 处理，
-                    //   orchestrator 会 spawn SkillUpdateCompletedMessage。
-                    // - text / error：LLM 已结束本轮，仅 despawn result entity。
-                    //   WorkItem 的 complete + despawn 交给 skill_update_completion_system 完成
-                    //   （需要 SkillUpdateContext Component，与 WorkItem 同 entity）。
+                    //   orchestrator 会 spawn SkillUpdateCompletedMessage，由
+                    //   skill_update_completion_system 消费并 despawn WorkItem。
+                    // - text / error：LLM 未调用工具，无 operations 可应用；
+                    //   直接 despawn WorkItem + SkillUpdateContext entity + result entity，
+                    //   候选状态保持 GovernanceResolved，由后续治理重新评估。
                     match &result.result {
                         Ok(AgentExecutionOutput {
                             content: OutputContent::ToolCalls(_),
@@ -899,12 +899,18 @@ pub fn llm_response_system(
                             // 不 continue，让下面的 tool calling loop 处理 tool calls
                         }
                         Ok(_) => {
-                            debug!(
-                                event = "SkillUpdateWorkItemLlmDone",
+                            warn!(
+                                event = "SkillUpdateWorkItemNoToolCall",
                                 work_item_id = %work_item.id,
                                 task_id = %work_item.task_id,
-                                "skill update LLM finished, awaiting completion system"
+                                error = "LLM returned text without calling submit_skill_update",
+                                error_type = "NoToolCall",
+                                "skill update LLM finished without tool call, cleaning up work item"
                             );
+                            commands
+                                .entity(work_item_entity)
+                                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+                            commands.entity(work_item_entity).despawn();
                             commands.entity(entity).despawn();
                             continue;
                         }
@@ -915,8 +921,12 @@ pub fn llm_response_system(
                                 task_id = %work_item.task_id,
                                 error = "LLM execution returned Err",
                                 error_type = "LlmExecutionFailed",
-                                "skill update LLM failed, awaiting completion system"
+                                "skill update LLM failed, cleaning up work item"
                             );
+                            commands
+                                .entity(work_item_entity)
+                                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+                            commands.entity(work_item_entity).despawn();
                             commands.entity(entity).despawn();
                             continue;
                         }
