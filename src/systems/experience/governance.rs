@@ -1,12 +1,13 @@
 use crate::prelude::*;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentRequestKind, ConfirmationOption, ConfirmationSource,
     ExperienceCandidate, ExperienceCandidateStatus, ExperienceGovernanceDecision,
     ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore,
-    ExperienceWritebackDestination, ExperienceWritebackRequestMessage, Task, TaskInjectedSkill,
-    ToolCalledHookPending, ToolConfirmationRequestMessage, ToolExecutionRequestMessage,
+    ExperienceWritebackDestination, ExperienceWritebackRequestMessage, SkillUpdateRequestMessage,
+    Task, TaskInjectedSkill, ToolCalledHookPending, ToolConfirmationRequestMessage,
+    ToolExecutionRequestMessage,
 };
 use crate::infrastructure::skills::SkillRegistry;
 
@@ -210,23 +211,48 @@ pub(crate) fn experience_governance_system(
                     );
                 }
                 commands.spawn(decision);
+            } else if decision.destination == ExperienceWritebackDestination::SkillUpdate {
+                // SkillUpdate destination：spawn SkillUpdateRequestMessage，
+                // 由 skill_update_workitem_system 消费构造 skill-updater WorkItem。
+                // 候选状态保持 GovernanceResolved，等 skill_update_completion_system 完成后再置 Persisted。
+                let injected_skill = tasks
+                    .iter()
+                    .find(|(t, _)| t.id == request.task_id)
+                    .and_then(|(_, is)| is)
+                    .and_then(|is| is.skill_id.clone());
+
+                match injected_skill {
+                    Some(skill_id) => {
+                        debug!(
+                            event = "SkillUpdateRequestSpawned",
+                            task_id = %request.task_id,
+                            candidate_id = %candidate_id,
+                            skill_id = %skill_id.as_string(),
+                            governing_agent_id = %request.agent_id,
+                            "spawning SkillUpdateRequestMessage for skill-updater"
+                        );
+                        commands.spawn(SkillUpdateRequestMessage {
+                            task_id: request.task_id,
+                            skill_id,
+                            experience_candidate_id: *candidate_id,
+                            governing_agent_id: request.agent_id,
+                        });
+                    }
+                    None => {
+                        warn!(
+                            event = "SkillUpdateDestinationMissingInjectedSkill",
+                            task_id = %request.task_id,
+                            candidate_id = %candidate_id,
+                            error = "decision.destination == SkillUpdate but task has no TaskInjectedSkill",
+                            error_type = "MissingInjectedSkill",
+                            "cannot spawn SkillUpdateRequestMessage without injected skill, skipping"
+                        );
+                    }
+                }
             } else {
                 // 无需确认，直接进入 WritebackPending
                 if let Some(c) = store.candidates.get_mut(candidate_id) {
                     c.status = ExperienceCandidateStatus::WritebackPending;
-                }
-
-                if decision.destination == ExperienceWritebackDestination::SkillUpdate {
-                    // TODO(task 20): 任务 20 将在此处替换 WritebackRequestMessage spawn
-                    // 为真正的 SkillUpdateRequestMessage spawn，由 skill_update_workitem_system 接管。
-                    // 当前先走 WritebackPending 占位，由现有 writeback 链路兜底（writeback.rs SkillUpdate 分支为 no-op）。
-                    debug!(
-                        event = "SkillUpdateDestinationPlaceholder",
-                        task_id = %request.task_id,
-                        candidate_id = %candidate_id,
-                        destination = ?decision.destination,
-                        "SkillUpdate destination reached, awaiting task 20 spawn implementation"
-                    );
                 }
 
                 commands.spawn(ExperienceWritebackRequestMessage {
@@ -535,22 +561,29 @@ mod tests {
 
         app.update();
 
-        // 先收集 world 中 spawn 的 message（需要 &mut App）
-        let destinations = writeback_destinations(&mut app);
-        let decisions = governance_decision_destinations(&mut app);
-
-        // 候选状态 WritebackPending，destination=SkillUpdate
+        // SkillUpdate destination 改为 spawn SkillUpdateRequestMessage（由 skill_update_workitem_system 消费），
+        // 候选状态保持 GovernanceResolved，不进入 WritebackPending。
         let store = app.world().resource::<ExperienceStore>();
         assert_eq!(
             store.candidates.get(&candidate_id).unwrap().status,
-            ExperienceCandidateStatus::WritebackPending,
+            ExperienceCandidateStatus::GovernanceResolved,
         );
-        assert_eq!(
-            destinations,
-            vec![ExperienceWritebackDestination::SkillUpdate],
+        // 不应 spawn 任何 WritebackRequestMessage
+        let destinations = writeback_destinations(&mut app);
+        assert!(
+            destinations.is_empty(),
+            "SkillUpdate path should not spawn WritebackRequestMessage"
         );
-        // 确认路径不应触发
+        // 不应 spawn 任何 ExperienceGovernanceDecision（确认路径）
+        let decisions = governance_decision_destinations(&mut app);
         assert!(decisions.is_empty());
+        // 应 spawn 1 个 SkillUpdateRequestMessage
+        let mut q = app.world_mut().query::<&SkillUpdateRequestMessage>();
+        let skill_update_count = q.iter(app.world()).count();
+        assert_eq!(
+            skill_update_count, 1,
+            "should spawn exactly one SkillUpdateRequestMessage"
+        );
     }
 
     /// 2. self_updatable=false 的注入 skill → LongTermMemory，kind_hint 降级为 Knowledge。

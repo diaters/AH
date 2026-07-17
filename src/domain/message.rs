@@ -11,6 +11,7 @@ use super::{
     AgentExecutionRequest, AgentExecutionResult, AgentId, SignalSource, SummarizationTrigger,
     TaskId, TaskRoutingPolicy, TaskTrigger,
 };
+use crate::infrastructure::skills::SkillId;
 
 // ============ 信号与输入 ============
 
@@ -508,6 +509,16 @@ pub struct ExperienceCollectionCompletedMessage {
     pub parent_task_id: Option<TaskId>,
     pub agent_id: AgentId,
     /// 原任务治理者，由请求链路显式传递。
+    pub governing_agent_id: AgentId,
+}
+
+/// skill 更新请求消息：由 route_persistent_agent_experience 或 governance 在 SkillUpdate destination 决议后 spawn，
+/// 由 skill_update_workitem_system 消费，构造 skill-updater WorkItem。
+#[derive(Debug, Clone, Component)]
+pub struct SkillUpdateRequestMessage {
+    pub task_id: TaskId,
+    pub skill_id: SkillId,
+    pub experience_candidate_id: uuid::Uuid,
     pub governing_agent_id: AgentId,
 }
 

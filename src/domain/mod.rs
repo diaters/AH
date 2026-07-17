@@ -107,11 +107,11 @@ pub use message::{
     LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
     ModelChainStateUpdate, OutputKind, OutputMessage, PendingChannelSend, ReloadPluginsMessage,
     ReloadTriggersMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
-    SessionStartedMessage, Signal, SignalPayload, SubTaskBatchCreatedMessage,
-    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
-    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage,
-    UserOutputMessage, WaitingReason,
+    SessionStartedMessage, Signal, SignalPayload, SkillUpdateRequestMessage,
+    SubTaskBatchCreatedMessage, SubTaskCompletedMessage, SummarizationRequestMessage,
+    SystemOutputMessage, TaskTerminatedMessage, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    TriggerTaskMessage, UserInputMessage, UserOutputMessage, WaitingReason,
 };
 
 // model_chain

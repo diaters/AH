@@ -1,7 +1,7 @@
 //! 持久Agent吸收路径：经验候选路由到 skill-updater / LTM。
 //!
 //! 当 task 的 delegate 是持久Agent时，候选不进入父任务 inbox，而是按 kind_hint 分流：
-//! - 注入 skill 路径：skill 类候选 → spawn skill update workitem（占位），
+//! - 注入 skill 路径：skill 类候选 → spawn SkillUpdateRequestMessage，
 //!   knowledge 类候选 → 写回 LTM（占位）
 //! - 未注入 skill 路径：仍走 governance，由治理层走用户确认（评审 D12）
 //!
@@ -10,15 +10,19 @@
 //! - profile_generation.rs 的 profile_generation_workitem_system
 
 use crate::prelude::*;
-use tracing::info;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentId, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
-    ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
-    Task,
+    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentId, AgentRequestKind,
+    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
+    ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceKindFilter,
+    ExperienceKindHint, ExperienceStore, MessageDispatchedHookPending, SkillUpdateContext,
+    SkillUpdateRequestMessage, SpaceToolRegistry, Task, TaskId, WorkItem,
+    WorkItemLifecycleHookPending,
 };
-use crate::infrastructure::skills::SkillId;
+use crate::infrastructure::skills::{SkillId, SkillRegistry};
+use crate::user_plugins::hook_point::HookPoint;
 
 /// 持久Agent吸收路径：候选不进父 inbox，按 kind 分流。
 ///
@@ -125,25 +129,185 @@ pub fn route_persistent_agent_experience(
     let _ = task;
 }
 
-/// 占位：spawn skill update workitem。任务 20 将替换为 spawn SkillUpdateRequestMessage。
+/// spawn SkillUpdateRequestMessage，由 skill_update_workitem_system 消费构造 skill-updater WorkItem。
 fn spawn_skill_update_workitem(
     commands: &mut Commands,
     candidate_id: Uuid,
     skill_id: SkillId,
     governing_agent_id: AgentId,
-    task_id: crate::domain::TaskId,
+    task_id: TaskId,
 ) {
-    // 占位：任务 20 将替换为 spawn SkillUpdateRequestMessage。
-    // 当前仅记录日志，commands 参数留作后续实现使用。
-    let _ = commands;
-    info!(
-        event = "SkillUpdateWorkitemSpawnPlaceholder",
-        task_id = %task_id,
-        candidate_id = %candidate_id,
-        skill_id = %skill_id.as_string(),
-        governing_agent_id = %governing_agent_id,
-        "spawn skill update workitem (TODO impl in task 20)"
-    );
+    commands.spawn(SkillUpdateRequestMessage {
+        task_id,
+        skill_id,
+        experience_candidate_id: candidate_id,
+        governing_agent_id,
+    });
+}
+
+/// skill 更新 WorkItem 创建系统：将 skill 更新请求转换为独立 WorkItem 分配给 skill-updater Agent。
+#[allow(dead_code)] // 任务 22 系统注册时启用
+pub(crate) fn skill_update_workitem_system(
+    mut commands: Commands,
+    requests: Query<(Entity, &SkillUpdateRequestMessage)>,
+    agents: Query<&Agent>,
+    store: Res<ExperienceStore>,
+    registry: Res<SpaceToolRegistry>,
+    skill_registry: Res<SkillRegistry>,
+) {
+    for (entity, request) in &requests {
+        // 1. 查找 skill-updater Agent（按 tags 匹配 "skill-updater"）
+        let skill_updater = agents
+            .iter()
+            .find(|a| a.capabilities.tags.iter().any(|t| t == "skill-updater"));
+
+        let skill_updater_id = match skill_updater {
+            Some(a) => a.id,
+            None => {
+                warn!(
+                    event = "SkillUpdaterNotFound",
+                    task_id = %request.task_id,
+                    skill_id = %request.skill_id.as_string(),
+                    "skill-updater agent not found, skipping skill update"
+                );
+                // 候选状态保持原 GovernanceResolved，不强制降级
+                commands.entity(entity).despawn();
+                continue;
+            }
+        };
+
+        // 2. 从 SkillRegistry 取 skill 内容
+        let Some(skill_entry) = skill_registry.get(&request.skill_id) else {
+            warn!(
+                event = "SkillNotFoundInRegistry",
+                task_id = %request.task_id,
+                skill_id = %request.skill_id.as_string(),
+                error = "skill_id not found in SkillRegistry",
+                error_type = "SkillNotFound",
+                "skill not found in registry, skipping skill update"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 3. 从 ExperienceStore 取候选原文
+        let Some(candidate) = store.candidates.get(&request.experience_candidate_id) else {
+            warn!(
+                event = "ExperienceCandidateNotFound",
+                task_id = %request.task_id,
+                candidate_id = %request.experience_candidate_id,
+                error = "candidate_id not found in store",
+                error_type = "CandidateNotFound",
+                "experience candidate not found, skipping skill update"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 4. 构造 prompt（含原 skill instructions + 候选原文 + 版本号）
+        let prompt = format!(
+            "## 任务\n\n根据以下经验候选，为现有 skill 提交结构化 diff 更新。\n\n\
+             ## 原 skill（version {}）\n\n{}\n\n\
+             ## 经验候选\n\n### {}\n\n{}\n\n\
+             ## 要求\n\n\
+             1. 调用 submit_skill_update 工具提交更新\n\
+             2. base_version 必须为 {}\n\
+             3. new_version 必须为 {}（base_version + 1）\n\
+             4. operations 必须是有效的 diff 操作（replace_section / add_section / remove_section / replace_frontmatter）",
+            skill_entry.version,
+            skill_entry.instructions,
+            candidate.title,
+            candidate_payload_text(candidate),
+            skill_entry.version,
+            skill_entry.version + 1,
+        );
+
+        // 5. 从 registry 过滤工具，仅保留 submit_skill_update
+        let tools: Vec<crate::domain::ToolDefinition> = registry
+            .iter()
+            .filter(|tool| tool.name == "submit_skill_update")
+            .cloned()
+            .collect();
+
+        // 6. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
+        let conversation = Vec::new();
+
+        // 7. 创建 WorkItem 并分配给 skill-updater，直接启动并派发执行请求
+        let mut work_item = WorkItem::skill_update(
+            request.task_id,
+            prompt,
+            conversation,
+            tools,
+            request.governing_agent_id,
+        );
+        // 若 Agent 配置了 system_prompt（来自 agents.toml），覆盖 WorkItem 的默认 system_prompt
+        if let Some(agent_system_prompt) = skill_updater.and_then(|a| a.system_prompt.as_ref()) {
+            work_item.input.context.system_prompt = Some(agent_system_prompt.clone());
+        }
+        work_item.assign(skill_updater_id);
+        work_item.start();
+
+        let work_item_id = work_item.id;
+        let exec_prompt = work_item.input.prompt.clone();
+        let exec_system_prompt = work_item.input.context.system_prompt.clone();
+        let exec_tools = work_item.input.context.tools.clone();
+        let exec_conversation = work_item.input.context.conversation.clone();
+
+        debug!(
+            event = "SkillUpdateWorkItemCreated",
+            task_id = %request.task_id,
+            skill_id = %request.skill_id.as_string(),
+            base_version = skill_entry.version,
+            agent_id = %skill_updater_id,
+            "spawning skill update work item"
+        );
+
+        commands.spawn((
+            work_item,
+            SkillUpdateContext {
+                skill_id: request.skill_id.clone(),
+                base_version: skill_entry.version,
+                experience_candidate_id: request.experience_candidate_id,
+                governing_agent_id: request.governing_agent_id,
+            },
+            WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted),
+        ));
+        commands.spawn((
+            AgentExecutionRequestMessage {
+                request: AgentExecutionRequest {
+                    task_id: request.task_id,
+                    agent_id: skill_updater_id,
+                    request_kind: AgentRequestKind::LlmCompletion,
+                    prompt: exec_prompt,
+                    system_prompt: exec_system_prompt,
+                    tools: exec_tools,
+                    conversation: exec_conversation,
+                    work_item_id: Some(work_item_id),
+                    model_override: None,
+                },
+            },
+            MessageDispatchedHookPending,
+        ));
+        commands.entity(entity).despawn();
+    }
+}
+
+/// 从 ExperienceCandidate 取候选文本用于 prompt 构造。
+fn candidate_payload_text(candidate: &ExperienceCandidate) -> String {
+    match &candidate.payload {
+        ExperienceCandidatePayload::Knowledge { content } => content.clone(),
+        ExperienceCandidatePayload::Skill {
+            name,
+            description,
+            instructions,
+            ..
+        } => {
+            format!(
+                "技能名：{}\n描述：{}\n指令：{}",
+                name, description, instructions
+            )
+        }
+    }
 }
 
 /// 占位：写回长期记忆。直接置为 WritebackPending，实际写回逻辑由后续任务接入。
