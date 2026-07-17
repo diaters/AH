@@ -1020,24 +1020,82 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
-        Ok(ToolAction::SubmitSkillUpdate { .. }) => {
-            // TODO(skill-update): 在 skill_update_completion_system 实现后，
-            // 此处应 spawn SkillUpdateCompletedMessage 并返回成功结果给 LLM。
-            // 当前 skill_update_completion_system 尚未实现，先返回执行错误。
-            warn!(
-                event = "SkillUpdateOrchestratorNotImplemented",
+        Ok(ToolAction::SubmitSkillUpdate {
+            skill_id,
+            base_version,
+            new_version,
+            operations,
+            rationale,
+        }) => {
+            // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费
+            // TODO(skill-update): work_item_id 应由 skill_update_workitem_system（任务 20）
+            // 在 spawn workitem entity 时记录并通过其他渠道（如 SkillUpdateContext Component）
+            // 关联。当前 orchestrator 无法直接获取，先用 nil 占位。
+            commands.spawn(crate::domain::SkillUpdateCompletedMessage {
+                work_item_id: uuid::Uuid::nil(),
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                skill_id: skill_id.clone(),
+                base_version,
+                new_version,
+                operations: operations.clone(),
+                rationale: rationale.clone(),
+            });
+
+            // 返回工具执行结果给 LLM
+            let output = serde_json::json!({
+                "status": "submitted",
+                "skill_id": skill_id.as_string(),
+                "base_version": base_version,
+                "new_version": new_version,
+                "operations_count": operations.len(),
+                "rationale": rationale,
+            });
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!(
+                        "skill update submitted: {} (v{} -> v{})",
+                        skill_id.as_string(),
+                        base_version,
+                        new_version
+                    )),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "submit_skill_update".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            debug!(
+                event = "SkillUpdateSubmitted",
                 task_id = %request.request.task_id,
                 agent_id = %request.request.agent_id,
-                "submit_skill_update orchestrator handling not yet implemented"
+                skill_id = %skill_id.as_string(),
+                base_version,
+                new_version,
+                operations_count = operations.len(),
+                "skill update submitted by LLM"
             );
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::ExecutionFailed(
-                    "skill_update_completion_system not yet implemented".to_string(),
-                ),
-            );
+
+            commands.entity(request_entity).despawn();
         }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
