@@ -1,4 +1,4 @@
-use crate::prelude::{Component, Resource};
+use crate::prelude::{Component, Event, Resource};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -643,6 +643,39 @@ pub struct SkillUpdateContext {
     pub governing_agent_id: AgentId,
 }
 
+/// skill 更新的结构化 diff 操作
+#[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "action")]
+pub enum SkillUpdateOperation {
+    #[serde(rename = "replace_section")]
+    ReplaceSection { section: String, content: String },
+    #[serde(rename = "add_section")]
+    AddSection {
+        after: String,
+        section: String,
+        content: String,
+    },
+    #[serde(rename = "remove_section")]
+    RemoveSection { section: String },
+    #[serde(rename = "replace_frontmatter")]
+    ReplaceFrontmatter { field: String, value: String },
+}
+
+/// skill-updater workitem 完成后由 orchestrator spawn
+#[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
+#[derive(Debug, Clone, Event)]
+pub struct SkillUpdateCompletedMessage {
+    pub work_item_id: uuid::Uuid,
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub skill_id: SkillId,
+    pub base_version: u32,
+    pub new_version: u32,
+    pub operations: Vec<SkillUpdateOperation>,
+    pub rationale: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,5 +907,62 @@ mod tests {
         assert!(result.contains(&"calculation".to_string()));
         assert!(!result.contains(&"incubated".to_string()));
         // incubated 由写回逻辑注入，不在 sanitize_tags 中
+    }
+
+    mod skill_update_operation_tests {
+        use super::*;
+
+        #[test]
+        fn serialize_replace_section() {
+            let op = SkillUpdateOperation::ReplaceSection {
+                section: "## Steps".to_string(),
+                content: "new content".to_string(),
+            };
+            let json = serde_json::to_string(&op).expect("serialize ReplaceSection");
+            assert!(
+                json.contains("\"replace_section\""),
+                "expected JSON to contain replace_section tag, got: {json}"
+            );
+            assert!(json.contains("## Steps"));
+            assert!(json.contains("new content"));
+        }
+
+        #[test]
+        fn deserialize_add_section() {
+            let json = "{\"action\":\"add_section\",\"after\":\"## Intro\",\"section\":\"## Tips\",\"content\":\"be careful\"}";
+            let op: SkillUpdateOperation =
+                serde_json::from_str(json).expect("deserialize AddSection");
+            match op {
+                SkillUpdateOperation::AddSection {
+                    after,
+                    section,
+                    content,
+                } => {
+                    assert_eq!(after, "## Intro");
+                    assert_eq!(section, "## Tips");
+                    assert_eq!(content, "be careful");
+                }
+                other => panic!("expected AddSection, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn frontmatter_field_whitelist_enforced_at_apply_layer() {
+            // 枚举本身允许任意 field 值；白名单检查应在 apply 层
+            let op = SkillUpdateOperation::ReplaceFrontmatter {
+                field: "arbitrary_field".to_string(),
+                value: "arbitrary_value".to_string(),
+            };
+            let json = serde_json::to_string(&op).expect("serialize ReplaceFrontmatter");
+            let de: SkillUpdateOperation =
+                serde_json::from_str(&json).expect("deserialize ReplaceFrontmatter");
+            match de {
+                SkillUpdateOperation::ReplaceFrontmatter { field, value } => {
+                    assert_eq!(field, "arbitrary_field");
+                    assert_eq!(value, "arbitrary_value");
+                }
+                other => panic!("expected ReplaceFrontmatter, got {other:?}"),
+            }
+        }
     }
 }
