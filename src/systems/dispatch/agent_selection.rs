@@ -5,6 +5,7 @@
 use tracing::debug;
 
 use crate::domain::{Agent, AgentKind, LongTermMemory};
+use crate::infrastructure::skills::{SkillId, SkillRegistry};
 
 /// 计算 Agent 与任务内容的匹配分数
 pub fn match_score(agent: &Agent, task_content: &str) -> usize {
@@ -161,6 +162,37 @@ pub fn select_agent_for_sub_task<'a>(
     }
 }
 
+/// 为子任务选择 Agent 并附带可能的 skill
+///
+/// 复用 `select_agent_for_sub_task` 选出 agent，然后从 `skill_registry` 列出该 agent 拥有的 skills。
+/// 当前实现采用简单启发式占位（取第一个 skill），未来由 brain_dispatch 系统替换为真实 LLM 调用，
+/// 让 LLM 基于 task_content 和 skill descriptions 选择最合适的 skill。
+#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
+pub fn select_agent_for_sub_task_with_skill<'a>(
+    agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
+    task_content: &str,
+    skill_registry: &SkillRegistry,
+) -> Option<(&'a Agent, Option<&'a LongTermMemory>, Option<SkillId>)> {
+    // 复用现有 select_agent_for_sub_task 的候选过滤逻辑，确保两次 filter 幂等
+    let candidates: Vec<_> = agents
+        .filter(|(a, _)| a.kind == AgentKind::Persistent)
+        .filter(|(a, _)| !a.capabilities.tags.contains(&"brain".to_string()))
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let selected = select_agent_for_sub_task(candidates.into_iter(), task_content)?;
+    // 对选中的 agent，从 skill_registry 列出其 skills
+    let owner_skills = skill_registry.list_by_owner(&selected.0.profile.name);
+    if owner_skills.is_empty() {
+        return Some((selected.0, selected.1, None));
+    }
+    // TODO(skill-selection): 替换为真实 LLM 调用，让 LLM 基于 task_content 和 skill descriptions 选择最合适的 skill
+    // 当前启发式：取第一个 skill 作为占位
+    let skill_id = owner_skills.first().map(|e| e.skill_id.clone());
+    Some((selected.0, selected.1, skill_id))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::domain::{
@@ -168,7 +200,9 @@ mod tests {
     };
     use uuid::Uuid;
 
-    use super::{select_agent_for_sub_task, select_agent_with_memory};
+    use super::{
+        select_agent_for_sub_task, select_agent_for_sub_task_with_skill, select_agent_with_memory,
+    };
 
     fn make_agent(name: &str, tags: Vec<&str>) -> Agent {
         Agent {
@@ -286,5 +320,48 @@ mod tests {
         assert!(selected.is_some());
         let (agent, _) = selected.unwrap();
         assert_eq!(agent.profile.name, "agent-a");
+    }
+
+    mod skill_selection_tests {
+        use super::*;
+        use crate::infrastructure::skills::{SkillEntry, SkillId, SkillRegistry};
+
+        fn make_skill_registry(agent: &Agent, skill_name: &str) -> SkillRegistry {
+            let mut reg = SkillRegistry::default();
+            reg.upsert(SkillEntry {
+                skill_id: SkillId::new(&agent.profile.name, skill_name),
+                name: skill_name.to_string(),
+                description: format!("desc for {}", skill_name),
+                instructions: "instructions".to_string(),
+                version: 1,
+                owner_agent_name: agent.profile.name.clone(),
+                self_updatable: true,
+            });
+            reg
+        }
+
+        #[test]
+        fn select_agent_with_skill_returns_skill_id() {
+            let agent = make_agent("agent-a", vec!["default"]);
+            let reg = make_skill_registry(&agent, "coding");
+            let agents = vec![(&agent, None as Option<&LongTermMemory>)];
+            let result =
+                select_agent_for_sub_task_with_skill(agents.into_iter(), "需要写代码的任务", &reg);
+            assert!(result.is_some());
+            let (_, _, skill) = result.unwrap();
+            assert!(skill.is_some());
+            assert_eq!(skill.unwrap(), SkillId::new("agent-a", "coding"));
+        }
+
+        #[test]
+        fn select_agent_without_skills_returns_none_skill() {
+            let agent = make_agent("agent-b", vec!["default"]);
+            let reg = SkillRegistry::default();
+            let agents = vec![(&agent, None as Option<&LongTermMemory>)];
+            let result = select_agent_for_sub_task_with_skill(agents.into_iter(), "任意任务", &reg);
+            assert!(result.is_some());
+            let (_, _, skill) = result.unwrap();
+            assert!(skill.is_none());
+        }
     }
 }
