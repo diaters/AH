@@ -1020,6 +1020,25 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::SubmitSkillUpdate { .. }) => {
+            // TODO(skill-update): 在 skill_update_completion_system 实现后，
+            // 此处应 spawn SkillUpdateCompletedMessage 并返回成功结果给 LLM。
+            // 当前 skill_update_completion_system 尚未实现，先返回执行错误。
+            warn!(
+                event = "SkillUpdateOrchestratorNotImplemented",
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                "submit_skill_update orchestrator handling not yet implemented"
+            );
+            spawn_tool_error(
+                commands,
+                request_entity,
+                request,
+                ToolError::ExecutionFailed(
+                    "skill_update_completion_system not yet implemented".to_string(),
+                ),
+            );
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }

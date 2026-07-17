@@ -256,6 +256,22 @@ pub enum ToolAction {
     },
     /// 跳过 profile 更新（更新场景下 LLM 认为不需要更新）
     SkipProfileUpdate,
+    /// 提交 skill 更新的结构化 diff 操作
+    ///
+    /// 由 skill-updater Agent 调用，实际的 skill 文件 apply 与 registry 刷新
+    /// 在 `skill_update_completion_system` 中完成。
+    SubmitSkillUpdate {
+        /// 待更新 skill 的全局唯一 ID（已解析）
+        skill_id: crate::infrastructure::skills::SkillId,
+        /// 原 skill 版本号
+        base_version: u32,
+        /// 新版本号（必须等于 base_version + 1）
+        new_version: u32,
+        /// 结构化 diff 操作列表
+        operations: Vec<crate::domain::SkillUpdateOperation>,
+        /// 本次更新的理由说明
+        rationale: String,
+    },
 }
 
 /// 经验候选提交数据

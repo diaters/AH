@@ -8,6 +8,7 @@ mod shell;
 mod skip_profile_update;
 mod submit_experience_candidate;
 mod submit_profile_update;
+mod submit_skill_update;
 mod wait_tasks;
 
 pub use chat_with_agent::ChatWithAgentTool;
@@ -20,4 +21,5 @@ pub use shell::{
 pub use skip_profile_update::SkipProfileUpdateTool;
 pub use submit_experience_candidate::SubmitExperienceCandidateTool;
 pub use submit_profile_update::SubmitProfileUpdateTool;
+pub use submit_skill_update::SubmitSkillUpdateTool;
 pub use wait_tasks::WaitTasksTool;
