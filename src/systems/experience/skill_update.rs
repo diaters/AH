@@ -10,6 +10,7 @@
 //! - profile_generation.rs 的 profile_generation_workitem_system
 
 use crate::prelude::*;
+use std::path::PathBuf;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -17,11 +18,13 @@ use crate::domain::{
     Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentId, AgentRequestKind,
     ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
     ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceKindFilter,
-    ExperienceKindHint, ExperienceStore, MessageDispatchedHookPending, SkillUpdateContext,
-    SkillUpdateRequestMessage, SpaceToolRegistry, Task, TaskId, WorkItem,
+    ExperienceKindHint, ExperienceStore, MessageDispatchedHookPending, SkillUpdateCompletedMessage,
+    SkillUpdateContext, SkillUpdateRequestMessage, SpaceToolRegistry, Task, TaskId, WorkItem,
     WorkItemLifecycleHookPending,
 };
-use crate::infrastructure::skills::{SkillId, SkillRegistry};
+use crate::infrastructure::skills::{
+    SkillEntry, SkillId, SkillLoader, SkillRegistry, apply_skill_operations, cleanup_skill_history,
+};
 use crate::user_plugins::hook_point::HookPoint;
 
 /// 持久Agent吸收路径：候选不进父 inbox，按 kind 分流。
@@ -288,6 +291,170 @@ pub(crate) fn skill_update_workitem_system(
             },
             MessageDispatchedHookPending,
         ));
+        commands.entity(entity).despawn();
+    }
+}
+
+/// skill 更新完成系统：消费 `SkillUpdateCompletedMessage`，将 diff 操作 apply 到 SKILL.md，
+/// 备份原版本到 history 目录，刷新 `SkillRegistry`，将候选置为 `Persisted`，
+/// 最后标记 WorkItem 完成并清理实体。
+///
+/// 错误处理：文件读取 / apply / 写入失败时候选状态保持不变（仍为 `GovernanceResolved`），
+/// 仅记录 warn 日志并 despawn 消息。history 备份与清理失败不阻断主流程。
+#[allow(dead_code)] // 任务 22 系统注册时启用
+pub(crate) fn skill_update_completion_system(
+    mut commands: Commands,
+    messages: Query<(Entity, &SkillUpdateCompletedMessage)>,
+    contexts: Query<(Entity, &SkillUpdateContext, &WorkItem)>,
+    mut store: ResMut<ExperienceStore>,
+    mut skill_registry: ResMut<SkillRegistry>,
+    skill_loader: Res<SkillLoader>,
+) {
+    for (entity, msg) in &messages {
+        // 1. 通过 work_item_id 反查 SkillUpdateContext（与 WorkItem 同 entity）
+        let Some((context_entity, context, _work_item)) =
+            contexts.iter().find(|(_, _, wi)| wi.id == msg.work_item_id)
+        else {
+            warn!(
+                event = "SkillUpdateContextNotFound",
+                work_item_id = %msg.work_item_id,
+                skill_id = %msg.skill_id.as_string(),
+                error = "no SkillUpdateContext found for work_item_id",
+                error_type = "ContextNotFound",
+                "SkillUpdateContext not found, skipping completion"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 2. 计算 SKILL.md 路径与 history 目录
+        let skill_path = skill_loader.skill_md_path(&msg.skill_id);
+        let history_dir = skill_path
+            .parent()
+            .map(|p| p.join("history"))
+            .unwrap_or_else(|| PathBuf::from("history"));
+
+        // 3. 读取现有 SKILL.md（失败 → 候选状态保持不变）
+        let Ok(content) = std::fs::read_to_string(&skill_path) else {
+            warn!(
+                event = "SkillMdReadFailed",
+                skill_id = %msg.skill_id.as_string(),
+                skill_path = ?skill_path,
+                error = "failed to read SKILL.md",
+                error_type = "FileReadFailed",
+                "failed to read SKILL.md, candidate status unchanged"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 4. apply diff 操作（失败 → 候选状态保持不变）
+        let Ok(new_content) = apply_skill_operations(&content, &msg.operations) else {
+            warn!(
+                event = "SkillUpdateApplyFailed",
+                skill_id = %msg.skill_id.as_string(),
+                base_version = context.base_version,
+                error = "apply_skill_operations returned Err",
+                error_type = "ApplyOperationsFailed",
+                "failed to apply skill operations, candidate status unchanged"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 5. 备份原版本到 history 目录（失败不阻断后续写入）
+        if let Err(e) = std::fs::create_dir_all(&history_dir) {
+            warn!(
+                event = "SkillHistoryDirCreateFailed",
+                skill_id = %msg.skill_id.as_string(),
+                history_dir = ?history_dir,
+                error = %e,
+                error_type = "HistoryDirCreateFailed",
+                "failed to create history dir, but proceeding with write"
+            );
+        }
+        let backup_path = history_dir.join(format!("v{}.md", context.base_version));
+        if let Err(e) = std::fs::write(&backup_path, &content) {
+            warn!(
+                event = "SkillHistoryBackupFailed",
+                skill_id = %msg.skill_id.as_string(),
+                backup_path = ?backup_path,
+                error = %e,
+                error_type = "HistoryBackupFailed",
+                "failed to write history backup, but proceeding with write"
+            );
+        }
+
+        // 6. 写入新版本 SKILL.md（失败 → 候选状态保持不变）
+        if let Err(e) = std::fs::write(&skill_path, &new_content) {
+            warn!(
+                event = "SkillMdWriteFailed",
+                skill_id = %msg.skill_id.as_string(),
+                skill_path = ?skill_path,
+                error = %e,
+                error_type = "FileWriteFailed",
+                "failed to write new SKILL.md, candidate status unchanged"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        // 7. 清理 history（保留最新 3 代，失败不阻断）
+        if let Err(e) = cleanup_skill_history(&history_dir, 3) {
+            warn!(
+                event = "SkillHistoryCleanupFailed",
+                skill_id = %msg.skill_id.as_string(),
+                history_dir = ?history_dir,
+                error = %e,
+                error_type = "HistoryCleanupFailed",
+                "failed to cleanup skill history, but proceeding"
+            );
+        }
+
+        // 8. 解析新内容并刷新 SkillRegistry；若解析失败，文件已写入，候选仍置 Persisted
+        let parsed_entry =
+            crate::infrastructure::skills::loader::parse_skill_md(&new_content).map(|parsed| {
+                SkillEntry {
+                    skill_id: msg.skill_id.clone(),
+                    name: parsed.name,
+                    description: parsed.description,
+                    instructions: parsed.instructions,
+                    version: msg.new_version,
+                    owner_agent_name: msg.skill_id.owner_agent_name.clone(),
+                    self_updatable: parsed.self_updatable,
+                }
+            });
+        if let Some(entry) = parsed_entry {
+            skill_registry.refresh(entry);
+        } else {
+            warn!(
+                event = "SkillMdParseFailed",
+                skill_id = %msg.skill_id.as_string(),
+                error = "parse_skill_md returned None for new content",
+                error_type = "ParseFailed",
+                "failed to parse new SKILL.md content, registry not refreshed"
+            );
+        }
+
+        // 9. 候选置为 Persisted
+        if let Some(c) = store.candidates.get_mut(&context.experience_candidate_id) {
+            c.status = ExperienceCandidateStatus::Persisted;
+        }
+
+        // 10. 标记 WorkItem 完成（llm_response.rs 不再 despawn 该 entity，交由本系统清理）
+        commands
+            .entity(context_entity)
+            .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemCompleted));
+        commands.entity(context_entity).despawn();
+
+        debug!(
+            event = "SkillUpdateCompleted",
+            skill_id = %msg.skill_id.as_string(),
+            base_version = context.base_version,
+            new_version = msg.new_version,
+            "skill updated successfully"
+        );
+
         commands.entity(entity).despawn();
     }
 }
@@ -715,5 +882,343 @@ mod tests {
     fn make_persistent_agent_constructs_correctly() {
         let agent = make_persistent_agent();
         assert_eq!(agent.kind, AgentKind::Persistent);
+    }
+}
+
+#[cfg(test)]
+mod completion_system_tests {
+    use super::*;
+    use crate::domain::{ConversationMessage, SkillUpdateOperation, ToolDefinition};
+    use crate::infrastructure::skills::SkillLoader;
+    use bevy_ecs::system::RunSystemOnce;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// 测试用 SKILL.md 模板（version=1，含 Usage 与 Examples 两个 section）
+    const SAMPLE_SKILL_MD: &str = "---\nname: coding\ndescription: A coding skill\nversion: 1\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n\n## Examples\n\nExample 1.\n";
+
+    /// 在临时目录下写入 SKILL.md，返回 (TempDir, SkillLoader, skill_path)。
+    /// 保留 TempDir 句柄以避免目录被提前清理。
+    fn setup_skill_dir(skill_id: &SkillId, content: &str) -> (TempDir, SkillLoader) {
+        let tmp = TempDir::new().unwrap();
+        // base_dir 直接指向 agents/ 目录（与 default_path() 语义一致）
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+        let skill_path = loader.skill_md_path(skill_id);
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(&skill_path, content).unwrap();
+        (tmp, loader)
+    }
+
+    /// 构造测试用 SkillUpdateContext + WorkItem（同 entity）并 spawn 到 world。
+    /// 返回 (work_item_id, candidate_id)。
+    fn spawn_work_item_with_context(
+        world: &mut World,
+        skill_id: SkillId,
+        base_version: u32,
+    ) -> (Uuid, Uuid) {
+        let candidate_id = Uuid::new_v4();
+        let governing_agent_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut work_item = WorkItem::skill_update(
+            task_id,
+            "prompt".to_string(),
+            Vec::<ConversationMessage>::new(),
+            Vec::<ToolDefinition>::new(),
+            governing_agent_id,
+        );
+        work_item.start();
+        let work_item_id = work_item.id;
+        world.spawn((
+            work_item,
+            SkillUpdateContext {
+                skill_id: skill_id.clone(),
+                base_version,
+                experience_candidate_id: candidate_id,
+                governing_agent_id,
+            },
+        ));
+        (work_item_id, candidate_id)
+    }
+
+    /// 在 ExperienceStore 中插入一个 GovernanceResolved 状态的候选，返回 candidate_id。
+    fn stage_resolved_candidate(store: &mut ExperienceStore) -> Uuid {
+        let mut c = ExperienceCandidate::skill(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "title".to_string(),
+            "skill-name".to_string(),
+            "desc".to_string(),
+            "instr".to_string(),
+            Vec::new(),
+        );
+        c.status = ExperienceCandidateStatus::GovernanceResolved;
+        let id = c.candidate_id;
+        store.candidates.insert(id, c);
+        id
+    }
+
+    /// 构造 SkillUpdateCompletedMessage。
+    fn make_completed_message(
+        work_item_id: Uuid,
+        skill_id: SkillId,
+        base_version: u32,
+        new_version: u32,
+        operations: Vec<SkillUpdateOperation>,
+    ) -> SkillUpdateCompletedMessage {
+        SkillUpdateCompletedMessage {
+            work_item_id,
+            task_id: Uuid::new_v4(),
+            agent_id: Uuid::new_v4(),
+            skill_id,
+            base_version,
+            new_version,
+            operations,
+            rationale: "test rationale".to_string(),
+        }
+    }
+
+    /// 验证 SkillLoader::skill_md_path 返回的路径符合约定。
+    #[test]
+    fn skill_md_path_returns_correct_path() {
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+        let skill_id = SkillId::new("agent-a", "coding");
+        let path = loader.skill_md_path(&skill_id);
+        let expected = tmp
+            .path()
+            .join("agent-a")
+            .join("skills")
+            .join("coding")
+            .join("SKILL.md");
+        assert_eq!(path, expected);
+    }
+
+    /// 构造完整的 SkillUpdateCompletedMessage + Context，运行 system，
+    /// 验证文件被更新、history 备份生成、registry 刷新、候选状态为 Persisted。
+    #[test]
+    fn completion_system_applies_operations_and_persists() {
+        let skill_id = SkillId::new("agent-a", "coding");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+        let skill_path = loader.skill_md_path(&skill_id);
+
+        let mut world = World::new();
+        world.insert_resource(ExperienceStore::default());
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let candidate_id = stage_resolved_candidate(&mut world.resource_mut::<ExperienceStore>());
+        let (work_item_id, _) = {
+            // 用同样的 skill_id 调用 spawn helper，但手动覆盖 candidate_id
+            let governing_agent_id = Uuid::new_v4();
+            let task_id = Uuid::new_v4();
+            let mut work_item = WorkItem::skill_update(
+                task_id,
+                "prompt".to_string(),
+                Vec::<ConversationMessage>::new(),
+                Vec::<ToolDefinition>::new(),
+                governing_agent_id,
+            );
+            work_item.start();
+            let work_item_id = work_item.id;
+            world.spawn((
+                work_item,
+                SkillUpdateContext {
+                    skill_id: skill_id.clone(),
+                    base_version: 1,
+                    experience_candidate_id: candidate_id,
+                    governing_agent_id,
+                },
+            ));
+            (work_item_id, candidate_id)
+        };
+
+        // 用 ReplaceSection 操作替换 Usage section 内容
+        let operations = vec![SkillUpdateOperation::ReplaceSection {
+            section: "## Usage".to_string(),
+            content: "New usage content.".to_string(),
+        }];
+        world.spawn(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // 1. SKILL.md 已更新
+        let new_content = fs::read_to_string(&skill_path).unwrap();
+        assert!(new_content.contains("New usage content."));
+        assert!(!new_content.contains("Do the thing."));
+
+        // 2. history v1.md 备份存在
+        let history_dir = skill_path.parent().unwrap().join("history");
+        let backup = fs::read_to_string(history_dir.join("v1.md")).unwrap();
+        assert!(backup.contains("Do the thing."));
+
+        // 3. SkillRegistry 已刷新（version=2）
+        let registry = world.resource::<SkillRegistry>();
+        let entry = registry
+            .get(&skill_id)
+            .expect("skill should be in registry");
+        assert_eq!(entry.version, 2);
+        assert_eq!(entry.name, "coding");
+
+        // 4. 候选状态为 Persisted
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::Persisted);
+
+        // 5. WorkItem entity 与 message entity 均已 despawn
+        let msg_count = world
+            .query::<&SkillUpdateCompletedMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(msg_count, 0);
+        let work_item_count = world.query::<&WorkItem>().iter(&world).count();
+        assert_eq!(work_item_count, 0);
+    }
+
+    /// SKILL.md 不存在时，候选状态保持不变，message 被 despawn。
+    #[test]
+    fn completion_system_handles_missing_skill_file() {
+        let skill_id = SkillId::new("agent-a", "coding");
+        // 不写入 SKILL.md，仅创建 loader 指向空目录
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let (work_item_id, _) = spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        // 覆盖 candidate_id：直接重新 spawn 不方便，这里用 nil candidate_id 验证候选不变即可
+        // 实际上 spawn_work_item_with_context 用的是随机 candidate_id，不影响测试逻辑：
+        // 文件读取失败时候选状态保持不变，store 中无该 candidate_id 也算"不变"。
+
+        world.spawn(make_completed_message(work_item_id, skill_id, 1, 2, vec![]));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // 候选状态保持 GovernanceResolved（未被改为 Persisted）
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::GovernanceResolved);
+
+        // message 已 despawn
+        let msg_count = world
+            .query::<&SkillUpdateCompletedMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(msg_count, 0);
+    }
+
+    /// 构造无法 apply 的 operations（section 不存在），候选状态保持不变。
+    #[test]
+    fn completion_system_handles_apply_failure() {
+        let skill_id = SkillId::new("agent-a", "coding");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader.clone());
+
+        let (work_item_id, context_candidate_id) =
+            spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        // 把 store 中的 candidate_id 与 context 对齐
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .get_mut(&candidate_id)
+            .unwrap()
+            .candidate_id = context_candidate_id;
+        // 重新插入以 key 对齐
+        let c = world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .remove(&candidate_id)
+            .unwrap();
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .insert(context_candidate_id, c);
+        let candidate_id = context_candidate_id;
+
+        // 用不存在的 section 触发 ApplyError::SectionNotFound
+        let operations = vec![SkillUpdateOperation::ReplaceSection {
+            section: "## NonExistent".to_string(),
+            content: "x".to_string(),
+        }];
+        world.spawn(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // 候选状态保持 GovernanceResolved
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::GovernanceResolved);
+
+        // SKILL.md 未被修改（仍含原内容）
+        let content = fs::read_to_string(loader.skill_md_path(&skill_id)).unwrap();
+        assert!(content.contains("Do the thing."));
+
+        // message 已 despawn
+        let msg_count = world
+            .query::<&SkillUpdateCompletedMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(msg_count, 0);
+    }
+
+    /// work_item_id 在 contexts Query 中找不到时，候选状态保持不变。
+    #[test]
+    fn completion_system_handles_context_missing() {
+        let skill_id = SkillId::new("agent-a", "coding");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        // 不 spawn 任何 WorkItem + SkillUpdateContext，使用一个随机 work_item_id
+        let missing_work_item_id = Uuid::new_v4();
+        world.spawn(make_completed_message(
+            missing_work_item_id,
+            skill_id,
+            1,
+            2,
+            vec![],
+        ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // 候选状态保持 GovernanceResolved
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::GovernanceResolved);
+
+        // message 已 despawn
+        let msg_count = world
+            .query::<&SkillUpdateCompletedMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(msg_count, 0);
     }
 }

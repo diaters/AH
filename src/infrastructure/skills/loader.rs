@@ -42,6 +42,26 @@ impl SkillLoader {
         }
     }
 
+    /// 用指定 base_dir 构造 SkillLoader。
+    ///
+    /// `base_dir` 语义与 `default_path()` 一致：直接指向 `agents/` 目录本身，
+    /// 而非其父目录。主要供测试注入临时目录使用。
+    pub fn new(base_dir: PathBuf) -> Self {
+        Self { base_dir }
+    }
+
+    /// 返回指定 skill 的 SKILL.md 文件路径。
+    ///
+    /// 路径约定：`<base_dir>/<owner_agent_name>/skills/<skill_name>/SKILL.md`
+    ///（`base_dir` 本身就是 `agents/` 目录，与 `load_skills` / `build_registry` 语义一致）。
+    pub fn skill_md_path(&self, skill_id: &SkillId) -> PathBuf {
+        self.base_dir
+            .join(&skill_id.owner_agent_name)
+            .join("skills")
+            .join(&skill_id.skill_name)
+            .join("SKILL.md")
+    }
+
     /// 扫描指定 Agent 的 skills 目录，返回所有已加载的 Skill。
     pub fn load_skills(&self, agent_name: &str) -> Vec<LoadedSkill> {
         let skills_dir = self.base_dir.join(agent_name).join("skills");

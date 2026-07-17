@@ -884,6 +884,44 @@ pub fn llm_response_system(
                         }
                     }
                 }
+                WorkItemType::SkillUpdate => {
+                    // 参考 ProfileGeneration 模式：
+                    // - ToolCalls（submit_skill_update）：fall through，让 tool calling loop 处理，
+                    //   orchestrator 会 spawn SkillUpdateCompletedMessage。
+                    // - text / error：LLM 已结束本轮，仅 despawn result entity。
+                    //   WorkItem 的 complete + despawn 交给 skill_update_completion_system 完成
+                    //   （需要 SkillUpdateContext Component，与 WorkItem 同 entity）。
+                    match &result.result {
+                        Ok(AgentExecutionOutput {
+                            content: OutputContent::ToolCalls(_),
+                            ..
+                        }) => {
+                            // 不 continue，让下面的 tool calling loop 处理 tool calls
+                        }
+                        Ok(_) => {
+                            debug!(
+                                event = "SkillUpdateWorkItemLlmDone",
+                                work_item_id = %work_item.id,
+                                task_id = %work_item.task_id,
+                                "skill update LLM finished, awaiting completion system"
+                            );
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!(
+                                event = "SkillUpdateWorkItemLlmFailed",
+                                work_item_id = %work_item.id,
+                                task_id = %work_item.task_id,
+                                error = "LLM execution returned Err",
+                                error_type = "LlmExecutionFailed",
+                                "skill update LLM failed, awaiting completion system"
+                            );
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                    }
+                }
                 _ => {}
             }
         }

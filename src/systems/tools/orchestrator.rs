@@ -1027,12 +1027,11 @@ pub fn handle_tool_action<B: SessionBackend>(
             operations,
             rationale,
         }) => {
-            // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费
-            // TODO(skill-update): work_item_id 应由 skill_update_workitem_system（任务 20）
-            // 在 spawn workitem entity 时记录并通过其他渠道（如 SkillUpdateContext Component）
-            // 关联。当前 orchestrator 无法直接获取，先用 nil 占位。
+            // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
+            // work_item_id 从 AgentExecutionRequest 透传，便于 completion_system 反查
+            // 同 entity 上的 SkillUpdateContext Component。
             commands.spawn(crate::domain::SkillUpdateCompletedMessage {
-                work_item_id: uuid::Uuid::nil(),
+                work_item_id: request.request.work_item_id.unwrap_or(uuid::Uuid::nil()),
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,
                 skill_id: skill_id.clone(),
