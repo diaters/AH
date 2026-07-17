@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use thiserror::Error;
+
 use crate::domain::SkillUpdateOperation;
 
 /// 允许 LLM 修改的 frontmatter 字段白名单
@@ -35,9 +37,7 @@ fn split_frontmatter(content: &str) -> (String, String) {
 fn find_section_range(body: &str, section: &str) -> Option<(usize, usize)> {
     let lines: Vec<&str> = body.lines().collect();
     let header = section.trim();
-    let start = lines
-        .iter()
-        .position(|l| l.trim_start().starts_with(header))?;
+    let start = lines.iter().position(|l| l.trim_start() == header)?;
     let end = lines
         .iter()
         .enumerate()
@@ -115,9 +115,11 @@ pub fn apply_skill_operations(
     Ok(result)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ApplyError {
+    #[error("section not found: {0}")]
     SectionNotFound(String),
+    #[error("frontmatter field not whitelisted: {0}")]
     FieldNotWhitelisted(String),
 }
 
@@ -125,7 +127,8 @@ pub enum ApplyError {
 pub fn cleanup_skill_history(history_dir: &Path, keep: usize) -> std::io::Result<()> {
     let entries = match std::fs::read_dir(history_dir) {
         Ok(e) => e,
-        Err(_) => return Ok(()), // 目录不存在视为无操作
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
     };
 
     let mut versions: Vec<(u32, std::path::PathBuf)> = Vec::new();

@@ -74,6 +74,10 @@ impl SkillRegistry {
 
     /// 刷新单个 skill entry（skill-updater 写入后调用）
     pub fn refresh(&mut self, entry: SkillEntry) {
+        debug_assert_eq!(
+            entry.skill_id.owner_agent_name, entry.owner_agent_name,
+            "SkillEntry.owner_agent_name must match SkillEntry.skill_id.owner_agent_name"
+        );
         self.skills.insert(entry.skill_id.clone(), entry);
     }
 }
