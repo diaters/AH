@@ -118,7 +118,6 @@ pub fn route_persistent_agent_experience(
 }
 
 /// 占位：spawn skill update workitem。任务 20 将替换为 spawn SkillUpdateRequestMessage。
-#[allow(dead_code)] // 任务 20 启用
 fn spawn_skill_update_workitem(
     commands: &mut Commands,
     candidate_id: Uuid,
@@ -140,7 +139,6 @@ fn spawn_skill_update_workitem(
 }
 
 /// 占位：写回长期记忆。直接置为 WritebackPending，实际写回逻辑由后续任务接入。
-#[allow(dead_code)] // 后续任务启用
 fn writeback_to_long_term_memory_for_persistent_agent(
     store: &mut ExperienceStore,
     candidate_id: Uuid,
