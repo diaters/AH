@@ -285,6 +285,7 @@ pub fn brain_dispatch_system(
                     debug!(
                         event = "TaskInjectedSkillAttached",
                         task_id = %task.id,
+                        selected_agent = %agent.profile.name,
                         skill_id = %skill.as_string(),
                         "attached skill to task"
                     );
@@ -476,6 +477,7 @@ mod tests {
     use crate::{
         app::{BrainConfig, HarnessConfig},
         domain::{AgentCapabilities, AgentProfile, ChannelId, FrontendKind},
+        infrastructure::skills::SkillEntry,
     };
     use uuid::Uuid;
 
@@ -549,6 +551,172 @@ mod tests {
         };
         assert_eq!(task_after.status, TaskStatus::Ready);
         assert!(task_after.delegate.is_some());
+    }
+
+    mod build_sub_task_system_prompt_tests {
+        use super::*;
+
+        fn make_skill_entry(owner: &str, skill_name: &str) -> SkillEntry {
+            SkillEntry {
+                skill_id: SkillId::new(owner, skill_name),
+                name: format!("{}-display", skill_name),
+                description: format!("desc for {}", skill_name),
+                instructions: format!("INSTRUCTIONS_FOR_{}", skill_name),
+                version: 1,
+                owner_agent_name: owner.to_string(),
+                self_updatable: true,
+            }
+        }
+
+        #[test]
+        fn returns_base_when_skill_id_is_none() {
+            let reg = SkillRegistry::default();
+            let result = build_sub_task_system_prompt(&None, &reg);
+            assert_eq!(result, SUB_TASK_SYSTEM_PROMPT);
+        }
+
+        #[test]
+        fn includes_skill_when_registry_hit() {
+            let mut reg = SkillRegistry::default();
+            let entry = make_skill_entry("agent-a", "coding");
+            let skill_id = entry.skill_id.clone();
+            reg.upsert(entry);
+
+            let result = build_sub_task_system_prompt(&Some(skill_id), &reg);
+
+            assert!(
+                result.starts_with(SUB_TASK_SYSTEM_PROMPT),
+                "prompt should start with base SUB_TASK_SYSTEM_PROMPT"
+            );
+            assert!(
+                result.contains("## Skill: coding-display"),
+                "prompt should include the skill display name section"
+            );
+            assert!(
+                result.contains("INSTRUCTIONS_FOR_coding"),
+                "prompt should include the skill instructions"
+            );
+        }
+
+        #[test]
+        fn falls_back_to_base_when_registry_miss() {
+            // SkillRegistry::default() 中无该 skill，应回退到 base prompt，不能 panic
+            let reg = SkillRegistry::default();
+            let missing_skill_id = SkillId::new("agent-a", "missing");
+
+            let result = build_sub_task_system_prompt(&Some(missing_skill_id), &reg);
+
+            assert_eq!(result, SUB_TASK_SYSTEM_PROMPT);
+        }
+    }
+
+    /// 端到端验证：当 `select_agent_for_sub_task_with_skill` 选中了 skill 时，
+    /// `brain_dispatch_system` 会向 task entity 插入 `TaskInjectedSkill { skill_id: Some(...) }`。
+    ///
+    /// 验证链路：SubTaskConfig 路径 → select_agent_for_sub_task_with_skill → 选中 default agent
+    /// （由 list_by_owner 命中预注册的 skill）→ brain_dispatch 注入 TaskInjectedSkill Component。
+    #[test]
+    fn brain_dispatch_attaches_task_injected_skill_when_skill_selected() {
+        let mut app = build_test_app();
+
+        // 给 default-llm-agent 预注册一个 skill
+        {
+            let mut skill_reg = app.world_mut().resource_mut::<SkillRegistry>();
+            skill_reg.upsert(SkillEntry {
+                skill_id: SkillId::new("default-llm-agent", "coding"),
+                name: "coding".to_string(),
+                description: "Coding skill".to_string(),
+                instructions: "Always write tests".to_string(),
+                version: 1,
+                owner_agent_name: "default-llm-agent".to_string(),
+                self_updatable: true,
+            });
+        }
+
+        // Spawn brain agent
+        let brain_agent_id = Uuid::new_v4();
+        app.world_mut().spawn(Agent {
+            id: brain_agent_id,
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "brain agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: Default::default(),
+            system_prompt: None,
+        });
+
+        // Spawn regular agent（带 "default" tag，会被 select_agent_for_sub_task_with_skill 选中）
+        let regular_agent_id = Uuid::new_v4();
+        app.world_mut().spawn(Agent {
+            id: regular_agent_id,
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["default".to_string()],
+                description: "default agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: Default::default(),
+            system_prompt: None,
+        });
+
+        // Spawn 一个带 SubTaskConfig 的 Task
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test-user".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input_ready("write some code", 0, channel);
+        let task_id = task.id;
+        let parent_agent_id = Uuid::new_v4();
+        app.world_mut().spawn((
+            task,
+            SubTaskConfig {
+                batch_id: Uuid::new_v4(),
+                child_agent_name: "coder".to_string(),
+                child_agent_model: None,
+                allowed_tools: vec![],
+                parent_agent_id,
+                depends_on: vec![],
+                depended_by: vec![],
+            },
+        ));
+
+        // 运行一帧
+        app.update();
+
+        // 找到 task entity 并断言 TaskInjectedSkill 已注入且 skill_id 与预期匹配
+        let task_entity = {
+            let world = app.world_mut();
+            let mut query = world.query::<(Entity, &Task)>();
+            query
+                .iter(world)
+                .find(|(_, t)| t.id == task_id)
+                .map(|(e, _)| e)
+                .expect("task should still exist")
+        };
+
+        let injected = app
+            .world()
+            .entity(task_entity)
+            .get::<TaskInjectedSkill>()
+            .expect("TaskInjectedSkill should be attached to task");
+        assert_eq!(
+            injected.skill_id,
+            Some(SkillId::new("default-llm-agent", "coding")),
+            "skill_id should match the skill registered to the selected agent"
+        );
     }
 
     mod skill_selection_parse_tests {

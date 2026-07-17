@@ -167,7 +167,6 @@ pub fn select_agent_for_sub_task<'a>(
 /// 复用 `select_agent_for_sub_task` 选出 agent，然后从 `skill_registry` 列出该 agent 拥有的 skills。
 /// 当前实现采用简单启发式占位（取第一个 skill），未来由 brain_dispatch 系统替换为真实 LLM 调用，
 /// 让 LLM 基于 task_content 和 skill descriptions 选择最合适的 skill。
-#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
 pub fn select_agent_for_sub_task_with_skill<'a>(
     agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,
