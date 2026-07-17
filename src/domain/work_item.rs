@@ -24,6 +24,8 @@ pub enum WorkItemType {
     ExperienceCollection,
     /// profile 生成工作项（孵化场景生成新 profile，更新场景评估并生成更新后 profile）
     ProfileGeneration,
+    /// skill 更新工作项：由 skill-updater Agent 消费，产出 SkillUpdateOperation 列表
+    SkillUpdate,
 }
 
 /// 工作项状态
@@ -279,6 +281,37 @@ impl WorkItem {
         let mut wi = Self::new(
             task_id,
             WorkItemType::ProfileGeneration,
+            input,
+            tags,
+            WorkItemOrigin::ExperienceCollection,
+            WorkItemWritebackTarget::ExperienceInbox,
+        );
+        wi.governing_agent_id = Some(governing_agent_id);
+        wi
+    }
+
+    /// 创建 skill 更新工作项
+    ///
+    /// `skill_id` 标识待更新的 skill；具体的 `SkillUpdateContext` 由调用方
+    /// 作为独立 Component 注入到同一 entity，不存储在 WorkItem 中。
+    pub fn skill_update(
+        task_id: TaskId,
+        prompt: String,
+        conversation: Vec<ConversationMessage>,
+        tools: Vec<ToolDefinition>,
+        governing_agent_id: AgentId,
+        _skill_id: crate::infrastructure::skills::SkillId,
+    ) -> Self {
+        let tags = TagSet::from_tags(["skill_update"]);
+        let context = WorkItemContext {
+            conversation: Some(conversation),
+            tools,
+            system_prompt: None,
+        };
+        let input = WorkItemInput { prompt, context };
+        let mut wi = Self::new(
+            task_id,
+            WorkItemType::SkillUpdate,
             input,
             tags,
             WorkItemOrigin::ExperienceCollection,

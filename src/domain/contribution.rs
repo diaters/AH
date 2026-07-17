@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{AgentId, TaskId};
+use crate::infrastructure::skills::SkillId;
 use crate::user_plugins::hook_point::HookPoint;
 
 /// 经验候选类型提示。
@@ -627,6 +628,19 @@ impl IncubationProposal {
         }
         self.updated_at = chrono::Utc::now();
     }
+}
+
+/// skill-updater workitem 的上下文 Component
+///
+/// 由 orchestrator 在 spawn `WorkItemType::SkillUpdate` workitem 时一并注入到同一 entity，
+/// skill-updater Agent 通过读取该 Component 获取待更新 skill 的基线版本与来源候选，
+/// 完成后由 orchestrator 读取并构造 `SkillUpdateCompletedMessage`。
+#[derive(Component, Debug, Clone)]
+pub struct SkillUpdateContext {
+    pub skill_id: SkillId,
+    pub base_version: u32,
+    pub experience_candidate_id: uuid::Uuid,
+    pub governing_agent_id: AgentId,
 }
 
 #[cfg(test)]
