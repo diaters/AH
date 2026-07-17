@@ -587,5 +587,27 @@ mod tests {
             let (_, skill) = result.unwrap();
             assert_eq!(skill, None);
         }
+
+        #[test]
+        fn parse_strips_markdown_json_block() {
+            // LLM 常见输出格式：```json ... ``` 代码块包裹
+            let json = "```json\n{\"agent_name\":\"a\",\"skill_name\":\"coding\"}\n```";
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (agent, skill) = result.unwrap();
+            assert_eq!(agent, "a");
+            assert_eq!(skill, Some("coding".to_string()));
+        }
+
+        #[test]
+        fn parse_strips_bom_and_zero_width_chars() {
+            // BOM (U+FEFF) + 零宽空格 (U+200B) 等不可见字符应被清洗
+            let json = "\u{feff}\u{200b}{\"agent_name\":\"a\",\"skill_name\":\"coding\"}";
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (agent, skill) = result.unwrap();
+            assert_eq!(agent, "a");
+            assert_eq!(skill, Some("coding".to_string()));
+        }
     }
 }
