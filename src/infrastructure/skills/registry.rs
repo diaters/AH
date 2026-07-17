@@ -71,6 +71,11 @@ impl SkillRegistry {
         );
         self.skills.insert(entry.skill_id.clone(), entry);
     }
+
+    /// 刷新单个 skill entry（skill-updater 写入后调用）
+    pub fn refresh(&mut self, entry: SkillEntry) {
+        self.skills.insert(entry.skill_id.clone(), entry);
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +134,49 @@ mod tests {
         reg.upsert(sample_entry("c", "agent-b"));
         let owned = reg.list_by_owner("agent-a");
         assert_eq!(owned.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_replaces_entry() {
+        let mut reg = SkillRegistry::default();
+        let mut entry = SkillEntry {
+            skill_id: SkillId::new("agent", "skill"),
+            name: "skill".to_string(),
+            description: "old".to_string(),
+            instructions: "old".to_string(),
+            version: 1,
+            owner_agent_name: "agent".to_string(),
+            self_updatable: true,
+        };
+        reg.upsert(entry.clone());
+        entry.version = 2;
+        entry.instructions = "new".to_string();
+        reg.refresh(entry);
+        let got = reg
+            .get(&SkillId::new("agent", "skill"))
+            .expect("skill should exist");
+        assert_eq!(got.version, 2);
+        assert_eq!(got.instructions, "new");
+    }
+
+    #[test]
+    fn refresh_inserts_if_missing() {
+        let mut reg = SkillRegistry::default();
+        let entry = SkillEntry {
+            skill_id: SkillId::new("agent", "new-skill"),
+            name: "new-skill".to_string(),
+            description: "d".to_string(),
+            instructions: "i".to_string(),
+            version: 1,
+            owner_agent_name: "agent".to_string(),
+            self_updatable: true,
+        };
+        reg.refresh(entry);
+        assert_eq!(reg.skills.len(), 1);
     }
 }
