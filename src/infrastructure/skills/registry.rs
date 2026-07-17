@@ -35,6 +35,7 @@ impl SkillId {
     }
 }
 
+/// Skill 元数据：名称、描述、指令、版本与归属 Agent
 #[derive(Clone, Debug)]
 pub struct SkillEntry {
     pub skill_id: SkillId,
@@ -52,8 +53,8 @@ pub struct SkillRegistry {
 }
 
 impl SkillRegistry {
-    pub fn get(&self, skill_id: &SkillId) -> &SkillEntry {
-        &self.skills[skill_id]
+    pub fn get(&self, skill_id: &SkillId) -> Option<&SkillEntry> {
+        self.skills.get(skill_id)
     }
 
     pub fn list_by_owner(&self, owner_agent_name: &str) -> Vec<&SkillEntry> {
@@ -64,6 +65,10 @@ impl SkillRegistry {
     }
 
     pub fn upsert(&mut self, entry: SkillEntry) {
+        debug_assert_eq!(
+            entry.skill_id.owner_agent_name, entry.owner_agent_name,
+            "SkillEntry.owner_agent_name must match SkillEntry.skill_id.owner_agent_name"
+        );
         self.skills.insert(entry.skill_id.clone(), entry);
     }
 }
@@ -105,11 +110,15 @@ mod tests {
     fn registry_upsert_replaces() {
         let mut reg = SkillRegistry::default();
         let mut entry = sample_entry("coding", "agent-a");
-        entry.version = 1;
         reg.upsert(entry.clone());
         entry.version = 2;
         reg.upsert(entry);
-        assert_eq!(reg.get(&SkillId::new("agent-a", "coding")).version, 2);
+        assert_eq!(
+            reg.get(&SkillId::new("agent-a", "coding"))
+                .expect("skill should exist")
+                .version,
+            2
+        );
     }
 
     #[test]
