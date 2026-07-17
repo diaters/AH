@@ -1,3 +1,4 @@
+use crate::infrastructure::skills::registry::{SkillEntry, SkillId, SkillRegistry};
 use crate::prelude::Resource;
 use std::path::PathBuf;
 
@@ -81,6 +82,43 @@ impl SkillLoader {
                 })
             })
             .collect()
+    }
+
+    /// 扫描所有 agent 的 skills 目录，构造 SkillRegistry。
+    ///
+    /// 遍历 `base_dir/agents/<agent_name>/skills/<skill_name>/SKILL.md`，
+    /// 解析每个 SKILL.md 并以 `SkillId(owner_agent_name, skill_name)` 为键
+    /// 写入 `SkillRegistry`。
+    pub fn build_registry(&self) -> SkillRegistry {
+        let mut registry = SkillRegistry::default();
+        let agents_dir = self.base_dir.join("agents");
+        if let Ok(agent_entries) = std::fs::read_dir(&agents_dir) {
+            for agent_entry in agent_entries.flatten() {
+                let agent_name = agent_entry.file_name().to_string_lossy().to_string();
+                let skills_dir = agent_entry.path().join("skills");
+                if let Ok(skill_entries) = std::fs::read_dir(&skills_dir) {
+                    for skill_entry in skill_entries.flatten() {
+                        let skill_path = skill_entry.path().join("SKILL.md");
+                        if let Ok(content) = std::fs::read_to_string(&skill_path)
+                            && let Some(loaded) = parse_skill_md(&content)
+                        {
+                            let skill_id = SkillId::new(agent_name.clone(), loaded.name.clone());
+                            let entry = SkillEntry {
+                                skill_id,
+                                name: loaded.name,
+                                description: loaded.description,
+                                instructions: loaded.instructions,
+                                version: loaded.version,
+                                owner_agent_name: agent_name.clone(),
+                                self_updatable: loaded.self_updatable,
+                            };
+                            registry.upsert(entry);
+                        }
+                    }
+                }
+            }
+        }
+        registry
     }
 
     /// 将 Skill 列表格式化为系统提示注入文本。
@@ -285,5 +323,64 @@ mod version_field_tests {
         let content = "---\nname: my-skill\nself_updatable: maybe\n---\n\n## Usage\n\nDo it.\n";
         let parsed = parse_skill_md(content).unwrap();
         assert!(parsed.self_updatable);
+    }
+}
+
+#[cfg(test)]
+mod registry_build_tests {
+    use super::*;
+    use crate::infrastructure::skills::registry::{SkillId, SkillRegistry};
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_skill(base: &std::path::Path, agent: &str, skill_name: &str, content: &str) {
+        let dir = base
+            .join("agents")
+            .join(agent)
+            .join("skills")
+            .join(skill_name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
+
+    #[test]
+    fn build_registry_scans_all_agents() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".harness").join("assets");
+        write_skill(
+            &base,
+            "agent-a",
+            "coding",
+            "---\nname: coding\ndescription: coding skill\nversion: 2\n---\n\n## Usage\n\nDo it.\n",
+        );
+        write_skill(
+            &base,
+            "agent-a",
+            "review",
+            "---\nname: review\ndescription: review skill\n---\n\n## Usage\n\nReview.\n",
+        );
+        write_skill(
+            &base,
+            "agent-b",
+            "writing",
+            "---\nname: writing\ndescription: writing skill\nself_updatable: false\n---\n\n## Usage\n\nWrite.\n",
+        );
+
+        let loader = SkillLoader {
+            base_dir: base.clone(),
+        };
+        let registry: SkillRegistry = loader.build_registry();
+
+        assert_eq!(registry.skills.len(), 3);
+        let coding = registry
+            .get(&SkillId::new("agent-a", "coding"))
+            .expect("coding skill should exist");
+        assert_eq!(coding.version, 2);
+        assert_eq!(coding.owner_agent_name, "agent-a");
+        assert!(coding.self_updatable);
+        let writing = registry
+            .get(&SkillId::new("agent-b", "writing"))
+            .expect("writing skill should exist");
+        assert!(!writing.self_updatable);
     }
 }
