@@ -149,7 +149,6 @@ fn spawn_skill_update_workitem(
 }
 
 /// skill 更新 WorkItem 创建系统：将 skill 更新请求转换为独立 WorkItem 分配给 skill-updater Agent。
-#[allow(dead_code)] // 任务 22 系统注册时启用
 pub(crate) fn skill_update_workitem_system(
     mut commands: Commands,
     requests: Query<(Entity, &SkillUpdateRequestMessage)>,
@@ -301,7 +300,6 @@ pub(crate) fn skill_update_workitem_system(
 ///
 /// 错误处理：文件读取 / apply / 写入失败时候选状态保持不变（仍为 `GovernanceResolved`），
 /// 仅记录 warn 日志并 despawn 消息。history 备份与清理失败不阻断主流程。
-#[allow(dead_code)] // 任务 22 系统注册时启用
 pub(crate) fn skill_update_completion_system(
     mut commands: Commands,
     messages: Query<(Entity, &SkillUpdateCompletedMessage)>,
