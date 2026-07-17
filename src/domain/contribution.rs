@@ -1,4 +1,4 @@
-use crate::prelude::{Component, Event, Resource};
+use crate::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -635,6 +635,7 @@ impl IncubationProposal {
 /// 由 orchestrator 在 spawn `WorkItemType::SkillUpdate` workitem 时一并注入到同一 entity，
 /// skill-updater Agent 通过读取该 Component 获取待更新 skill 的基线版本与来源候选，
 /// 完成后由 orchestrator 读取并构造 `SkillUpdateCompletedMessage`。
+#[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
 #[derive(Component, Debug, Clone)]
 pub struct SkillUpdateContext {
     pub skill_id: SkillId,
@@ -664,7 +665,7 @@ pub enum SkillUpdateOperation {
 
 /// skill-updater workitem 完成后由 orchestrator spawn
 #[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
-#[derive(Debug, Clone, Event)]
+#[derive(Debug, Clone, Component)]
 pub struct SkillUpdateCompletedMessage {
     pub work_item_id: uuid::Uuid,
     pub task_id: TaskId,
@@ -948,7 +949,7 @@ mod skill_update_operation_tests {
     }
 
     #[test]
-    fn frontmatter_field_whitelist_enforced_at_apply_layer() {
+    fn replace_frontmatter_preserves_arbitrary_field_through_serde_roundtrip() {
         // 枚举本身允许任意 field 值；白名单检查应在 apply 层
         let op = SkillUpdateOperation::ReplaceFrontmatter {
             field: "arbitrary_field".to_string(),
