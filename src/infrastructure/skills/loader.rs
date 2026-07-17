@@ -24,6 +24,8 @@ pub struct LoadedSkill {
     pub name: String,
     pub description: String,
     pub instructions: String,
+    pub version: u32,
+    pub self_updatable: bool,
 }
 
 /// Skill 加载器：扫描 Agent 的 skills 目录，解析 SKILL.md。
@@ -50,7 +52,8 @@ impl SkillLoader {
                 let path = entry.ok()?.path();
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
-                    parse_skill_md(&skill_md)
+                    let content = std::fs::read_to_string(&skill_md).ok()?;
+                    parse_skill_md(&content)
                 } else {
                     None
                 }
@@ -71,7 +74,8 @@ impl SkillLoader {
             .entries
             .iter()
             .filter_map(|c| {
-                parse_skill_md(&c.path).map(|mut s| {
+                let content = std::fs::read_to_string(&c.path).ok()?;
+                parse_skill_md(&content).map(|mut s| {
                     s.name = format!("{}:{}", c.plugin_id, s.name);
                     s
                 })
@@ -94,31 +98,57 @@ impl SkillLoader {
     }
 }
 
-fn parse_skill_md(path: &std::path::Path) -> Option<LoadedSkill> {
-    let content = std::fs::read_to_string(path).ok()?;
-    if !content.starts_with("---") {
+pub fn parse_skill_md(content: &str) -> Option<LoadedSkill> {
+    let mut lines = content.lines();
+    let first = lines.next()?;
+    if first.trim() != "---" {
         return None;
     }
-    let rest = &content[3..];
-    let end = rest.find("---")?;
-    let frontmatter = &rest[..end];
-    let instructions = rest[end + 3..].trim().to_string();
 
-    let name = frontmatter
-        .lines()
-        .find(|l| l.starts_with("name:"))
-        .map(|l| l.trim_start_matches("name:").trim().to_string())
-        .unwrap_or_default();
-    let description = frontmatter
-        .lines()
-        .find(|l| l.starts_with("description:"))
-        .map(|l| l.trim_start_matches("description:").trim().to_string())
-        .unwrap_or_default();
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut version: u32 = 1;
+    let mut self_updatable: bool = true;
+    let mut instructions_lines: Vec<String> = Vec::new();
+    let mut in_frontmatter = true;
 
+    for line in lines {
+        if in_frontmatter {
+            if line.trim() == "---" {
+                in_frontmatter = false;
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("name:") {
+                name = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("description:") {
+                description = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("version:") {
+                if let Ok(v) = rest.trim().parse::<u32>() {
+                    version = v;
+                }
+            } else if let Some(rest) = line.strip_prefix("self_updatable:") {
+                match rest.trim() {
+                    "true" => self_updatable = true,
+                    "false" => self_updatable = false,
+                    _ => {}
+                }
+            }
+        } else {
+            instructions_lines.push(line.to_string());
+        }
+    }
+
+    if name.is_empty() {
+        return None;
+    }
+
+    let instructions = instructions_lines.join("\n").trim().to_string();
     Some(LoadedSkill {
         name,
         description,
         instructions,
+        version,
+        self_updatable,
     })
 }
 
@@ -132,6 +162,8 @@ mod tests {
             name: "smoke-test".to_string(),
             description: "验证工具链".to_string(),
             instructions: "1. 运行脚本".to_string(),
+            version: 1,
+            self_updatable: true,
         }];
         let prompt = SkillLoader::format_skills_prompt(&skills);
         assert!(prompt.contains("## 可用技能"));
@@ -188,5 +220,34 @@ mod tests {
         };
         let skills = loader.load_plugin_skills(&contributions, "any-agent");
         assert!(skills.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod version_field_tests {
+    use super::*;
+
+    #[test]
+    fn parse_skill_md_with_version_and_self_updatable() {
+        let content = "---\nname: my-skill\ndescription: A skill\nversion: 3\nself_updatable: false\n---\n\n## Usage\n\nDo the thing.\n";
+        let parsed = parse_skill_md(content).unwrap();
+        assert_eq!(parsed.version, 3);
+        assert!(!parsed.self_updatable);
+    }
+
+    #[test]
+    fn parse_skill_md_defaults_when_fields_missing() {
+        let content =
+            "---\nname: my-skill\ndescription: A skill\n---\n\n## Usage\n\nDo the thing.\n";
+        let parsed = parse_skill_md(content).unwrap();
+        assert_eq!(parsed.version, 1);
+        assert!(parsed.self_updatable);
+    }
+
+    #[test]
+    fn parse_skill_md_self_updatable_true_explicit() {
+        let content = "---\nname: my-skill\ndescription: A skill\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n";
+        let parsed = parse_skill_md(content).unwrap();
+        assert!(parsed.self_updatable);
     }
 }
