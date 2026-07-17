@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::domain::SkillUpdateOperation;
 
 /// 允许 LLM 修改的 frontmatter 字段白名单
@@ -119,6 +121,37 @@ pub enum ApplyError {
     FieldNotWhitelisted(String),
 }
 
+/// 保留最新 keep 代历史，删除超出部分
+pub fn cleanup_skill_history(history_dir: &Path, keep: usize) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(history_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()), // 目录不存在视为无操作
+    };
+
+    let mut versions: Vec<(u32, std::path::PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        // 解析 vN.md
+        if let Some(stripped) = file_name.strip_prefix('v')
+            && let Some(name) = stripped.strip_suffix(".md")
+            && let Ok(v) = name.parse::<u32>()
+        {
+            versions.push((v, path));
+        }
+    }
+
+    versions.sort_by_key(|(v, _)| *v);
+    let excess = versions.len().saturating_sub(keep);
+    for (_, path) in versions.iter().take(excess) {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +228,38 @@ mod tests {
             apply_skill_operations(SAMPLE, &ops),
             Err(ApplyError::FieldNotWhitelisted(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn cleanup_keeps_latest_3_generations() {
+        let tmp = TempDir::new().unwrap();
+        let history_dir = tmp.path().join("history");
+        fs::create_dir_all(&history_dir).unwrap();
+        for v in 1..=6 {
+            fs::write(history_dir.join(format!("v{}.md", v)), format!("v{}", v)).unwrap();
+        }
+        cleanup_skill_history(&history_dir, 3).unwrap();
+        let remaining: Vec<_> = fs::read_dir(&history_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.len(), 3);
+        // 保留最新的 3 代（v4, v5, v6）
+        assert!(remaining.contains(&"v4.md".to_string()));
+        assert!(remaining.contains(&"v5.md".to_string()));
+        assert!(remaining.contains(&"v6.md".to_string()));
+    }
+
+    #[test]
+    fn cleanup_no_dir_is_noop() {
+        let result = cleanup_skill_history(std::path::Path::new("/nonexistent"), 3);
+        assert!(result.is_ok());
     }
 }
