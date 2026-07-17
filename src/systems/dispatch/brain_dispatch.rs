@@ -366,9 +366,15 @@ struct BrainSkillSelection {
 /// - `skill_name` 为非字符串类型（数字、布尔、对象、数组）：记录 warn 日志并返回 None
 /// - `agent_name` 字段缺失：返回 Err
 /// - JSON 格式错误：返回 Err
+///
+/// 输入清洗：调用 [`sanitize_brain_output`] 剥离 LLM 常见的 markdown 代码块包裹、
+/// BOM 与不可见字符，逻辑与 `crate::llm::brain_prompt` 中的私有函数对齐，
+/// 但不跨模块复用以避免引入不必要的耦合。
 #[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
 pub fn parse_brain_skill_selection(raw: &str) -> Result<(String, Option<String>), String> {
-    let parsed: BrainSkillSelection = serde_json::from_str(raw)
+    // 清洗 LLM 输出：剥离 markdown 包裹/BOM/不可见字符
+    let cleaned = sanitize_brain_output(raw);
+    let parsed: BrainSkillSelection = serde_json::from_str(&cleaned)
         .map_err(|e| format!("invalid brain skill selection JSON: {}", e))?;
     let skill = match parsed.skill_name {
         None => None,
@@ -382,14 +388,45 @@ pub fn parse_brain_skill_selection(raw: &str) -> Result<(String, Option<String>)
         }
         Some(other) => {
             warn!(
-                event = "UnexpectedSkillNameType",
-                value = ?other,
+                event = "SkillNameParseFailed",
+                error_type = "NonStringSkillName",
+                error = ?other,
                 "skill_name is not a string, treating as None"
             );
             None
         }
     };
     Ok((parsed.agent_name, skill))
+}
+
+/// 清洗 brain LLM 输出：剥离 markdown 代码块包裹、BOM 与不可见字符。
+///
+/// 与 `crate::llm::brain_prompt::sanitize_json_like_input` +
+/// `extract_json_block` 逻辑对齐，因后者为私有函数且跨模块复用价值有限，
+/// 此处保留本地实现供 brain_dispatch 使用。
+fn sanitize_brain_output(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+
+    // 剥离 BOM (U+FEFF)
+    if let Some(stripped) = s.strip_prefix('\u{feff}') {
+        s = stripped.to_string();
+    }
+
+    // 剥离不可见字符 (U+200B / U+200C / U+200D / U+2060)
+    for inv in ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}'] {
+        s = s.replace(inv, "");
+    }
+
+    // 剥离 ```json ... ``` 代码块包裹
+    let trimmed = s.trim();
+    if let (Some(start), Some(end)) = (trimmed.find("```json"), trimmed.rfind("```"))
+        && end > start
+    {
+        let json_start = start + 7;
+        return trimmed[json_start..end].trim().to_string();
+    }
+
+    s
 }
 
 #[cfg(test)]
@@ -524,6 +561,31 @@ mod tests {
             let json = "not a json";
             let result = parse_brain_skill_selection(json);
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn parse_missing_agent_name_errors() {
+            let json = r#"{"skill_name": "coding"}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn parse_non_string_skill_name_returns_none() {
+            // 数字类型 skill_name 应被容错为 None
+            let json = r#"{"agent_name": "agent-a", "skill_name": 123}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (agent, skill) = result.unwrap();
+            assert_eq!(agent, "agent-a");
+            assert_eq!(skill, None);
+
+            // 布尔类型 skill_name 应被容错为 None
+            let json = r#"{"agent_name": "agent-a", "skill_name": true}"#;
+            let result = parse_brain_skill_selection(json);
+            assert!(result.is_ok());
+            let (_, skill) = result.unwrap();
+            assert_eq!(skill, None);
         }
     }
 }
