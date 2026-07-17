@@ -86,12 +86,16 @@ impl SkillLoader {
 
     /// 扫描所有 agent 的 skills 目录，构造 SkillRegistry。
     ///
-    /// 遍历 `base_dir/agents/<agent_name>/skills/<skill_name>/SKILL.md`，
+    /// 遍历 `base_dir/<agent_name>/skills/<skill_name>/SKILL.md`，
     /// 解析每个 SKILL.md 并以 `SkillId(owner_agent_name, skill_name)` 为键
     /// 写入 `SkillRegistry`。
+    ///
+    /// `base_dir` 本身就是 `agents/` 目录，与 `default_path()` / `load_skills`
+    /// 的语义保持一致。
     pub fn build_registry(&self) -> SkillRegistry {
         let mut registry = SkillRegistry::default();
-        let agents_dir = self.base_dir.join("agents");
+        // base_dir 本身就是 agents/ 目录，与 load_skills / load_plugin_skills 一致
+        let agents_dir = self.base_dir.clone();
         if let Ok(agent_entries) = std::fs::read_dir(&agents_dir) {
             for agent_entry in agent_entries.flatten() {
                 let agent_name = agent_entry.file_name().to_string_lossy().to_string();
@@ -333,12 +337,10 @@ mod registry_build_tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn write_skill(base: &std::path::Path, agent: &str, skill_name: &str, content: &str) {
-        let dir = base
-            .join("agents")
-            .join(agent)
-            .join("skills")
-            .join(skill_name);
+    /// 写入一个 SKILL.md 到 `<agents_dir>/<agent>/skills/<skill_name>/SKILL.md`。
+    /// `agents_dir` 应直接指向 `agents/` 目录本身，与 `default_path()` 语义一致。
+    fn write_skill(agents_dir: &std::path::Path, agent: &str, skill_name: &str, content: &str) {
+        let dir = agents_dir.join(agent).join("skills").join(skill_name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), content).unwrap();
     }
@@ -346,28 +348,29 @@ mod registry_build_tests {
     #[test]
     fn build_registry_scans_all_agents() {
         let tmp = TempDir::new().unwrap();
-        let base = tmp.path().join(".harness").join("assets");
+        // base_dir 是 agents/ 目录本身（与 default_path() 语义一致）
+        let agents_dir = tmp.path().join(".harness").join("assets").join("agents");
         write_skill(
-            &base,
+            &agents_dir,
             "agent-a",
             "coding",
             "---\nname: coding\ndescription: coding skill\nversion: 2\n---\n\n## Usage\n\nDo it.\n",
         );
         write_skill(
-            &base,
+            &agents_dir,
             "agent-a",
             "review",
             "---\nname: review\ndescription: review skill\n---\n\n## Usage\n\nReview.\n",
         );
         write_skill(
-            &base,
+            &agents_dir,
             "agent-b",
             "writing",
             "---\nname: writing\ndescription: writing skill\nself_updatable: false\n---\n\n## Usage\n\nWrite.\n",
         );
 
         let loader = SkillLoader {
-            base_dir: base.clone(),
+            base_dir: agents_dir.clone(),
         };
         let registry: SkillRegistry = loader.build_registry();
 
