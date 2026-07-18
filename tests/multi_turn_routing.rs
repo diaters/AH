@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskRoutingPolicy,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExternalInput,
+    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy,
     TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 
@@ -19,18 +20,70 @@ use tokio::runtime::Runtime;
 struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
+    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        match request.request_kind {
+            harness::AgentRequestKind::BrainDecision => Box::pin(async move {
+                Ok(AgentExecutionOutput {
+                    content: harness::OutputContent::Text(
+                        r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
+                    ),
+                    reasoning_content: None,
+                })
+            }),
+            _ => Box::pin(async move {
+                Ok(AgentExecutionOutput {
+                    content: harness::OutputContent::Text("echo".to_string()),
+                    reasoning_content: None,
+                })
+            }),
+        }
     }
 }
 
 fn test_config() -> HarnessConfig {
     HarnessConfig::default()
+}
+
+/// Helper: spawn brain + default-llm-agent（统一 dispatch 架构要求）
+fn spawn_default_agents(app: &mut bevy_app::App) {
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        },
+        LongTermMemory::default(),
+    ));
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "default-llm-agent".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["llm".to_string(), "default".to_string()],
+                description: "Default LLM Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        },
+        LongTermMemory::default(),
+    ));
 }
 
 #[test]
@@ -82,32 +135,36 @@ fn user_input_continues_waiting_task() {
     );
 
     app.update();
+    spawn_default_agents(&mut app);
 
     // Create a task in Waiting(User) state (multi-turn)
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn(Task {
-        id: task_id,
-        content: "existing task".to_string(),
-        creator: uuid::Uuid::nil(),
-        delegate: None,
-        status: TaskStatus::Waiting(WaitingReason::User),
-        pending_confirmation_id: None,
-        input_summary: "existing task".to_string(),
-        result_summary: String::new(),
-        priority: 0,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: true,
-        parent_task_id: None,
-        batch_id: None,
-        origin_channel: Some(default_channel()),
-        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-        last_evaluated_turn: None,
-    });
+    app.world_mut().spawn((
+        Task {
+            id: task_id,
+            content: "existing task".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Waiting(WaitingReason::User),
+            pending_confirmation_id: None,
+            input_summary: "existing task".to_string(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+            last_evaluated_turn: None,
+        },
+        ShortTermMemory::default(),
+    ));
 
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
@@ -278,6 +335,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
     );
 
     app.update();
+    spawn_default_agents(&mut app);
 
     // 创建两个 Waiting(User) 状态的任务
     let task_id_1 = uuid::Uuid::new_v4();
