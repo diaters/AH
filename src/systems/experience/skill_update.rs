@@ -15,12 +15,11 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentId, AgentRequestKind,
-    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-    ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceKindFilter,
-    ExperienceKindHint, ExperienceStore, MessageDispatchedHookPending, SkillUpdateCompletedMessage,
-    SkillUpdateContext, SkillUpdateRequestMessage, SpaceToolRegistry, Task, TaskId, WorkItem,
-    WorkItemLifecycleHookPending,
+    AgentId, DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidate,
+    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
+    ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
+    PendingDispatch, SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateRequestMessage,
+    SpaceToolRegistry, Task, TaskId, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::infrastructure::skills::{
     SkillEntry, SkillId, SkillLoader, SkillRegistry, apply_skill_operations, cleanup_skill_history,
@@ -148,37 +147,17 @@ fn spawn_skill_update_workitem(
     });
 }
 
-/// skill 更新 WorkItem 创建系统：将 skill 更新请求转换为独立 WorkItem 分配给 skill-updater Agent。
+/// skill 更新 WorkItem 创建系统：将 skill 更新请求转换为 WorkItem 并附加 PendingDispatch，
+/// 由统一 dispatch_system 查找 skill-updater Agent 并派发执行请求。
 pub(crate) fn skill_update_workitem_system(
     mut commands: Commands,
     requests: Query<(Entity, &SkillUpdateRequestMessage)>,
-    agents: Query<&Agent>,
     store: Res<ExperienceStore>,
     registry: Res<SpaceToolRegistry>,
     skill_registry: Res<SkillRegistry>,
 ) {
     for (entity, request) in &requests {
-        // 1. 查找 skill-updater Agent（按 tags 匹配 "skill-updater"）
-        let skill_updater = agents
-            .iter()
-            .find(|a| a.capabilities.tags.iter().any(|t| t == "skill-updater"));
-
-        let skill_updater_id = match skill_updater {
-            Some(a) => a.id,
-            None => {
-                warn!(
-                    event = "SkillUpdaterNotFound",
-                    task_id = %request.task_id,
-                    skill_id = %request.skill_id.as_string(),
-                    "skill-updater agent not found, skipping skill update"
-                );
-                // 候选状态保持原 GovernanceResolved，不强制降级
-                commands.entity(entity).despawn();
-                continue;
-            }
-        };
-
-        // 2. 从 SkillRegistry 取 skill 内容
+        // 1. 从 SkillRegistry 取 skill 内容
         let Some(skill_entry) = skill_registry.get(&request.skill_id) else {
             warn!(
                 event = "SkillNotFoundInRegistry",
@@ -192,7 +171,7 @@ pub(crate) fn skill_update_workitem_system(
             continue;
         };
 
-        // 3. 从 ExperienceStore 取候选原文
+        // 2. 从 ExperienceStore 取候选原文
         let Some(candidate) = store.candidates.get(&request.experience_candidate_id) else {
             warn!(
                 event = "ExperienceCandidateNotFound",
@@ -206,7 +185,7 @@ pub(crate) fn skill_update_workitem_system(
             continue;
         };
 
-        // 4. 构造 prompt（含原 skill instructions + 候选原文 + 版本号）
+        // 3. 构造 prompt（含原 skill instructions + 候选原文 + 版本号）
         let prompt = format!(
             "## 任务\n\n根据以下经验候选，为现有 skill 提交结构化 diff 更新。\n\n\
              ## 原 skill（version {}）\n\n{}\n\n\
@@ -224,43 +203,30 @@ pub(crate) fn skill_update_workitem_system(
             skill_entry.version + 1,
         );
 
-        // 5. 从 registry 过滤工具，仅保留 submit_skill_update
+        // 4. 从 registry 过滤工具，仅保留 submit_skill_update
         let tools: Vec<crate::domain::ToolDefinition> = registry
             .iter()
             .filter(|tool| tool.name == "submit_skill_update")
             .cloned()
             .collect();
 
-        // 6. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
+        // 5. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
         let conversation = Vec::new();
 
-        // 7. 创建 WorkItem 并分配给 skill-updater，直接启动并派发执行请求
-        let mut work_item = WorkItem::skill_update(
+        // 6. 创建 WorkItem 并附加 PendingDispatch，由 dispatch_system 查找 Agent 并派发执行请求
+        let work_item = WorkItem::skill_update(
             request.task_id,
             prompt,
             conversation,
             tools,
             request.governing_agent_id,
         );
-        // 若 Agent 配置了 system_prompt（来自 agents.toml），覆盖 WorkItem 的默认 system_prompt
-        if let Some(agent_system_prompt) = skill_updater.and_then(|a| a.system_prompt.as_ref()) {
-            work_item.input.context.system_prompt = Some(agent_system_prompt.clone());
-        }
-        work_item.assign(skill_updater_id);
-        work_item.start();
-
-        let work_item_id = work_item.id;
-        let exec_prompt = work_item.input.prompt.clone();
-        let exec_system_prompt = work_item.input.context.system_prompt.clone();
-        let exec_tools = work_item.input.context.tools.clone();
-        let exec_conversation = work_item.input.context.conversation.clone();
 
         debug!(
             event = "SkillUpdateWorkItemCreated",
             task_id = %request.task_id,
             skill_id = %request.skill_id.as_string(),
             base_version = skill_entry.version,
-            agent_id = %skill_updater_id,
             "spawning skill update work item"
         );
 
@@ -272,23 +238,15 @@ pub(crate) fn skill_update_workitem_system(
                 experience_candidate_id: request.experience_candidate_id,
                 governing_agent_id: request.governing_agent_id,
             },
-            WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted),
-        ));
-        commands.spawn((
-            AgentExecutionRequestMessage {
-                request: AgentExecutionRequest {
-                    task_id: request.task_id,
-                    agent_id: skill_updater_id,
-                    request_kind: AgentRequestKind::LlmCompletion,
-                    prompt: exec_prompt,
-                    system_prompt: exec_system_prompt,
-                    tools: exec_tools,
-                    conversation: exec_conversation,
-                    work_item_id: Some(work_item_id),
-                    model_override: None,
+            PendingDispatch {
+                kind: DispatchKind::WorkItem(WorkItemType::SkillUpdate),
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
                 },
             },
-            MessageDispatchedHookPending,
         ));
         commands.entity(entity).despawn();
     }

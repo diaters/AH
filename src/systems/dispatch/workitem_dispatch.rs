@@ -7,8 +7,8 @@ use tracing::{debug, warn};
 
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-    MessageDispatchedHookPending, Task, TaskEvaluationConfig, TaskStatus, WaitingReason, WorkItem,
-    WorkItemLifecycleHookPending, WorkItemStatus, WorkItemType,
+    MessageDispatchedHookPending, PendingDispatch, Task, TaskEvaluationConfig, TaskStatus,
+    WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemStatus, WorkItemType,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -22,9 +22,14 @@ pub(crate) fn workitem_dispatch_system(
     config: Res<TaskEvaluationConfig>,
     agents: Query<&Agent>,
     mut tasks: Query<&mut Task>,
-    mut work_items: Query<(Entity, &mut WorkItem)>,
+    mut work_items: Query<(Entity, &mut WorkItem, Option<&PendingDispatch>)>,
 ) {
-    for (_entity, mut work_item) in &mut work_items {
+    for (_entity, mut work_item, pending_dispatch) in &mut work_items {
+        // 阶段 4：带 PendingDispatch 的 WorkItem 由 dispatch_system 处理，跳过
+        if pending_dispatch.is_some() {
+            continue;
+        }
+
         // 只处理 Pending 状态
         if work_item.status != WorkItemStatus::Pending {
             continue;
