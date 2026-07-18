@@ -205,7 +205,7 @@ fn build_profile_generation_prompt(
 /// `work_item_entity`：对应的 WorkItem Entity，用于清理 ProfileGenerationContext Component。
 ///   若 WorkItem 已被 despawn（例如 LLM 异常路径中 WorkItem 已被 llm_response_system despawn），
 ///   传入 None 时跳过 Component 清理（此时 Component 已随 Entity 一起消失）。
-fn handle_profile_generation_failure(
+pub(crate) fn handle_profile_generation_failure(
     commands: &mut Commands,
     store: &mut ExperienceStore,
     pending_hooks: &mut PendingExperienceHooks,

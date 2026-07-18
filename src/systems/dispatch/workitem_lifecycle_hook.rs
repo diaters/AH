@@ -18,7 +18,12 @@ use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::debug;
 
-use crate::domain::{WorkItem, WorkItemLifecycleHookPending};
+use crate::app::Clock;
+use crate::domain::{
+    ExperienceStore, PendingExperienceHooks, ProfileGenerationContext, SkillUpdateContext, Task,
+    TaskStatus, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
+};
+use crate::systems::experience::profile_generation::handle_profile_generation_failure;
 use crate::user_plugins::dispatcher::{
     HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
     flush_world_commands,
@@ -63,6 +68,11 @@ pub fn workitem_lifecycle_hook_system(world: &mut World) {
             for (entity, work_item, hook_point) in targets {
                 dispatch_workitem_lifecycle_hook(world, &mut registry, &work_item, hook_point);
 
+                // 失败特化处理：按 Context Component 分流（设计文档 §2.7 决策 14、§3.7）。
+                if hook_point == HookPoint::OnWorkItemFailed {
+                    handle_workitem_failure_by_context(world, entity, &work_item);
+                }
+
                 // 移除标记。
                 if let Ok(mut e) = world.get_entity_mut(entity) {
                     e.remove::<WorkItemLifecycleHookPending>();
@@ -70,6 +80,109 @@ pub fn workitem_lifecycle_hook_system(world: &mut World) {
             }
         },
     );
+}
+
+/// 按 Context Component 分流 WorkItem 失败处理。
+///
+/// 在 `OnWorkItemFailed` hook 派发后调用，依据 WorkItem Entity 上附加的 Context
+/// Component 选择特化路径：
+///
+/// - `SkillUpdateContext`：候选保持 `GovernanceResolved`（仅日志，不强制降级）。
+/// - `ProfileGenerationContext`：调用 `handle_profile_generation_failure`
+///   （孵化场景标记候选失败 + 通知用户；更新场景静默跳过）。
+/// - 默认（Evaluation / Summarization / ExperienceCollection）：
+///   - Evaluation: `Task Waiting(Evaluator)` → `Ready`
+///   - Summarization: `Task Waiting(Summarization)` → `Waiting(User)`
+///   - ExperienceCollection: 不回滚 Task
+///
+/// Task 状态恢复逻辑迁移自 `workitem_dispatch.rs`（task 5.1 将删除该文件）。
+fn handle_workitem_failure_by_context(world: &mut World, entity: Entity, work_item: &WorkItem) {
+    // 1. SkillUpdateContext：候选保持 GovernanceResolved（仅日志，不强制降级）
+    if world.get::<SkillUpdateContext>(entity).is_some() {
+        debug!(
+            event = "SkillUpdateWorkItemFailedContext",
+            work_item_id = %work_item.id,
+            task_id = %work_item.task_id,
+            "skill update work item failed, candidate remains GovernanceResolved"
+        );
+        return;
+    }
+
+    // 2. ProfileGenerationContext：调用 handle_profile_generation_failure
+    if let Some(ctx) = world.get::<ProfileGenerationContext>(entity).cloned() {
+        debug!(
+            event = "ProfileGenerationWorkItemFailedContext",
+            work_item_id = %work_item.id,
+            task_id = %work_item.task_id,
+            kind = ?ctx.kind,
+            "profile generation work item failed, invoking failure handler"
+        );
+
+        world.resource_scope(|world, mut store: Mut<ExperienceStore>| {
+            world.resource_scope(|world, mut pending_hooks: Mut<PendingExperienceHooks>| {
+                let mut commands = world.commands();
+                handle_profile_generation_failure(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    work_item.task_id,
+                    ctx.kind.clone(),
+                    "profile-designer Agent not found by dispatch_system",
+                    Some(entity),
+                );
+            });
+        });
+        world.flush();
+        return;
+    }
+
+    // 3. 默认：ExperienceCollection 不回滚 Task；Evaluation / Summarization 恢复 Task 状态
+    if work_item.work_type == WorkItemType::ExperienceCollection {
+        debug!(
+            event = "ExperienceCollectionWorkItemFailedNoRollback",
+            work_item_id = %work_item.id,
+            task_id = %work_item.task_id,
+            "experience collection work item failed, no task rollback"
+        );
+        return;
+    }
+
+    let clock = world.resource::<Clock>().0;
+    let mut task_query = world.query::<&mut Task>();
+    if let Some(mut task) = task_query
+        .iter_mut(world)
+        .find(|t| t.id == work_item.task_id)
+    {
+        match task.status {
+            TaskStatus::Waiting(WaitingReason::Evaluator) => {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Ready;
+                task.updated_at = clock;
+                debug!(
+                    event = "TaskStatusRestoredAfterWorkItemFailed",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    work_type = ?work_item.work_type,
+                    "task restored to Ready after work item failed"
+                );
+            }
+            TaskStatus::Waiting(WaitingReason::Summarization) => {
+                let old_status = task.status.clone();
+                task.status = TaskStatus::Waiting(WaitingReason::User);
+                task.updated_at = clock;
+                debug!(
+                    event = "TaskStatusRestoredAfterWorkItemFailed",
+                    task_id = %task.id,
+                    from_status = ?old_status,
+                    to_status = ?task.status,
+                    work_type = ?work_item.work_type,
+                    "task restored to Waiting(User) after work item failed"
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 /// 对单个 WorkItem 派发生命周期 hook 并 flush WorldCommand。
@@ -237,6 +350,8 @@ mod tests {
             ))
             .id();
         world.insert_resource(PluginRegistry::default());
+        // OnWorkItemFailed 分流到默认分支时需要 Clock 资源恢复 Task 状态。
+        world.insert_resource(Clock::default());
 
         workitem_lifecycle_hook_system(&mut world);
 

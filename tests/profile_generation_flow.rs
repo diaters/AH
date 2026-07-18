@@ -239,11 +239,10 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
 /// - 候选状态变为 ProfileGenerationFailed
 /// - profile_generation_context 已清理
 ///
-/// 任务 4.2 暂时跳过：`profile_generation_workitem_system` 剥离直接派发逻辑后，
-/// 缺失 designer 路径由 `dispatch_system` 标记 WorkItem Failed +
-/// `OnWorkItemFailed` hook，需要任务 4.4 在 `workitem_lifecycle_hook_system`
-/// 中按 Context Component 分流到 `handle_profile_generation_failure`。
-#[ignore = "依赖任务 4.4：workitem_lifecycle_hook_system 按 Context 分流失败处理"]
+/// 失败路径（任务 4.4）：`dispatch_system` 找不到 profile-designer Agent →
+/// 标记 WorkItem Failed + `OnWorkItemFailed` hook →
+/// `workitem_lifecycle_hook_system` 按 Context Component 分流到
+/// `handle_profile_generation_failure`。
 #[test]
 fn incubation_fails_when_profile_designer_missing() {
     let config_dir = TempDir::new().unwrap();
