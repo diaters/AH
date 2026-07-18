@@ -28,6 +28,23 @@ pub enum WorkItemType {
     SkillUpdate,
 }
 
+impl WorkItemType {
+    /// 返回此 WorkItem 类型对应的 Agent tag。
+    ///
+    /// `dispatch_system` 通过此方法查找匹配的 Persistent Agent。
+    /// 集中管理 tag 映射，避免散落硬编码。
+    pub fn required_tag(&self) -> &'static str {
+        match self {
+            WorkItemType::Evaluation => "evaluation",
+            WorkItemType::Summarization => "summarization",
+            WorkItemType::ExperienceCollection => "collect",
+            WorkItemType::SkillUpdate => "skill-updater",
+            WorkItemType::ProfileGeneration => "profile",
+            WorkItemType::Execution => "execution",
+        }
+    }
+}
+
 /// 工作项状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkItemStatus {
@@ -513,5 +530,35 @@ mod tests {
         );
         assert!(work_item.input.context.conversation.is_some());
         assert_eq!(work_item.parent_task_id, Some(parent_task_id));
+    }
+
+    #[test]
+    fn required_tag_evaluation() {
+        assert_eq!(WorkItemType::Evaluation.required_tag(), "evaluation");
+    }
+
+    #[test]
+    fn required_tag_summarization() {
+        assert_eq!(WorkItemType::Summarization.required_tag(), "summarization");
+    }
+
+    #[test]
+    fn required_tag_experience_collection() {
+        assert_eq!(WorkItemType::ExperienceCollection.required_tag(), "collect");
+    }
+
+    #[test]
+    fn required_tag_skill_update() {
+        assert_eq!(WorkItemType::SkillUpdate.required_tag(), "skill-updater");
+    }
+
+    #[test]
+    fn required_tag_profile_generation() {
+        assert_eq!(WorkItemType::ProfileGeneration.required_tag(), "profile");
+    }
+
+    #[test]
+    fn required_tag_execution() {
+        assert_eq!(WorkItemType::Execution.required_tag(), "execution");
     }
 }
