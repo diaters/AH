@@ -758,8 +758,14 @@ commands.spawn((AgentExecutionRequestMessage {...}, ...));  // 旁路！
 
 ```rust
 // skill_update_workitem_system 退化为 WorkItem 创建器
+// 注意（Bug C）：build_skill_update_prompt 当前包含完整 SKILL.md 内容
+// （frontmatter + 所有 section 标题），让 LLM 看到真实结构而非幻觉 section 名
 let prompt = build_skill_update_prompt(&skill_entry, &candidate);
 let work_item = WorkItem::skill_update(...);
+// SkillUpdateContext 的字段（skill_id / base_version / experience_candidate_id /
+// governing_agent_id）在 orchestrator 处理 submit_skill_update 工具时作为
+// 服务端权威源（Bug A）：LLM 仅提交 operations + rationale，
+// skill_id / base_version / new_version 由 orchestrator 从此 Component 注入
 commands.spawn((
     work_item,
     SkillUpdateContext {
@@ -781,6 +787,19 @@ commands.spawn((
 ));
 // 不再 spawn AgentExecutionRequestMessage
 ```
+
+__orchestrator dry-run 路径__（Bug C，2026-07-19 实施偏差修正）：
+
+orchestrator 在 `ToolAction::SubmitSkillUpdate` 分支提前做 dry-run apply 校验，确保
+`operations` 在真实 SKILL.md 结构上可执行（section 存在、frontmatter 字段在白名单）：
+
+- dry-run 失败：以 `ToolError::InvalidInput` 同步返回给 LLM，候选状态不变，`SkillUpdateCompletedMessage`
+  不 insert，LLM 可在同一对话中修正 `operations` 重新提交
+- dry-run 通过：把 `SkillUpdateCompletedMessage` insert 到 WorkItem entity（与 `SkillUpdateContext`
+  同 entity，Bug B），由 `skill_update_completion_system` 异步消费
+- 读文件失败（如 SKILL.md 不存在）：返回 `ToolError::InternalState`（框架状态错误，区分于 LLM 输入错误）
+
+详见 ADR-004 v7 D16/D17/D18。
 
 ---
 
@@ -839,20 +858,32 @@ __保留__：
 4. __WorkItem 派发迁移__：WorkItem 派发迁移到新 system，`skill_update_workitem_system` 和 `profile_generation_workitem_system` 退化为创建器
 5. __清理与简化__：删除 `agent_selection.rs` 和 `contracts/dispatch.rs` 未使用 trait，更新文档
 
+__阶段 4 实施偏差记录（2026-07-19）__：
+
+阶段 4 实施期间发现并修复了 skill update 链路的 3 个 bug：
+
+- Bug A：`submit_skill_update` 工具参数收敛 — LLM 之前会臆造 `skill_id`，改为服务端权威注入
+- Bug B：`SkillUpdateCompletedMessage` 改为 Component insert 模式 — 之前 `work_item_id` 在
+  `llm_response.rs` 被硬编码为 None，导致 completion_system 反查失败
+- Bug C：orchestrator dry-run + 完整 SKILL.md prompt — 之前 LLM 看不到 SKILL.md 真实结构
+  会幻觉 section 名
+
+详见 ADR-004 v7 D16/D17/D18。
+
 ### 4.3 腐化点覆盖情况
 
-| 腐化点 | 治理方式 | 阶段 |
-|---|---|---|
-| 严重 1：派发逻辑重复 | dispatch_system 统一处理，`select_agent_with_memory` / `select_agent_for_sub_task` 删除 | 5 |
-| 严重 2：trait 脱节 | `contracts/dispatch.rs` 未使用 trait 删除 | 5 |
-| 严重 3：ADR-004 v6 未接入 | `parse_brain_skill_selection` 在 brain_decision_system 中调用 | 3 |
-| 严重 4：WorkItem 旁路派发 | 创建器/派发器职责切分 | 4 |
-| 严重 5：task_dispatch 与 brain_dispatch 边界混乱 | 统一入口 | 3 |
-| 中等 6：`child_agent_name` 字段语义误导 | 字段迁移到 `AgentSpawnSpec.name`（同时用作 spawn Agent 的 name 和 description） | 3 |
-| 中等 7：Placeholder 与 TODO 残留 | `select_agent_for_sub_task_with_skill` placeholder 删除 | 5 |
-| 中等 8：tag 硬编码散落 | `WorkItemType::required_tag()` 集中映射 | 1 |
-| 中等 9：WorkItem tag 与 Agent tag 不一致 | 删除 `WorkItem.tags` 字段，派发完全依赖 `work_type.required_tag()` | 1 |
-| 轻微 10：sanitize 逻辑重复 | 不在本次治理范围 | - |
+| 腐化点 | 治理方式 | 阶段 | 状态 |
+|---|---|---|---|
+| 严重 1：派发逻辑重复 | dispatch_system 统一处理，`select_agent_with_memory` / `select_agent_for_sub_task` 删除 | 5 | 已治理 |
+| 严重 2：trait 脱节 | `contracts/dispatch.rs` 未使用 trait 删除 | 5 | 已治理 |
+| 严重 3：ADR-004 v6 未接入 | `parse_brain_skill_selection` 在 brain_decision_system 中调用 | 3 | 已治理 |
+| 严重 4：WorkItem 旁路派发 | 创建器/派发器职责切分 | 4 | 已治理（2026-07-19，Phase 4 实施偏差修正 Bug A/B/C 已闭合 skill update 链路） |
+| 严重 5：task_dispatch 与 brain_dispatch 边界混乱 | 统一入口 | 3 | 已治理 |
+| 中等 6：`child_agent_name` 字段语义误导 | 字段迁移到 `AgentSpawnSpec.name`（同时用作 spawn Agent 的 name 和 description） | 3 | 已治理 |
+| 中等 7：Placeholder 与 TODO 残留 | `select_agent_for_sub_task_with_skill` placeholder 删除 | 5 | 已治理 |
+| 中等 8：tag 硬编码散落 | `WorkItemType::required_tag()` 集中映射 | 1 | 已治理 |
+| 中等 9：WorkItem tag 与 Agent tag 不一致 | 删除 `WorkItem.tags` 字段，派发完全依赖 `work_type.required_tag()` | 1 | 已治理 |
+| 轻微 10：sanitize 逻辑重复 | 不在本次治理范围 | - | 不在本次范围 |
 
 ---
 
@@ -931,6 +962,8 @@ __缓解__：符合 YAGNI 原则。当前只有两种策略（BrainLlm / DirectD
 - `docs/current-state.md`：派发架构章节
 - `docs/design/README.md`：新增本文档索引
 - `docs/adr/`：本次改动涉及派发架构重大调整，建议新增 ADR-005 记录决策
+- `docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md`：v7 同步（Phase 4
+  skill update 实施偏差修正 D16/D17/D18，2026-07-19）
 - `docs/design/2026-06-06-workitem-boundary-design.md`：如有冲突，补充说明或归档
 
 ---

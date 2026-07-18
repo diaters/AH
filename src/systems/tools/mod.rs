@@ -422,14 +422,11 @@ pub fn register_builtin_tools(
     // Skill update tool (仅 skill-updater 可用)
     registry.register(ToolDefinition {
         name: "submit_skill_update".to_string(),
-        description: "提交 skill 更新的结构化 diff 操作。必须基于原 skill 的 instruction 和经验候选，提交 operations 数组。new_version 必须等于 base_version + 1；operations 支持 replace_section/add_section/remove_section/replace_frontmatter 四种操作；frontmatter 字段仅允许更新 name/description/self_updatable。".to_string(),
+        description: "提交 skill 更新的结构化 diff 操作。基于原 skill 内容和经验候选，提交 operations 数组。skill_id、base_version、new_version 由系统自动从当前 skill update 上下文注入，无需填写。operations 支持 replace_section/add_section/remove_section/replace_frontmatter 四种操作；frontmatter 字段仅允许更新 name/description/self_updatable。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "skill_id": {"type": "string", "description": "skill 的全局唯一 ID，格式为 owner_agent_name/skill_name"},
-                    "base_version": {"type": "integer", "description": "原 skill 的版本号"},
-                    "new_version": {"type": "integer", "description": "新版本号，必须等于 base_version + 1"},
                     "operations": {
                         "type": "array",
                         "description": "结构化 diff 操作数组，按顺序 apply 到 skill 文件",
@@ -468,7 +465,7 @@ pub fn register_builtin_tools(
                     },
                     "rationale": {"type": "string", "description": "本次更新的理由说明"}
                 },
-                "required": ["skill_id", "base_version", "new_version", "operations", "rationale"]
+                "required": ["operations", "rationale"]
             }),
         },
         default_permission: ToolPermission::Allow,

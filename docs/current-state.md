@@ -170,11 +170,18 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
     的应通过 `IncubationProposal` 提案新 skill（ADR-004 v6 D15）
   - `default Agent` 维持 `Skill → IncubationProposal` 路径不变
 - skill-updater Agent 消费 `SkillUpdateRequestMessage`，构造 prompt 后 spawn `WorkItem`（类型为
-  `WorkItemType::SkillUpdate`）+ `SkillUpdateContext` + `AgentExecutionRequestMessage`
-- `submit_skill_update` 工具：LLM 提交结构化 diff 操作（`replace_section` / `add_section` /
-  `remove_section` / `replace_frontmatter`），orchestrator 解析后 spawn
-  `SkillUpdateCompletedMessage`
-- `skill_update_completion_system` 消费 `SkillUpdateCompletedMessage`：
+  `WorkItemType::SkillUpdate`）+ `SkillUpdateContext` + `PendingDispatch`（dispatch 架构统一后由
+  `dispatch_system` 派发）
+- skill-updater 的 prompt 现在包含完整 SKILL.md 内容（frontmatter + 所有 section 标题），让 LLM
+  看到真实结构而非幻觉 section 名
+- `submit_skill_update` 工具：LLM 仅提交 `operations` + `rationale`；`skill_id` / `base_version` /
+  `new_version` 由 orchestrator 从 `SkillUpdateContext` 服务端权威注入（避免 LLM 臆造 skill_id）。
+  orchestrator 在 insert 完成消息前先做 dry-run 同步校验
+- `SkillUpdateCompletedMessage` 由 orchestrator insert 到 WorkItem entity（与 `SkillUpdateContext`
+  同 entity），不再 spawn 独立 entity
+- `skill_update_completion_system` 通过同 entity Component 联合查询直接拿 context
+  （`SkillUpdateContext` + `SkillUpdateCompletedMessage`），不再用 `work_item_id` Uuid 反查
+- `skill_update_completion_system` 执行职责：
   - apply diff 到 SKILL.md（任一 section 未找到即整体失败）
   - 备份旧版本到 `history/v{base}.md`，写入新版本 frontmatter `version: base + 1`
   - 通过 `SkillLoader` 重建并替换 `SkillRegistry` Resource

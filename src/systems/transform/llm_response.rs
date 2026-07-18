@@ -1244,6 +1244,14 @@ pub fn llm_response_system(
                     }
 
                     // Spawn ToolExecutionRequestMessage for each call
+                    // 反查 WorkItem entity：用于将 SkillUpdateCompletedMessage 等"工具产物"
+                    // 直接 insert 到 WorkItem entity 上（替代用 work_item_id 反查）。
+                    let work_item_entity: Option<Entity> = result.work_item_id.and_then(|wid| {
+                        work_items
+                            .iter()
+                            .find(|(_, wi)| wi.id == wid)
+                            .map(|(e, _)| e)
+                    });
                     for call in calls {
                         let tool_input: serde_json::Value = serde_json::from_str(&call.arguments)
                             .unwrap_or(serde_json::Value::Null);
@@ -1260,7 +1268,7 @@ pub fn llm_response_system(
                                     system_prompt: None,
                                     tools: vec![],
                                     conversation: None,
-                                    work_item_id: None,
+                                    work_item_id: result.work_item_id,
                                     model_override: None,
                                 },
                                 tool_name: call.name.clone(),
@@ -1268,6 +1276,7 @@ pub fn llm_response_system(
                                 pending_confirmation_id: None,
                                 tool_call_id: Some(call.id.clone()),
                                 pending_confirmation_options: None,
+                                work_item_entity,
                             },
                         ));
                     }

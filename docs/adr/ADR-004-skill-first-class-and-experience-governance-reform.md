@@ -2,9 +2,9 @@
 
 ## 状态
 
-Proposed（v6 — 已根据五轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
+Proposed（v7 — 已根据六轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
 v2 `logs/2026-07-18-adr-004-skill-first-class-review-v2.md`、v3 用户反馈 F15、v4 实施偏差修正 D13/D14、
-v6 实施 review 修正 D15）
+v6 实施 review 修正 D15、v7 Phase 4 skill update 实施修正 D16/D17/D18）
 
 ## 生效范围
 
@@ -437,11 +437,12 @@ __输入__（workitem payload + SkillUpdateContext）：
 
 __输出__（通过新工具 `submit_skill_update`）：
 
+LLM 仅提交 `operations` + `rationale`；`skill_id` / `base_version` / `new_version` 由 orchestrator
+从 `SkillUpdateContext`（Component，挂在 WorkItem entity 上）服务端权威注入，避免 LLM 臆造 `skill_id`
+或拼错 `base_version`（D16）。
+
 ```json
 {
-  "skill_id": "<owner_agent_name>/<skill_name>",
-  "base_version": 3,
-  "new_version": 4,
   "operations": [
     {"action": "replace_section", "section": "## Usage", "content": "..."},
     {"action": "add_section", "after": "## Usage", "section": "## Edge Cases", "content": "..."},
@@ -451,6 +452,10 @@ __输出__（通过新工具 `submit_skill_update`）：
   "rationale": "为什么这么改"
 }
 ```
+
+__prompt 内容__（D18）：skill-updater 的 prompt 现在包含完整 SKILL.md 内容（frontmatter + 所有 section
+标题），让 LLM 看到真实结构而非幻觉 section 名。早期版本只把 `SkillEntry.instructions` 字段塞进 prompt，
+但 `instructions` 只是 `SkillEntry` 的一个 String 字段，并不等同于磁盘上的 SKILL.md 真实结构。
 
 #### 3.6 结构化 diff 操作的 markdown 解析策略（评审 D4）
 
@@ -470,6 +475,9 @@ __已知局限__（不阻塞实施，但需在测试中覆盖）：
    （`version` 由框架自动递增，不允许 LLM 直接改）
 3. __解析策略__：基于行级正则匹配 `^##` 和 `^[a-z_]+:`，不引入完整 markdown 解析器
    （依赖原则：优先纯 Rust，避免新依赖）
+4. __dry-run 同步校验__（D18）：orchestrator 在 `SubmitSkillUpdate` 分支提前做 dry-run apply，
+   section 不存在或 frontmatter 字段不在白名单时立即以 `ToolError::InvalidInput` 同步返回给 LLM
+   （而非异步抛到 `skill_update_completion_system`）。dry-run 通过后再 insert 完成消息。
 
 #### 3.7 循环防护（评审 D7 修正）
 
@@ -589,23 +597,25 @@ __v6 修订 D15__：原 v3-v5 设计为 self_updatable=false 时"降级 kind_hin
    - 记录 error 日志
    - 触发重试或失败处理（详见 4.1）
 
-__`SkillUpdateCompletedMessage` 的 spawn 时机__（评审 D11 补充）：
+__`SkillUpdateCompletedMessage` 的 insert 时机__（评审 D11 补充，D17 修正）：
 
-复用现有 WorkItem 完成流程，不单独 spawn。具体路径：
+复用现有 WorkItem 完成流程，不单独 spawn entity。具体路径：
 
 1. skill-updater Agent 调用 `submit_skill_update` 工具
-2. orchestrator.rs 处理 `ToolAction::SubmitSkillUpdate`，spawn `SkillUpdateCompletedMessage`
-   （类似 `ProfileGenerationCompletedMessage` 在
-   [orchestrator.rs:908-917](../../src/systems/tools/orchestrator.rs#L908-L917) 的 spawn 模式）
-3. `skill_update_completion_system` 接收 `SkillUpdateCompletedMessage` 执行上述 5 步职责
+2. orchestrator.rs 处理 `ToolAction::SubmitSkillUpdate`：
+   - 先对 `operations` 做 dry-run apply 校验，失败则同步返回 `ToolError::InvalidInput`（D18）
+   - dry-run 通过后，把 `SkillUpdateCompletedMessage` insert 到 WorkItem entity
+     （与 `SkillUpdateContext` 同 entity，D17）
+3. `skill_update_completion_system` 通过同 entity Component 联合查询拿到
+   `SkillUpdateContext` + `SkillUpdateCompletedMessage`，执行上述 5 步职责
 
 __不通过__ `WorkItemCompletedMessage` 触发，因为 `WorkItemCompletedMessage` 是通用的，
 不携带 skill 更新所需的具体 payload（operations、rationale 等）。`SkillUpdateCompletedMessage` 需要携带：
 
 ```rust
-#[derive(Debug, Clone, Event)]
+#[derive(Debug, Clone, Component)]
 pub struct SkillUpdateCompletedMessage {
-    pub work_item_id: Uuid,
+    pub work_item_id: Uuid,  // 保留用于日志，通过同 entity 查询获取
     pub task_id: TaskId,
     pub agent_id: AgentId,
     pub skill_id: SkillId,
@@ -618,20 +628,38 @@ pub struct SkillUpdateCompletedMessage {
 
 `SkillUpdateOperation` 为枚举，对应 §3.5 的四种操作。
 
+> 说明（D17）：`SkillUpdateCompletedMessage` 由 `Event` 改为 `Component`，不再 spawn 独立 entity，
+> 而是 insert 到 WorkItem entity 上。`work_item_id` 字段保留用于日志追溯，但 `skill_update_completion_system`
+> 不再用它做 Uuid 反查，而是直接通过同 entity 上的 `SkillUpdateContext` 拿 context。
+
 #### 4.1 apply 失败处理
 
 __修订（v5）__：原 v4 §4.1 描述"section 不存在 / frontmatter 字段不在白名单时跳过该 operation 并继续"。
 实施时发现该语义会导致 SKILL.md 处于部分更新状态，难以让 LLM 从错误中恢复，也增加测试与审计复杂度。
 经评审决定改为：__任何 apply 错误都整体回滚__，让 LLM 在下一轮重试中纠正完整 diff。
 
+__修订（v7，D18）__：失败路径明确分为两条：
+
+- (a) __dry-run 失败__（orchestrator 同步路径）：orchestrator 在 `SubmitSkillUpdate` 分支提前做
+  dry-run apply 校验，section 不存在或 frontmatter 字段不在白名单时立即以 `ToolError::InvalidInput`
+  同步返回给 LLM。此时 `SkillUpdateCompletedMessage` 还未 insert，候选状态不变，LLM 可在同一对话中
+  修正 `operations` 重新提交
+- (b) __completion_system apply 失败__（异步路径）：dry-run 通过后，`skill_update_completion_system`
+  在真正写盘前的极小 TOCTOU 窗口内或 IO 错误发生时整体回滚，候选状态不变，记录 warn 日志
+
 修订后的失败处理语义：
 
 - 章节不存在：返回 `ApplyError::SectionNotFound`，整体回滚，候选状态不变
 - frontmatter 字段不在白名单：返回 `ApplyError::FieldNotWhitelisted`，整体回滚，候选状态不变
 - 文件 IO 错误：整体回滚，候选状态不变
+- 读文件失败（如 SKILL.md 不存在）：返回 `ToolError::InternalState`（框架状态错误，区分于 LLM 输入错误）
 - 任何错误均通过 `skill_update_completion_system` 记录 `SkillUpdateApplyFailed` warn 日志
   （含 `task_id`、`skill_id`、`error`、`error_type`），候选保持 `GovernanceResolved`，
   skill-updater Agent 可在下一轮重新提交完整 diff
+
+> TOCTOU 风险注释（D18）：dry-run 与真正 apply 之间存在时间窗口，理论上 SKILL.md 可能被外部修改。
+> 当前 orchestrator 与 completion_system 串行执行，且 skill-updater 是唯一写入方，风险可接受。
+> 未来若引入并发写入，需要加文件锁或原子写。
 
 #### 4.2 与 profile-designer 的链路闭合
 
@@ -712,7 +740,10 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 - `ExperienceCandidateStatus::Discarded` 变体
 - `submit_skill_update` 工具
 - `skill-updater` Agent 配置
-- `SkillUpdateCompletedMessage`
+- `SkillUpdateCompletedMessage`（Component，D17 修正：原为 `Event`，现 insert 到 WorkItem entity 上）
+- `ToolError::InternalState` 变体（区分框架状态错误与 LLM 输入错误，D16/D18）
+- `ToolExecutionRequestMessage.work_item_entity: Option<Entity>` 字段（D17 修正：用于在
+  orchestrator 处理 `submit_skill_update` 时 O(1) 查询 context）
 
 ### 修改
 
@@ -837,6 +868,27 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 | 评审编号 | 修正内容 |
 |---|---|
 | D15 | §3.8 修正：self_updatable=false 不降级 Knowledge，改 Discarded + warn。payload 不匹配致 writeback 失败。 |
+
+### 第六轮（Phase 4 skill update 实施修正 — 2026-07-19）
+
+| 评审编号 | 修正概要 |
+|---|---|
+| D16 | §3.5 修正：工具参数收敛为 `operations` + `rationale`（Bug A） |
+| D17 | §4 + 数据结构清单：完成消息改为 Component insert（Bug B） |
+| D18 | §3.6 + §4.1 修正：dry-run 同步校验 + 完整 SKILL.md prompt（Bug C） |
+
+详细内容：
+
+- D16（Bug A）：`submit_skill_update` 工具参数从 `skill_id + base_version + new_version + operations + rationale`
+  收敛为 `operations` + `rationale`；`skill_id` / `base_version` / `new_version` 由 orchestrator
+  从 `SkillUpdateContext` 服务端权威注入，避免 LLM 臆造 `skill_id`
+- D17（Bug B）：`SkillUpdateCompletedMessage` 改为 Component，由 orchestrator insert 到 WorkItem
+  entity 上；`skill_update_completion_system` 通过同 entity Component 联合查询拿 context，
+  不再用 `work_item_id` 反查；新增 `ToolExecutionRequestMessage.work_item_entity: Option<Entity>`
+  字段
+- D18（Bug C）：orchestrator 在 `SubmitSkillUpdate` 分支提前做 dry-run 同步校验，错误以
+  `ToolError::InvalidInput` 同步反馈给 LLM；prompt 现在包含完整 SKILL.md 内容
+  （frontmatter + section 标题），让 LLM 看到真实结构
 
 ## 关联文件
 

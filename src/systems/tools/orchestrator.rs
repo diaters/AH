@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 use serde::Serialize;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::app::Clock;
@@ -15,11 +15,12 @@ use crate::domain::{
     EntryRole, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
     ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingDispatch,
     PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellExecResult,
-    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
-    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-    WaitingForTasksInfo, WaitingReason, WorkItem,
+    ShellSessionResult, ShortTermMemory, SkillUpdateContext, SubTaskBatchCreatedMessage,
+    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
+    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
 };
+use crate::infrastructure::skills::{SkillLoader, apply_skill_operations};
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
     ScheduledTaskInfo, ScheduledTaskRegistry, update_scheduler_state,
@@ -358,7 +359,16 @@ pub fn handle_tool_action<B: SessionBackend>(
     pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
     clock: &Clock,
-    profile_contexts: &Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
+    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询：
+    // 两者都是与 WorkItem 同 entity 的 Component，任一 WorkItem entity 至多只有其中之一。
+    // 通过 Option<&...> 在单 SystemParam 中表达"存在与否"，避免触发 Bevy 16 参数上限。
+    context_queries: &Query<(
+        Entity,
+        Option<&ProfileGenerationContext>,
+        Option<&SkillUpdateContext>,
+        &WorkItem,
+    )>,
+    skill_loader: &SkillLoader,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -918,9 +928,9 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
             // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
             let mut resolved_kind = crate::domain::ProfileGenerationKind::Incubation;
-            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+            if let Some((wi_entity, Some(ctx), _, _wi)) = context_queries
                 .iter()
-                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
+                .find(|(_, prof, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
             {
                 resolved_kind = ctx.kind.clone();
                 // 重置 exception_count：clone + modify + insert（不可变 Query + Commands 写回）
@@ -990,9 +1000,9 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
             // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
             let mut resolved_kind = crate::domain::ProfileGenerationKind::Update;
-            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+            if let Some((wi_entity, Some(ctx), _, _wi)) = context_queries
                 .iter()
-                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
+                .find(|(_, prof, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
             {
                 resolved_kind = ctx.kind.clone();
                 let mut new_ctx = ctx.clone();
@@ -1048,17 +1058,177 @@ pub fn handle_tool_action<B: SessionBackend>(
             commands.entity(request_entity).despawn();
         }
         Ok(ToolAction::SubmitSkillUpdate {
-            skill_id,
-            base_version,
-            new_version,
             operations,
             rationale,
         }) => {
-            // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
-            // work_item_id 从 AgentExecutionRequest 透传，便于 completion_system 反查
-            // 同 entity 上的 SkillUpdateContext Component。
-            commands.spawn(crate::domain::SkillUpdateCompletedMessage {
-                work_item_id: request.request.work_item_id.unwrap_or(uuid::Uuid::nil()),
+            // skill_id / base_version / new_version 由 orchestrator 从
+            // SkillUpdateContext 服务端权威注入，避免 LLM 臆造 skill_id。
+            //
+            // work_item_id（Uuid）仍需要保留：用于 SkillUpdateCompletedMessage.work_item_id
+            // 字段与日志关联。work_item_entity（Entity）则用于 O(1) 直接查询 context。
+            let work_item_id = match request.request.work_item_id {
+                Some(id) => id,
+                None => {
+                    warn!(
+                        event = "SkillUpdateMissingWorkItemId",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        "submit_skill_update missing work_item_id, rejecting"
+                    );
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(
+                            "work_item_id missing for submit_skill_update".to_string(),
+                        ),
+                    );
+                    return;
+                }
+            };
+
+            // [重要-1] 修复：work_item_entity 为 None 是不可达路径。
+            // 前置条件：llm_response.rs 中 work_item_entity 是基于同一 WorkItem query 设置的，
+            // 反查 work_item_id 成功意味着 work_item_entity 也应为 Some。
+            // 原实现为 warn + spawn 独立 entity，但独立 entity 没有 SkillUpdateContext，
+            // 会被 completion_system 的 fallback 路径 despawn，形成"fallback 必然失败"链。
+            // 改为 error! + 直接拒绝，与其他错误路径风格一致，避免伪精细控制面。
+            let work_item_entity = match request.work_item_entity {
+                Some(e) => e,
+                None => {
+                    error!(
+                        event = "SkillUpdateMissingWorkItemEntity",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        work_item_id = %work_item_id,
+                        "work_item_entity is None despite context lookup succeeded; \
+                         rejecting submit_skill_update"
+                    );
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(
+                            "work_item_entity missing for submit_skill_update \
+                             (framework state inconsistency)"
+                                .to_string(),
+                        ),
+                    );
+                    return;
+                }
+            };
+
+            // [重要-2] 修复：用 work_item_entity 做 O(1) 直接查询，替代 O(n) Uuid 反查。
+            // 三层错误分支覆盖所有失败情况，每条路径都 spawn_tool_error 直接拒绝。
+            let Some((_, _, context_opt, _)) = context_queries.get(work_item_entity).ok() else {
+                warn!(
+                    event = "SkillUpdateWorkItemNotInContextQueries",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    work_item_id = %work_item_id,
+                    work_item_entity = ?work_item_entity,
+                    "WorkItem entity not found in context_queries, rejecting submit_skill_update"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InternalState(format!(
+                        "WorkItem entity {:?} not in context_queries for work_item_id={}",
+                        work_item_entity, work_item_id
+                    )),
+                );
+                return;
+            };
+
+            let Some(context) = context_opt else {
+                warn!(
+                    event = "SkillUpdateContextNotFound",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    work_item_id = %work_item_id,
+                    work_item_entity = ?work_item_entity,
+                    "SkillUpdateContext not found on work_item_entity, rejecting submit_skill_update"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InternalState(format!(
+                        "SkillUpdateContext not found on work_item_entity {:?} for work_item_id={}",
+                        work_item_entity, work_item_id
+                    )),
+                );
+                return;
+            };
+
+            let skill_id = context.skill_id.clone();
+            let base_version = context.base_version;
+            let new_version = base_version + 1;
+
+            // dry-run：提前 apply 一次 operations 到当前 SKILL.md，
+            // 检查 section 名是否存在 / frontmatter 字段是否在白名单。
+            // Bug C 修复：之前 operations 错误要等到 completion_system 才发现，
+            // 错误反馈异步且不可见；现在改为同步返回 ToolError，LLM 可立即修正。
+            //
+            // TOCTOU 说明：dry-run 通过后 completion_system 会重新读取 SKILL.md 并 apply。
+            // 两次读取之间存在理论上的 time-of-check-to-time-of-use 窗口，本实现未加文件锁。
+            // 当前 skill-update 串行执行（同一 task 同一时刻至多一个 SkillUpdate WorkItem），
+            // 外部并发修改风险可接受。若未来允许并发 skill update，需要引入文件锁或
+            // work item 级互斥。
+            let skill_path = skill_loader.skill_md_path(&skill_id);
+            let content = match std::fs::read_to_string(&skill_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(
+                        event = "SkillMdReadFailed",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        skill_id = %skill_id.as_string(),
+                        skill_path = ?skill_path,
+                        error = %e,
+                        "failed to read SKILL.md for dry-run, rejecting submit_skill_update"
+                    );
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(format!(
+                            "failed to read SKILL.md for dry-run: {}",
+                            e
+                        )),
+                    );
+                    return;
+                }
+            };
+
+            if let Err(apply_err) = apply_skill_operations(&content, &operations) {
+                warn!(
+                    event = "SkillUpdateDryRunFailed",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    skill_id = %skill_id.as_string(),
+                    error = %apply_err,
+                    "operations dry-run failed, rejecting submit_skill_update"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(format!(
+                        "operations dry-run failed: {}. 请确保 section 名与原 SKILL.md 中实际存在的 section 一致。",
+                        apply_err
+                    )),
+                );
+                return;
+            }
+
+            // dry-run 通过，将 SkillUpdateCompletedMessage insert 到 WorkItem entity 上
+            // （而非 spawn 独立 entity），让 skill_update_completion_system 通过同 entity 的
+            // Component 查询直接拿到 SkillUpdateContext，避免用 work_item_id 反查。
+            // work_item_entity 已在前面校验为 Some（None 路径已 early return）。
+            let completed_message = crate::domain::SkillUpdateCompletedMessage {
+                work_item_id,
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,
                 skill_id: skill_id.clone(),
@@ -1066,7 +1236,8 @@ pub fn handle_tool_action<B: SessionBackend>(
                 new_version,
                 operations: operations.clone(),
                 rationale: rationale.clone(),
-            });
+            };
+            commands.entity(work_item_entity).insert(completed_message);
 
             // 返回工具执行结果给 LLM
             let output = serde_json::json!({

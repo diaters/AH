@@ -24,7 +24,7 @@ self_updatable: false
 - `remove_section`：删除指定章节
 - `replace_frontmatter`：修改 frontmatter 字段（仅允许 `name`、`description`、`self_updatable`）
 
-`base_version` 必须等于你看到的原 skill 版本号。`new_version` 必须等于 `base_version + 1`。
+只需提供 `operations` 和 `rationale` 两个字段。`skill_id` / `base_version` / `new_version` 由系统自动注入（基于当前 skill 更新上下文），不要在工具调用中填写这些字段——即使填写也会被静默忽略。
 
 ## 章节匹配规则
 
@@ -44,9 +44,6 @@ markdown 章节由二级标题（`##` 加空格）开始。同名章节匹配第
 
 ```json
 {
-  "skill_id": "owner/skill-name",
-  "base_version": 3,
-  "new_version": 4,
   "operations": [
     {
       "action": "add_section",

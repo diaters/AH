@@ -1,13 +1,16 @@
 //! skill 更新提交工具
 
 use crate::domain::{BuiltinTool, SkillUpdateOperation, ToolAction, ToolContext, ToolError};
-use crate::infrastructure::skills::SkillId;
 
 /// 提交 skill 更新工具
 ///
 /// 由 skill-updater Agent 调用，提交结构化 diff 操作。
 /// 实际的 skill 文件 apply 与 registry 刷新在 `skill_update_completion_system`
 /// 中完成，本工具仅负责参数解析与校验。
+///
+/// 仅暴露 `operations` 与 `rationale` 给 LLM；
+/// `skill_id` / `base_version` / `new_version` 由 orchestrator 从
+/// `SkillUpdateContext` 服务端权威注入，避免 LLM 臆造 skill_id。
 pub struct SubmitSkillUpdateTool;
 
 impl BuiltinTool for SubmitSkillUpdateTool {
@@ -20,35 +23,6 @@ impl BuiltinTool for SubmitSkillUpdateTool {
         input: &serde_json::Value,
         _ctx: &ToolContext,
     ) -> Result<ToolAction, ToolError> {
-        let skill_id_str = input
-            .get("skill_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput("missing skill_id".to_string()))?;
-
-        let skill_id = SkillId::parse(skill_id_str).ok_or_else(|| {
-            ToolError::InvalidInput(format!("invalid skill_id: {}", skill_id_str))
-        })?;
-
-        let base_version = {
-            let v = input
-                .get("base_version")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| ToolError::InvalidInput("missing base_version".to_string()))?;
-            u32::try_from(v).map_err(|_| {
-                ToolError::InvalidInput(format!("base_version out of u32 range: {}", v))
-            })?
-        };
-
-        let new_version = {
-            let v = input
-                .get("new_version")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| ToolError::InvalidInput("missing new_version".to_string()))?;
-            u32::try_from(v).map_err(|_| {
-                ToolError::InvalidInput(format!("new_version out of u32 range: {}", v))
-            })?
-        };
-
         let operations: Vec<SkillUpdateOperation> = input
             .get("operations")
             .and_then(|v| v.as_array())
@@ -70,17 +44,7 @@ impl BuiltinTool for SubmitSkillUpdateTool {
             ));
         }
 
-        if new_version != base_version + 1 {
-            return Err(ToolError::InvalidInput(format!(
-                "new_version must be base_version + 1, got base={} new={}",
-                base_version, new_version
-            )));
-        }
-
         Ok(ToolAction::SubmitSkillUpdate {
-            skill_id,
-            base_version,
-            new_version,
             operations,
             rationale,
         })
@@ -112,15 +76,45 @@ mod tests {
     }
 
     #[test]
-    fn submit_skill_update_returns_submit_action() {
+    fn submit_skill_update_accepts_only_operations_and_rationale() {
+        let ctx = test_ctx();
+        let tool = SubmitSkillUpdateTool;
+        // 仅提供 operations + rationale；额外携带 skill_id/base_version/new_version
+        // 也应被忽略而非报错（向后兼容 LLM 误填）。
+        let action = tool
+            .execute(
+                &serde_json::json!({
+                    "operations": [
+                        {"action": "replace_section", "section": "## Usage", "content": "new"}
+                    ],
+                    "rationale": "更新 Usage 章节",
+                    "skill_id": "agent-a/coding",
+                    "base_version": 3,
+                    "new_version": 4,
+                }),
+                &ctx,
+            )
+            .unwrap();
+
+        match action {
+            ToolAction::SubmitSkillUpdate {
+                operations,
+                rationale,
+            } => {
+                assert_eq!(operations.len(), 1);
+                assert_eq!(rationale, "更新 Usage 章节");
+            }
+            other => panic!("expected SubmitSkillUpdate, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn submit_skill_update_returns_submit_action_with_minimal_fields() {
         let ctx = test_ctx();
         let tool = SubmitSkillUpdateTool;
         let action = tool
             .execute(
                 &serde_json::json!({
-                    "skill_id": "agent-a/coding",
-                    "base_version": 3,
-                    "new_version": 4,
                     "operations": [
                         {"action": "replace_section", "section": "## Usage", "content": "new"}
                     ],
@@ -132,15 +126,9 @@ mod tests {
 
         match action {
             ToolAction::SubmitSkillUpdate {
-                skill_id,
-                base_version,
-                new_version,
                 operations,
                 rationale,
             } => {
-                assert_eq!(skill_id, SkillId::new("agent-a", "coding"));
-                assert_eq!(base_version, 3);
-                assert_eq!(new_version, 4);
                 assert_eq!(operations.len(), 1);
                 assert_eq!(rationale, "更新 Usage 章节");
             }
@@ -149,73 +137,11 @@ mod tests {
     }
 
     #[test]
-    fn submit_skill_update_rejects_missing_skill_id() {
-        let ctx = test_ctx();
-        let tool = SubmitSkillUpdateTool;
-        let result = tool.execute(
-            &serde_json::json!({
-                "base_version": 1,
-                "new_version": 2,
-                "operations": [],
-                "rationale": "test"
-            }),
-            &ctx,
-        );
-        assert!(matches!(
-            result,
-            Err(ToolError::InvalidInput(msg)) if msg.contains("skill_id")
-        ));
-    }
-
-    #[test]
-    fn submit_skill_update_rejects_invalid_skill_id() {
-        let ctx = test_ctx();
-        let tool = SubmitSkillUpdateTool;
-        let result = tool.execute(
-            &serde_json::json!({
-                "skill_id": "no-slash",
-                "base_version": 1,
-                "new_version": 2,
-                "operations": [],
-                "rationale": "test"
-            }),
-            &ctx,
-        );
-        assert!(matches!(
-            result,
-            Err(ToolError::InvalidInput(msg)) if msg.contains("invalid skill_id")
-        ));
-    }
-
-    #[test]
-    fn submit_skill_update_rejects_wrong_version_increment() {
-        let ctx = test_ctx();
-        let tool = SubmitSkillUpdateTool;
-        let result = tool.execute(
-            &serde_json::json!({
-                "skill_id": "agent-a/coding",
-                "base_version": 3,
-                "new_version": 5,
-                "operations": [],
-                "rationale": "test"
-            }),
-            &ctx,
-        );
-        assert!(matches!(
-            result,
-            Err(ToolError::InvalidInput(msg)) if msg.contains("new_version")
-        ));
-    }
-
-    #[test]
     fn submit_skill_update_rejects_empty_rationale() {
         let ctx = test_ctx();
         let tool = SubmitSkillUpdateTool;
         let result = tool.execute(
             &serde_json::json!({
-                "skill_id": "agent-a/coding",
-                "base_version": 1,
-                "new_version": 2,
                 "operations": [],
                 "rationale": ""
             }),
@@ -233,9 +159,6 @@ mod tests {
         let tool = SubmitSkillUpdateTool;
         let result = tool.execute(
             &serde_json::json!({
-                "skill_id": "agent-a/coding",
-                "base_version": 1,
-                "new_version": 2,
                 "operations": [{"action": "unknown_action"}],
                 "rationale": "test"
             }),
@@ -244,6 +167,38 @@ mod tests {
         assert!(matches!(
             result,
             Err(ToolError::InvalidInput(msg)) if msg.contains("operations")
+        ));
+    }
+
+    #[test]
+    fn submit_skill_update_rejects_missing_operations() {
+        let ctx = test_ctx();
+        let tool = SubmitSkillUpdateTool;
+        let result = tool.execute(
+            &serde_json::json!({
+                "rationale": "test"
+            }),
+            &ctx,
+        );
+        assert!(matches!(
+            result,
+            Err(ToolError::InvalidInput(msg)) if msg.contains("operations")
+        ));
+    }
+
+    #[test]
+    fn submit_skill_update_rejects_missing_rationale() {
+        let ctx = test_ctx();
+        let tool = SubmitSkillUpdateTool;
+        let result = tool.execute(
+            &serde_json::json!({
+                "operations": []
+            }),
+            &ctx,
+        );
+        assert!(matches!(
+            result,
+            Err(ToolError::InvalidInput(msg)) if msg.contains("rationale")
         ));
     }
 }

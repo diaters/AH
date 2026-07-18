@@ -9,17 +9,19 @@
 
 use std::sync::Arc;
 
+use bevy_ecs::entity::Entity;
 use crossbeam_channel::unbounded;
 use harness::infrastructure::skills::{SkillEntry, SkillId, SkillLoader, SkillRegistry};
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ConversationMessage,
-    ExperienceCandidate, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
-    ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
-    ExperienceWritebackDestination, FrontendKind, HarnessConfig, LongTermMemory,
-    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, Task,
-    TaskExperiencePolicy, TaskInjectedSkill, TaskRoutingPolicy, TaskStatus, ToolDefinition,
-    WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
+    ConversationMessage, ExperienceCandidate, ExperienceCandidateStatus,
+    ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceKindFilter,
+    ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination, FrontendKind,
+    HarnessConfig, LongTermMemory, ShortTermMemory, SkillUpdateCompletedMessage,
+    SkillUpdateContext, SkillUpdateOperation, Task, TaskExperiencePolicy, TaskInjectedSkill,
+    TaskRoutingPolicy, TaskStatus, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
+    ToolPermission, WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -212,11 +214,17 @@ fn create_test_app(config: HarnessConfig) -> bevy_app::App {
 /// 通过验证 WorkItem 是否创建来间接确认 SkillUpdateRequestMessage 曾被 spawn。
 #[test]
 fn persistent_agent_with_skill_skill_kind_triggers_skill_updater() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    // Bug C 修复后 skill_update_workitem_system 需要读取 SKILL.md 完整内容构造 prompt，
+    // 测试必须提供真实文件，否则系统会因读文件失败而 despawn 请求。
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+
     let mut app = create_test_app(no_brain_test_config());
+    // 覆盖 SkillLoader 指向临时目录
+    app.insert_resource(loader.clone());
 
     let agent_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
-    let skill_id = SkillId::new("worker-agent", "coding");
 
     // Spawn 持久Agent（非 default，避免走 incubation 路径）
     app.world_mut()
@@ -285,6 +293,8 @@ fn persistent_agent_with_skill_skill_kind_triggers_skill_updater() {
         ExperienceCandidateStatus::GovernancePending,
         "candidate status should be GovernancePending (skill-updater placeholder does not modify status)"
     );
+
+    drop(tmp);
 }
 
 /// 持久Agent + 注入 skill + Knowledge 类候选 → 候选置 WritebackPending。
@@ -499,12 +509,15 @@ fn setup_skill_dir(skill_id: &SkillId, content: &str) -> (TempDir, SkillLoader) 
 }
 
 /// 构造测试用 SkillUpdateContext + WorkItem（同 entity）并 spawn 到 world。
+/// 返回 (work_item_id, work_item_entity)：work_item_id 用于日志/Uuid 匹配，
+/// work_item_entity 用于把 SkillUpdateCompletedMessage / ToolExecutionRequestMessage.work_item_entity
+/// 关联到同一 entity（Bug B 修复后的 insert 模式）。
 fn spawn_work_item_with_context(
     world: &mut bevy_ecs::world::World,
     skill_id: SkillId,
     base_version: u32,
     candidate_id: Uuid,
-) -> Uuid {
+) -> (Uuid, Entity) {
     let governing_agent_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let mut work_item = WorkItem::skill_update(
@@ -516,16 +529,18 @@ fn spawn_work_item_with_context(
     );
     work_item.start();
     let work_item_id = work_item.id;
-    world.spawn((
-        work_item,
-        SkillUpdateContext {
-            skill_id: skill_id.clone(),
-            base_version,
-            experience_candidate_id: candidate_id,
-            governing_agent_id,
-        },
-    ));
-    work_item_id
+    let work_item_entity = world
+        .spawn((
+            work_item,
+            SkillUpdateContext {
+                skill_id: skill_id.clone(),
+                base_version,
+                experience_candidate_id: candidate_id,
+                governing_agent_id,
+            },
+        ))
+        .id();
+    (work_item_id, work_item_entity)
 }
 
 /// 构造 SkillUpdateCompletedMessage。
@@ -587,7 +602,7 @@ fn skill_update_increments_version_and_keeps_history() {
         producer_task_id,
     );
 
-    let work_item_id =
+    let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
 
     // 用 ReplaceSection 操作替换 Usage section 内容
@@ -595,13 +610,15 @@ fn skill_update_increments_version_and_keeps_history() {
         section: "## Usage".to_string(),
         content: "New usage content.".to_string(),
     }];
-    app.world_mut().spawn(make_completed_message(
-        work_item_id,
-        skill_id.clone(),
-        1,
-        2,
-        operations,
-    ));
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
 
     app.update();
 
@@ -662,7 +679,7 @@ fn skill_update_apply_failure_preserves_state() {
         producer_task_id,
     );
 
-    let work_item_id =
+    let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
 
     // 用不存在的 section 触发 ApplyError::SectionNotFound
@@ -670,13 +687,15 @@ fn skill_update_apply_failure_preserves_state() {
         section: "## NonExistent".to_string(),
         content: "x".to_string(),
     }];
-    app.world_mut().spawn(make_completed_message(
-        work_item_id,
-        skill_id.clone(),
-        1,
-        2,
-        operations,
-    ));
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
 
     app.update();
 
@@ -855,4 +874,503 @@ fn experience_kind_filter_knowledge_only_discards_skill() {
         ExperienceCandidateStatus::WritebackPending,
         "knowledge candidate should be WritebackPending under injected skill path"
     );
+}
+
+// ============ Bug C：SubmitSkillUpdate dry-run 校验 ============
+
+/// Bug C 修复：orchestrator 在 SubmitSkillUpdate 分支提前做 dry-run 校验。
+///
+/// 当 LLM 提交的 operations 引用不存在的 section 时，dry-run 应立即拒绝：
+/// - 不 spawn SkillUpdateCompletedMessage
+/// - ToolCallingState 的 pending_tool_call_ids 被清空（说明 error result 已被
+///   tool_calling_orchestrator_system 消费，LLM 通过 conversation 收到了 error 反馈）
+/// - SKILL.md 文件不变
+/// - SkillRegistry version 仍是 1（completion_system 未被触发）
+/// - 候选状态保持 GovernanceResolved（未推进到 Persisted）
+#[test]
+fn submit_skill_update_dry_run_rejects_nonexistent_section() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    // SKILL.md 仅含 `## Usage` section，operations 引用 `## NonExistent` 必然失败
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    // 覆盖 SkillLoader 指向临时目录
+    app.insert_resource(loader.clone());
+    // 预置 SkillRegistry（让 skill_update_workitem_system / completion_system 都能查到）
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    // 预置 GovernanceResolved 候选，让 completion_system 在 dry-run 通过路径下能推进到 Persisted。
+    // dry-run 失败时候选状态应保持 GovernanceResolved。
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    // Spawn skill-updater Agent（持有 submit_skill_update 工具所需 tag）
+    let agent_id = Uuid::new_v4();
+    app.world_mut().spawn(Agent {
+        id: agent_id,
+        profile: AgentProfile {
+            name: "skill-updater".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["skill-updater".to_string()],
+            description: "skill-updater agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    });
+
+    // Spawn Task + ShortTermMemory（dispatch_system 会查询 task）
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("skill update task", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // Spawn WorkItem + SkillUpdateContext（让 orchestrator 能反查 context 注入 skill_id）
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    // Spawn ToolCallingState（restore_task_after_tool / tool_calling_orchestrator_system 会查询）
+    let calling_state_entity = app
+        .world_mut()
+        .spawn(ToolCallingState {
+            task_id,
+            agent_id,
+            pending_tool_call_ids: vec!["call_test".to_string()],
+            iteration: 1,
+            max_iterations: 5,
+            conversation: Vec::new(),
+            tools: Vec::new(),
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            work_item_id: Some(work_item_id),
+        })
+        .id();
+
+    // Spawn ToolExecutionRequestMessage：operations 引用不存在的 section
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: Vec::new(),
+            conversation: None,
+            work_item_id: Some(work_item_id),
+            model_override: None,
+        },
+        tool_name: "submit_skill_update".to_string(),
+        tool_input: serde_json::json!({
+            "operations": [
+                {"action": "replace_section", "section": "## NonExistent", "content": "x"}
+            ],
+            "rationale": "test dry-run rejection"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_test".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: Some(work_item_entity),
+    });
+
+    // 运行多帧让 dispatch → handle_tool_action → dry-run → tool_calling_orchestrator 完成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 1. 不应 spawn SkillUpdateCompletedMessage（dry-run 拦截）
+    let completed_count = {
+        let mut q = app.world_mut().query::<&SkillUpdateCompletedMessage>();
+        q.iter(app.world()).count()
+    };
+    assert_eq!(
+        completed_count, 0,
+        "dry-run should reject invalid operations; no SkillUpdateCompletedMessage spawned"
+    );
+
+    // 2. ToolCallingState 的 pending_tool_call_ids 应被清空。
+    // 说明 tool_calling_orchestrator_system 收集到了 dry-run 失败的 error result，
+    // 把它作为 Tool message 加到 conversation 中（LLM 即将收到错误反馈）。
+    let calling_state = app
+        .world()
+        .get::<ToolCallingState>(calling_state_entity)
+        .expect("ToolCallingState should still exist");
+    assert!(
+        calling_state.pending_tool_call_ids.is_empty(),
+        "dry-run failure result should be consumed by tool_calling_orchestrator_system, clearing pending_tool_call_ids"
+    );
+    // conversation 中应包含一条 Tool 消息，其内容含 dry-run 失败说明
+    let has_dry_run_error_msg = calling_state.conversation.iter().any(|m| match m {
+        ConversationMessage::Tool { content, .. } => content.contains("dry-run failed"),
+        _ => false,
+    });
+    assert!(
+        has_dry_run_error_msg,
+        "ToolCallingState conversation should contain dry-run failure message"
+    );
+
+    // 3. SKILL.md 内容未被修改（仍含原 Usage 内容）
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("Do the thing."),
+        "SKILL.md should be unchanged after dry-run rejection"
+    );
+
+    // 4. SkillRegistry version 仍是 1（completion_system 未被触发）
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 1,
+        "registry version should remain 1 after dry-run rejection"
+    );
+
+    // 5. 候选状态保持 GovernanceResolved（未推进到 Persisted）
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::GovernanceResolved,
+        "candidate status should remain GovernanceResolved after dry-run rejection"
+    );
+
+    drop(tmp);
+}
+
+/// Bug C 修复：dry-run 通过时正常 spawn SkillUpdateCompletedMessage。
+///
+/// 验证 dry-run 不会误拒合法 operations：
+/// - operations 引用存在的 section（## Usage）
+/// - spawn SkillUpdateCompletedMessage
+/// - completion_system 同帧消费并 apply 到 SKILL.md
+#[test]
+fn submit_skill_update_dry_run_accepts_valid_operations() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    // 预置 GovernanceResolved 候选，让 completion_system 能推进到 Persisted
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    let agent_id = Uuid::new_v4();
+    app.world_mut().spawn(Agent {
+        id: agent_id,
+        profile: AgentProfile {
+            name: "skill-updater".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["skill-updater".to_string()],
+            description: "skill-updater agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    });
+
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("skill update task", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    app.world_mut().spawn(ToolCallingState {
+        task_id,
+        agent_id,
+        pending_tool_call_ids: vec!["call_test".to_string()],
+        iteration: 1,
+        max_iterations: 5,
+        conversation: Vec::new(),
+        tools: Vec::new(),
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "submit_skill_update".to_string(),
+        },
+        work_item_id: Some(work_item_id),
+    });
+
+    // 合法 operations：引用实际存在的 ## Usage section
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: Vec::new(),
+            conversation: None,
+            work_item_id: Some(work_item_id),
+            model_override: None,
+        },
+        tool_name: "submit_skill_update".to_string(),
+        tool_input: serde_json::json!({
+            "operations": [
+                {"action": "replace_section", "section": "## Usage", "content": "New usage content."}
+            ],
+            "rationale": "valid update"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_test".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: Some(work_item_entity),
+    });
+
+    // 运行多帧：dispatch → dry-run 通过 → spawn SkillUpdateCompletedMessage → completion_system apply
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 1. SKILL.md 已被 apply 更新
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("New usage content."),
+        "dry-run should accept valid operations; SKILL.md should be updated"
+    );
+    assert!(
+        !content.contains("Do the thing."),
+        "old Usage content should be replaced"
+    );
+
+    // 2. SkillRegistry version 已刷新到 2
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 2,
+        "registry version should be 2 after successful dry-run + apply"
+    );
+
+    // 3. 候选状态为 Persisted（completion_system 推进）
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::Persisted,
+        "candidate should be Persisted after successful dry-run + apply"
+    );
+
+    drop(tmp);
+}
+
+/// [次要-1] 回归测试：当 `ToolExecutionRequestMessage.work_item_entity` 为 None
+/// 但 `request.work_item_id` 为 Some 时（不可达路径），orchestrator 应直接拒绝。
+///
+/// 验证 [重要-1] 修复后的行为：
+/// - 不 spawn `SkillUpdateCompletedMessage`（既不 insert 到 WorkItem，也不 spawn 独立 entity）
+/// - 通过 `spawn_tool_error` 返回错误给 LLM（`ToolCallingState.pending_tool_call_ids` 清空）
+/// - SKILL.md 内容不变
+/// - SkillRegistry version 仍是 1
+/// - 候选状态保持 GovernanceResolved（未推进到 Persisted）
+///
+/// 该路径在实践中不可达：`llm_response.rs` 中 `work_item_entity` 是基于同一 WorkItem
+/// query 设置的，反查 work_item_id 成功意味着 work_item_entity 也应为 Some。本测试
+/// 通过手动构造异常请求验证 orchestrator 的防御性拒绝行为。
+#[test]
+fn submit_skill_update_rejects_when_work_item_entity_is_none() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    // 覆盖 SkillLoader 指向临时目录
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    // 预置 GovernanceResolved 候选
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    // Spawn skill-updater Agent
+    let agent_id = Uuid::new_v4();
+    app.world_mut().spawn(Agent {
+        id: agent_id,
+        profile: AgentProfile {
+            name: "skill-updater".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["skill-updater".to_string()],
+            description: "skill-updater agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    });
+
+    // Spawn Task + ShortTermMemory
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("skill update task", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // Spawn WorkItem + SkillUpdateContext（让 work_item_id 存在但请求中不引用 entity）
+    let (work_item_id, _work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    // Spawn ToolCallingState
+    let calling_state_entity = app
+        .world_mut()
+        .spawn(ToolCallingState {
+            task_id,
+            agent_id,
+            pending_tool_call_ids: vec!["call_test".to_string()],
+            iteration: 1,
+            max_iterations: 5,
+            conversation: Vec::new(),
+            tools: Vec::new(),
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            work_item_id: Some(work_item_id),
+        })
+        .id();
+
+    // 构造异常 ToolExecutionRequestMessage：work_item_id 为 Some（通过第一道检查），
+    // 但 work_item_entity 为 None（触发 [重要-1] 修复后的 error! + spawn_tool_error 路径）。
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: Vec::new(),
+            conversation: None,
+            work_item_id: Some(work_item_id),
+            model_override: None,
+        },
+        tool_name: "submit_skill_update".to_string(),
+        tool_input: serde_json::json!({
+            "operations": [
+                {"action": "replace_section", "section": "## Usage", "content": "New usage content."}
+            ],
+            "rationale": "should be rejected due to missing work_item_entity"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_test".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: None,
+    });
+
+    // 运行多帧让 dispatch → handle_tool_action → error! + spawn_tool_error → tool_calling_orchestrator 完成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 1. 不应 spawn 任何 SkillUpdateCompletedMessage（不 insert 到 WorkItem，也不 spawn 独立 entity）
+    let completed_count = {
+        let mut q = app.world_mut().query::<&SkillUpdateCompletedMessage>();
+        q.iter(app.world()).count()
+    };
+    assert_eq!(
+        completed_count, 0,
+        "should not spawn SkillUpdateCompletedMessage when work_item_entity is None"
+    );
+
+    // 2. ToolCallingState 的 pending_tool_call_ids 应被清空（spawn_tool_error 已被消费）
+    let calling_state = app
+        .world()
+        .get::<ToolCallingState>(calling_state_entity)
+        .expect("ToolCallingState should still exist");
+    assert!(
+        calling_state.pending_tool_call_ids.is_empty(),
+        "spawn_tool_error result should be consumed by tool_calling_orchestrator_system, \
+         clearing pending_tool_call_ids"
+    );
+
+    // 3. SKILL.md 内容未被修改（仍含原 Usage 内容）
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("Do the thing."),
+        "SKILL.md should be unchanged when work_item_entity is None"
+    );
+
+    // 4. SkillRegistry version 仍是 1（completion_system 未被触发）
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 1,
+        "registry version should remain 1 when work_item_entity is None"
+    );
+
+    // 5. 候选状态保持 GovernanceResolved（未推进到 Persisted）
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::GovernanceResolved,
+        "candidate status should remain GovernanceResolved when work_item_entity is None"
+    );
+
+    drop(tmp);
 }

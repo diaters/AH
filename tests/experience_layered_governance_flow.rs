@@ -342,6 +342,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
         pending_confirmation_id: Some(request_id),
         tool_call_id: None,
         pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        work_item_entity: None,
     });
 
     // 模拟用户批准
@@ -480,6 +481,7 @@ fn approved_candidate_spawns_writeback_request() {
         pending_confirmation_id: Some(request_id),
         tool_call_id: None,
         pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        work_item_entity: None,
     });
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
@@ -604,6 +606,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         pending_confirmation_id: Some(request_id),
         tool_call_id: None,
         pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        work_item_entity: None,
     });
     app.world_mut().spawn(ToolConfirmationResponseMessage {
         request_id,
@@ -726,6 +729,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
             pending_confirmation_id: Some(*req_id),
             tool_call_id: None,
             pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+            work_item_entity: None,
         });
     }
 
@@ -904,6 +908,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
             pending_confirmation_id: Some(*req_id),
             tool_call_id: None,
             pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+            work_item_entity: None,
         });
     }
 

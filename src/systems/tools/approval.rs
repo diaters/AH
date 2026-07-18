@@ -11,10 +11,11 @@ use crate::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, ExecutionError, ExperienceStore,
         GrantMode, PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, Task, TaskStatus, ToolCallingState, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-        WaitingReason, WorkItem,
+        ShortTermMemory, SkillUpdateContext, Task, TaskStatus, ToolCallingState, ToolContext,
+        ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolReturnedHookPending, WaitingReason, WorkItem,
     },
+    infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
 };
 
@@ -105,10 +106,20 @@ pub fn approval_result_system(
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
-    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
+    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
+    // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
+    // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
+    context_queries: Query<(
+        Entity,
+        Option<&ProfileGenerationContext>,
+        Option<&SkillUpdateContext>,
+        &WorkItem,
+    )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    clock: Res<Clock>,
+    // 合并 clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // 两者都仅用于转发给 handle_tool_action（dry-run 校验需要 skill_loader）。
+    clock_and_loader: (Res<Clock>, Res<SkillLoader>),
 ) {
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -263,8 +274,9 @@ pub fn approval_result_system(
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         None,
-                        &clock,
-                        &profile_contexts,
+                        &clock_and_loader.0,
+                        &context_queries,
+                        &clock_and_loader.1,
                     );
                 }
 
@@ -300,6 +312,9 @@ mod tests {
         world.insert_resource(crate::domain::SharedKnowledgeBase::default());
         world.insert_resource(crate::domain::ExperienceStore::default());
         world.insert_resource(crate::domain::PendingExperienceHooks::default());
+        world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
+            std::path::PathBuf::from("/nonexistent_skills_root"),
+        ));
         world
     }
 
@@ -358,6 +373,7 @@ mod tests {
             pending_confirmation_id: Some(request_id),
             tool_call_id: None,
             pending_confirmation_options: None,
+            work_item_entity: None,
         }
     }
 
