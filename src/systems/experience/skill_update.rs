@@ -1204,3 +1204,285 @@ mod completion_system_tests {
         assert_eq!(msg_count, 0);
     }
 }
+
+#[cfg(test)]
+mod workitem_system_tests {
+    use super::*;
+    use crate::infrastructure::skills::SkillEntry;
+    use bevy_ecs::system::RunSystemOnce;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// 测试用 SKILL.md 模板（version=1，含 frontmatter 与 Usage / Examples 两个 section）。
+    const SAMPLE_SKILL_MD: &str = "---\nname: coding\ndescription: A coding skill\nversion: 1\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n\n## Examples\n\nExample 1.\n";
+
+    /// 在临时目录下写入 SKILL.md，返回 (TempDir, SkillLoader)。
+    /// 保留 TempDir 句柄以避免目录被提前清理。
+    fn setup_skill_dir(skill_id: &SkillId, content: &str) -> (TempDir, SkillLoader) {
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+        let skill_path = loader.skill_md_path(skill_id);
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(&skill_path, content).unwrap();
+        (tmp, loader)
+    }
+
+    /// 构造测试用 SkillEntry。
+    fn make_skill_entry(skill_id: SkillId, version: u32) -> SkillEntry {
+        SkillEntry {
+            owner_agent_name: skill_id.owner_agent_name.clone(),
+            skill_id: skill_id.clone(),
+            name: skill_id.skill_name.clone(),
+            description: format!("desc for {}", skill_id.skill_name),
+            instructions: format!("instructions for {}", skill_id.skill_name),
+            version,
+            self_updatable: true,
+        }
+    }
+
+    /// 在 ExperienceStore 中插入一个 Submitted 状态的 Skill 类候选，返回 candidate_id。
+    fn stage_submitted_skill_candidate(store: &mut ExperienceStore) -> Uuid {
+        let c = ExperienceCandidate::skill(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "test skill".to_string(),
+            "test-skill".to_string(),
+            "desc".to_string(),
+            "instr".to_string(),
+            Vec::new(),
+        );
+        let id = c.candidate_id;
+        store.candidates.insert(id, c);
+        id
+    }
+
+    /// 构造 SkillUpdateRequestMessage。
+    fn make_request_message(skill_id: SkillId, candidate_id: Uuid) -> SkillUpdateRequestMessage {
+        SkillUpdateRequestMessage {
+            task_id: Uuid::new_v4(),
+            skill_id,
+            experience_candidate_id: candidate_id,
+            governing_agent_id: Uuid::new_v4(),
+        }
+    }
+
+    /// 读取成功路径：SKILL.md 存在时，应创建 WorkItem，prompt 包含完整 SKILL.md 内容，
+    /// SkillUpdateContext 附加到 WorkItem entity，请求消息被 despawn。
+    #[test]
+    fn workitem_system_reads_skill_md_and_spawns_workitem() {
+        let skill_id = SkillId::new("worker-agent", "coding");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_submitted_skill_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SpaceToolRegistry::default());
+        let mut skill_registry = SkillRegistry::default();
+        skill_registry.upsert(make_skill_entry(skill_id.clone(), 1));
+        world.insert_resource(skill_registry);
+        world.insert_resource(loader);
+
+        world.spawn(make_request_message(skill_id.clone(), candidate_id));
+
+        let _ = world.run_system_once(skill_update_workitem_system);
+
+        // 1. SkillUpdateRequestMessage 已被 despawn
+        let request_count = world
+            .query::<&SkillUpdateRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            request_count, 0,
+            "SkillUpdateRequestMessage should be despawned after processing"
+        );
+
+        // 2. 创建了一个 SkillUpdate WorkItem，prompt 包含完整 SKILL.md 内容
+        let (work_item_count, prompt_contains_skill_md, has_frontmatter) = {
+            let mut q = world.query::<&WorkItem>();
+            let mut count = 0;
+            let mut prompt_ok = false;
+            let mut frontmatter_ok = false;
+            for wi in q.iter(&world) {
+                if wi.work_type == WorkItemType::SkillUpdate {
+                    count += 1;
+                    // prompt 应包含 SKILL.md 的完整内容（frontmatter + body）
+                    if wi.input.prompt.contains("Do the thing.")
+                        && wi.input.prompt.contains("## Examples")
+                    {
+                        prompt_ok = true;
+                    }
+                    // frontmatter 的 `---` 标记应出现在 prompt 中
+                    if wi.input.prompt.contains("---") {
+                        frontmatter_ok = true;
+                    }
+                }
+            }
+            (count, prompt_ok, frontmatter_ok)
+        };
+        assert_eq!(
+            work_item_count, 1,
+            "exactly one SkillUpdate WorkItem should be spawned"
+        );
+        assert!(
+            prompt_contains_skill_md,
+            "WorkItem prompt should contain full SKILL.md body content"
+        );
+        assert!(
+            has_frontmatter,
+            "WorkItem prompt should contain SKILL.md frontmatter (`---` marker)"
+        );
+
+        // 3. SkillUpdateContext 附加到 WorkItem entity，且字段与请求一致
+        let context_attached = {
+            let mut q = world.query::<(&WorkItem, &SkillUpdateContext)>();
+            q.iter(&world).any(|(wi, ctx)| {
+                wi.work_type == WorkItemType::SkillUpdate
+                    && ctx.skill_id == skill_id
+                    && ctx.experience_candidate_id == candidate_id
+                    && ctx.base_version == 1
+            })
+        };
+        assert!(
+            context_attached,
+            "SkillUpdateContext should be attached to WorkItem entity with correct fields"
+        );
+
+        // 4. PendingDispatch 也应附加到 WorkItem entity（dispatch_system 会消费）
+        let has_pending_dispatch = {
+            let mut q = world.query::<(&WorkItem, &PendingDispatch)>();
+            q.iter(&world)
+                .any(|(wi, _)| wi.work_type == WorkItemType::SkillUpdate)
+        };
+        assert!(
+            has_pending_dispatch,
+            "PendingDispatch should be attached to WorkItem entity"
+        );
+    }
+
+    /// 读取失败路径：SKILL.md 不存在时，请求被 despawn，不 spawn WorkItem。
+    #[test]
+    fn workitem_system_despawns_request_when_skill_md_missing() {
+        let skill_id = SkillId::new("worker-agent", "coding");
+        // 不写入 SKILL.md，仅创建 loader 指向空临时目录
+        let _tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(_tmp.path().to_path_buf());
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_submitted_skill_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SpaceToolRegistry::default());
+        let mut skill_registry = SkillRegistry::default();
+        skill_registry.upsert(make_skill_entry(skill_id.clone(), 1));
+        world.insert_resource(skill_registry);
+        world.insert_resource(loader);
+
+        world.spawn(make_request_message(skill_id, candidate_id));
+
+        let _ = world.run_system_once(skill_update_workitem_system);
+
+        // 1. SkillUpdateRequestMessage 已被 despawn（读取失败分支）
+        let request_count = world
+            .query::<&SkillUpdateRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            request_count, 0,
+            "SkillUpdateRequestMessage should be despawned when SKILL.md read fails"
+        );
+
+        // 2. 不应 spawn 任何 WorkItem
+        let work_item_count = world.query::<&WorkItem>().iter(&world).count();
+        assert_eq!(
+            work_item_count, 0,
+            "no WorkItem should be spawned when SKILL.md read fails"
+        );
+
+        // 3. 不应 spawn 任何 SkillUpdateContext
+        let context_count = world.query::<&SkillUpdateContext>().iter(&world).count();
+        assert_eq!(
+            context_count, 0,
+            "no SkillUpdateContext should be spawned when SKILL.md read fails"
+        );
+    }
+
+    /// skill_id 未在 SkillRegistry 注册时，请求被 despawn，不 spawn WorkItem。
+    /// 覆盖 system 中 `SkillNotFoundInRegistry` 分支（与 SKILL.md 读取失败是不同的分支）。
+    #[test]
+    fn workitem_system_despawns_request_when_skill_not_in_registry() {
+        let skill_id = SkillId::new("worker-agent", "coding");
+        // 即使 SKILL.md 存在，registry 中没有该 skill 也会被 despawn
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_submitted_skill_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SpaceToolRegistry::default());
+        // 故意不注册 skill_id 到 SkillRegistry
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        world.spawn(make_request_message(skill_id, candidate_id));
+
+        let _ = world.run_system_once(skill_update_workitem_system);
+
+        // 1. SkillUpdateRequestMessage 已被 despawn
+        let request_count = world
+            .query::<&SkillUpdateRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            request_count, 0,
+            "SkillUpdateRequestMessage should be despawned when skill not in registry"
+        );
+
+        // 2. 不应 spawn 任何 WorkItem
+        let work_item_count = world.query::<&WorkItem>().iter(&world).count();
+        assert_eq!(
+            work_item_count, 0,
+            "no WorkItem should be spawned when skill not in registry"
+        );
+    }
+
+    /// experience_candidate_id 不在 ExperienceStore 中时，请求被 despawn。
+    /// 覆盖 system 中 `ExperienceCandidateNotFound` 分支。
+    #[test]
+    fn workitem_system_despawns_request_when_candidate_missing() {
+        let skill_id = SkillId::new("worker-agent", "coding");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+
+        let mut world = World::new();
+        // store 为空，candidate_id 不存在
+        world.insert_resource(ExperienceStore::default());
+        world.insert_resource(SpaceToolRegistry::default());
+        let mut skill_registry = SkillRegistry::default();
+        skill_registry.upsert(make_skill_entry(skill_id.clone(), 1));
+        world.insert_resource(skill_registry);
+        world.insert_resource(loader);
+
+        // 使用一个不存在的 candidate_id
+        world.spawn(make_request_message(skill_id, Uuid::new_v4()));
+
+        let _ = world.run_system_once(skill_update_workitem_system);
+
+        // 1. SkillUpdateRequestMessage 已被 despawn
+        let request_count = world
+            .query::<&SkillUpdateRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            request_count, 0,
+            "SkillUpdateRequestMessage should be despawned when candidate not in store"
+        );
+
+        // 2. 不应 spawn 任何 WorkItem
+        let work_item_count = world.query::<&WorkItem>().iter(&world).count();
+        assert_eq!(
+            work_item_count, 0,
+            "no WorkItem should be spawned when candidate not in store"
+        );
+    }
+}

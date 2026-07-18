@@ -1115,6 +1115,12 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 检查 section 名是否存在 / frontmatter 字段是否在白名单。
             // Bug C 修复：之前 operations 错误要等到 completion_system 才发现，
             // 错误反馈异步且不可见；现在改为同步返回 ToolError，LLM 可立即修正。
+            //
+            // TOCTOU 说明：dry-run 通过后 completion_system 会重新读取 SKILL.md 并 apply。
+            // 两次读取之间存在理论上的 time-of-check-to-time-of-use 窗口，本实现未加文件锁。
+            // 当前 skill-update 串行执行（同一 task 同一时刻至多一个 SkillUpdate WorkItem），
+            // 外部并发修改风险可接受。若未来允许并发 skill update，需要引入文件锁或
+            // work item 级互斥。
             let skill_path = skill_loader.skill_md_path(&skill_id);
             let content = match std::fs::read_to_string(&skill_path) {
                 Ok(c) => c,
