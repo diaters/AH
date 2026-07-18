@@ -179,9 +179,6 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   当前仅在 owner_skills 为空时 fallback；接入 LLM 后需要补充 LLM 选错场景的集成测试
 - 治理层将 `kind_hint` 从 `Skill` 降级为 `Knowledge` 时未同步转换候选 payload，导致 writeback 路径失败
   （候选最终为 `WritebackFailed` 而非 `Persisted`）；需要补 payload 适配层或直接重新构造 Knowledge 候选
-- ADR-004 §4.1 与实现存在语义偏差：`apply_skill_operations` 在 section 未找到时返回 `Err` 并整体回滚，
-  与 ADR 描述的"跳过未找到 section 并继续"不一致；偏差决策待补（更新 ADR 或修正实现）
-- ADR-004 §2.3 错误类型设计待定：`parse_brain_skill_selection` 当前使用 `String` 错误，未使用 typed error（如 `thiserror` 定义的 `BrainSkillSelectionError`）
 
 ### 已收敛或已废弃
 

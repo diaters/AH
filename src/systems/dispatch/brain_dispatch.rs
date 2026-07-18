@@ -9,6 +9,7 @@
 
 use crate::prelude::*;
 use serde::Deserialize;
+use thiserror::Error;
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -24,6 +25,22 @@ use crate::{
 };
 
 use super::agent_selection::select_agent_for_sub_task_with_skill;
+
+/// Brain 选 skill 流程的统一错误类型（ADR-004 §2.3）
+///
+/// 当前仅 `parse_brain_skill_selection` 使用 `InvalidJson` 变体；
+/// `AgentNotInCandidates` 与 `SkillNotOwned` 预留给调用方
+/// （`select_agent_for_sub_task_with_skill` 接入真实 LLM 后使用）。
+#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
+#[derive(Debug, Error)]
+pub enum BrainSkillSelectionError {
+    #[error("invalid brain skill selection JSON: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+    #[error("agent not in candidates: {0}")]
+    AgentNotInCandidates(String),
+    #[error("skill not owned by agent: agent={agent}, skill={skill}")]
+    SkillNotOwned { agent: String, skill: String },
+}
 
 const SUB_TASK_SYSTEM_PROMPT: &str = "\
 你是一个专注于完成特定子任务的 AI Agent。请仔细阅读任务描述，认真完成分配给你的工作。
@@ -406,18 +423,18 @@ struct BrainSkillSelection {
 /// - `skill_name` 字段缺失或为 null：返回 None
 /// - `skill_name` 为字符串 "None"（不区分大小写）或空字符串（trim 后）：返回 None
 /// - `skill_name` 为非字符串类型（数字、布尔、对象、数组）：记录 warn 日志并返回 None
-/// - `agent_name` 字段缺失：返回 Err
-/// - JSON 格式错误：返回 Err
+/// - `agent_name` 字段缺失或 JSON 格式错误：返回 [`BrainSkillSelectionError::InvalidJson`]
 ///
 /// 输入清洗：调用 [`sanitize_brain_output`] 剥离 LLM 常见的 markdown 代码块包裹、
 /// BOM 与不可见字符，逻辑与 `crate::llm::brain_prompt` 中的私有函数对齐，
 /// 但不跨模块复用以避免引入不必要的耦合。
 #[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
-pub fn parse_brain_skill_selection(raw: &str) -> Result<(String, Option<String>), String> {
+pub fn parse_brain_skill_selection(
+    raw: &str,
+) -> Result<(String, Option<String>), BrainSkillSelectionError> {
     // 清洗 LLM 输出：剥离 markdown 包裹/BOM/不可见字符
     let cleaned = sanitize_brain_output(raw);
-    let parsed: BrainSkillSelection = serde_json::from_str(&cleaned)
-        .map_err(|e| format!("invalid brain skill selection JSON: {}", e))?;
+    let parsed: BrainSkillSelection = serde_json::from_str(&cleaned)?;
     let skill = match parsed.skill_name {
         None => None,
         Some(serde_json::Value::String(s)) => {
@@ -818,6 +835,26 @@ mod tests {
             let (agent, skill) = result.unwrap();
             assert_eq!(agent, "a");
             assert_eq!(skill, Some("coding".to_string()));
+        }
+
+        #[test]
+        fn parse_invalid_json_returns_invalid_json_variant() {
+            // 验证 typed error：JSON 解析失败应返回 InvalidJson 变体
+            let result = parse_brain_skill_selection("not a json");
+            assert!(matches!(
+                result,
+                Err(BrainSkillSelectionError::InvalidJson(_))
+            ));
+        }
+
+        #[test]
+        fn parse_missing_agent_name_returns_invalid_json_variant() {
+            // agent_name 字段缺失时 serde_json 解析失败，应返回 InvalidJson 变体
+            let result = parse_brain_skill_selection(r#"{"skill_name": "coding"}"#);
+            assert!(matches!(
+                result,
+                Err(BrainSkillSelectionError::InvalidJson(_))
+            ));
         }
     }
 }

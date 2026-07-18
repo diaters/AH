@@ -2,7 +2,8 @@
 
 ## 状态
 
-Proposed（v4 — 已根据三轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、v2 `logs/2026-07-18-adr-004-skill-first-class-review-v2.md`、v3 用户反馈 F15）
+Proposed（v5 — 已根据四轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
+  v2 `logs/2026-07-18-adr-004-skill-first-class-review-v2.md`、v3 用户反馈 F15、v4 实施偏差修正 D13/D14）
 
 ## 生效范围
 
@@ -17,16 +18,17 @@ Proposed（v4 — 已根据三轮评审报告修正：v1 `logs/2026-07-18-adr-00
 当前 skill 在代码库中不是一等公民：
 
 - `LoadedSkill` 仅在 prompt 拼装时临时构造（[loader.rs:22-27](../../src/infrastructure/skills/loader.rs#L22-L27)），没有版本号、没有注册表
-- skill 通过 `agent.profile.name` 字符串间接关联（[task_dispatch.rs:215](../../src/systems/dispatch/task_dispatch.rs#L215)），无法被 brain 显式选择
+- skill 通过 `agent.profile.name` 字符串间接关联（[task_dispatch.rs:215](../../src/systems/dispatch/task_dispatch.rs#L215)），
+  无法被 brain 显式选择
 - brain 子任务派发路径（[brain_dispatch.rs:237-294](../../src/systems/dispatch/brain_dispatch.rs#L237-L294)）完全不加载 skill
 - 经验汇聚当前为两级（子→父 inbox、父终态合并 root+inbox），所有候选都透传到父 Agent
 - `writeback_to_skill_package` 直接落盘 SKILL.md，没有版本管理、没有 diff 机制
 
 本决策需要在三个维度同时改造：
 
-1. **Skill 数据模型升级**：让 skill 成为可被 brain 选择、带版本、可注册的一等公民
-2. **Brain 派发改造**：brain 在派发子任务时，为 Agent 选择 0 或 1 个 skill 注入
-3. **经验治理改造**：持久Agent吸收子经验（含 knowledge 和 skill 类），skill 类经验触发 skill-updater workitem，避免子经验层层透传到顶层
+1. __Skill 数据模型升级__：让 skill 成为可被 brain 选择、带版本、可注册的一等公民
+2. __Brain 派发改造__：brain 在派发子任务时，为 Agent 选择 0 或 1 个 skill 注入
+3. __经验治理改造__：持久Agent吸收子经验（含 knowledge 和 skill 类），skill 类经验触发 skill-updater workitem，避免子经验层层透传到顶层
 
 ## 决策
 
@@ -87,7 +89,8 @@ self_updatable: <bool，默认 true，缺省视为 true>
 
 #### 1.4 `Task` 字段扩展 — 拆为独立 Component
 
-评审 D8 指出 `Task` 当前已有 21 个字段（[task.rs:71-100](../../src/domain/task.rs#L71-L100)），作为 Bevy Component 已偏大。新增字段不再塞进 `Task`，改为独立 Component：
+评审 D8 指出 `Task` 当前已有 21 个字段（[task.rs:71-100](../../src/domain/task.rs#L71-L100)），作为 Bevy Component 已偏大。
+新增字段不再塞进 `Task`，改为独立 Component：
 
 ```rust
 /// 标记 Task 注入的 skill（由 brain 派发时写入）
@@ -134,10 +137,10 @@ pub enum ExperienceKindFilter {
 
 评审 D5 指出 LLM 输出可能不规范。解析层需处理以下情况：
 
-- **非标准 JSON**：解析失败计入重试次数
-- **`skill_name` 为字符串 `"None"` / `""`**：等价于 `null`，不注入 skill
-- **额外字段**：忽略，不视为错误
-- **`agent_name` 不存在或不在候选列表**：计入重试次数
+- __非标准 JSON__：解析失败计入重试次数
+- __`skill_name` 为字符串 `"None"` / `""`__：等价于 `null`，不注入 skill
+- __额外字段__：忽略，不视为错误
+- __`agent_name` 不存在或不在候选列表__：计入重试次数
 
 解析策略在 `parse_brain_skill_selection` 函数实现，单元测试覆盖所有边界情况。
 
@@ -156,11 +159,22 @@ fallback_on_fail = "no_skill"   # 可选值：no_skill / fail_task
   - `no_skill`：放弃注入 skill，仍派发 Agent（与 Q6 决策一致）
   - `fail_task`：任务失败
 
-**token 成本评估**（评审 D5）：最坏情况下同一决策点调用 LLM `max_retries + 1` 次。结合 brain 本身 dispatch 的一次 LLM 调用，单次子任务派发最坏 LLM 调用次数 = `max_retries + 2`。这是可接受的成本，因为子任务派发不是高频路径。
+__token 成本评估__（评审 D5）：最坏情况下同一决策点调用 LLM `max_retries + 1` 次。结合 brain 本身 dispatch 的一次 LLM 调用，
+单次子任务派发最坏 LLM 调用次数 = `max_retries + 2`。这是可接受的成本，因为子任务派发不是高频路径。
+
+__错误类型设计__（修订 v5）：`parse_brain_skill_selection` 必须使用 `thiserror` 定义的 typed error（`BrainSkillSelectionError`），
+符合 AGENTS.md 库 crate 错误处理规范。变体划分：
+
+- `InvalidJson`：LLM 输出非合法 JSON 或清洗后仍无法解析
+- `AgentNotInCandidates`：`agent_name` 不在候选列表中
+- `SkillNotOwned`：`skill_name` 不属于该 agent 名下 skill 集合
+
+`String` 错误类型不允许在库 crate 中使用。
 
 #### 2.4 `select_agent_for_sub_task` 函数签名变更
 
-评审 D5 指出当前签名（[agent_selection.rs:96-162](../../src/systems/dispatch/agent_selection.rs#L96-L162)）只返回 Agent，改造后需要同时返回 skill 选择结果。新签名：
+评审 D5 指出当前签名（[agent_selection.rs:96-162](../../src/systems/dispatch/agent_selection.rs#L96-L162)）只返回 Agent，
+改造后需要同时返回 skill 选择结果。新签名：
 
 ```rust
 pub fn select_agent_for_sub_task<'a>(
@@ -185,11 +199,14 @@ pub fn select_agent_for_sub_task<'a>(
 
 #### 3.1 持久Agent吸收子经验
 
-改造 [collection.rs:165-215](../../src/systems/experience/collection.rs#L165-L215) 的 `experience_collection_completion_system`。当前函数签名不包含 `agents: Query<&Agent>`，需要扩展。
+改造 [collection.rs:165-215](../../src/systems/experience/collection.rs#L165-L215) 的 `experience_collection_completion_system`。
+当前函数签名不包含 `agents: Query<&Agent>`，需要扩展。
 
-**联合查询模式**（评审 F14 修正）：使用 `Query<(&Task, Option<&TaskInjectedSkill>, Option<&TaskExperiencePolicy>)>` 联合查询，避免占位符。
+__联合查询模式__（评审 F14 修正）：使用 `Query<(&Task, Option<&TaskInjectedSkill>, Option<&TaskExperiencePolicy>)>` 联合查询，
+避免占位符。
 
-**SystemParam 封装**（评审 D10 建议）：参数膨胀到 7 个时，可考虑将 `agents`、`injected_skills`、`task_experience_policies` 封装为 `#[derive(SystemParam)]` 的 `TaskExperienceQuery`，降低签名复杂度。不阻塞当前设计，作为实施阶段优化。
+__SystemParam 封装__（评审 D10 建议）：参数膨胀到 7 个时，可考虑将 `agents`、`injected_skills`、`task_experience_policies`
+封装为 `#[derive(SystemParam)]` 的 `TaskExperienceQuery`，降低签名复杂度。不阻塞当前设计，作为实施阶段优化。
 
 ```rust
 pub(crate) fn experience_collection_completion_system(
@@ -239,7 +256,8 @@ pub(crate) fn experience_collection_completion_system(
 }
 ```
 
-**`governing_agent_id` 取值明确**（评审 D2）：持久Agent吸收路径下，`governing_agent_id` 始终为 `task.delegate`（即持久Agent自身）。无论是 knowledge 类写 LTM 还是 skill 类走 skill-updater，写回路径都以持久Agent自己为归属。
+__`governing_agent_id` 取值明确__（评审 D2）：持久Agent吸收路径下，`governing_agent_id` 始终为 `task.delegate`（即持久Agent自身）。
+无论是 knowledge 类写 LTM 还是 skill 类走 skill-updater，写回路径都以持久Agent自己为归属。
 
 #### 3.2 持久Agent吸收的分流路径
 
@@ -307,11 +325,15 @@ fn route_persistent_agent_experience(
 }
 ```
 
-**用户确认策略明确**（评审 D12）：
+__用户确认策略明确__（评审 D12）：
 
-- **持久Agent + 注入skill + skill 经验**：不经过 governance 的用户确认环节，直接走 skill-updater workitem。理由：skill-updater 本身是经验驱动的自我迭代，skill 更新属于框架内部治理，且 skill 有版本快照支持回退
-- **持久Agent + 注入skill + knowledge 经验**：直接写 LTM，无需用户确认。理由：knowledge 写入持久Agent自己的 LTM，影响范围局部
-- **持久Agent + 未注入skill**：**仍经 governance 走用户确认**。理由：这条路径会形成新 skill（`writeback_to_skill_package`）或新 Agent profile（孵化路径），属于跨 Agent 影响的操作，维持现有策略不变
+- __持久Agent + 注入skill + skill 经验__：不经过 governance 的用户确认环节，直接走 skill-updater workitem。
+  理由：skill-updater 本身是经验驱动的自我迭代，skill 更新属于框架内部治理，且 skill 有版本快照支持回退
+- __持久Agent + 注入skill + knowledge 经验__：直接写 LTM，无需用户确认。
+  理由：knowledge 写入持久Agent自己的 LTM，影响范围局部
+- __持久Agent + 未注入skill__：__仍经 governance 走用户确认__。
+  理由：这条路径会形成新 skill（`writeback_to_skill_package`）或新 Agent profile（孵化路径），
+  属于跨 Agent 影响的操作，维持现有策略不变
 
 这条策略变更需要在 ADR 中显式记录：从 v2 的"持久Agent吸收路径全部绕过 governance"改为 v3 的"仅注入skill 的吸收路径绕过 governance，未注入skill 仍走 governance"。
 
@@ -321,45 +343,45 @@ fn route_persistent_agent_experience(
 
 1. 在 `WorkItemType` 中新增 `SkillUpdate` 变体：
 
-```rust
-pub enum WorkItemType {
-    Execution,
-    Summarization,
-    Evaluation,
-    ExperienceCollection,
-    ProfileGeneration,
-    SkillUpdate,    // 新增
-}
-```
+   ```rust
+   pub enum WorkItemType {
+       Execution,
+       Summarization,
+       Evaluation,
+       ExperienceCollection,
+       ProfileGeneration,
+       SkillUpdate,    // 新增
+   }
+   ```
 
 2. `skill_id`、`base_version`、`experience_candidate_id` 等字段通过独立 Component 附加：
 
-```rust
-#[derive(Component, Debug, Clone)]
-pub struct SkillUpdateContext {
-    pub skill_id: SkillId,
-    pub base_version: u32,
-    pub experience_candidate_id: Uuid,
-    pub governing_agent_id: AgentId,
-}
-```
+   ```rust
+   #[derive(Component, Debug, Clone)]
+   pub struct SkillUpdateContext {
+       pub skill_id: SkillId,
+       pub base_version: u32,
+       pub experience_candidate_id: Uuid,
+       pub governing_agent_id: AgentId,
+   }
+   ```
 
 3. `WorkItem::skill_update` 构造函数（类似 [profile_generation](../../src/domain/work_item.rs#L264-L289)）：
 
-```rust
-impl WorkItem {
-    pub fn skill_update(
-        task_id: TaskId,
-        prompt: String,
-        conversation: Vec<ConversationMessage>,
-        tools: Vec<ToolDefinition>,
-        governing_agent_id: AgentId,
-    ) -> Self {
-        let tags = TagSet::from_tags(["skill-update"]);
-        // ... 构造逻辑类似 profile_generation
-    }
-}
-```
+   ```rust
+   impl WorkItem {
+       pub fn skill_update(
+           task_id: TaskId,
+           prompt: String,
+           conversation: Vec<ConversationMessage>,
+           tools: Vec<ToolDefinition>,
+           governing_agent_id: AgentId,
+       ) -> Self {
+           let tags = TagSet::from_tags(["skill-update"]);
+           // ... 构造逻辑类似 profile_generation
+       }
+   }
+   ```
 
 `SkillUpdateContext` 在 workitem spawn 时同时挂载到同一 entity。
 
@@ -380,9 +402,12 @@ system_prompt = """
 tools = ["submit_skill_update"]
 ```
 
-**brain 不可见性**：`skill-updater` 的 task 由经验治理系统直接 spawn，不经过 brain 选 Agent 路径。`skill-updater` 的 tags 含 `skill-updater`，使其不进入 `select_agent_for_sub_task` 候选（因为 [agent_selection.rs:100-103](../../src/systems/dispatch/agent_selection.rs#L100-L103) 过滤 `Persistent` 且 tags 不含 `"brain"`，需要同时扩展过滤 `skill-updater` 等"内部角色"tag）。
+__brain 不可见性__：`skill-updater` 的 task 由经验治理系统直接 spawn，不经过 brain 选 Agent 路径。
+`skill-updater` 的 tags 含 `skill-updater`，使其不进入 `select_agent_for_sub_task` 候选
+（因为 [agent_selection.rs:100-103](../../src/systems/dispatch/agent_selection.rs#L100-L103) 过滤 `Persistent` 且 tags 不含 `"brain"`，
+需要同时扩展过滤 `skill-updater` 等"内部角色"tag）。
 
-**引导方案**（评审 D3）：
+__引导方案__（评审 D3）：
 
 - skill-updater 自身的初始 skill 内容由人工编写一份 SKILL.md，预置在 `.harness/assets/agents/skill-updater/skills/skill-update/SKILL.md`
 - 该 skill 的 frontmatter 标 `self_updatable: false`，避免 skill-updater 自己更新自己
@@ -391,13 +416,13 @@ tools = ["submit_skill_update"]
 
 #### 3.5 skill-updater 的输入输出契约
 
-**输入**（workitem payload + SkillUpdateContext）：
+__输入__（workitem payload + SkillUpdateContext）：
 
 - 原 skill 的完整 instruction（从 SkillRegistry 取）
 - 原 skill 的 version（从 SkillRegistry 取）
 - 触发更新的那条 skill 经验原文（从 ExperienceStore 取）
 
-**输出**（通过新工具 `submit_skill_update`）：
+__输出__（通过新工具 `submit_skill_update`）：
 
 ```json
 {
@@ -416,28 +441,34 @@ tools = ["submit_skill_update"]
 
 #### 3.6 结构化 diff 操作的 markdown 解析策略（评审 D4）
 
-**章节定义**：markdown 章节由 `## `（二级标题）开始，到下一个 `## ` 或文件末尾结束。`### ` 及更深层级属于父章节内容的一部分。
+__章节定义__：markdown 章节由 `##`（二级标题）开始，到下一个 `##` 或文件末尾结束。`###` 及更深层级属于父章节内容的一部分。
 
-**操作语义**：
+__操作语义__：
 
-- `replace_section(section, content)`：替换从 `## {section}` 到下一个 `## ` 之间的所有内容（含子章节）
-- `add_section(after, section, content)`：在 `## {after}` 章节完整内容之后（即下一个 `## ` 之前）插入新章节
-- `remove_section(section)`：删除从 `## {section}` 到下一个 `## ` 之间的所有内容
+- `replace_section(section, content)`：替换从 `## {section}` 到下一个 `##` 之间的所有内容（含子章节）
+- `add_section(after, section, content)`：在 `## {after}` 章节完整内容之后（即下一个 `##` 之前）插入新章节
+- `remove_section(section)`：删除从 `## {section}` 到下一个 `##` 之间的所有内容
 - `replace_frontmatter(field, value)`：修改 frontmatter 中指定字段的值
 
-**已知局限**（不阻塞实施，但需在测试中覆盖）：
+__已知局限__（不阻塞实施，但需在测试中覆盖）：
 
-1. **标题重名**：同层级同名章节，匹配第一个。apply 函数记录 warning 日志
-2. **frontmatter 字段白名单**：仅允许修改 `name`、`description`、`self_updatable` 三个字段（`version` 由框架自动递增，不允许 LLM 直接改）
-3. **解析策略**：基于行级正则匹配 `^## ` 和 `^[a-z_]+:`，不引入完整 markdown 解析器（依赖原则：优先纯 Rust，避免新依赖）
+1. __标题重名__：同层级同名章节，匹配第一个。apply 函数记录 warning 日志
+2. __frontmatter 字段白名单__：仅允许修改 `name`、`description`、`self_updatable` 三个字段
+   （`version` 由框架自动递增，不允许 LLM 直接改）
+3. __解析策略__：基于行级正则匹配 `^##` 和 `^[a-z_]+:`，不引入完整 markdown 解析器
+   （依赖原则：优先纯 Rust，避免新依赖）
 
 #### 3.7 循环防护（评审 D7 修正）
 
-**修正**：`experience_kind_filter` 检查点从 `task_terminated_experience_trigger_system`（[collection.rs:12](../../src/systems/experience/collection.rs#L12)）移到 `experience_collection_completion_system`（[collection.rs:165-215](../../src/systems/experience/collection.rs#L165-L215)），具体实现在 §3.2 的 `route_persistent_agent_experience` 函数内。
+__修正__：`experience_kind_filter` 检查点从 `task_terminated_experience_trigger_system`（[collection.rs:12](../../src/systems/experience/collection.rs#L12)）
+移到 `experience_collection_completion_system`（[collection.rs:165-215](../../src/systems/experience/collection.rs#L165-L215)），
+具体实现在 §3.2 的 `route_persistent_agent_experience` 函数内。
 
-**理由**（评审 D7）：`task_terminated_experience_trigger_system` 只 spawn `ExperienceCollectionRequestMessage`，根本不接触候选，kind 此时未知（由 LLM 在 `submit_experience_candidate` 调用时才确定）。filter 必须在收集完成后、进入汇聚/治理前检查。
+__理由__（评审 D7）：`task_terminated_experience_trigger_system` 只 spawn `ExperienceCollectionRequestMessage`，根本不接触候选，
+kind 此时未知（由 LLM 在 `submit_experience_candidate` 调用时才确定）。filter 必须在收集完成后、进入汇聚/治理前检查。
 
-**实现**（评审 F12 修正：候选 ID 从 `ExperienceStore` 获取，不依赖 `msg.candidate_ids`）：已在 §3.2 的 `route_persistent_agent_experience` 函数中展示。核心逻辑：
+__实现__（评审 F12 修正：候选 ID 从 `ExperienceStore` 获取，不依赖 `msg.candidate_ids`）：
+已在 §3.2 的 `route_persistent_agent_experience` 函数中展示。核心逻辑：
 
 ```rust
 let filtered_ids: Vec<Uuid> = candidate_ids.iter()
@@ -457,7 +488,7 @@ let filtered_ids: Vec<Uuid> = candidate_ids.iter()
     .collect();
 ```
 
-**新增候选状态**（`ExperienceCandidateStatus`）：
+__新增候选状态__（`ExperienceCandidateStatus`）：
 
 ```rust
 pub enum ExperienceCandidateStatus {
@@ -470,7 +501,8 @@ pub enum ExperienceCandidateStatus {
 
 在 [governance.rs:64-103](../../src/systems/experience/governance.rs#L64-L103) 的治理决策中，针对 skill 类候选增加检查。
 
-**评审 F13 修正**：`injected_skill` 已拆为独立 Component `TaskInjectedSkill`，治理系统应通过 `Query<&TaskInjectedSkill>` 查询，不能用 `task.injected_skill`。`experience_governance_system` 的函数签名需要扩展：
+__评审 F13 修正__：`injected_skill` 已拆为独立 Component `TaskInjectedSkill`，治理系统应通过 `Query<&TaskInjectedSkill>` 查询，
+不能用 `task.injected_skill`。`experience_governance_system` 的函数签名需要扩展：
 
 ```rust
 pub(crate) fn experience_governance_system(
@@ -507,7 +539,9 @@ pub(crate) fn experience_governance_system(
 }
 ```
 
-**注意**：注入skill 路径的候选在 §3.2 已被 `route_persistent_agent_experience` 直接走 skill-updater，不会进入 governance。因此 §3.8 的 `SkillUpdate` destination 分支实际上只处理"候选已通过 governance 路径流入但发现 `injected_skill` 存在"的边界情况——但按 §3.2 的设计，这种情况不会发生。为防御性编程，governance 仍检查 `injected_skill`，若存在则 redirect 到 skill-updater 路径。
+__注意__：注入skill 路径的候选在 §3.2 已被 `route_persistent_agent_experience` 直接走 skill-updater，不会进入 governance。
+因此 §3.8 的 `SkillUpdate` destination 分支实际上只处理"候选已通过 governance 路径流入但发现 `injected_skill` 存在"的边界情况
+——但按 §3.2 的设计，这种情况不会发生。为防御性编程，governance 仍检查 `injected_skill`，若存在则 redirect 到 skill-updater 路径。
 
 ### 4. skill_update_completion_system 职责（评审 D6 补全、D11 补充）
 
@@ -520,21 +554,26 @@ pub(crate) fn experience_governance_system(
    - 把当前 SKILL.md 复制到 `history/v{base_version}.md`
    - 调用 `cleanup_skill_history` 保留 3 代
    - 刷新 SkillRegistry 中对应 `SkillEntry`（`version` 递增，`instructions` 更新）
-   - **将候选状态置为 `Persisted`**（触发 [profile_update.rs:23-111](../../src/systems/experience/profile_update.rs#L23-L111) 的 profile-designer 评估）
+   - __将候选状态置为 `Persisted`__（触发
+     [profile_update.rs:23-111](../../src/systems/experience/profile_update.rs#L23-L111)
+     的 profile-designer 评估）
 5. apply 失败：
    - 候选状态保持原状（不置 `Persisted`）
    - 记录 error 日志
    - 触发重试或失败处理（详见 4.1）
 
-**`SkillUpdateCompletedMessage` 的 spawn 时机**（评审 D11 补充）：
+__`SkillUpdateCompletedMessage` 的 spawn 时机__（评审 D11 补充）：
 
 复用现有 WorkItem 完成流程，不单独 spawn。具体路径：
 
 1. skill-updater Agent 调用 `submit_skill_update` 工具
-2. orchestrator.rs 处理 `ToolAction::SubmitSkillUpdate`，spawn `SkillUpdateCompletedMessage`（类似 `ProfileGenerationCompletedMessage` 在 [orchestrator.rs:908-917](../../src/systems/tools/orchestrator.rs#L908-L917) 的 spawn 模式）
+2. orchestrator.rs 处理 `ToolAction::SubmitSkillUpdate`，spawn `SkillUpdateCompletedMessage`
+   （类似 `ProfileGenerationCompletedMessage` 在
+   [orchestrator.rs:908-917](../../src/systems/tools/orchestrator.rs#L908-L917) 的 spawn 模式）
 3. `skill_update_completion_system` 接收 `SkillUpdateCompletedMessage` 执行上述 5 步职责
 
-**不通过** `WorkItemCompletedMessage` 触发，因为 `WorkItemCompletedMessage` 是通用的，不携带 skill 更新所需的具体 payload（operations、rationale 等）。`SkillUpdateCompletedMessage` 需要携带：
+__不通过__ `WorkItemCompletedMessage` 触发，因为 `WorkItemCompletedMessage` 是通用的，
+不携带 skill 更新所需的具体 payload（operations、rationale 等）。`SkillUpdateCompletedMessage` 需要携带：
 
 ```rust
 #[derive(Debug, Clone, Event)]
@@ -554,36 +593,50 @@ pub struct SkillUpdateCompletedMessage {
 
 #### 4.1 apply 失败处理
 
-- 章节不存在：跳过该 operation，记录 warning，继续后续 operations
-- frontmatter 字段不在白名单：跳过该 operation，记录 warning
-- 文件 IO 错误：整个 apply 失败回滚，候选状态不变
+__修订（v5）__：原 v4 §4.1 描述"section 不存在 / frontmatter 字段不在白名单时跳过该 operation 并继续"。
+实施时发现该语义会导致 SKILL.md 处于部分更新状态，难以让 LLM 从错误中恢复，也增加测试与审计复杂度。
+经评审决定改为：__任何 apply 错误都整体回滚__，让 LLM 在下一轮重试中纠正完整 diff。
+
+修订后的失败处理语义：
+
+- 章节不存在：返回 `ApplyError::SectionNotFound`，整体回滚，候选状态不变
+- frontmatter 字段不在白名单：返回 `ApplyError::FieldNotWhitelisted`，整体回滚，候选状态不变
+- 文件 IO 错误：整体回滚，候选状态不变
+- 任何错误均通过 `skill_update_completion_system` 记录 `SkillUpdateApplyFailed` warn 日志
+  （含 `task_id`、`skill_id`、`error`、`error_type`），候选保持 `GovernanceResolved`，
+  skill-updater Agent 可在下一轮重新提交完整 diff
 
 #### 4.2 与 profile-designer 的链路闭合
 
-skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，[profile_update_trigger_system](../../src/systems/experience/profile_update.rs#L23-L111) 检测到 `Persisted` 后会 spawn `ProfileGenerationRequestMessage { kind: Update }`，profile-designer 评估 agent profile 是否需要更新。两者不冲突。
+skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，
+[profile_update_trigger_system](../../src/systems/experience/profile_update.rs#L23-L111) 检测到 `Persisted` 后
+会 spawn `ProfileGenerationRequestMessage { kind: Update }`，profile-designer 评估 agent profile 是否需要更新。两者不冲突。
 
 ### 5. profile-designer 与 skill-updater 的边界
 
 | 场景 | 路径 | 涉及组件 |
 |---|---|---|
-| default Agent 产生 Skill/Knowledge 经验 | IncubationProposal → profile-designer → 审批 → writeback_incubation_proposal | profile-designer + writeback |
-| 持久Agent + 注入skill 产生 skill 经验 | **新路径**：collection 拦截 → skill-updater workitem → submit_skill_update → 写新版本 SKILL.md → profile-designer 评估 profile | skill-updater + writeback + profile-designer |
-| 持久Agent + 注入skill 产生 knowledge 经验 | LongTermMemory 路径，写持久Agent自己 LTM → profile-designer 评估 profile | writeback + profile-designer |
-| 持久Agent + 未注入skill 产生 skill 经验 | 现有 SkillPackage 路径，形成新 skill → profile-designer 评估 profile | writeback_to_skill_package + profile-designer |
-| 持久Agent + 未注入skill 产生 knowledge 经验 | LongTermMemory 路径 → profile-designer 评估 profile | writeback + profile-designer |
+| default Agent 产生 Skill/Knowledge 经验 | IncubationProposal→profile-designer→审批→writeback | profile-designer+writeback |
+| 持久Agent+注入skill 产生 skill 经验 | __新路径__：collection→skill-updater→写SKILL.md | skill-updater+writeback+profile-designer |
+| 持久Agent+注入skill 产生 knowledge 经验 | LTM路径→写持久Agent LTM→profile-designer评估 | writeback+profile-designer |
+| 持久Agent+未注入skill 产生 skill 经验 | SkillPackage路径→形成新skill | writeback_to_skill_package+profile-designer |
+| 持久Agent+未注入skill 产生 knowledge 经验 | LongTermMemory 路径→profile-designer 评估 | writeback+profile-designer |
 | 临时Agent 产生经验 | 现有路径：进入父任务 inbox | queue_for_parent |
 
-**职责切分**：
+__职责切分__：
 
 - profile-designer：管孵化期 profile 生成和持久Agent profile 评估更新（不写 SKILL.md）
 - skill-updater：管成熟期 skill 迭代（只更新已有 skill，不形成新 skill）
 - 两者写入路径不冲突：skill-updater 写 `<skill>/SKILL.md`，profile-designer 写 `agents.toml`
 
-**触发 profile-designer 的条件不变**：[profile_update.rs:23-111](../../src/systems/experience/profile_update.rs#L23-L111) 检测 `Persisted` 状态。skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile-designer 仍会被触发评估。
+__触发 profile-designer 的条件不变__：
+[profile_update.rs:23-111](../../src/systems/experience/profile_update.rs#L23-L111) 检测 `Persisted` 状态。
+skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile-designer 仍会被触发评估。
 
 ### 6. 执行 Agent 能看到 skill 元信息
 
-改造 `submit_experience_candidate` 工具的 prompt（[collection.rs:75-83](../../src/systems/experience/collection.rs#L75-L83)），显式告诉 LLM：
+改造 `submit_experience_candidate` 工具的 prompt（[collection.rs:75-83](../../src/systems/experience/collection.rs#L75-L83)），
+显式告诉 LLM：
 
 - 当前 task 注入的 skill 是什么（name + description + instructions）
 - 如果经验用于改进当前 skill，请使用 `kind=skill`
@@ -591,7 +644,7 @@ skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，[profile_updat
 
 ### 7. skill 删除/退役机制（评审 D9 — 显式推迟）
 
-本 ADR **不引入** skill 删除/退役机制。理由：
+本 ADR __不引入__ skill 删除/退役机制。理由：
 
 - skill 保留成本极低（单文件 + 3 代历史快照）
 - 删除策略需要更多运行期数据（如"长期未被 brain 选择"的统计），不在本次改造范围
@@ -642,8 +695,11 @@ skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，[profile_updat
 - `SubTaskConfig`：`child_agent_name` 字段在 brain_dispatch 中被读取
 - `HarnessConfig`：新增 `[brain.skill_selection]` 配置段
 - `select_agent_for_sub_task`：函数签名扩展，新增 `skill_registry` 参数，返回值新增 `Option<SkillId>`
-- `experience_collection_completion_system`：新增 `agents` Query 参数，`tasks` 改为联合查询 `Query<(&Task, Option<&TaskInjectedSkill>, Option<&TaskExperiencePolicy>)>`（评审 F14 + D10）
-- `experience_governance_system`：新增 `skill_registry: Res<SkillRegistry>` 和 `tasks: Query<(&Task, Option<&TaskInjectedSkill>)>` 参数（评审 F13）
+- `experience_collection_completion_system`：新增 `agents` Query 参数，
+  `tasks` 改为联合查询 `Query<(&Task, Option<&TaskInjectedSkill>,
+  Option<&TaskExperiencePolicy>)>`（评审 F14 + D10）
+- `experience_governance_system`：新增 `skill_registry: Res<SkillRegistry>` 和
+  `tasks: Query<(&Task, Option<&TaskInjectedSkill>)>` 参数（评审 F13）
 
 ## system 改动清单
 
@@ -689,17 +745,18 @@ skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，[profile_updat
 
 ### 集成测试
 
-1. **brain 选 skill 成功路径**：task 适合某 skill，brain 选 Agent+skill，skill 注入 prompt，任务执行
-2. **brain 选 skill 失败重试**：brain 选错 skill 名字，重试，达到上限 fallback
-3. **持久Agent + 注入skill + skill 经验**：完整路径——collection 拦截 → skill-updater workitem → submit_skill_update → SKILL.md 更新 → 候选置 `Persisted` → profile-designer 评估
-4. **持久Agent + 注入skill + knowledge 经验**：knowledge 写入持久Agent LTM，不进父 inbox
-5. **持久Agent + 未注入skill + skill 经验**：走原 writeback_to_skill_package 路径
-6. **临时Agent + 经验**：走原 queue_for_parent 路径
-7. **skill-updater 自指循环防护**：skill-updater 产生 skill 候选，`self_updatable=false` 降级为 knowledge
-8. **skill-updater kind filter 防护**：skill-updater 的 task 标 `KnowledgeOnly`，skill 候选被标记 `Discarded`
-9. **skill 版本递增**：连续两次 skill 更新，version 正确递增，history 保留 3 代
-10. **skill 回退保护**：apply 失败，SKILL.md 不变，history 不写入，候选状态不变
-11. **持久Agent + 注入skill 路径不进父 inbox**：验证父 Agent 的 `ExperienceInbox` 中无对应候选
+1. __brain 选 skill 成功路径__：task 适合某 skill，brain 选 Agent+skill，skill 注入 prompt，任务执行
+2. __brain 选 skill 失败重试__：brain 选错 skill 名字，重试，达到上限 fallback
+3. __持久Agent + 注入skill + skill 经验__：完整路径——collection 拦截 → skill-updater workitem →
+   submit_skill_update → SKILL.md 更新 → 候选置 `Persisted` → profile-designer 评估
+4. __持久Agent + 注入skill + knowledge 经验__：knowledge 写入持久Agent LTM，不进父 inbox
+5. __持久Agent + 未注入skill + skill 经验__：走原 writeback_to_skill_package 路径
+6. __临时Agent + 经验__：走原 queue_for_parent 路径
+7. __skill-updater 自指循环防护__：skill-updater 产生 skill 候选，`self_updatable=false` 降级为 knowledge
+8. __skill-updater kind filter 防护__：skill-updater 的 task 标 `KnowledgeOnly`，skill 候选被标记 `Discarded`
+9. __skill 版本递增__：连续两次 skill 更新，version 正确递增，history 保留 3 代
+10. __skill 回退保护__：apply 失败，SKILL.md 不变，history 不写入，候选状态不变
+11. __持久Agent + 注入skill 路径不进父 inbox__：验证父 Agent 的 `ExperienceInbox` 中无对应候选
 
 ## 开放问题（留给实施阶段细化）
 
@@ -725,7 +782,7 @@ skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，[profile_updat
 | D4 | 明确章节定义、操作语义、已知局限、frontmatter 字段白名单 |
 | D5 | 补充 LLM 输出容错策略、token 成本评估、`select_agent_for_sub_task` 签名变更 |
 | D6 | 补全 `skill_update_completion_system` 完整职责，包括 apply 成功后置候选状态为 `Persisted` |
-| D7 | `experience_kind_filter` 检查点从 `task_terminated_experience_trigger_system` 移到 `experience_collection_completion_system` |
+| D7 | `kind_filter` 检查点从 `task_terminated_experience_trigger_system` 移到 `experience_collection_completion_system` |
 | D8 | Task 新增字段拆为独立 Component `TaskInjectedSkill` 和 `TaskExperiencePolicy` |
 | D9 | 显式推迟 skill 删除/退役机制，作为已知约束记录（§7） |
 
@@ -733,22 +790,31 @@ skill-updater 写完 SKILL.md 后，候选状态置 `Persisted`，[profile_updat
 
 | 评审编号 | 修正内容 |
 |---|---|
-| F12 | §3.2 和 §3.7 伪代码移除不存在的 `msg.candidate_ids`，改为从 `ExperienceStore` 获取候选（`aggregate_inbox_for_task` / `collect_top_level_governance_candidates`） |
+| F12 | §3.2/§3.7 移除 `msg.candidate_ids`，改从 `ExperienceStore` 获取候选（`aggregate_inbox_for_task` 等） |
 | F13 | §3.8 治理伪代码从 `task.injected_skill` 改为通过 `Query<(&Task, Option<&TaskInjectedSkill>)>` 联合查询 |
-| F14 | §3.1 伪代码移除占位符 `/* match task entity */`，改为联合查询 `Query<(&Task, Option<&TaskInjectedSkill>, Option<&TaskExperiencePolicy>)>` |
+| F14 | §3.1 移除占位符，改为联合查询 `Query<(&Task, Option<&TaskInjectedSkill>, Option<&TaskExperiencePolicy>)>` |
 | D10 | 补充 SystemParam 封装建议（`TaskExperienceQuery`），作为实施阶段优化 |
-| D11 | 补充 `SkillUpdateCompletedMessage` 的 spawn 时机（由 orchestrator.rs 处理 `ToolAction::SubmitSkillUpdate` 时 spawn）和完整字段定义 |
+| D11 | 补充 `SkillUpdateCompletedMessage` spawn 时机（orchestrator.rs 处理 `ToolAction::SubmitSkillUpdate`）和字段定义 |
 | D12 | 明确用户确认策略：注入skill 路径绕过 governance（skill/knowledge 均无需确认），未注入skill 路径仍经 governance 走用户确认 |
-| F15 | §3.2 spawn `ExperienceGovernanceRequestMessage` 时移除多余的 `candidate_ids` 字段（该 struct 只有 `task_id` 和 `agent_id`，候选已置为 `GovernancePending`，由 `governance_candidates_for_task` 自动发现） |
+| F15 | §3.2 移除 `candidate_ids`，候选置 `GovernancePending`，由 `governance_candidates_for_task` 自动发现 |
+
+### 第四轮（实施偏差修正 — 2026-07-18）
+
+| 评审编号 | 修正内容 |
+|---|---|
+| D13 | §4.1 修正：原"section 不存在 / field 不在白名单时跳过并继续"改为"任何 apply 错误都整体回滚"。部分更新会让 SKILL.md 处于不一致状态，整体回滚更安全。 |
+| D14 | §2.3 补充错误类型：`parse_brain_skill_selection` 使用 `thiserror` 定义的 `BrainSkillSelectionError`，符合库 crate 规范。 |
 
 ## 关联文件
 
 - [src/domain/task.rs](../../src/domain/task.rs) — Task 字段拆为独立 Component
 - [src/domain/work_item.rs](../../src/domain/work_item.rs) — `WorkItemType::SkillUpdate` 变体
 - [src/domain/contribution.rs](../../src/domain/contribution.rs) — `ExperienceKindFilter`、`ExperienceCandidateStatus::Discarded`
-- [src/infrastructure/skills/loader.rs](../../src/infrastructure/skills/loader.rs) — SkillRegistry + SkillEntry + frontmatter 新字段解析
+- [src/infrastructure/skills/loader.rs](../../src/infrastructure/skills/loader.rs) —
+  SkillRegistry + SkillEntry + frontmatter 新字段解析
 - [src/systems/dispatch/brain_dispatch.rs](../../src/systems/dispatch/brain_dispatch.rs) — brain 选 skill
-- [src/systems/dispatch/agent_selection.rs](../../src/systems/dispatch/agent_selection.rs) — `select_agent_for_sub_task` 签名扩展
+- [src/systems/dispatch/agent_selection.rs](../../src/systems/dispatch/agent_selection.rs) —
+  `select_agent_for_sub_task` 签名扩展
 - [src/systems/experience/collection.rs](../../src/systems/experience/collection.rs) — 持久Agent吸收分支 + kind_filter 检查
 - [src/systems/experience/governance.rs](../../src/systems/experience/governance.rs) — self_updatable 检查
 - [src/systems/experience/skill_update.rs](../../src/systems/experience/skill_update.rs) — 新文件，skill-updater workitem 系统
