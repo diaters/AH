@@ -1074,7 +1074,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                         commands,
                         request_entity,
                         request,
-                        ToolError::InvalidInput(
+                        ToolError::InternalState(
                             "work_item_id missing for submit_skill_update".to_string(),
                         ),
                     );
@@ -1097,7 +1097,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     commands,
                     request_entity,
                     request,
-                    ToolError::InvalidInput(format!(
+                    ToolError::InternalState(format!(
                         "SkillUpdateContext not found for work_item_id={}",
                         work_item_id
                     )),
