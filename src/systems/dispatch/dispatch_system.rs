@@ -25,7 +25,7 @@ use crate::{
         PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskInjectedSkill, TaskStatus,
         ToolPermission, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
-    infrastructure::skills::{PluginSkillContributions, SkillLoader},
+    infrastructure::skills::{PluginSkillContributions, SkillLoader, SkillRegistry},
     user_plugins::hook_point::HookPoint,
 };
 
@@ -41,6 +41,7 @@ pub fn dispatch_system(
     mut commands: Commands,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
+    skill_registry: Res<SkillRegistry>,
     skill_loader: Res<SkillLoader>,
     plugin_skills: Res<PluginSkillContributions>,
     mut tasks: Query<(
@@ -178,8 +179,13 @@ pub fn dispatch_system(
         match hint.strategy {
             DispatchStrategy::BrainLlm => {
                 // 调用 brain_llm_builder 构造 Brain LLM 执行请求
-                let brain_request =
-                    build_brain_execution_request(&task, short_term, &agent_refs, &registry);
+                let brain_request = build_brain_execution_request(
+                    &task,
+                    short_term,
+                    &agent_refs,
+                    &registry,
+                    &skill_registry,
+                );
 
                 let Some((request_message, hook_pending)) = brain_request else {
                     // 未找到 Brain Agent → Task Failed

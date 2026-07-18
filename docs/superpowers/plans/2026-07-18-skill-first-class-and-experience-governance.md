@@ -1,5 +1,13 @@
 # Skill 成为一等公民与经验治理改造 实现计划
 
+> **状态说明（2026-07-18）：** 本计划中关于 `select_agent_for_sub_task_with_skill`
+> 函数的实现段落（§2.4 任务步骤 3 等）已被派发架构统一设计取代，不再作为实施依据。
+> Brain LLM 现在通过 `build_brain_execution_request` 整体决策输出 `{agent_name, skill_name?}`，
+> 候选 Agent 名下 skills 由 `SkillRegistry` 注入 prompt。详见
+> [ADR-004 §2.4](../../adr/ADR-004-skill-first-class-and-experience-governance-reform.md)
+> 与 [派发架构统一设计](../../design/2026-07-18-dispatch-architecture-unification-design.md)。
+> 本计划其余段落保留作为历史背景。
+
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
 **目标：** 让 skill 成为可被 brain 选择的一等公民，持久Agent吸收子经验，skill-updater 让 skill 具备经验驱动自我迭代能力。

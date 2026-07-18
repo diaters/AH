@@ -4,10 +4,10 @@ use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntryRole, ExecutorFuture,
-    ExperienceCollectionRequestMessage, FrontendKind, HarnessConfig, LongTermMemory,
-    ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason, WorkItem,
-    build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
+    DispatchStrategy, EntryRole, ExecutorFuture, ExperienceCollectionRequestMessage, FrontendKind,
+    HarnessConfig, LongTermMemory, PendingDispatch, ShortTermMemory, Task, TaskRoutingPolicy,
+    TaskStatus, WaitingReason, WorkItem, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -680,7 +680,10 @@ fn prompt_includes_conversation_history() {
     app.update();
     spawn_default_agent(&mut app);
 
-    // 创建带历史对话的任务
+    // 创建带历史对话的任务并附加 PendingDispatch(BrainLlm)
+    // 老的 brain_dispatch_system 兜底路径已移除，TopLevelTask 必须通过
+    // PendingDispatch 流入 dispatch_system 才能触发 Brain LLM 调用。
+    // Brain LLM 的 prompt 由 build_prompt_with_history 构造，会注入 [Conversation history]。
     let task_id = uuid::Uuid::new_v4();
     let _entity_id = app
         .world_mut()
@@ -716,6 +719,15 @@ fn prompt_includes_conversation_history() {
                 summary_prefix: None,
                 estimated_tokens: 100,
                 last_cached_tokens: None,
+            },
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::BrainLlm,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
             },
         ))
         .id();

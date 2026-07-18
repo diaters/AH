@@ -174,6 +174,18 @@ __错误类型设计__（修订 v5）：`parse_brain_skill_selection` 必须使�
 
 #### 2.4 `select_agent_for_sub_task` 函数签名变更
 
+> __状态：已被取代__（2026-07-18）
+>
+> 本节原设想在 `select_agent_for_sub_task` 内部用 LLM 选 Agent + skill 并返回 `Option<SkillId>`。
+> 该思路在派发架构统一（参见 `docs/design/2026-07-18-dispatch-architecture-unification-design.md`）
+> 之后已被取代：Brain LLM 现在整体决策输出 JSON `{agent_name, skill_name?}`，
+> 由 `build_brain_execution_request`（`src/systems/dispatch/brain_llm_builder.rs`）+
+> `parse_brain_skill_selection`（`src/systems/dispatch/brain_dispatch.rs`）+
+> `brain_decision_system`（`src/systems/transform/brain_decision.rs`）形成统一闭环。
+> 候选 Agent 名下 skills 清单由 `SkillRegistry` 注入 Brain LLM prompt（按 agent 嵌套渲染）。
+> 因此 `select_agent_for_sub_task_with_skill` 函数从未在源码中实现，原签名扩展也不再适用。
+> 本节内容保留作为历史背景，不再作为实施依据。
+
 评审 D5 指出当前签名（[agent_selection.rs:96-162](../../src/systems/dispatch/agent_selection.rs#L96-L162)）只返回 Agent，
 改造后需要同时返回 skill 选择结果。新签名：
 
