@@ -33,7 +33,6 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 
 - 父 Agent 审批仍为 MVP 自动通过实现，尚未接入真实 LLM 审查
 - Brain 中 `select_agent_for_sub_task_with_skill` 仍为占位实现，未接入真实 LLM 选 skill 调用
-- 治理层将 `kind_hint` 从 `Skill` 降级为 `Knowledge` 时未同步转换候选 payload，导致 writeback 失败
 - 部分历史设计文档仍需持续整理状态标注
 - 更多真实场景下的 provider 兼容性与复杂任务策略验证
 - 飞书通道仅有占位模块，尚未接入实际 API

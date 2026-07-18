@@ -869,16 +869,13 @@ fn skill_update_apply_failure_preserves_state() {
     drop(tmp);
 }
 
-/// self_updatable=false：候选 kind_hint 降级为 Knowledge，
-/// governance 决议 destination 为 LongTermMemory，未走 SkillUpdate 路径。
+/// self_updatable=false：候选被标记 Discarded，未走 SkillUpdate 路径，也不产生 writeback 请求。
 ///
-/// 验证链路：governance → kind_hint 降级 → WritebackRequestMessage(LongTermMemory) → writeback 执行。
-///
-/// 已知行为说明：governance 仅修改 candidate.kind_hint，未同步转换 candidate.payload（仍为 Skill），
-/// 因此 `as_long_term_memory_entry()` 返回 None，writeback_to_long_term_memory 失败，
-/// 候选最终状态为 WritebackFailed。本测试不断言 Persisted，仅验证 governance 阶段的降级行为。
+/// ADR-004 v6 D15：原设计"降级 kind_hint 为 Knowledge 并写入 LTM"会导致 payload 形态不匹配
+/// （Skill payload 与 Knowledge payload 不同，writeback 失败）。修订为直接 Discarded + warn 日志，
+/// 让 LLM 在下一轮重新评估。需要变更不可自更新 skill 的，应通过 IncubationProposal 提案新 skill。
 #[test]
-fn self_updatable_false_downgrades_to_knowledge() {
+fn self_updatable_false_discards_candidate() {
     let mut app = create_test_app(no_brain_test_config());
 
     let agent_id = Uuid::new_v4();
@@ -931,7 +928,7 @@ fn self_updatable_false_downgrades_to_knowledge() {
         "SkillUpdateRequestMessage should NOT be spawned when self_updatable=false"
     );
 
-    // 验证：候选 kind_hint 被降级为 Knowledge（governance 降级行为）
+    // 验证：候选 kind_hint 保持 Skill（不降级 payload，避免语义不一致）
     let store = app.world().resource::<ExperienceStore>();
     let candidate = store
         .candidates
@@ -939,17 +936,15 @@ fn self_updatable_false_downgrades_to_knowledge() {
         .expect("candidate exists");
     assert_eq!(
         candidate.kind_hint,
-        ExperienceKindHint::Knowledge,
-        "kind_hint should be downgraded to Knowledge when self_updatable=false"
+        ExperienceKindHint::Skill,
+        "kind_hint should remain Skill; do not downgrade payload"
     );
 
-    // 验证：候选最终状态为 WritebackFailed（已知行为：candidate.payload 仍是 Skill，
-    // as_long_term_memory_entry() 返回 None，writeback 失败。governance 未同步转换 payload。
-    // 通过 WritebackFailed 间接证明 destination=LongTermMemory 被 writeback_system 执行。）
+    // 验证：候选被标记 Discarded（ADR-004 v6 D15：不强行降级，直接 Discarded + warn）
     assert_eq!(
         candidate.status,
-        ExperienceCandidateStatus::WritebackFailed,
-        "candidate should be WritebackFailed: payload remains Skill despite kind_hint downgrade"
+        ExperienceCandidateStatus::Discarded,
+        "candidate should be Discarded when self_updatable=false (ADR-004 v6 D15)"
     );
 }
 

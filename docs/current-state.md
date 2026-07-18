@@ -150,7 +150,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 顶层治理 Skill 分支根据 `self_updatable` 路由：
   - `self_updatable = true` → `ExperienceWritebackDestination::SkillUpdate`，spawn
     `SkillUpdateRequestMessage`，候选保持 `GovernanceResolved`
-  - `self_updatable = false` → 降级 `kind_hint` 为 `Knowledge`
+  - `self_updatable = false` → 候选标记 `Discarded` + warn 日志
+    （`SkillCandidateDiscardedNotSelfUpdatable`）。不强行降级 payload 形态，需要变更该 skill
+    的应通过 `IncubationProposal` 提案新 skill（ADR-004 v6 D15）
   - `default Agent` 维持 `Skill → IncubationProposal` 路径不变
 - skill-updater Agent 消费 `SkillUpdateRequestMessage`，构造 prompt 后 spawn `WorkItem`（类型为
   `WorkItemType::SkillUpdate`）+ `SkillUpdateContext` + `AgentExecutionRequestMessage`
@@ -177,8 +179,6 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 - Brain 中 `select_agent_for_sub_task_with_skill` 仍为占位实现，未接入真实 LLM 选 skill 调用，
   当前仅在 owner_skills 为空时 fallback；接入 LLM 后需要补充 LLM 选错场景的集成测试
-- 治理层将 `kind_hint` 从 `Skill` 降级为 `Knowledge` 时未同步转换候选 payload，导致 writeback 路径失败
-  （候选最终为 `WritebackFailed` 而非 `Persisted`）；需要补 payload 适配层或直接重新构造 Knowledge 候选
 
 ### 已收敛或已废弃
 

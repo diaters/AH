@@ -65,7 +65,7 @@ pub(crate) fn experience_governance_system(
                 None => continue,
             };
 
-            let (decision, downgrade_kind) = match candidate.kind_hint {
+            let decision: Option<ExperienceGovernanceDecision> = match candidate.kind_hint {
                 ExperienceKindHint::Knowledge => {
                     let d = if is_default {
                         ExperienceGovernanceDecision {
@@ -84,19 +84,18 @@ pub(crate) fn experience_governance_system(
                             source_task_id: request.task_id,
                         }
                     };
-                    (d, None)
+                    Some(d)
                 }
                 ExperienceKindHint::Skill => {
                     if is_default {
                         // 保留原 default agent skill → incubation 语义（修正 plan 疏漏）
-                        let d = ExperienceGovernanceDecision {
+                        Some(ExperienceGovernanceDecision {
                             candidate_id: *candidate_id,
                             destination: ExperienceWritebackDestination::IncubationProposal,
                             requires_user_confirmation: true,
                             decision_rationale: "default agent skill -> incubation".to_string(),
                             source_task_id: request.task_id,
-                        };
-                        (d, None)
+                        })
                     } else {
                         // 非默认 agent：检查 task 是否注入了 skill，按 self_updatable 分流
                         let injected_skill = tasks
@@ -109,7 +108,7 @@ pub(crate) fn experience_governance_system(
                             && let Some(entry) = skill_registry.get(skill_id)
                         {
                             if entry.self_updatable {
-                                let d = ExperienceGovernanceDecision {
+                                Some(ExperienceGovernanceDecision {
                                     candidate_id: *candidate_id,
                                     destination: ExperienceWritebackDestination::SkillUpdate,
                                     requires_user_confirmation: false,
@@ -118,21 +117,26 @@ pub(crate) fn experience_governance_system(
                                         skill_id.as_string()
                                     ),
                                     source_task_id: request.task_id,
-                                };
-                                (d, None)
+                                })
                             } else {
-                                // 不可自更新：降级为 LongTermMemory，kind_hint 强制改为 Knowledge
-                                let d = ExperienceGovernanceDecision {
-                                    candidate_id: *candidate_id,
-                                    destination: ExperienceWritebackDestination::LongTermMemory,
-                                    requires_user_confirmation: false,
-                                    decision_rationale: format!(
-                                        "skill {} not self_updatable, degraded to knowledge -> LTM",
-                                        skill_id.as_string()
-                                    ),
-                                    source_task_id: request.task_id,
-                                };
-                                (d, Some(ExperienceKindHint::Knowledge))
+                                // 不可自更新的 skill 产生 Skill 经验：
+                                // 不强行降级为 Knowledge（payload 形态不匹配，会导致 writeback 失败），
+                                // 也不走 skill-updater（会自指循环）。
+                                // 直接标记 Discarded 并记录 warn，让 LLM 在下一轮重新评估。
+                                // 真正需要变更该 skill 的，应通过 IncubationProposal 提案新 skill。
+                                warn!(
+                                    event = "SkillCandidateDiscardedNotSelfUpdatable",
+                                    task_id = %request.task_id,
+                                    candidate_id = %candidate_id,
+                                    skill_id = %skill_id.as_string(),
+                                    error = "skill is not self_updatable, cannot route to skill-updater",
+                                    error_type = "SkillNotSelfUpdatable",
+                                    "skill candidate discarded; consider IncubationProposal for new skill"
+                                );
+                                if let Some(c) = store.candidates.get_mut(candidate_id) {
+                                    c.status = ExperienceCandidateStatus::Discarded;
+                                }
+                                None
                             }
                         } else if let Some(skill_id) = injected_skill.as_ref() {
                             // skill 在 registry 中找不到：保守回退到 SkillPackage
@@ -143,36 +147,32 @@ pub(crate) fn experience_governance_system(
                                 skill_id = %skill_id.as_string(),
                                 "skill not found in registry, fallback to SkillPackage"
                             );
-                            let d = ExperienceGovernanceDecision {
+                            Some(ExperienceGovernanceDecision {
                                 candidate_id: *candidate_id,
                                 destination: ExperienceWritebackDestination::SkillPackage,
                                 requires_user_confirmation: true,
                                 decision_rationale:
                                     "skill not in registry, fallback to SkillPackage".to_string(),
                                 source_task_id: request.task_id,
-                            };
-                            (d, None)
+                            })
                         } else {
                             // 未注入 skill：保留原 SkillPackage 逻辑
-                            let d = ExperienceGovernanceDecision {
+                            Some(ExperienceGovernanceDecision {
                                 candidate_id: *candidate_id,
                                 destination: ExperienceWritebackDestination::SkillPackage,
                                 requires_user_confirmation: true,
                                 decision_rationale: "skill requires user confirmation".to_string(),
                                 source_task_id: request.task_id,
-                            };
-                            (d, None)
+                            })
                         }
                     }
                 }
             };
 
-            // 处理 kind_hint 降级副作用（self_updatable=false 时强制改为 Knowledge）
-            if let Some(new_kind) = downgrade_kind
-                && let Some(c) = store.candidates.get_mut(candidate_id)
-            {
-                c.kind_hint = new_kind;
-            }
+            let Some(decision) = decision else {
+                // 已在分支内处理（如 Discarded），跳过后续决议处理
+                continue;
+            };
 
             // 标记候选为 GovernanceResolved
             if let Some(c) = store.candidates.get_mut(candidate_id) {
@@ -586,9 +586,9 @@ mod tests {
         );
     }
 
-    /// 2. self_updatable=false 的注入 skill → LongTermMemory，kind_hint 降级为 Knowledge。
+    /// 2. self_updatable=false 的注入 skill → 候选标记 Discarded（不强行降级 payload）。
     #[test]
-    fn governance_degrades_non_self_updatable_skill_to_knowledge_ltm() {
+    fn governance_discards_non_self_updatable_skill_candidate() {
         let mut app = make_governance_app();
 
         let agent_id = uuid::Uuid::new_v4();
@@ -620,19 +620,25 @@ mod tests {
         let destinations = writeback_destinations(&mut app);
         let decisions = governance_decision_destinations(&mut app);
 
-        // 候选 kind_hint 被降级为 Knowledge
+        // 候选被 Discarded，kind_hint 保持 Skill（不降级 payload）
         let store = app.world().resource::<ExperienceStore>();
         let candidate = store.candidates.get(&candidate_id).unwrap();
-        assert_eq!(candidate.kind_hint, ExperienceKindHint::Knowledge);
-        assert_eq!(
-            candidate.status,
-            ExperienceCandidateStatus::WritebackPending
+        assert_eq!(candidate.kind_hint, ExperienceKindHint::Skill);
+        assert_eq!(candidate.status, ExperienceCandidateStatus::Discarded);
+        // 不应 spawn WritebackRequestMessage
+        assert!(
+            destinations.is_empty(),
+            "Discarded path should not spawn WritebackRequestMessage"
         );
-        assert_eq!(
-            destinations,
-            vec![ExperienceWritebackDestination::LongTermMemory],
-        );
+        // 不应 spawn 任何 ExperienceGovernanceDecision
         assert!(decisions.is_empty());
+        // 不应 spawn SkillUpdateRequestMessage
+        let mut q = app.world_mut().query::<&SkillUpdateRequestMessage>();
+        let skill_update_count = q.iter(app.world()).count();
+        assert_eq!(
+            skill_update_count, 0,
+            "Discarded path should not spawn SkillUpdateRequestMessage"
+        );
     }
 
     /// 3. 非默认 agent + 未注入 skill → SkillPackage（需要用户确认）。

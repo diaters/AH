@@ -2,8 +2,9 @@
 
 ## 状态
 
-Proposed（v5 — 已根据四轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
-  v2 `logs/2026-07-18-adr-004-skill-first-class-review-v2.md`、v3 用户反馈 F15、v4 实施偏差修正 D13/D14）
+Proposed（v6 — 已根据五轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
+v2 `logs/2026-07-18-adr-004-skill-first-class-review-v2.md`、v3 用户反馈 F15、v4 实施偏差修正 D13/D14、
+v6 实施 review 修正 D15）
 
 ## 生效范围
 
@@ -527,9 +528,12 @@ pub(crate) fn experience_governance_system(
                 // 正常路径：触发 skill-updater
                 destination = SkillUpdate;
             } else {
-                // skill-updater 自身的 skill，降级为 knowledge 写入 LTM
-                destination = LongTermMemory;
-                candidate.kind_hint = ExperienceKindHint::Knowledge;  // 强制降级
+                // 不可自更新的 skill 产生 Skill 经验：标记 Discarded（v6 修订 D15）
+                // 不强行降级为 Knowledge（payload 形态不匹配，会导致 writeback 失败）
+                // 也不走 skill-updater（会自指循环）
+                // 真正需要变更该 skill 的，应通过 IncubationProposal 提案新 skill
+                candidate.status = Discarded;
+                return None;  // 不产生治理决议
             }
         } else {
             // 持久Agent未注入 skill：形成新 skill
@@ -542,6 +546,17 @@ pub(crate) fn experience_governance_system(
 __注意__：注入skill 路径的候选在 §3.2 已被 `route_persistent_agent_experience` 直接走 skill-updater，不会进入 governance。
 因此 §3.8 的 `SkillUpdate` destination 分支实际上只处理"候选已通过 governance 路径流入但发现 `injected_skill` 存在"的边界情况
 ——但按 §3.2 的设计，这种情况不会发生。为防御性编程，governance 仍检查 `injected_skill`，若存在则 redirect 到 skill-updater 路径。
+
+__v6 修订 D15__：原 v3-v5 设计为 self_updatable=false 时"降级 kind_hint 为 Knowledge 并写入 LTM"。
+实施时发现该路径存在两个问题：
+
+1. __语义不诚实__：Skill payload（`file_refs` / `instructions` / `description`）与 Knowledge payload（`content: String`）形态不同，
+   `as_long_term_memory_entry()` 对 Skill payload 返回 `None`，导致 writeback 失败
+2. __循环防护冗余__：skill-updater 自身的任务会标 `KnowledgeOnly` filter（§3.7），
+   skill 候选在 collection 阶段就被 `Discarded`，永远不会到达 governance 的 self_updatable 检查
+
+修订为：self_updatable=false 的 skill 候选直接标记 `Discarded` + warn 日志（`SkillCandidateDiscardedNotSelfUpdatable`），
+让 LLM 在下一轮重新评估。若确实需要变更该 skill，应通过 `IncubationProposal` 提案新 skill。
 
 ### 4. skill_update_completion_system 职责（评审 D6 补全、D11 补充）
 
@@ -804,6 +819,12 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 |---|---|
 | D13 | §4.1 修正：原"section 不存在 / field 不在白名单时跳过并继续"改为"任何 apply 错误都整体回滚"。部分更新会让 SKILL.md 处于不一致状态，整体回滚更安全。 |
 | D14 | §2.3 补充错误类型：`parse_brain_skill_selection` 使用 `thiserror` 定义的 `BrainSkillSelectionError`，符合库 crate 规范。 |
+
+### 第五轮（实施 review 修正 — 2026-07-18）
+
+| 评审编号 | 修正内容 |
+|---|---|
+| D15 | §3.8 修正：self_updatable=false 不降级 Knowledge，改 Discarded + warn。payload 不匹配致 writeback 失败。 |
 
 ## 关联文件
 
