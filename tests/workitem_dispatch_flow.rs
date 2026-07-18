@@ -199,11 +199,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
     // Create an Execution work item
     // (The narrow dispatcher only handles Evaluation/Summarization, so this is not dispatched)
     let task_id = uuid::Uuid::new_v4();
-    let work_item = WorkItem::execution(
-        task_id,
-        "Execute this task".to_string(),
-        harness::contracts::TagSet::from_tags(["nonexistent-tag"]),
-    );
+    let work_item = WorkItem::execution(task_id, "Execute this task".to_string());
     app.world_mut().spawn((
         work_item,
         PendingDispatch {

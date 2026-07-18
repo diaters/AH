@@ -144,7 +144,6 @@ fn agent_to_map(a: &Agent) -> Map {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::TagSet;
     use crate::domain::{
         Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
         FrontendKind, Task, WorkItem,
@@ -220,7 +219,7 @@ mod tests {
     #[test]
     fn get_work_item_ids_for_filters_by_task() {
         let tid = uuid::Uuid::new_v4();
-        let w = WorkItem::execution(tid, "do thing".to_string(), TagSet::from_tags(["x"]));
+        let w = WorkItem::execution(tid, "do thing".to_string());
         let snap = WorldSnapshot {
             tasks: Arc::new(Vec::new()),
             work_items: Arc::new(vec![w]),

@@ -5,11 +5,8 @@
 use crate::prelude::*;
 use uuid::Uuid;
 
+use crate::domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition};
 use crate::user_plugins::hook_point::HookPoint;
-use crate::{
-    contracts::TagSet,
-    domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition},
-};
 
 /// 工作项类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,8 +151,6 @@ pub struct WorkItem {
     pub work_type: WorkItemType,
     /// 输入
     pub input: WorkItemInput,
-    /// 标签集合
-    pub tags: TagSet,
     /// 状态
     pub status: WorkItemStatus,
     /// 分配的 Agent
@@ -174,7 +169,6 @@ impl WorkItem {
         task_id: TaskId,
         work_type: WorkItemType,
         input: WorkItemInput,
-        tags: TagSet,
         origin: WorkItemOrigin,
         writeback_target: WorkItemWritebackTarget,
     ) -> Self {
@@ -184,7 +178,6 @@ impl WorkItem {
             parent_task_id: None,
             work_type,
             input,
-            tags,
             status: WorkItemStatus::Pending,
             assigned_agent: None,
             governing_agent_id: None,
@@ -194,12 +187,11 @@ impl WorkItem {
     }
 
     /// 创建执行工作项
-    pub fn execution(task_id: TaskId, prompt: String, tags: TagSet) -> Self {
+    pub fn execution(task_id: TaskId, prompt: String) -> Self {
         Self::new(
             task_id,
             WorkItemType::Execution,
             WorkItemInput::new(prompt),
-            tags,
             WorkItemOrigin::UserTask,
             WorkItemWritebackTarget::TaskResult,
         )
@@ -212,7 +204,6 @@ impl WorkItem {
         target_tokens: usize,
         _trigger: SummarizationTrigger,
     ) -> Self {
-        let tags = TagSet::from_tags(["summarization"]);
         let input = WorkItemInput::new(format!(
             "请对以下内容进行摘要，目标约 {} tokens:\n\n{}",
             target_tokens, content
@@ -221,7 +212,6 @@ impl WorkItem {
             task_id,
             WorkItemType::Summarization,
             input,
-            tags,
             WorkItemOrigin::MemoryCompaction,
             WorkItemWritebackTarget::ShortTermContext,
         )
@@ -229,7 +219,6 @@ impl WorkItem {
 
     /// 创建评估工作项
     pub fn evaluation(task_id: TaskId, prompt: String, reasoning_hint: Option<String>) -> Self {
-        let tags = TagSet::from_tags(["evaluation"]);
         let full_prompt = if let Some(hint) = reasoning_hint {
             format!("{}\n\n评估提示: {}", prompt, hint)
         } else {
@@ -240,7 +229,6 @@ impl WorkItem {
             task_id,
             WorkItemType::Evaluation,
             input,
-            tags,
             WorkItemOrigin::Evaluation,
             WorkItemWritebackTarget::TaskResult,
         )
@@ -255,7 +243,6 @@ impl WorkItem {
         tools: Vec<ToolDefinition>,
         governing_agent_id: AgentId,
     ) -> Self {
-        let tags = TagSet::from_tags(["collect"]);
         let context = WorkItemContext {
             conversation: Some(conversation),
             tools,
@@ -266,7 +253,6 @@ impl WorkItem {
             task_id,
             WorkItemType::ExperienceCollection,
             input,
-            tags,
             WorkItemOrigin::ExperienceCollection,
             WorkItemWritebackTarget::ExperienceInbox,
         );
@@ -288,7 +274,6 @@ impl WorkItem {
         governing_agent_id: AgentId,
         _kind: crate::domain::ProfileGenerationKind,
     ) -> Self {
-        let tags = TagSet::from_tags(["profile"]);
         let context = WorkItemContext {
             conversation: Some(conversation),
             tools,
@@ -299,7 +284,6 @@ impl WorkItem {
             task_id,
             WorkItemType::ProfileGeneration,
             input,
-            tags,
             WorkItemOrigin::ExperienceCollection,
             WorkItemWritebackTarget::ExperienceInbox,
         );
@@ -318,7 +302,6 @@ impl WorkItem {
         tools: Vec<ToolDefinition>,
         governing_agent_id: AgentId,
     ) -> Self {
-        let tags = TagSet::from_tags(["skill-update"]);
         let context = WorkItemContext {
             conversation: Some(conversation),
             tools,
@@ -329,7 +312,6 @@ impl WorkItem {
             task_id,
             WorkItemType::SkillUpdate,
             input,
-            tags,
             WorkItemOrigin::ExperienceCollection,
             WorkItemWritebackTarget::ExperienceInbox,
         );
@@ -407,11 +389,7 @@ mod tests {
     #[test]
     fn work_item_execution_creation() {
         let task_id = Uuid::nil();
-        let work_item = WorkItem::execution(
-            task_id,
-            "test prompt".to_string(),
-            TagSet::from_tags(["llm"]),
-        );
+        let work_item = WorkItem::execution(task_id, "test prompt".to_string());
         assert_eq!(work_item.work_type, WorkItemType::Execution);
         assert_eq!(work_item.status, WorkItemStatus::Pending);
         assert!(work_item.is_pending());
@@ -420,7 +398,7 @@ mod tests {
     #[test]
     fn work_item_state_transitions() {
         let task_id = Uuid::nil();
-        let mut work_item = WorkItem::execution(task_id, "test".to_string(), TagSet::empty());
+        let mut work_item = WorkItem::execution(task_id, "test".to_string());
 
         assert!(work_item.is_pending());
         work_item.assign(Uuid::new_v4());
@@ -444,7 +422,7 @@ mod tests {
             SummarizationTrigger::TaskComplete,
         );
         assert_eq!(work_item.work_type, WorkItemType::Summarization);
-        assert!(work_item.tags.tags.contains(&"summarization".to_string()));
+        assert_eq!(work_item.work_type.required_tag(), "summarization");
         // System prompt is now provided by agents.toml, not WorkItem
         assert!(work_item.input.context.system_prompt.is_none());
         // Verify prompt contains target_tokens value
@@ -466,7 +444,7 @@ mod tests {
             work_item.writeback_target,
             WorkItemWritebackTarget::TaskResult
         );
-        assert!(work_item.tags.tags.contains(&"evaluation".to_string()));
+        assert_eq!(work_item.work_type.required_tag(), "evaluation");
 
         // Verify the prompt contains reasoning hint
         assert!(work_item.input.prompt.contains("请评估当前任务状态"));
@@ -520,7 +498,7 @@ mod tests {
             work_item.writeback_target,
             WorkItemWritebackTarget::ExperienceInbox
         );
-        assert!(work_item.tags.tags.contains(&"collect".to_string()));
+        assert_eq!(work_item.work_type.required_tag(), "collect");
         // System prompt is now provided by agents.toml, not WorkItem
         assert!(work_item.input.context.system_prompt.is_none());
         assert_eq!(work_item.input.context.tools.len(), 1);

@@ -248,7 +248,6 @@ fn dispatch_workitem_lifecycle_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::TagSet;
     use crate::domain::{
         WorkItemInput, WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
     };
@@ -259,7 +258,6 @@ mod tests {
             uuid::Uuid::nil(),
             WorkItemType::Evaluation,
             WorkItemInput::new("test".to_string()),
-            TagSet::empty(),
             WorkItemOrigin::Evaluation,
             WorkItemWritebackTarget::TaskResult,
         );
