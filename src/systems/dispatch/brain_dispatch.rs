@@ -17,45 +17,27 @@ use crate::{
     contracts::{AgentCapabilitySummary, BrainSelectionPolicy, FirstBrainPolicy},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory,
-        MessageDispatchedHookPending, PendingDispatch, ShortTermMemory, SpaceToolRegistry,
-        SubTaskBatchState, SubTaskConfig, Task, TaskInjectedSkill, TaskStatus, ToolPermission,
-        WaitingReason,
+        EntryRole, MessageDispatchedHookPending, PendingDispatch, ShortTermMemory,
+        SpaceToolRegistry, Task, TaskStatus, ToolPermission,
     },
-    infrastructure::skills::{SkillId, SkillRegistry},
 };
-
-use super::agent_selection::select_agent_for_sub_task_with_skill;
 
 /// Brain 选 skill 流程的统一错误类型（ADR-004 §2.3）
 ///
 /// 当前仅 `parse_brain_skill_selection` 使用 `InvalidJson` 变体；
 /// `AgentNotInCandidates` 与 `SkillNotOwned` 预留给调用方
-/// （`select_agent_for_sub_task_with_skill` 接入真实 LLM 后使用）。
+/// （`brain_decision_system` 后续接入更严格校验时使用）。
 #[derive(Debug, Error)]
 pub enum BrainSkillSelectionError {
     #[error("invalid brain skill selection JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
-    #[allow(dead_code)] // 预留给调用方（select_agent_for_sub_task_with_skill 接入真实 LLM 后使用）
+    #[allow(dead_code)] // 预留给调用方（brain_decision_system 接入更严格校验时使用）
     #[error("agent not in candidates: {0}")]
     AgentNotInCandidates(String),
-    #[allow(dead_code)] // 预留给调用方（select_agent_for_sub_task_with_skill 接入真实 LLM 后使用）
+    #[allow(dead_code)] // 预留给调用方（brain_decision_system 接入更严格校验时使用）
     #[error("skill not owned by agent: agent={agent}, skill={skill}")]
     SkillNotOwned { agent: String, skill: String },
 }
-
-const SUB_TASK_SYSTEM_PROMPT: &str = "\
-你是一个专注于完成特定子任务的 AI Agent。请仔细阅读任务描述，认真完成分配给你的工作。
-
-重要：请在回答的最后，用 <<<RESULT>>> 和 <<</RESULT>>> 标记包围你的核心结论或最终答案。
-标记内的内容应当精炼、自包含，便于其他任务引用。
-
-示例格式：
-（你的详细分析和推理过程...）
-
-<<<RESULT>>>
-你的精炼结论
-<<</RESULT>>>";
 
 pub(crate) struct AgentDescription {
     pub name: String,
@@ -138,22 +120,6 @@ pub(crate) fn build_prompt_with_history(
     )
 }
 
-/// 构建子任务的 system prompt，如选中 skill 则拼接 skill instructions
-fn build_sub_task_system_prompt(
-    skill_id: &Option<SkillId>,
-    skill_registry: &SkillRegistry,
-) -> String {
-    if let Some(skill) = skill_id
-        && let Some(entry) = skill_registry.get(skill)
-    {
-        return format!(
-            "{}\n\n## Skill: {}\n\n{}",
-            SUB_TASK_SYSTEM_PROMPT, entry.name, entry.instructions
-        );
-    }
-    SUB_TASK_SYSTEM_PROMPT.to_string()
-}
-
 /// Brain 分发 System
 ///
 /// 使用 Brain Agent 进行任务分发决策。
@@ -161,22 +127,17 @@ fn build_sub_task_system_prompt(
 /// ## Brain Agent 选择
 ///
 /// 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的那个。
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     mut commands: Commands,
     mut tasks: Query<(
-        Entity,
         &mut Task,
         Option<&ShortTermMemory>,
-        Option<&SubTaskConfig>,
         Option<&PendingDispatch>,
     )>,
     agents: Query<&Agent>,
-    batch_states: Query<&SubTaskBatchState>,
     registry: Res<SpaceToolRegistry>,
-    skill_registry: Res<SkillRegistry>,
 ) {
     let Some(brain_config) = &settings.0.brain else {
         return;
@@ -216,7 +177,7 @@ pub fn brain_dispatch_system(
         })
         .collect();
 
-    for (task_entity, mut task, short_term, sub_task_config, pending_dispatch) in &mut tasks {
+    for (mut task, short_term, pending_dispatch) in &mut tasks {
         // 阶段 3：带 PendingDispatch 的 Task 由 dispatch_system 处理，跳过
         if pending_dispatch.is_some() {
             continue;
@@ -235,142 +196,6 @@ pub fn brain_dispatch_system(
                 delegate = ?task.delegate,
                 "task already has delegate, skipping brain dispatch"
             );
-            continue;
-        }
-
-        // 子任务处理：检查 DAG 依赖，由 Brain 分发
-        if let Some(config) = sub_task_config {
-            // 检查 DAG 依赖是否满足
-            let deps_satisfied = if config.depends_on.is_empty() {
-                true
-            } else if let Some(batch_state) = batch_states
-                .iter()
-                .find(|bs| bs.batch_id == config.batch_id)
-            {
-                config.depends_on.iter().all(|dep_name| {
-                    batch_state.tasks.get(dep_name).is_some_and(|s| {
-                        matches!(s.state, BatchTaskState::Done | BatchTaskState::Failed)
-                    })
-                })
-            } else {
-                false
-            };
-
-            if !deps_satisfied {
-                trace!(
-                    event = "SubTaskWaitingForDependencies",
-                    task_id = %task.id,
-                    child_name = %config.child_agent_name,
-                    depends_on = ?config.depends_on,
-                    "sub-task waiting for dependencies to complete"
-                );
-                continue;
-            }
-
-            // 收集依赖的兄弟任务结果
-            let sibling_results = if !config.depends_on.is_empty() {
-                if let Some(batch_state) = batch_states
-                    .iter()
-                    .find(|bs| bs.batch_id == config.batch_id)
-                {
-                    let mut results = Vec::new();
-                    for dep_name in &config.depends_on {
-                        if let Some(status) = batch_state.tasks.get(dep_name) {
-                            let result_text = match &status.result_summary {
-                                Some(summary) if !summary.is_empty() => summary.clone(),
-                                _ => format!("[{}: 执行失败，无结果]", dep_name),
-                            };
-                            results.push(format!("### {}\n{}", dep_name, result_text));
-                        }
-                    }
-                    if results.is_empty() {
-                        None
-                    } else {
-                        Some(results)
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // 选择匹配的 Agent（基于所需工具标签）
-            let child_agent = select_agent_for_sub_task_with_skill(
-                agents.iter().map(|a| (a, None::<&LongTermMemory>)),
-                &task.content,
-                &skill_registry,
-            );
-
-            if let Some((agent, _ltm, skill_id)) = child_agent {
-                debug!(
-                    event = "SubTaskDispatched",
-                    task_id = %task.id,
-                    child_name = %config.child_agent_name,
-                    selected_agent = %agent.profile.name,
-                    batch_id = %config.batch_id,
-                    "dispatching sub-task to agent"
-                );
-
-                let child_task_id = task.id;
-
-                // 注入 TaskInjectedSkill Component（如果选中了 skill）
-                if let Some(skill) = &skill_id {
-                    commands.entity(task_entity).insert(TaskInjectedSkill {
-                        skill_id: Some(skill.clone()),
-                    });
-                    debug!(
-                        event = "TaskInjectedSkillAttached",
-                        task_id = %task.id,
-                        selected_agent = %agent.profile.name,
-                        skill_id = %skill.as_string(),
-                        "attached skill to task"
-                    );
-                }
-
-                commands.spawn(AgentSpawnRequestMessage {
-                    parent_agent_id: config.parent_agent_id,
-                    task_id: child_task_id,
-                    name: config.child_agent_name.clone(),
-                    model: config.child_agent_model.clone(),
-                    description: config.child_agent_name.clone(),
-                    tools: config.allowed_tools.clone(),
-                    task_prompt: if let Some(ref results) = sibling_results {
-                        format!(
-                            "{}\n\n## 兄弟任务结果\n\n{}\n\n请基于以上兄弟任务的结果完成你的任务。你可以直接引用这些结果，无需重新计算或搜索。",
-                            task.content,
-                            results.join("\n\n")
-                        )
-                    } else {
-                        task.content.clone()
-                    },
-                    task_system_prompt: Some(build_sub_task_system_prompt(
-                        &skill_id,
-                        &skill_registry,
-                    )),
-                });
-
-                if sibling_results.is_some() {
-                    debug!(
-                        event = "SiblingResultsInjected",
-                        task_id = %task.id,
-                        child_name = %config.child_agent_name,
-                        depends_on = ?config.depends_on,
-                        "injected sibling task results into sub-task prompt"
-                    );
-                }
-
-                task.status = TaskStatus::Waiting(WaitingReason::Agent);
-                task.delegate = Some(agent.id);
-                task.updated_at = clock.0;
-            } else {
-                debug!(
-                    event = "SubTaskNoAgentAvailable",
-                    task_id = %task.id,
-                    child_name = %config.child_agent_name,
-                    "no suitable agent found for sub-task"
-                );
-            }
             continue;
         }
 
@@ -513,7 +338,6 @@ mod tests {
     use crate::{
         app::{BrainConfig, HarnessConfig},
         domain::{AgentCapabilities, AgentProfile, ChannelId, FrontendKind},
-        infrastructure::skills::SkillEntry,
     };
     use uuid::Uuid;
 
@@ -526,7 +350,6 @@ mod tests {
             ..Default::default()
         }));
         app.insert_resource(SpaceToolRegistry::default());
-        app.insert_resource(SkillRegistry::default());
         app.add_systems(Update, brain_dispatch_system);
         app
     }
@@ -587,172 +410,6 @@ mod tests {
         };
         assert_eq!(task_after.status, TaskStatus::Ready);
         assert!(task_after.delegate.is_some());
-    }
-
-    mod build_sub_task_system_prompt_tests {
-        use super::*;
-
-        fn make_skill_entry(owner: &str, skill_name: &str) -> SkillEntry {
-            SkillEntry {
-                skill_id: SkillId::new(owner, skill_name),
-                name: format!("{}-display", skill_name),
-                description: format!("desc for {}", skill_name),
-                instructions: format!("INSTRUCTIONS_FOR_{}", skill_name),
-                version: 1,
-                owner_agent_name: owner.to_string(),
-                self_updatable: true,
-            }
-        }
-
-        #[test]
-        fn returns_base_when_skill_id_is_none() {
-            let reg = SkillRegistry::default();
-            let result = build_sub_task_system_prompt(&None, &reg);
-            assert_eq!(result, SUB_TASK_SYSTEM_PROMPT);
-        }
-
-        #[test]
-        fn includes_skill_when_registry_hit() {
-            let mut reg = SkillRegistry::default();
-            let entry = make_skill_entry("agent-a", "coding");
-            let skill_id = entry.skill_id.clone();
-            reg.upsert(entry);
-
-            let result = build_sub_task_system_prompt(&Some(skill_id), &reg);
-
-            assert!(
-                result.starts_with(SUB_TASK_SYSTEM_PROMPT),
-                "prompt should start with base SUB_TASK_SYSTEM_PROMPT"
-            );
-            assert!(
-                result.contains("## Skill: coding-display"),
-                "prompt should include the skill display name section"
-            );
-            assert!(
-                result.contains("INSTRUCTIONS_FOR_coding"),
-                "prompt should include the skill instructions"
-            );
-        }
-
-        #[test]
-        fn falls_back_to_base_when_registry_miss() {
-            // SkillRegistry::default() 中无该 skill，应回退到 base prompt，不能 panic
-            let reg = SkillRegistry::default();
-            let missing_skill_id = SkillId::new("agent-a", "missing");
-
-            let result = build_sub_task_system_prompt(&Some(missing_skill_id), &reg);
-
-            assert_eq!(result, SUB_TASK_SYSTEM_PROMPT);
-        }
-    }
-
-    /// 端到端验证：当 `select_agent_for_sub_task_with_skill` 选中了 skill 时，
-    /// `brain_dispatch_system` 会向 task entity 插入 `TaskInjectedSkill { skill_id: Some(...) }`。
-    ///
-    /// 验证链路：SubTaskConfig 路径 → select_agent_for_sub_task_with_skill → 选中 default agent
-    /// （由 list_by_owner 命中预注册的 skill）→ brain_dispatch 注入 TaskInjectedSkill Component。
-    #[test]
-    fn brain_dispatch_attaches_task_injected_skill_when_skill_selected() {
-        let mut app = build_test_app();
-
-        // 给 default-llm-agent 预注册一个 skill
-        {
-            let mut skill_reg = app.world_mut().resource_mut::<SkillRegistry>();
-            skill_reg.upsert(SkillEntry {
-                skill_id: SkillId::new("default-llm-agent", "coding"),
-                name: "coding".to_string(),
-                description: "Coding skill".to_string(),
-                instructions: "Always write tests".to_string(),
-                version: 1,
-                owner_agent_name: "default-llm-agent".to_string(),
-                self_updatable: true,
-            });
-        }
-
-        // Spawn brain agent
-        let brain_agent_id = Uuid::new_v4();
-        app.world_mut().spawn(Agent {
-            id: brain_agent_id,
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "test-model".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string()],
-                description: "brain agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: Default::default(),
-            system_prompt: None,
-        });
-
-        // Spawn regular agent（带 "default" tag，会被 select_agent_for_sub_task_with_skill 选中）
-        let regular_agent_id = Uuid::new_v4();
-        app.world_mut().spawn(Agent {
-            id: regular_agent_id,
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "test-model".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["default".to_string()],
-                description: "default agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: Default::default(),
-            system_prompt: None,
-        });
-
-        // Spawn 一个带 SubTaskConfig 的 Task
-        let channel = ChannelId {
-            frontend: FrontendKind::Tui,
-            user_id: "test-user".to_string(),
-            thread_id: None,
-        };
-        let task = Task::from_user_input_ready("write some code", 0, channel);
-        let task_id = task.id;
-        let parent_agent_id = Uuid::new_v4();
-        app.world_mut().spawn((
-            task,
-            SubTaskConfig {
-                batch_id: Uuid::new_v4(),
-                child_agent_name: "coder".to_string(),
-                child_agent_model: None,
-                allowed_tools: vec![],
-                parent_agent_id,
-                depends_on: vec![],
-                depended_by: vec![],
-            },
-        ));
-
-        // 运行一帧
-        app.update();
-
-        // 找到 task entity 并断言 TaskInjectedSkill 已注入且 skill_id 与预期匹配
-        let task_entity = {
-            let world = app.world_mut();
-            let mut query = world.query::<(Entity, &Task)>();
-            query
-                .iter(world)
-                .find(|(_, t)| t.id == task_id)
-                .map(|(e, _)| e)
-                .expect("task should still exist")
-        };
-
-        let injected = app
-            .world()
-            .entity(task_entity)
-            .get::<TaskInjectedSkill>()
-            .expect("TaskInjectedSkill should be attached to task");
-        assert_eq!(
-            injected.skill_id,
-            Some(SkillId::new("default-llm-agent", "coding")),
-            "skill_id should match the skill registered to the selected agent"
-        );
     }
 
     mod skill_selection_parse_tests {

@@ -1,7 +1,6 @@
 //! Skill 更新与经验治理集成测试
 //!
-//! 覆盖 plan 任务 24-26：
-//! - 任务 24：brain_dispatch 注入 TaskInjectedSkill（成功 + fallback）
+//! 覆盖 plan 任务 25-26：
 //! - 任务 25：持久Agent 吸收路径（skill-updater / LTM / governance / parent inbox）
 //! - 任务 26：skill 更新 apply / 失败保护 / self_updatable 降级 / kind_filter 循环防护
 //!
@@ -14,11 +13,11 @@ use crossbeam_channel::unbounded;
 use harness::infrastructure::skills::{SkillEntry, SkillId, SkillLoader, SkillRegistry};
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, BrainConfig, ChannelId, ConversationMessage,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ConversationMessage,
     ExperienceCandidate, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
     ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
     ExperienceWritebackDestination, FrontendKind, HarnessConfig, LongTermMemory,
-    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, SubTaskConfig, Task,
+    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, Task,
     TaskExperiencePolicy, TaskInjectedSkill, TaskRoutingPolicy, TaskStatus, ToolDefinition,
     WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
@@ -33,15 +32,6 @@ fn default_channel() -> ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-fn brain_test_config() -> HarnessConfig {
-    HarnessConfig {
-        brain: Some(BrainConfig { enabled: true }),
-        agents_config_path: "/nonexistent_agents.toml".to_string(),
-        providers_config_path: "/nonexistent_providers.toml".to_string(),
-        ..HarnessConfig::default()
     }
 }
 
@@ -63,25 +53,6 @@ impl AgentExecutor for NoOpExecutor {
                 reasoning_content: None,
             })
         })
-    }
-}
-
-fn make_brain_agent(id: Uuid) -> Agent {
-    Agent {
-        id,
-        profile: AgentProfile {
-            name: "brain".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["brain".to_string()],
-            description: "brain agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions::default(),
-        system_prompt: None,
     }
 }
 
@@ -230,137 +201,6 @@ fn create_test_app(config: HarnessConfig) -> bevy_app::App {
     // 第一帧：运行 Startup 系统（load_agents / plugin_load）
     app.update();
     app
-}
-
-// ============ 任务 24：brain 选 skill ============
-
-/// brain_dispatch 为子任务注入 TaskInjectedSkill。
-///
-/// 验证：default-llm-agent 在 SkillRegistry 中预置 coding skill 后，
-/// brain_dispatch_system 选中 default-llm-agent 并注入
-/// TaskInjectedSkill { skill_id: Some(SkillId::new("default-llm-agent", "coding")) }。
-#[test]
-fn brain_selects_agent_and_skill_successfully() {
-    let mut app = create_test_app(brain_test_config());
-
-    let skill_id = SkillId::new("default-llm-agent", "coding");
-    app.world_mut()
-        .resource_mut::<SkillRegistry>()
-        .upsert(make_skill_entry(skill_id.clone(), true));
-
-    // Spawn brain agent
-    let brain_agent_id = Uuid::new_v4();
-    app.world_mut().spawn(make_brain_agent(brain_agent_id));
-
-    // Spawn default-llm-agent with "default" tag
-    let default_agent_id = Uuid::new_v4();
-    app.world_mut().spawn(make_persistent_agent(
-        default_agent_id,
-        "default-llm-agent",
-        vec!["default"],
-    ));
-
-    // Spawn task with SubTaskConfig
-    let parent_agent_id = brain_agent_id;
-    let task = Task::from_user_input_ready("write some code", 0, default_channel());
-    let task_id = task.id;
-    app.world_mut().spawn((
-        task,
-        SubTaskConfig {
-            batch_id: Uuid::new_v4(),
-            child_agent_name: "coder".to_string(),
-            child_agent_model: None,
-            allowed_tools: vec![],
-            parent_agent_id,
-            depends_on: vec![],
-            depended_by: vec![],
-        },
-    ));
-
-    app.update();
-
-    // 找到 task entity 并验证 TaskInjectedSkill 已注入
-    let task_entity = {
-        let world = app.world_mut();
-        let mut query = world.query::<(bevy_ecs::entity::Entity, &Task)>();
-        query
-            .iter(world)
-            .find(|(_, t)| t.id == task_id)
-            .map(|(e, _)| e)
-            .expect("task should still exist")
-    };
-
-    let injected = app
-        .world()
-        .entity(task_entity)
-        .get::<TaskInjectedSkill>()
-        .expect("TaskInjectedSkill should be attached to task");
-    assert_eq!(
-        injected.skill_id,
-        Some(SkillId::new("default-llm-agent", "coding")),
-        "skill_id should match the skill registered to the selected agent"
-    );
-}
-
-/// owner_skills 为空时 brain_dispatch 不注入 TaskInjectedSkill（fallback 路径）。
-///
-/// 当前 `select_agent_for_sub_task_with_skill` 是占位实现（任务 15 TODO）：
-/// 取 owner_skills.first() 作为 skill_id，若 owner_skills 为空则返回 None。
-/// brain_dispatch 在 skill_id 为 None 时不插入 TaskInjectedSkill Component。
-///
-/// 场景退化说明：plan 原本要求构造「LLM 选错 skill name」场景，
-/// 但当前实现未做真实 LLM 调用，无法构造该场景。
-/// 改为构造 owner_skills 为空的 fallback 场景，验证 TaskInjectedSkill 未被插入。
-#[test]
-fn brain_selects_skill_falls_back_when_no_skills() {
-    let mut app = create_test_app(brain_test_config());
-
-    // SkillRegistry 保持空：default-llm-agent 无预置 skill
-    let brain_agent_id = Uuid::new_v4();
-    app.world_mut().spawn(make_brain_agent(brain_agent_id));
-
-    let default_agent_id = Uuid::new_v4();
-    app.world_mut().spawn(make_persistent_agent(
-        default_agent_id,
-        "default-llm-agent",
-        vec!["default"],
-    ));
-
-    let task = Task::from_user_input_ready("write some code", 0, default_channel());
-    let task_id = task.id;
-    app.world_mut().spawn((
-        task,
-        SubTaskConfig {
-            batch_id: Uuid::new_v4(),
-            child_agent_name: "coder".to_string(),
-            child_agent_model: None,
-            allowed_tools: vec![],
-            parent_agent_id: brain_agent_id,
-            depends_on: vec![],
-            depended_by: vec![],
-        },
-    ));
-
-    app.update();
-
-    let task_entity = {
-        let world = app.world_mut();
-        let mut query = world.query::<(bevy_ecs::entity::Entity, &Task)>();
-        query
-            .iter(world)
-            .find(|(_, t)| t.id == task_id)
-            .map(|(e, _)| e)
-            .expect("task should still exist")
-    };
-
-    // fallback 路径：TaskInjectedSkill Component 未被插入
-    assert!(
-        app.world()
-            .entity(task_entity)
-            .get::<TaskInjectedSkill>()
-            .is_none(),
-        "TaskInjectedSkill should NOT be attached when owner_skills is empty (fallback path)"
-    );
 }
 
 // ============ 任务 25：持久Agent 吸收路径 ============
