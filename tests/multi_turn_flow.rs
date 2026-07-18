@@ -22,13 +22,25 @@ use tokio::runtime::Runtime;
 struct EchoExecutor;
 
 impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo response".to_string()),
-                reasoning_content: None,
-            })
-        })
+    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        match request.request_kind {
+            // TopLevelTask 经 user_message_to_task_system 创建时附加 PendingDispatch(BrainLlm)，
+            // 需要走 BrainLlm 派发路径，BrainDecision 请求需返回 JSON 决策。
+            harness::AgentRequestKind::BrainDecision => Box::pin(async move {
+                Ok(AgentExecutionOutput {
+                    content: harness::OutputContent::Text(
+                        r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
+                    ),
+                    reasoning_content: None,
+                })
+            }),
+            _ => Box::pin(async move {
+                Ok(AgentExecutionOutput {
+                    content: harness::OutputContent::Text("echo response".to_string()),
+                    reasoning_content: None,
+                })
+            }),
+        }
     }
 }
 
@@ -41,7 +53,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        brain: Some(harness::BrainConfig { enabled: true }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -61,6 +73,26 @@ fn test_config() -> HarnessConfig {
 
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut bevy_app::App) {
+    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        },
+        LongTermMemory::default(),
+    ));
     app.world_mut().spawn((
         Agent {
             id: uuid::Uuid::new_v4(),

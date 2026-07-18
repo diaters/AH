@@ -9,8 +9,8 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        ChannelId, ChatSession, LongTermMemory, MessageDispatchedHookPending, ShortTermMemory,
-        SpaceToolRegistry, Task, TaskStatus, ToolPermission,
+        ChannelId, ChatSession, LongTermMemory, MessageDispatchedHookPending, PendingDispatch,
+        ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolPermission,
     },
 };
 
@@ -103,6 +103,7 @@ fn append_memory_section(
 /// 任务分发 System
 ///
 /// 将任务分发给最合适的 Agent 执行。
+#[allow(clippy::type_complexity)]
 pub fn task_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
@@ -111,13 +112,19 @@ pub fn task_dispatch_system(
         &mut Task,
         Option<&ShortTermMemory>,
         Has<ChatSession>,
+        Option<&PendingDispatch>,
     )>,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
     skill_loader: Res<crate::infrastructure::skills::SkillLoader>,
     plugin_skills: Res<crate::infrastructure::skills::PluginSkillContributions>,
 ) {
-    for (_entity, mut task, short_term, has_chat_session) in &mut tasks {
+    for (_entity, mut task, short_term, has_chat_session, pending_dispatch) in &mut tasks {
+        // 阶段 3：带 PendingDispatch 的 Task 由 dispatch_system 处理，跳过
+        if pending_dispatch.is_some() {
+            continue;
+        }
+
         // 子任务由 Brain 分发，普通 dispatch 不处理；
         // 例外：chat_with_agent 对话型子任务且已指定 delegate 时，直接调度到该 Persistent Agent。
         if task.parent_task_id.is_some() && !(has_chat_session && task.delegate.is_some()) {

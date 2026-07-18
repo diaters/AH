@@ -268,18 +268,31 @@ fn empty_user_input_creates_task() {
 fn large_input_is_handled() {
     let runtime = Arc::new(Runtime::new().unwrap());
 
+    // EchoExecutor 区分 BrainDecision（返回 JSON 决策）与其他请求（返回文本）。
+    // TopLevelTask 经 user_message_to_task_system 创建时会附加 PendingDispatch(BrainLlm)，
+    // 需要走 BrainLlm 派发路径，故需启用 brain 并 spawn brain agent。
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move {
-                Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text(format!(
-                        "processed {} chars",
-                        request.prompt.len()
-                    )),
-                    reasoning_content: None,
-                })
-            })
+            match request.request_kind {
+                harness::AgentRequestKind::BrainDecision => Box::pin(async move {
+                    Ok(AgentExecutionOutput {
+                        content: harness::OutputContent::Text(
+                            r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
+                        ),
+                        reasoning_content: None,
+                    })
+                }),
+                _ => Box::pin(async move {
+                    Ok(AgentExecutionOutput {
+                        content: harness::OutputContent::Text(format!(
+                            "processed {} chars",
+                            request.prompt.len()
+                        )),
+                        reasoning_content: None,
+                    })
+                }),
+            }
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -287,7 +300,10 @@ fn large_input_is_handled() {
 
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
-        test_config(),
+        HarnessConfig {
+            brain: Some(harness::BrainConfig { enabled: true }),
+            ..test_config()
+        },
         runtime,
         executor_registry,
         input_rx,
@@ -298,6 +314,26 @@ fn large_input_is_handled() {
     // Initialize
     app.update();
     spawn_default_agent(&mut app);
+    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
+    app.world_mut().spawn((
+        Agent {
+            id: Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        },
+        LongTermMemory::default(),
+    ));
 
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);

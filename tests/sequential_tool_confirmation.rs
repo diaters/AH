@@ -70,7 +70,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        brain: Some(harness::BrainConfig { enabled: true }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -90,6 +90,26 @@ fn test_config() -> HarnessConfig {
 
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut App) {
+    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
+    app.world_mut().spawn((
+        Agent {
+            id: uuid::Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        },
+        LongTermMemory::default(),
+    ));
     app.world_mut().spawn((
         Agent {
             id: uuid::Uuid::new_v4(),
@@ -130,6 +150,16 @@ impl CannedExecutor {
 
 impl AgentExecutor for CannedExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        // BrainDecision 请求：返回 JSON 决策（选择 default-llm-agent），
+        // TopLevelTask 经 user_message_to_task_system 创建时附加 PendingDispatch(BrainLlm)，
+        // 需要走 BrainLlm 派发路径。
+        if request.request_kind == AgentRequestKind::BrainDecision {
+            return Box::pin(async move {
+                Ok(text_output(
+                    r#"{"agent_name":"default-llm-agent","skill_name":null}"#,
+                ))
+            });
+        }
         // 治理型 WorkItem / 非普通 LLM 请求直接返回占位文本，避免干扰主流程。
         if request.work_item_id.is_some() || request.request_kind != AgentRequestKind::LlmCompletion
         {

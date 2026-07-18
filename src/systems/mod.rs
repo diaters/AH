@@ -23,8 +23,8 @@ pub(crate) use command::{
 };
 pub(crate) use dispatch::{
     agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system, dispatch_system,
-    on_message_dispatched_hook_system, task_dispatch_system, workitem_dispatch_system,
-    workitem_lifecycle_hook_system,
+    on_message_dispatched_hook_system, subtask_dispatch_preparation_system, task_dispatch_system,
+    workitem_dispatch_system, workitem_lifecycle_hook_system,
 };
 pub(crate) use evaluation::evaluation_trigger_system;
 pub(crate) use execution::{agent_execution_system, model_chain_state_update_system};

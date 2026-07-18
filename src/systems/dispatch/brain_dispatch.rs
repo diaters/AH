@@ -18,8 +18,9 @@ use crate::{
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         AgentSpawnRequestMessage, BatchTaskState, EntryRole, LongTermMemory,
-        MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, SubTaskBatchState,
-        SubTaskConfig, Task, TaskInjectedSkill, TaskStatus, ToolPermission, WaitingReason,
+        MessageDispatchedHookPending, PendingDispatch, ShortTermMemory, SpaceToolRegistry,
+        SubTaskBatchState, SubTaskConfig, Task, TaskInjectedSkill, TaskStatus, ToolPermission,
+        WaitingReason,
     },
     infrastructure::skills::{SkillId, SkillRegistry},
 };
@@ -84,7 +85,13 @@ pub(crate) fn brain_user_prompt_from_descriptions(
 Available agents:
 {}
 
-Select the best agent for this task and provide a delegate prompt."#,
+Select the best agent for this task and optionally a skill.
+
+Return your decision as JSON:
+{{"agent_name": "<selected_agent_name>", "skill_name": "<skill_name_or_null>"}}
+
+- agent_name: must be one of the available agents listed above
+- skill_name: optional, the name of a skill to inject; use null if no skill is needed"#,
         task_content,
         agent_descriptions.join("\n"),
     )
@@ -154,7 +161,7 @@ fn build_sub_task_system_prompt(
 /// ## Brain Agent 选择
 ///
 /// 通过 Tag 查找所有带 "brain" 标签的 Agent，选择配置中最前的那个。
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn brain_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
@@ -164,6 +171,7 @@ pub fn brain_dispatch_system(
         &mut Task,
         Option<&ShortTermMemory>,
         Option<&SubTaskConfig>,
+        Option<&PendingDispatch>,
     )>,
     agents: Query<&Agent>,
     batch_states: Query<&SubTaskBatchState>,
@@ -208,7 +216,12 @@ pub fn brain_dispatch_system(
         })
         .collect();
 
-    for (task_entity, mut task, short_term, sub_task_config) in &mut tasks {
+    for (task_entity, mut task, short_term, sub_task_config, pending_dispatch) in &mut tasks {
+        // 阶段 3：带 PendingDispatch 的 Task 由 dispatch_system 处理，跳过
+        if pending_dispatch.is_some() {
+            continue;
+        }
+
         // Pending 或 Ready 状态都可以被调度
         if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
             continue;

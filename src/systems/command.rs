@@ -3,10 +3,11 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, FinishTaskMessage, NewlyCreatedTask, PendingKnowledgeWriteHooks,
-    ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
-    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy,
-    TaskStatus, UserCommand, UserInputMessage,
+    CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, FinishTaskMessage,
+    NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks, ReloadPluginsMessage,
+    ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
+    SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy, TaskStatus,
+    UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -58,7 +59,20 @@ pub(crate) fn command_parse_system(
                         parent.max_retries,
                         input.origin_channel.clone(),
                     );
-                    commands.spawn((child_task, ShortTermMemory::default(), NewlyCreatedTask));
+                    commands.spawn((
+                        child_task,
+                        ShortTermMemory::default(),
+                        NewlyCreatedTask,
+                        PendingDispatch {
+                            kind: DispatchKind::Task,
+                            hint: DispatchHint {
+                                strategy: DispatchStrategy::BrainLlm,
+                                preferred_agent_name: None,
+                                required_skill_id: None,
+                                agent_spawn_spec: None,
+                            },
+                        },
+                    ));
                 } else {
                     debug!(
                         event = "NoParentTask",
