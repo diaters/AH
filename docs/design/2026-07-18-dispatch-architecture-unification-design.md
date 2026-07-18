@@ -4,10 +4,10 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 当前有效（待评审） |
+| 状态 | 当前有效 |
 | 创建日期 | 2026-07-18 |
 | 适用阶段 | 派发模块重构 |
-| 相关文档 | `docs/design/2026-06-06-workitem-boundary-design.md`、`docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md`、`docs/current-state.md` |
+| 相关文档 | `docs/design/2026-06-06-workitem-boundary-design.md`、`docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md`、`docs/current-state.md` <!-- markdownlint-disable-line MD013 --> |
 
 ---
 
@@ -21,11 +21,11 @@
 
 | System | 位置 | 职责 |
 |---|---|---|
-| `brain_dispatch_system` | `src/systems/dispatch/brain_dispatch.rs` | 顶级 Task → Brain Agent；SubTask → 临时 Agent + skill |
+| `brain_dispatch_system` | `src/systems/dispatch/brain_dispatch.rs` | 顶级 Task → Brain Agent；SubTask → 临时 Agent + skill <!-- markdownlint-disable-line MD013 --> |
 | `brain_decision_system` | `src/systems/transform/brain_decision.rs` | 解析 Brain LLM 输出，委派给真实执行 Agent |
 | `task_dispatch_system` | `src/systems/dispatch/task_dispatch.rs` | 顶级 Task 直接派发（Brain 未启用 / chat 子任务） |
 | `workitem_dispatch_system` | `src/systems/dispatch/workitem_dispatch.rs` | WorkItem 按 tag 找 Agent（仅覆盖 3 种类型） |
-| `skill_update_workitem_system`（旁路） | `src/systems/experience/skill_update.rs` | 直接 spawn WorkItem + AgentExecutionRequest |
+| `skill_update_workitem_system`（旁路） | `src/systems/experience/skill_update.rs` | 直接 spawn WorkItem + AgentExecutionRequest <!-- markdownlint-disable-line MD013 --> |
 | `profile_generation_workitem_system`（旁路） | `src/systems/experience/profile_generation.rs` | 同上，绕过通用派发 |
 
 ### 1.2 已识别的腐化点
@@ -35,10 +35,22 @@
 - 严重 3：ADR-004 v6 的 `parse_brain_skill_selection` 已实现但未接入生产路径，`select_agent_for_sub_task_with_skill` 仍是 placeholder
 - 严重 4：`skill_update_workitem_system` 和 `profile_generation_workitem_system` 绕过通用派发入口直接 spawn
 - 严重 5：`task_dispatch` 与 `brain_dispatch` 通过隐式条件分支划分边界，规则不直观
-- 中等 6：`SubTaskConfig.child_agent_name` 字段名与实际用途不符——该字段用于命名 spawn 出的 Agent（同时作为 `AgentSpawnRequestMessage.name` 和 `description`，见 [brain_dispatch.rs:314-316](../../src/systems/dispatch/brain_dispatch.rs)），但不参与 agent 选择（`select_agent_for_sub_task_with_skill` 基于 task content 与 agent tags 匹配评分，完全不读取此字段）
-- 中等 7：多个 placeholder 与 TODO 残留（`writeback_to_long_term_memory_for_persistent_agent`、`writeback.rs:123-135` 的 `ExperienceWritebackDestination::SkillUpdate` 占位分支等。后者注释明确"任务 20 替换后此分支不再被触发"，真正路由在 `governance.rs` 中通过 `SkillUpdateRequestMessage` spawn）
+- 中等 6：`SubTaskConfig.child_agent_name` 字段名与实际用途不符——
+  该字段用于命名 spawn 出的 Agent（同时作为 `AgentSpawnRequestMessage.name` 和 `description`，
+  见 [brain_dispatch.rs:314-316](../../src/systems/dispatch/brain_dispatch.rs)），
+  但不参与 agent 选择（`select_agent_for_sub_task_with_skill` 基于 task content 与 agent tags 匹配评分，
+  完全不读取此字段）
+- 中等 7：多个 placeholder 与 TODO 残留
+  （`writeback_to_long_term_memory_for_persistent_agent`、
+  `writeback.rs:123-135` 的 `ExperienceWritebackDestination::SkillUpdate` 占位分支等。
+  后者注释明确"任务 20 替换后此分支不再被触发"，真正路由在 `governance.rs` 中通过
+  `SkillUpdateRequestMessage` spawn）
 - 中等 8：`"brain"`、`"default"`、`"summarization"`、`"evaluation"`、`"collect"`、`"skill-updater"` 等 tag 在多处硬编码，无集中定义
-- 中等 9：`WorkItem::skill_update()` 构造函数使用 tag `"skill-update"`（[work_item.rs:304](../../src/domain/work_item.rs)），而 `skill_update_workitem_system` 查找 Agent 时使用 `"skill-updater"`（[skill_update.rs:164](../../src/systems/experience/skill_update.rs)）。当前因旁路派发不暴露，统一后将冲突
+- 中等 9：`WorkItem::skill_update()` 构造函数使用 tag `"skill-update"`
+  （[work_item.rs:304](../../src/domain/work_item.rs)），
+  而 `skill_update_workitem_system` 查找 Agent 时使用 `"skill-updater"`
+  （[skill_update.rs:164](../../src/systems/experience/skill_update.rs)）。
+  当前因旁路派发不暴露，统一后将冲突
 
 ### 1.3 目标
 
@@ -116,7 +128,9 @@ pub struct AgentSpawnSpec {
 - hint 携带所有派发提示，可选字段默认走通用策略
 - 解决 `child_agent_name` 字段腐化（字段迁移到 `AgentSpawnSpec.name`，语义对齐）
 - 解决 tag 硬编码散落（通过 `WorkItemType::required_tag()` 集中映射）
-- 不设 `required_tags` 字段：Task 派发走 BrainLlm/DirectDelegate 不需要 tag，WorkItem 派发从 `work_type.required_tag()` 获取，字段无存在必要。避免两处 tag 不一致的风险
+- 不设 `required_tags` 字段：Task 派发走 BrainLlm/DirectDelegate 不需要 tag，
+  WorkItem 派发从 `work_type.required_tag()` 获取，字段无存在必要。
+  避免两处 tag 不一致的风险
 
 ### 2.2 TopLevelTask 与 SubTask 合并
 
@@ -134,7 +148,8 @@ TopLevelTask 和 SubTask 在派发决策层面的差异通过 `DispatchHint` 表
 
 #### 决策 4：派发不预设 Agent kind 约束
 
-派发决策不再过滤 `AgentKind::Persistent`（当前代码 [agent_selection.rs:31-32](../../src/systems/dispatch/agent_selection.rs) 的预设）。Agent kind 是 Agent 的属性，不是 Task 的属性。
+派发决策不再过滤 `AgentKind::Persistent`（当前代码 [agent_selection.rs:31-32](../../src/systems/dispatch/agent_selection.rs) 的预设）。
+Agent kind 是 Agent 的属性，不是 Task 的属性。
 
 派发动作统一为"先委派，找不到再 spawn"：
 
@@ -191,7 +206,8 @@ Brain LLM 超时、解析失败、选了不存在的 Agent → 直接把 Task �
 1. `dispatch_system` 看到 `PendingDispatch` + `strategy = BrainLlm`
 2. 移除 `PendingDispatch`，添加 `AwaitingBrainDecision` Component，spawn Brain LLM 调用（通过 `AgentExecutionRequestMessage`）
 3. Brain LLM 完成后，`brain_decision_system` 处理输出，解析出 `{agent_name, skill_name?}`
-4. 移除 `AwaitingBrainDecision`，添加 `PendingDispatch` + `strategy = DirectDelegate` + `preferred_agent_name` + `required_skill_id` 回到队列
+4. 移除 `AwaitingBrainDecision`，添加 `PendingDispatch` + `strategy = DirectDelegate` +
+   `preferred_agent_name` + `required_skill_id` 回到队列
 5. 下一帧 `dispatch_system` 按 DirectDelegate 策略派发
 
 ```rust
@@ -275,9 +291,15 @@ RequestMessage → [WorkItem 创建器] → WorkItem + PendingDispatch → [统�
                 （构造 prompt + 工具）                            （按 work_type 找 Agent + spawn 执行请求）
 ```
 
-- `skill_update_workitem_system` 剥离直接派发逻辑，仅保留 WorkItem 创建 + 附加 PendingDispatch：消费 `SkillUpdateRequestMessage`，构造 prompt + 工具，spawn `WorkItem + SkillUpdateContext + PendingDispatch`
-- `profile_generation_workitem_system` 剥离直接派发逻辑，仅保留 WorkItem 创建 + 附加 PendingDispatch：消费 `ProfileGenerationRequestMessage`，构造 prompt + 工具，spawn `WorkItem + PendingDispatch`
-- `experience_collection_workitem_system` 同样剥离直接派发逻辑（该系统已是 WorkItem 创建器，只需移除直接 spawn `AgentExecutionRequestMessage` 的部分，改为附加 `PendingDispatch`）
+- `skill_update_workitem_system` 剥离直接派发逻辑，仅保留 WorkItem 创建 + 附加 PendingDispatch：
+  消费 `SkillUpdateRequestMessage`，构造 prompt + 工具，
+  spawn `WorkItem + SkillUpdateContext + PendingDispatch`
+- `profile_generation_workitem_system` 剥离直接派发逻辑，仅保留 WorkItem 创建 + 附加 PendingDispatch：
+  消费 `ProfileGenerationRequestMessage`，构造 prompt + 工具，
+  spawn `WorkItem + PendingDispatch`
+- `experience_collection_workitem_system` 同样剥离直接派发逻辑
+  （该系统已是 WorkItem 创建器，只需移除直接 spawn `AgentExecutionRequestMessage` 的部分，
+  改为附加 `PendingDispatch`）
 - `evaluation` / `summarization` WorkItem 创建器保持不变
 - `workitem_dispatch_system` 升级为统一派发器（合并到 `dispatch_system`）
 
@@ -536,7 +558,9 @@ impl WorkItemType {
 
 ### 3.4 dispatch_system 实现骨架
 
-**前置假设**：Task 和 WorkItem 是不同 entity，因此 `dispatch_system` 持有两个 `mut Query` 不会触发 Bevy ECS 的 query 冲突。未来如果架构调整使 Task 和 WorkItem 可能共存于同一 entity，需要重新审视 query 设计。
+__前置假设__：Task 和 WorkItem 是不同 entity，因此 `dispatch_system` 持有两个 `mut Query`
+不会触发 Bevy ECS 的 query 冲突。未来如果架构调整使 Task 和 WorkItem 可能共存于同一 entity，
+需要重新审视 query 设计。
 
 ```rust
 pub(crate) fn dispatch_system(
@@ -626,7 +650,8 @@ pub(crate) fn dispatch_system(
 
 迁移方式：
 
-1. 将 `brain_dispatch.rs` 中 Brain LLM 调用相关逻辑提取为 `build_brain_execution_request(task, agents) -> AgentExecutionRequestMessage` 独立函数
+1. 将 `brain_dispatch.rs` 中 Brain LLM 调用相关逻辑提取为
+   `build_brain_execution_request(task, agents) -> AgentExecutionRequestMessage` 独立函数
 2. `dispatch_system` 在 BrainLlm 策略分支中调用该函数
 3. 保留 `brain_dispatch.rs` 中的 Brain Agent 选择和 prompt 构建逻辑，仅移除派发决策部分
 
@@ -763,19 +788,24 @@ commands.spawn((
 
 ### 4.1 改动范围
 
-**新增**：
+__新增__：
 
-- `src/domain/dispatch.rs`：`PendingDispatch` / `DispatchKind` / `DispatchStrategy` / `DispatchHint` / `AgentSpawnSpec` / `AwaitingBrainDecision`
+- `src/domain/dispatch.rs`：
+  `PendingDispatch` / `DispatchKind` / `DispatchStrategy` / `DispatchHint`
+  / `AgentSpawnSpec` / `AwaitingBrainDecision`
 - `src/systems/dispatch/dispatch_system.rs`：统一派发器
 - `src/systems/dispatch/subtask_dispatch_preparation.rs`：SubTask 前置 system
 - `WorkItemType::required_tag()` 方法
 
-**修改**：
+__修改__：
 
-- `src/systems/dispatch/brain_dispatch.rs`：移除 SubTask 派发逻辑，Brain LLM 调用逻辑提取为独立函数 `build_brain_execution_request` 供 dispatch_system 调用
+- `src/systems/dispatch/brain_dispatch.rs`：移除 SubTask 派发逻辑，
+  Brain LLM 调用逻辑提取为独立函数 `build_brain_execution_request` 供 dispatch_system 调用
 - `src/systems/transform/brain_decision.rs`：接入 `parse_brain_skill_selection`，产出 `PendingDispatch + DirectDelegate`
-- `src/systems/experience/skill_update.rs`：`skill_update_workitem_system` 剥离直接派发逻辑，仅保留 WorkItem 创建 + 附加 PendingDispatch
-- `src/systems/experience/profile_generation.rs`：`profile_generation_workitem_system` 剥离直接派发逻辑，`ProfileGenerationContext` 迁移到 Entity Component
+- `src/systems/experience/skill_update.rs`：`skill_update_workitem_system` 剥离直接派发逻辑，
+  仅保留 WorkItem 创建 + 附加 PendingDispatch
+- `src/systems/experience/profile_generation.rs`：`profile_generation_workitem_system`
+  剥离直接派发逻辑，`ProfileGenerationContext` 迁移到 Entity Component
 - `src/systems/dispatch/workitem_lifecycle_hook.rs`：按 Context Component 分流失败处理
 - `src/plugins/dispatch.rs`：system 注册更新
 - `src/domain/work_item.rs`：
@@ -784,14 +814,16 @@ commands.spawn((
   - 修改所有 `WorkItem::xxx()` 构造函数，移除 `tags` 参数
   - 检查是否有其他代码路径读取 `WorkItem.tags`，统一清理
 
-**删除**：
+__删除__：
 
 - `src/systems/dispatch/task_dispatch.rs`（合并到 dispatch_system）
 - `src/systems/dispatch/workitem_dispatch.rs`（合并到 dispatch_system）
 - `src/systems/dispatch/agent_selection.rs`（tag 匹配逻辑收敛到 dispatch_system）
-- `src/contracts/dispatch.rs` 中未使用的 trait：`TagMatcher` / `AgentSelector` / `DispatchPolicy` / `TagBasedSelector` / `DefaultDispatchPolicy` / `SummarizerSelectionPolicy`
+- `src/contracts/dispatch.rs` 中未使用的 trait：
+  `TagMatcher` / `AgentSelector` / `DispatchPolicy` / `TagBasedSelector`
+  / `DefaultDispatchPolicy` / `SummarizerSelectionPolicy`
 
-**保留**：
+__保留__：
 
 - `BrainSelectionPolicy` trait + `FirstBrainPolicy`
 - `AgentCapabilitySummary`
@@ -801,11 +833,11 @@ commands.spawn((
 
 实施分 5 个阶段，每个阶段可独立验证：
 
-1. **数据结构定义**：新增 `src/domain/dispatch.rs` 和 `WorkItemType::required_tag()`，纯数据层改动，无行为变化
-2. **统一 dispatch_system 建立**：新增 `dispatch_system` 和 `subtask_dispatch_preparation_system`，与现有 system 并存（不删除旧 system）
-3. **Task 派发迁移**：TopLevelTask 和 SubTask 派发迁移到新 system，移除 `task_dispatch.rs` 和 `brain_dispatch.rs` 的派发逻辑
-4. **WorkItem 派发迁移**：WorkItem 派发迁移到新 system，`skill_update_workitem_system` 和 `profile_generation_workitem_system` 退化为创建器
-5. **清理与简化**：删除 `agent_selection.rs` 和 `contracts/dispatch.rs` 未使用 trait，更新文档
+1. __数据结构定义__：新增 `src/domain/dispatch.rs` 和 `WorkItemType::required_tag()`，纯数据层改动，无行为变化
+2. __统一 dispatch_system 建立__：新增 `dispatch_system` 和 `subtask_dispatch_preparation_system`，与现有 system 并存（不删除旧 system）
+3. __Task 派发迁移__：TopLevelTask 和 SubTask 派发迁移到新 system，移除 `task_dispatch.rs` 和 `brain_dispatch.rs` 的派发逻辑
+4. __WorkItem 派发迁移__：WorkItem 派发迁移到新 system，`skill_update_workitem_system` 和 `profile_generation_workitem_system` 退化为创建器
+5. __清理与简化__：删除 `agent_selection.rs` 和 `contracts/dispatch.rs` 未使用 trait，更新文档
 
 ### 4.3 腐化点覆盖情况
 
@@ -836,18 +868,18 @@ commands.spawn((
 
 每个实施阶段配套集成测试：
 
-1. **数据结构阶段**：无新行为，验证数据结构可序列化/Clone
-2. **dispatch_system 建立阶段**：验证新 system 与旧 system 并存时不会重复派发
-3. **Task 派发迁移阶段**：
+1. __数据结构阶段__：无新行为，验证数据结构可序列化/Clone
+2. __dispatch_system 建立阶段__：验证新 system 与旧 system 并存时不会重复派发
+3. __Task 派发迁移阶段__：
    - TopLevelTask 通过 BrainLlm 策略派发
    - SubTask 通过 preparation system + BrainLlm 策略派发
    - Brain LLM 失败时 Task 标 Failed
    - DirectDelegate 策略下 spawn_spec 携带和复用
-4. **WorkItem 派发迁移阶段**：
+4. __WorkItem 派发迁移阶段__：
    - SkillUpdate WorkItem 通过创建器 + dispatch_system 派发
    - ProfileGeneration WorkItem 同上
    - WorkItem 失败时按 Context Component 分流
-5. **清理阶段**：回归测试，确保删除旧代码后所有派发链路正常
+5. __清理阶段__：回归测试，确保删除旧代码后所有派发链路正常
 
 ### 5.3 CI 验证
 
@@ -862,15 +894,17 @@ commands.spawn((
 
 ### 6.1 风险：Brain LLM 决策链路变长
 
-**问题**：统一后 Brain LLM 决策从"brain_dispatch → brain_decision"两步变为"dispatch(BrainLlm) → AwaitingBrainDecision → brain_decision → dispatch(DirectDelegate)"四步，跨帧数增加。
+__问题__：统一后 Brain LLM 决策从"brain_dispatch → brain_decision"两步变为
+"dispatch(BrainLlm) → AwaitingBrainDecision → brain_decision → dispatch(DirectDelegate)"四步，
+跨帧数增加。
 
-**缓解**：跨帧数从 2 帧增加到 3 帧（dispatch_system → brain_decision_system → dispatch_system），延迟影响可忽略。状态机可观测性提升补偿了链路长度。
+__缓解__：跨帧数从 2 帧增加到 3 帧（dispatch_system → brain_decision_system → dispatch_system），延迟影响可忽略。状态机可观测性提升补偿了链路长度。
 
 ### 6.2 风险：迁移过程中派发链路中断
 
-**问题**：分阶段迁移时，旧 system 和新 system 可能同时处理同一 Task/WorkItem，导致重复派发或派发遗漏。
+__问题__：分阶段迁移时，旧 system 和新 system 可能同时处理同一 Task/WorkItem，导致重复派发或派发遗漏。
 
-**缓解**：
+__缓解__：
 
 - 阶段 2 新 system 建立时，与旧 system 通过 `PendingDispatch` Component 互斥——旧 system 不处理带 `PendingDispatch` 的 Entity
 - 阶段 3、4 迁移时，逐个 Task/WorkItem 创建入口切换到新流程，未切换的入口仍走旧流程
@@ -878,15 +912,15 @@ commands.spawn((
 
 ### 6.3 风险：ProfileGenerationContext 存储位置迁移
 
-**问题**：`ProfileGenerationContext` 从 ExperienceStore 迁移到 Entity Component，需要同步修改所有读取方。
+__问题__：`ProfileGenerationContext` 从 ExperienceStore 迁移到 Entity Component，需要同步修改所有读取方。
 
-**缓解**：通过全局搜索 `ProfileGenerationContext` 定位所有读取点，统一迁移。迁移后通过编译错误验证完整性。
+__缓解__：通过全局搜索 `ProfileGenerationContext` 定位所有读取点，统一迁移。迁移后通过编译错误验证完整性。
 
 ### 6.4 风险：删除 trait 体系影响扩展性
 
-**问题**：删除 `contracts/dispatch.rs` 的 trait 体系后，未来新增派发策略需要修改 dispatch_system 内部。
+__问题__：删除 `contracts/dispatch.rs` 的 trait 体系后，未来新增派发策略需要修改 dispatch_system 内部。
 
-**缓解**：符合 YAGNI 原则。当前只有两种策略（BrainLlm / DirectDelegate），dispatch_system 内部 match 足够清晰。未来如果策略数量增长（超过 3 种），再引入 trait 抽象。
+__缓解__：符合 YAGNI 原则。当前只有两种策略（BrainLlm / DirectDelegate），dispatch_system 内部 match 足够清晰。未来如果策略数量增长（超过 3 种），再引入 trait 抽象。
 
 ---
 

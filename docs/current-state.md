@@ -31,9 +31,24 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Brain 调度与多 Agent 配置加载已接入
 - 任务分解通过 `create_tasks` + DAG 调度 + `wait_tasks` 实现
 - 子任务结果可以回传父任务，支持继续执行
-- Brain 派发子任务时按 `SubTaskConfig.child_agent_name` 选定执行 Agent，并通过 LLM 在该 Agent
-  的 `owner_skills` 中选 0 或 1 个 skill 注入子任务（仅暴露 `name` + `description` 给 LLM），
-  选中后 spawn `TaskInjectedSkill` Component；LLM 选错或 owner_skills 为空时 fallback 到无 skill 路径
+- Brain LLM 决策选择执行 Agent 与 0 或 1 个 skill，详见下方"派发架构"章节
+
+#### 派发架构
+
+- 统一派发入口：所有 Task/WorkItem 派发通过 `PendingDispatch` Component 附加在 Entity 上，
+  由单一 `dispatch_system` 扫描处理
+- `DispatchKind` 区分 `Task` 与 `WorkItem(WorkItemType)`，`DispatchHint` 携带策略
+  （`BrainLlm` / `DirectDelegate`）、`preferred_agent_name`、`required_skill_id`、`agent_spawn_spec`
+- Task 派发：TopLevelTask 与 SubTask 统一为 `DispatchKind::Task`，通过 `DispatchHint` 表达差异
+- WorkItem 派发：按 `WorkItemType::required_tag()` 查找匹配的 Persistent Agent
+- SubTask 派发前置：`subtask_dispatch_preparation_system` 负责 DAG 依赖检查、兄弟任务结果收集、
+  `AgentSpawnSpec` 准备，完成后附加 `PendingDispatch`
+- Brain LLM 决策：Brain Agent 选择执行 Agent + skill，产出 `PendingDispatch(DirectDelegate)`；
+  LLM 失败直接标记 Task 为 `Failed`，不 fallback
+- skill 注入：对所有 Task 适用（max 1），仅限 Persistent Agent，通过 `TaskInjectedSkill`
+  Component 注入
+- WorkItem 创建器/派发器职责切分：summarization、evaluation、experience_collection、
+  profile_generation、skill_update 系统仅创建 WorkItem + 附加 `PendingDispatch`，不再直接派发
 
 #### 多模型与降级
 
@@ -177,8 +192,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 飞书通道仅有占位模块，尚未接入实际 API
 - Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 通道已支持收发媒体附件与审批文本回复匹配；飞书仍为占位模块
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
-- Brain 中 `select_agent_for_sub_task_with_skill` 仍为占位实现，未接入真实 LLM 选 skill 调用，
-  当前仅在 owner_skills 为空时 fallback；接入 LLM 后需要补充 LLM 选错场景的集成测试
+- Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
+  `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
 
 ### 已收敛或已废弃
 
@@ -190,6 +205,13 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `spawn_agent` Tool 已废弃并从 LLM 可调工具集中移除；子 Agent 创建统一收敛到
   `create_tasks` + Brain 调度内部生成的 `AgentSpawnRequestMessage`
 - 插件 Host API 的 `spawn_agent` 函数与 `WorldCommand::SpawnAgent` 已移除
+- 旧派发 system `task_dispatch_system`、`workitem_dispatch_system` 已删除，统一收敛到
+  `dispatch_system`
+- `agent_selection.rs` 已删除（tag 匹配逻辑收敛到 `dispatch_system` +
+  `WorkItemType::required_tag()`）
+- `WorkItem.tags` 字段已删除，由 `WorkItemType::required_tag()` 集中映射替代
+- `contracts/dispatch.rs` 中未使用的 trait（`TagMatcher`、`AgentSelector`、`DispatchPolicy`、
+  `TagBasedSelector`、`SummarizerSelectionPolicy` 等）已删除
 
 ## 当前架构结论
 
@@ -246,6 +268,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 7. `docs/wiki/llm-context-assembly.md` — LLM 上下文组装机制与例子
 8. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
 9. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
-10. `docs/design/README.md` — 设计文档索引
-11. `docs/superpowers/README.md` — 当前活跃计划与规格
-12. `docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md` — Skill 一等公民与经验治理改造
+10. `docs/design/2026-07-18-dispatch-architecture-unification-design.md` — 派发架构统一
+11. `docs/design/README.md` — 设计文档索引
+12. `docs/superpowers/README.md` — 当前活跃计划与规格
+13. `docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md` — Skill 一等公民与经验治理改造
