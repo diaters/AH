@@ -20,6 +20,7 @@ use crate::domain::{
     ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
     ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
 };
+use crate::infrastructure::skills::{SkillLoader, apply_skill_operations};
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
     ScheduledTaskInfo, ScheduledTaskRegistry, update_scheduler_state,
@@ -367,6 +368,7 @@ pub fn handle_tool_action<B: SessionBackend>(
         Option<&SkillUpdateContext>,
         &WorkItem,
     )>,
+    skill_loader: &SkillLoader,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -1109,7 +1111,58 @@ pub fn handle_tool_action<B: SessionBackend>(
             let base_version = context.base_version;
             let new_version = base_version + 1;
 
-            // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
+            // dry-run：提前 apply 一次 operations 到当前 SKILL.md，
+            // 检查 section 名是否存在 / frontmatter 字段是否在白名单。
+            // Bug C 修复：之前 operations 错误要等到 completion_system 才发现，
+            // 错误反馈异步且不可见；现在改为同步返回 ToolError，LLM 可立即修正。
+            let skill_path = skill_loader.skill_md_path(&skill_id);
+            let content = match std::fs::read_to_string(&skill_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(
+                        event = "SkillMdReadFailed",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        skill_id = %skill_id.as_string(),
+                        skill_path = ?skill_path,
+                        error = %e,
+                        "failed to read SKILL.md for dry-run, rejecting submit_skill_update"
+                    );
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(format!(
+                            "failed to read SKILL.md for dry-run: {}",
+                            e
+                        )),
+                    );
+                    return;
+                }
+            };
+
+            if let Err(apply_err) = apply_skill_operations(&content, &operations) {
+                warn!(
+                    event = "SkillUpdateDryRunFailed",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    skill_id = %skill_id.as_string(),
+                    error = %apply_err,
+                    "operations dry-run failed, rejecting submit_skill_update"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(format!(
+                        "operations dry-run failed: {}. 请确保 section 名与原 SKILL.md 中实际存在的 section 一致。",
+                        apply_err
+                    )),
+                );
+                return;
+            }
+
+            // dry-run 通过，spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
             commands.spawn(crate::domain::SkillUpdateCompletedMessage {
                 work_item_id,
                 task_id: request.request.task_id,

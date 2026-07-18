@@ -155,9 +155,10 @@ pub(crate) fn skill_update_workitem_system(
     store: Res<ExperienceStore>,
     registry: Res<SpaceToolRegistry>,
     skill_registry: Res<SkillRegistry>,
+    skill_loader: Res<SkillLoader>,
 ) {
     for (entity, request) in &requests {
-        // 1. 从 SkillRegistry 取 skill 内容
+        // 1. 从 SkillRegistry 取 skill 元信息（version / owner 等）
         let Some(skill_entry) = skill_registry.get(&request.skill_id) else {
             warn!(
                 event = "SkillNotFoundInRegistry",
@@ -185,31 +186,51 @@ pub(crate) fn skill_update_workitem_system(
             continue;
         };
 
-        // 3. 构造 prompt（含原 skill instructions + 候选原文 + 版本号）
+        // 3. 读取 SKILL.md 完整内容（含 frontmatter 与所有 section 标题）
+        //    Bug C 修复：之前 prompt 只展示 instructions 文本，LLM 看不到实际 section 结构，
+        //    凭"markdown 应该有 Instruction section"的常识幻觉出不存在的 section 名。
+        //    现在把完整 SKILL.md 给 LLM，让它能看到真实 section 列表。
+        let skill_md_path = skill_loader.skill_md_path(&request.skill_id);
+        let Ok(skill_md_content) = std::fs::read_to_string(&skill_md_path) else {
+            warn!(
+                event = "SkillMdReadFailed",
+                task_id = %request.task_id,
+                skill_id = %request.skill_id.as_string(),
+                skill_path = ?skill_md_path,
+                error = "failed to read SKILL.md for prompt construction",
+                error_type = "FileReadFailed",
+                "failed to read SKILL.md, skipping skill update"
+            );
+            commands.entity(entity).despawn();
+            continue;
+        };
+
+        // 4. 构造 prompt（含完整 SKILL.md + 候选原文 + 版本号）
         let prompt = format!(
             "## 任务\n\n根据以下经验候选，为现有 skill 提交结构化 diff 更新。\n\n\
-             ## 原 skill（version {}）\n\n{}\n\n\
+             ## 原 SKILL.md 完整内容（version {}）\n\n```markdown\n{}\n```\n\n\
              ## 经验候选\n\n### {}\n\n{}\n\n\
              ## 要求\n\n\
              1. 调用 submit_skill_update 工具提交更新，只需提供 operations 和 rationale 两个字段，skill_id / base_version / new_version 由系统自动注入\n\
-             2. operations 必须是有效的 diff 操作（replace_section / add_section / remove_section / replace_frontmatter）",
+             2. operations 必须是有效的 diff 操作（replace_section / add_section / remove_section / replace_frontmatter）\n\
+             3. operations 中的 section 名必须与原 SKILL.md 中实际存在的 section 一致（系统会做 dry-run 校验，section 不存在会立即拒绝）",
             skill_entry.version,
-            skill_entry.instructions,
+            skill_md_content,
             candidate.title,
             candidate_payload_text(candidate),
         );
 
-        // 4. 从 registry 过滤工具，仅保留 submit_skill_update
+        // 5. 从 registry 过滤工具，仅保留 submit_skill_update
         let tools: Vec<crate::domain::ToolDefinition> = registry
             .iter()
             .filter(|tool| tool.name == "submit_skill_update")
             .cloned()
             .collect();
 
-        // 5. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
+        // 6. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
         let conversation = Vec::new();
 
-        // 6. 创建 WorkItem 并附加 PendingDispatch，由 dispatch_system 查找 Agent 并派发执行请求
+        // 7. 创建 WorkItem 并附加 PendingDispatch，由 dispatch_system 查找 Agent 并派发执行请求
         let work_item = WorkItem::skill_update(
             request.task_id,
             prompt,

@@ -15,6 +15,7 @@ use crate::{
         ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
         ToolReturnedHookPending, WorkItem,
     },
+    infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
 };
 
@@ -62,7 +63,9 @@ pub fn tool_confirmation_result_system(
     )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    clock: Res<Clock>,
+    // 合并 clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // 两者都仅用于转发给 handle_tool_action（dry-run 校验需要 skill_loader）。
+    clock_and_loader: (Res<Clock>, Res<SkillLoader>),
 ) {
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -256,8 +259,9 @@ pub fn tool_confirmation_result_system(
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         None,
-                        &clock,
+                        &clock_and_loader.0,
                         &context_queries,
+                        &clock_and_loader.1,
                     );
                 }
 
@@ -334,6 +338,9 @@ mod tests {
         world.insert_resource(crate::domain::SharedKnowledgeBase::default());
         world.insert_resource(crate::domain::ExperienceStore::default());
         world.insert_resource(crate::domain::PendingExperienceHooks::default());
+        world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
+            std::path::PathBuf::from("/nonexistent_skills_root"),
+        ));
         world
     }
 

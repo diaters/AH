@@ -16,6 +16,7 @@ use crate::{
         ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
         WorkItem,
     },
+    infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
 };
 
@@ -50,7 +51,9 @@ pub fn tool_dispatch_system(
     )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    clock: Res<Clock>,
+    // 合并 clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // 两者都仅用于转发给 handle_tool_action（dry-run 校验需要 skill_loader）。
+    clock_and_loader: (Res<Clock>, Res<SkillLoader>),
 ) {
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -208,8 +211,9 @@ pub fn tool_dispatch_system(
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         parent_agent_id,
-                        &clock,
+                        &clock_and_loader.0,
                         &context_queries,
+                        &clock_and_loader.1,
                     );
                 }
 
@@ -409,6 +413,12 @@ mod tests {
 
         // 该测试不会真正执行工具，执行器注册表可为空
         world.insert_resource(BuiltinToolExecutors::default());
+
+        // tool_dispatch_system 通过 tuple SystemParam (Res<Clock>, Res<SkillLoader>) 同时
+        // 引用 Clock 与 SkillLoader，必须 init SkillLoader 才能运行。
+        world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
+            std::path::PathBuf::from("/nonexistent_skills_root"),
+        ));
 
         let task_id = Uuid::new_v4();
         let agent_id = Uuid::new_v4();
