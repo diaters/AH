@@ -191,16 +191,12 @@ pub(crate) fn skill_update_workitem_system(
              ## 原 skill（version {}）\n\n{}\n\n\
              ## 经验候选\n\n### {}\n\n{}\n\n\
              ## 要求\n\n\
-             1. 调用 submit_skill_update 工具提交更新\n\
-             2. base_version 必须为 {}\n\
-             3. new_version 必须为 {}（base_version + 1）\n\
-             4. operations 必须是有效的 diff 操作（replace_section / add_section / remove_section / replace_frontmatter）",
+             1. 调用 submit_skill_update 工具提交更新，只需提供 operations 和 rationale 两个字段，skill_id / base_version / new_version 由系统自动注入\n\
+             2. operations 必须是有效的 diff 操作（replace_section / add_section / remove_section / replace_frontmatter）",
             skill_entry.version,
             skill_entry.instructions,
             candidate.title,
             candidate_payload_text(candidate),
-            skill_entry.version,
-            skill_entry.version + 1,
         );
 
         // 4. 从 registry 过滤工具，仅保留 submit_skill_update

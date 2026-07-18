@@ -10,7 +10,7 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
         ExperienceStore, GrantMode, PendingExperienceHooks, ProfileGenerationContext,
-        SharedKnowledgeBase, ShortTermMemory, Task, ToolCallingState,
+        SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task, ToolCallingState,
         ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
         ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
         ToolReturnedHookPending, WorkItem,
@@ -51,7 +51,15 @@ pub fn tool_confirmation_result_system(
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
-    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
+    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
+    // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
+    // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
+    context_queries: Query<(
+        Entity,
+        Option<&ProfileGenerationContext>,
+        Option<&SkillUpdateContext>,
+        &WorkItem,
+    )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
     clock: Res<Clock>,
@@ -249,7 +257,7 @@ pub fn tool_confirmation_result_system(
                         &mut pending_experience_hooks,
                         None,
                         &clock,
-                        &profile_contexts,
+                        &context_queries,
                     );
                 }
 

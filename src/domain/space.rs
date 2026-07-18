@@ -260,13 +260,11 @@ pub enum ToolAction {
     ///
     /// 由 skill-updater Agent 调用，实际的 skill 文件 apply 与 registry 刷新
     /// 在 `skill_update_completion_system` 中完成。
+    ///
+    /// 仅承载 LLM 能决定的 `operations` 与 `rationale`；
+    /// `skill_id` / `base_version` / `new_version` 由 orchestrator 从
+    /// `SkillUpdateContext` 服务端权威注入，避免 LLM 臆造 skill_id。
     SubmitSkillUpdate {
-        /// 待更新 skill 的全局唯一 ID（已解析）
-        skill_id: crate::infrastructure::skills::SkillId,
-        /// 原 skill 版本号
-        base_version: u32,
-        /// 新版本号（必须等于 base_version + 1）
-        new_version: u32,
         /// 结构化 diff 操作列表
         operations: Vec<crate::domain::SkillUpdateOperation>,
         /// 本次更新的理由说明

@@ -15,10 +15,10 @@ use crate::domain::{
     EntryRole, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
     ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingDispatch,
     PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellExecResult,
-    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
-    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-    WaitingForTasksInfo, WaitingReason, WorkItem,
+    ShellSessionResult, ShortTermMemory, SkillUpdateContext, SubTaskBatchCreatedMessage,
+    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
+    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
@@ -358,7 +358,15 @@ pub fn handle_tool_action<B: SessionBackend>(
     pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
     clock: &Clock,
-    profile_contexts: &Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
+    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询：
+    // 两者都是与 WorkItem 同 entity 的 Component，任一 WorkItem entity 至多只有其中之一。
+    // 通过 Option<&...> 在单 SystemParam 中表达"存在与否"，避免触发 Bevy 16 参数上限。
+    context_queries: &Query<(
+        Entity,
+        Option<&ProfileGenerationContext>,
+        Option<&SkillUpdateContext>,
+        &WorkItem,
+    )>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -918,9 +926,9 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
             // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
             let mut resolved_kind = crate::domain::ProfileGenerationKind::Incubation;
-            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+            if let Some((wi_entity, Some(ctx), _, _wi)) = context_queries
                 .iter()
-                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
+                .find(|(_, prof, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
             {
                 resolved_kind = ctx.kind.clone();
                 // 重置 exception_count：clone + modify + insert（不可变 Query + Commands 写回）
@@ -990,9 +998,9 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
             // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
             let mut resolved_kind = crate::domain::ProfileGenerationKind::Update;
-            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+            if let Some((wi_entity, Some(ctx), _, _wi)) = context_queries
                 .iter()
-                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
+                .find(|(_, prof, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
             {
                 resolved_kind = ctx.kind.clone();
                 let mut new_ctx = ctx.clone();
@@ -1048,17 +1056,62 @@ pub fn handle_tool_action<B: SessionBackend>(
             commands.entity(request_entity).despawn();
         }
         Ok(ToolAction::SubmitSkillUpdate {
-            skill_id,
-            base_version,
-            new_version,
             operations,
             rationale,
         }) => {
+            // skill_id / base_version / new_version 由 orchestrator 从
+            // SkillUpdateContext 服务端权威注入，避免 LLM 臆造 skill_id。
+            let work_item_id = match request.request.work_item_id {
+                Some(id) => id,
+                None => {
+                    warn!(
+                        event = "SkillUpdateMissingWorkItemId",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        "submit_skill_update missing work_item_id, rejecting"
+                    );
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InvalidInput(
+                            "work_item_id missing for submit_skill_update".to_string(),
+                        ),
+                    );
+                    return;
+                }
+            };
+
+            let Some((_, _, Some(context), _)) = context_queries
+                .iter()
+                .find(|(_, _, skill, wi)| skill.is_some() && wi.id == work_item_id)
+            else {
+                warn!(
+                    event = "SkillUpdateContextNotFound",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    work_item_id = %work_item_id,
+                    "SkillUpdateContext not found for work_item_id, rejecting submit_skill_update"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(format!(
+                        "SkillUpdateContext not found for work_item_id={}",
+                        work_item_id
+                    )),
+                );
+                return;
+            };
+
+            let skill_id = context.skill_id.clone();
+            let base_version = context.base_version;
+            let new_version = base_version + 1;
+
             // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
-            // work_item_id 从 AgentExecutionRequest 透传，便于 completion_system 反查
-            // 同 entity 上的 SkillUpdateContext Component。
             commands.spawn(crate::domain::SkillUpdateCompletedMessage {
-                work_item_id: request.request.work_item_id.unwrap_or(uuid::Uuid::nil()),
+                work_item_id,
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,
                 skill_id: skill_id.clone(),
