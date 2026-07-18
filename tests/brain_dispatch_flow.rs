@@ -24,7 +24,9 @@ impl AgentExecutor for BrainMockExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         match request.request_kind {
             harness::AgentRequestKind::BrainDecision => {
-                let decision = r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"请处理这个任务","reasoning":"测试用例"}"#;
+                // 任务 3.1 起，brain_decision_system 使用 parse_brain_skill_selection
+                // 解析 Brain 输出，期望 JSON 格式：{"agent_name": "...", "skill_name": ...}
+                let decision = r#"{"agent_name":"default-llm-agent","skill_name":null}"#;
                 Box::pin(async move {
                     Ok(AgentExecutionOutput {
                         content: harness::OutputContent::Text(decision.to_string()),

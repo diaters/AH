@@ -20,15 +20,27 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        AgentSpawnRequestMessage, AwaitingBrainDecision, DispatchHint, DispatchKind,
+        AgentSpawnRequestMessage, AwaitingBrainDecision, ChannelId, DispatchHint, DispatchKind,
         DispatchStrategy, ExecutionError, MessageDispatchedHookPending, PendingDispatch,
-        ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, WaitingReason, WorkItem,
-        WorkItemLifecycleHookPending, WorkItemType,
+        ShortTermMemory, SpaceToolRegistry, Task, TaskInjectedSkill, TaskStatus, ToolPermission,
+        WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     user_plugins::hook_point::HookPoint,
 };
 
 use super::build_brain_execution_request;
+
+/// 在 task content 前追加当前通道上下文，
+/// 确保被委派 Agent 知道通过哪个 IM 通道回发文件/消息。
+fn augment_prompt_with_channel(task_content: &str, origin_channel: Option<&ChannelId>) -> String {
+    match origin_channel {
+        Some(ch) => {
+            let context = ch.to_prompt_context();
+            format!("{context}\n\n{task_content}")
+        }
+        None => task_content.to_string(),
+    }
+}
 
 /// 统一派发 System
 ///
@@ -153,16 +165,21 @@ pub fn dispatch_system(
             continue;
         }
 
-        // 跳过非 Ready/Pending 状态
-        if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
-            commands.entity(task_entity).remove::<PendingDispatch>();
-            continue;
-        }
+        // BrainLlm 策略：仅处理 Ready/Pending 且无 delegate 的 Task（初始派发）
+        // DirectDelegate 策略：由 brain_decision_system 产出，task 可能处于 Waiting(Agent)
+        // 且有 delegate（指向 Brain agent），不检查状态与 delegate
+        if matches!(pending.hint.strategy, DispatchStrategy::BrainLlm) {
+            // 跳过非 Ready/Pending 状态
+            if task.status != TaskStatus::Ready && task.status != TaskStatus::Pending {
+                commands.entity(task_entity).remove::<PendingDispatch>();
+                continue;
+            }
 
-        // 跳过已有 delegate 的 Task
-        if task.delegate.is_some() {
-            commands.entity(task_entity).remove::<PendingDispatch>();
-            continue;
+            // 跳过已有 delegate 的 Task
+            if task.delegate.is_some() {
+                commands.entity(task_entity).remove::<PendingDispatch>();
+                continue;
+            }
         }
 
         let hint: &DispatchHint = &pending.hint;
@@ -220,8 +237,53 @@ pub fn dispatch_system(
                 });
 
                 if let Some(agent) = agent {
-                    // 找到 Agent → 委派
+                    // 注入 TaskInjectedSkill（如果 hint 携带 required_skill_id）
+                    if let Some(skill_id) = &hint.required_skill_id {
+                        commands.entity(task_entity).insert(TaskInjectedSkill {
+                            skill_id: Some(skill_id.clone()),
+                        });
+                        debug!(
+                            event = "DispatchTaskDirectDelegateSkillInjected",
+                            task_id = %task.id,
+                            agent_name = %agent.profile.name,
+                            skill_id = %skill_id.as_string(),
+                            "injected skill for direct delegated task"
+                        );
+                    }
+
+                    // 构建 tools 列表：从 registry 中筛选 Agent 有权限的工具（非 Deny）
+                    let tools: Vec<_> = registry
+                        .iter()
+                        .filter(|tool_def| {
+                            !matches!(
+                                agent.tool_permissions.get_permission(&tool_def.name),
+                                ToolPermission::Deny
+                            )
+                        })
+                        .cloned()
+                        .collect();
+
+                    // 构建 prompt：task.content + 通道上下文
+                    let prompt =
+                        augment_prompt_with_channel(&task.content, task.origin_channel.as_ref());
+
+                    let request = AgentExecutionRequest {
+                        task_id: task.id,
+                        agent_id: agent.id,
+                        request_kind: AgentRequestKind::LlmCompletion,
+                        prompt,
+                        system_prompt: agent.system_prompt.clone(),
+                        tools,
+                        conversation: None,
+                        work_item_id: None,
+                        model_override: None,
+                    };
+
                     task.mark_waiting_for_agent(agent.id, clock.0);
+                    commands.spawn((
+                        AgentExecutionRequestMessage { request },
+                        MessageDispatchedHookPending,
+                    ));
                     commands.entity(task_entity).remove::<PendingDispatch>();
 
                     debug!(

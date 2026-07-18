@@ -31,13 +31,14 @@ use super::agent_selection::select_agent_for_sub_task_with_skill;
 /// 当前仅 `parse_brain_skill_selection` 使用 `InvalidJson` 变体；
 /// `AgentNotInCandidates` 与 `SkillNotOwned` 预留给调用方
 /// （`select_agent_for_sub_task_with_skill` 接入真实 LLM 后使用）。
-#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
 #[derive(Debug, Error)]
 pub enum BrainSkillSelectionError {
     #[error("invalid brain skill selection JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
+    #[allow(dead_code)] // 预留给调用方（select_agent_for_sub_task_with_skill 接入真实 LLM 后使用）
     #[error("agent not in candidates: {0}")]
     AgentNotInCandidates(String),
+    #[allow(dead_code)] // 预留给调用方（select_agent_for_sub_task_with_skill 接入真实 LLM 后使用）
     #[error("skill not owned by agent: agent={agent}, skill={skill}")]
     SkillNotOwned { agent: String, skill: String },
 }
@@ -434,8 +435,7 @@ struct BrainSkillSelection {
 /// 输入清洗：调用 [`sanitize_brain_output`] 剥离 LLM 常见的 markdown 代码块包裹、
 /// BOM 与不可见字符，逻辑与 `crate::llm::brain_prompt` 中的私有函数对齐，
 /// 但不跨模块复用以避免引入不必要的耦合。
-#[allow(dead_code)] // 后续 brain_dispatch 改造任务接入
-pub fn parse_brain_skill_selection(
+pub(crate) fn parse_brain_skill_selection(
     raw: &str,
 ) -> Result<(String, Option<String>), BrainSkillSelectionError> {
     // 清洗 LLM 输出：剥离 markdown 包裹/BOM/不可见字符
