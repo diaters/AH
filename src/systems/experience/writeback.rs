@@ -3,7 +3,8 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
-    ExperienceWritebackRequestMessage, LongTermMemory, PendingExperienceHooks, TaskId,
+    ExperienceWritebackRequestMessage, GeneratedProfile, LongTermMemory, PendingExperienceHooks,
+    ProfileGenerationContext, TaskId, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
 use crate::user_plugins::hook_point::HookPoint;
@@ -67,6 +68,7 @@ pub(crate) fn experience_writeback_system(
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
     settings: Res<crate::app::HarnessSettings>,
     requests: Query<(Entity, &ExperienceWritebackRequestMessage)>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {
     for (entity, request) in &requests {
         let decision = &request.decision;
@@ -108,6 +110,11 @@ pub(crate) fn experience_writeback_system(
             }
             ExperienceWritebackDestination::IncubationProposal => {
                 // IncubationProposal 写回：执行孵化，创建新 Agent 记录
+                // 通过 Query 从 WorkItem Entity 读取 ProfileGenerationContext.generated_profile
+                let generated_profile = profile_contexts
+                    .iter()
+                    .find(|(_, _, wi)| wi.task_id == decision.source_task_id)
+                    .and_then(|(_, ctx, _)| ctx.generated_profile.clone());
                 writeback_incubation_proposal(
                     decision.source_task_id,
                     &mut store,
@@ -117,6 +124,7 @@ pub(crate) fn experience_writeback_system(
                     &mut service,
                     &asset_service,
                     &settings.0.agents_config_path,
+                    generated_profile,
                 )
             }
             ExperienceWritebackDestination::Rejected => Ok(()),
@@ -256,6 +264,7 @@ fn writeback_incubation_proposal(
     service: &mut crate::infrastructure::memory::LongTermMemoryService,
     asset_service: &crate::infrastructure::assets::AgentAssetService,
     config_path: &str,
+    generated_profile: Option<GeneratedProfile>,
 ) -> Result<(), String> {
     // 按 task_id 查找任务级 proposal
     let proposal = store
@@ -376,13 +385,9 @@ fn writeback_incubation_proposal(
     }
 
     // 创建新 Agent 记录
-    // 从 ProfileGenerationContext 获取 LLM 生成的 profile（tags/description）；
-    // 若 context 不存在（回退场景），使用硬编码 tags 和基于候选标题的 description。
-    let generated_profile = store
-        .profile_generation_context
-        .get(&task_id)
-        .and_then(|ctx| ctx.generated_profile.clone());
-
+    // 从传入的 generated_profile（由 caller 通过 Query 从 ProfileGenerationContext
+    // Component 读取）获取 LLM 生成的 profile（tags/description）；
+    // 若为 None（回退场景），使用硬编码 tags 和基于候选标题的 description。
     // 从 agents.toml 读取 default Agent 的 models 链（Agent 组件不存储 models 链）
     let models_chain = load_default_agent_models_chain(config_path);
 
@@ -552,6 +557,7 @@ mod tests {
             &mut memory_service,
             &asset_service,
             config_path.to_str().unwrap(),
+            None,
         );
 
         assert!(result.is_ok(), "writeback failed: {:?}", result);
@@ -571,7 +577,7 @@ mod tests {
 
     #[test]
     fn incubation_writeback_uses_llm_profile_when_context_present() {
-        use crate::domain::{GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind};
+        use crate::domain::GeneratedProfile;
 
         let memory_dir = TempDir::new().unwrap();
         let proposal_dir = TempDir::new().unwrap();
@@ -606,20 +612,12 @@ mod tests {
         store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
         store.proposals.get_mut(&task_id).unwrap().status = IncubationProposalStatus::Approved;
 
-        // 设置 ProfileGenerationContext，包含 LLM 生成的 profile
-        store.profile_generation_context.insert(
-            task_id,
-            ProfileGenerationContext {
-                kind: ProfileGenerationKind::Incubation,
-                exception_count: 0,
-                existing_profile: None,
-                generated_profile: Some(GeneratedProfile {
-                    name: "quantum-specialist".to_string(),
-                    tags: vec!["physics".to_string(), "quantum".to_string()],
-                    description: "量子物理专家，擅长量子态测量与分析".to_string(),
-                }),
-            },
-        );
+        // 直接传入 LLM 生成的 profile（与通过 Query 读取 Component 一致）
+        let generated_profile = Some(GeneratedProfile {
+            name: "quantum-specialist".to_string(),
+            tags: vec!["physics".to_string(), "quantum".to_string()],
+            description: "量子物理专家，擅长量子态测量与分析".to_string(),
+        });
 
         let result = writeback_incubation_proposal(
             task_id,
@@ -630,6 +628,7 @@ mod tests {
             &mut memory_service,
             &asset_service,
             config_path.to_str().unwrap(),
+            generated_profile,
         );
 
         assert!(result.is_ok(), "writeback failed: {:?}", result);
@@ -651,7 +650,7 @@ mod tests {
 
     #[test]
     fn incubation_writeback_renames_on_duplicate() {
-        use crate::domain::{GeneratedProfile, ProfileGenerationContext, ProfileGenerationKind};
+        use crate::domain::GeneratedProfile;
 
         let memory_dir = TempDir::new().unwrap();
         let proposal_dir = TempDir::new().unwrap();
@@ -698,19 +697,12 @@ description = "existing"
         store.merge_into_proposal(task_id, agent_id, profile.clone(), &candidate);
         store.proposals.get_mut(&task_id).unwrap().status = IncubationProposalStatus::Approved;
 
-        store.profile_generation_context.insert(
-            task_id,
-            ProfileGenerationContext {
-                kind: ProfileGenerationKind::Incubation,
-                exception_count: 0,
-                existing_profile: None,
-                generated_profile: Some(GeneratedProfile {
-                    name: "physics-specialist".to_string(),
-                    tags: vec!["physics".to_string()],
-                    description: "物理专家".to_string(),
-                }),
-            },
-        );
+        // 直接传入 LLM 生成的 profile（与通过 Query 读取 Component 一致）
+        let generated_profile = Some(GeneratedProfile {
+            name: "physics-specialist".to_string(),
+            tags: vec!["physics".to_string()],
+            description: "物理专家".to_string(),
+        });
 
         let result = writeback_incubation_proposal(
             task_id,
@@ -721,6 +713,7 @@ description = "existing"
             &mut memory_service,
             &asset_service,
             config_path.to_str().unwrap(),
+            generated_profile,
         );
 
         assert!(result.is_ok(), "writeback failed: {:?}", result);

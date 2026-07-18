@@ -11,9 +11,9 @@ use crate::{
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
         ChatSession, ConfirmationOption, ConfirmationSource, ExperienceStore,
-        PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, SpaceToolRegistry, Task,
-        TaskStatus, ToolConfirmationRequestMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolPermission, WaitingReason,
+        PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory,
+        SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage, ToolContext,
+        ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason, WorkItem,
     },
     systems::NativeProcessBackend,
 };
@@ -38,6 +38,7 @@ pub fn tool_dispatch_system(
     chat_sessions: Query<&ChatSession>,
     calling_states: Query<&crate::domain::ToolCallingState>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
     clock: Res<Clock>,
@@ -199,6 +200,7 @@ pub fn tool_dispatch_system(
                         &mut pending_experience_hooks,
                         parent_agent_id,
                         &clock,
+                        &profile_contexts,
                     );
                 }
 

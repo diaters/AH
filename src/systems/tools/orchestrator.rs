@@ -13,11 +13,11 @@ use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, BatchTaskState,
     ChannelId, ChatRoundStartedMessage, ChatSession, EntryRole, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
-    FrontendKind, OutputContent, PendingExperienceHooks, SessionSummary, ShellExecResult,
-    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
-    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-    WaitingForTasksInfo, WaitingReason,
+    FrontendKind, OutputContent, PendingExperienceHooks, ProfileGenerationContext, SessionSummary,
+    ShellExecResult, ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage,
+    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
+    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
@@ -357,6 +357,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
     clock: &Clock,
+    profile_contexts: &Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -893,16 +894,19 @@ pub fn handle_tool_action<B: SessionBackend>(
             tags,
             description,
         }) => {
-            // 从 ExperienceStore 读取 kind 并重置 exception_count（LLM 成功调用工具，异常计数归 0）
-            let kind = if let Some(ctx) = experience_store
-                .profile_generation_context
-                .get_mut(&request.request.task_id)
+            // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
+            // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
+            let mut resolved_kind = crate::domain::ProfileGenerationKind::Incubation;
+            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+                .iter()
+                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
             {
-                ctx.exception_count = 0;
-                ctx.kind.clone()
-            } else {
-                crate::domain::ProfileGenerationKind::Incubation
-            };
+                resolved_kind = ctx.kind.clone();
+                // 重置 exception_count：clone + modify + insert（不可变 Query + Commands 写回）
+                let mut new_ctx = ctx.clone();
+                new_ctx.exception_count = 0;
+                commands.entity(wi_entity).insert(new_ctx);
+            }
 
             // spawn ProfileGenerationCompletedMessage 供 profile_generation_completion_system 消费
             commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
@@ -913,7 +917,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     tags: tags.clone(),
                     description: description.clone(),
                 }),
-                kind: kind.clone(),
+                kind: resolved_kind.clone(),
             });
 
             // 返回工具执行结果给 LLM
@@ -955,30 +959,32 @@ pub fn handle_tool_action<B: SessionBackend>(
                 event = "ProfileUpdateSubmitted",
                 task_id = %request.request.task_id,
                 agent_id = %request.request.agent_id,
-                kind = ?kind,
+                kind = ?resolved_kind,
                 "profile update submitted by LLM"
             );
 
             commands.entity(request_entity).despawn();
         }
         Ok(ToolAction::SkipProfileUpdate) => {
-            // 从 ExperienceStore 读取 kind 并重置 exception_count（LLM 成功调用工具，异常计数归 0）
-            let kind = if let Some(ctx) = experience_store
-                .profile_generation_context
-                .get_mut(&request.request.task_id)
+            // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
+            // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
+            let mut resolved_kind = crate::domain::ProfileGenerationKind::Update;
+            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+                .iter()
+                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
             {
-                ctx.exception_count = 0;
-                ctx.kind.clone()
-            } else {
-                crate::domain::ProfileGenerationKind::Update
-            };
+                resolved_kind = ctx.kind.clone();
+                let mut new_ctx = ctx.clone();
+                new_ctx.exception_count = 0;
+                commands.entity(wi_entity).insert(new_ctx);
+            }
 
             // spawn ProfileGenerationCompletedMessage（None 表示 skip）
             commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,
                 generated_profile: None,
-                kind: kind.clone(),
+                kind: resolved_kind.clone(),
             });
 
             let output = serde_json::json!({"status": "skipped"});
@@ -1014,7 +1020,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 event = "ProfileUpdateSkipped",
                 task_id = %request.request.task_id,
                 agent_id = %request.request.agent_id,
-                kind = ?kind,
+                kind = ?resolved_kind,
                 "profile update skipped by LLM"
             );
 

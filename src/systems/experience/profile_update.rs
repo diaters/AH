@@ -11,7 +11,8 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, AgentCapabilities, ExistingAgentProfile, ExperienceCandidateStatus, ExperienceStore,
-    PendingExperienceHooks, ProfileGenerationKind, ProfileGenerationRequestMessage, sanitize_tags,
+    PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationKind,
+    ProfileGenerationRequestMessage, WorkItem, sanitize_tags,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -119,14 +120,22 @@ pub(crate) fn profile_update_trigger_system(
 /// 2. 更新 ECS `Agent` 组件的 `capabilities` 字段
 #[allow(dead_code)] // 任务 11 系统注册时启用
 pub(crate) fn profile_update_writeback_system(
+    mut commands: Commands,
     mut store: ResMut<ExperienceStore>,
     mut agents: Query<&mut Agent>,
     mut pending_hooks: ResMut<PendingExperienceHooks>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
     settings: Res<crate::app::HarnessSettings>,
 ) {
-    // 先收集需要处理的候选（避免迭代时可变借用）
-    let mut to_process: Vec<(uuid::Uuid, crate::domain::TaskId)> = Vec::new();
+    // 先收集需要处理的候选（避免迭代时可变借用）。
+    // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component。
+    let mut to_process: Vec<(
+        uuid::Uuid,
+        crate::domain::TaskId,
+        Entity,
+        ProfileGenerationContext,
+    )> = Vec::new();
 
     for candidate in store.candidates.values() {
         if candidate.status != ExperienceCandidateStatus::WritebackPending {
@@ -134,7 +143,10 @@ pub(crate) fn profile_update_writeback_system(
         }
 
         let task_id = candidate.producer_task_id;
-        let Some(ctx) = store.profile_generation_context.get(&task_id) else {
+        let Some((wi_entity, ctx, _wi)) = profile_contexts
+            .iter()
+            .find(|(_, _, wi)| wi.task_id == task_id)
+        else {
             continue;
         };
 
@@ -146,16 +158,10 @@ pub(crate) fn profile_update_writeback_system(
             continue;
         }
 
-        to_process.push((candidate.candidate_id, task_id));
+        to_process.push((candidate.candidate_id, task_id, wi_entity, ctx.clone()));
     }
 
-    for (candidate_id, task_id) in to_process {
-        let ctx = store.profile_generation_context.get(&task_id).cloned();
-
-        let Some(ctx) = ctx else {
-            continue;
-        };
-
+    for (candidate_id, task_id, wi_entity, ctx) in to_process {
         let Some(generated) = &ctx.generated_profile else {
             continue;
         };
@@ -242,8 +248,10 @@ pub(crate) fn profile_update_writeback_system(
             }
         }
 
-        // 清理 context
-        store.profile_generation_context.remove(&task_id);
+        // 清理 context：从 WorkItem Entity 移除 ProfileGenerationContext Component
+        commands
+            .entity(wi_entity)
+            .remove::<ProfileGenerationContext>();
     }
 }
 
@@ -254,7 +262,7 @@ mod tests {
         AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ExistingAgentProfile,
         ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
         ExperienceKindHint, ExperienceStore, GeneratedProfile, ProfileGenerationContext,
-        ProfileGenerationKind,
+        ProfileGenerationKind, WorkItem,
     };
     use bevy_ecs::system::RunSystemOnce;
 
@@ -456,9 +464,26 @@ description = "old description"
         let candidate_id = candidate.candidate_id;
         store.candidates.insert(candidate_id, candidate);
 
-        // 存入 Update context with generated_profile
-        store.profile_generation_context.insert(
-            task_id,
+        let agent = make_test_agent("physics-specialist", &["physics"], agent_id);
+        let mut world = World::new();
+        world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
+        world.insert_resource(IncubatedAgentRegistry);
+        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
+            agents_config_path: config_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        }));
+        world.spawn(agent);
+        // 通过 spawn WorkItem + ProfileGenerationContext Component 注入 Update context
+        world.spawn((
+            WorkItem::profile_generation(
+                task_id,
+                String::new(),
+                vec![],
+                vec![],
+                agent_id,
+                ProfileGenerationKind::Update,
+            ),
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Update,
                 exception_count: 0,
@@ -473,18 +498,7 @@ description = "old description"
                     description: "new description".to_string(),
                 }),
             },
-        );
-
-        let agent = make_test_agent("physics-specialist", &["physics"], agent_id);
-        let mut world = World::new();
-        world.insert_resource(store);
-        world.insert_resource(PendingExperienceHooks::default());
-        world.insert_resource(IncubatedAgentRegistry);
-        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
-            agents_config_path: config_path.to_str().unwrap().to_string(),
-            ..Default::default()
-        }));
-        world.spawn(agent);
+        ));
 
         world
             .run_system_once(profile_update_writeback_system)
@@ -505,11 +519,12 @@ description = "old description"
             ExperienceCandidateStatus::Persisted
         );
 
-        // 验证 context 清理
-        assert!(
-            !store.profile_generation_context.contains_key(&task_id),
-            "context should be cleaned up after writeback"
-        );
+        // 验证 context 清理：commands.entity().remove() 在 run_system_once 中会立即生效
+        let ctx_count = world
+            .query::<&ProfileGenerationContext>()
+            .iter(&world)
+            .count();
+        assert_eq!(ctx_count, 0, "context should be cleaned up after writeback");
 
         // 验证 ECS 组件更新（需要 apply commands）
         // 注意：run_system_once 不会自动 apply commands，需要手动检查
@@ -532,8 +547,25 @@ description = "old description"
         let candidate_id = candidate.candidate_id;
         store.candidates.insert(candidate_id, candidate);
 
-        store.profile_generation_context.insert(
-            task_id,
+        let mut world = World::new();
+        world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
+        world.insert_resource(IncubatedAgentRegistry);
+        // 使用不存在的配置路径
+        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
+            agents_config_path: "/nonexistent/path/agents.toml".to_string(),
+            ..Default::default()
+        }));
+        // 通过 spawn WorkItem + ProfileGenerationContext Component 注入 Update context
+        world.spawn((
+            WorkItem::profile_generation(
+                task_id,
+                String::new(),
+                vec![],
+                vec![],
+                agent_id,
+                ProfileGenerationKind::Update,
+            ),
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Update,
                 exception_count: 0,
@@ -548,17 +580,7 @@ description = "old description"
                     description: "new".to_string(),
                 }),
             },
-        );
-
-        let mut world = World::new();
-        world.insert_resource(store);
-        world.insert_resource(PendingExperienceHooks::default());
-        world.insert_resource(IncubatedAgentRegistry);
-        // 使用不存在的配置路径
-        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
-            agents_config_path: "/nonexistent/path/agents.toml".to_string(),
-            ..Default::default()
-        }));
+        ));
 
         world
             .run_system_once(profile_update_writeback_system)

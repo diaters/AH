@@ -225,23 +225,22 @@ pub struct ExperienceStore {
     pub proposals: std::collections::HashMap<TaskId, IncubationProposal>,
     /// 审批请求 ID 到候选 ID 的精确绑定。
     approval_bindings: std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
-    /// profile 生成上下文：以 task_id 为 key 暂存 kind 与 retry_count，
-    /// 由 `profile_generation_workitem_system` 写入，
-    /// 由 orchestrator 的 SubmitProfileUpdate/SkipProfileUpdate 分支读取后清理。
-    pub profile_generation_context: std::collections::HashMap<TaskId, ProfileGenerationContext>,
     /// 已触发 profile 更新评估的候选 ID 集合，避免重复触发。
     pub profile_update_triggered: std::collections::HashSet<uuid::Uuid>,
 }
 
-/// profile 生成运行时上下文：在 ExperienceStore 中暂存，
-/// 用于在 orchestrator（工具执行）、completion_system（完成处理）与
-/// approval_system（拒绝并反馈重试）之间传递 kind/exception_count/existing_profile。
+/// profile 生成运行时上下文 Component：附加在 WorkItem Entity 上，
+/// 与 `SkillUpdateContext` 存储模型一致。
+///
+/// 由 `profile_generation_workitem_system` 在 spawn `WorkItemType::ProfileGeneration` workitem 时
+/// 一并注入到同一 entity，供 orchestrator（工具执行）、completion_system（完成处理）与
+/// approval_system（拒绝并反馈重试）通过 Query 读取。
 ///
 /// `exception_count` 语义：仅累计 LLM 异常（未调工具 / 互斥冲突 / Err / 调用非相关工具）。
 /// - LLM 成功调用 submit_profile_update 或 skip_profile_update 后，由 orchestrator 归 0。
 /// - reject_with_feedback 不占用计数（透传不变）。
 /// - 达到 `MAX_PROFILE_EXCEPTIONS` 后不再重试，走失败路径。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct ProfileGenerationContext {
     pub kind: ProfileGenerationKind,
     pub exception_count: u32,
