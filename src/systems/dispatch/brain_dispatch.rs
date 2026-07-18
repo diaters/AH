@@ -55,14 +55,17 @@ const SUB_TASK_SYSTEM_PROMPT: &str = "\
 你的精炼结论
 <<</RESULT>>>";
 
-struct AgentDescription {
-    name: String,
-    model: String,
-    tags: Vec<String>,
-    description: String,
+pub(crate) struct AgentDescription {
+    pub name: String,
+    pub model: String,
+    pub tags: Vec<String>,
+    pub description: String,
 }
 
-fn brain_user_prompt_from_descriptions(task_content: &str, agents: &[AgentDescription]) -> String {
+pub(crate) fn brain_user_prompt_from_descriptions(
+    task_content: &str,
+    agents: &[AgentDescription],
+) -> String {
     let agent_descriptions: Vec<String> = agents
         .iter()
         .filter(|agent| !agent.tags.contains(&"brain".to_string()))
@@ -87,7 +90,10 @@ Select the best agent for this task and provide a delegate prompt."#,
 }
 
 /// 构建带历史对话的 prompt（Brain Agent 使用）
-fn build_prompt_with_history(task_content: &str, short_term: Option<&ShortTermMemory>) -> String {
+pub(crate) fn build_prompt_with_history(
+    task_content: &str,
+    short_term: Option<&ShortTermMemory>,
+) -> String {
     let Some(stm) = short_term else {
         return task_content.to_string();
     };
