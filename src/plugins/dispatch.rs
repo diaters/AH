@@ -6,7 +6,7 @@ use crate::prelude::*;
 
 use crate::systems::{
     HarnessSet, agent_started_hook_system, agent_stopped_hook_system, approval_dispatch_system,
-    approval_result_system, brain_decision_system, brain_dispatch_system,
+    approval_result_system, brain_decision_system, brain_dispatch_system, dispatch_system,
     evaluation_trigger_system, on_approval_requested_hook_system, on_approval_resolved_hook_system,
     on_message_dispatched_hook_system, task_dispatch_system, tool_confirmation_result_system,
     workitem_dispatch_system, workitem_lifecycle_hook_system,
@@ -35,6 +35,10 @@ impl Plugin for DispatchPlugin {
                 workitem_dispatch_system
                     .in_set(HarnessSet::Dispatch)
                     .after(task_dispatch_system),
+                // 统一派发系统（阶段 2：与旧 system 并存）
+                dispatch_system
+                    .in_set(HarnessSet::Dispatch)
+                    .after(workitem_dispatch_system),
                 // WorkItem 生命周期 hook companion 系统
                 workitem_lifecycle_hook_system
                     .in_set(HarnessSet::Dispatch)
