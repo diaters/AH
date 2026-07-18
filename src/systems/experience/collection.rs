@@ -2,11 +2,11 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
-    Agent, AgentKind, ConversationMessage, EntryRole, ExperienceCollectionCompletedMessage,
-    ExperienceCollectionRequestMessage, ExperienceConsolidationRequestMessage,
-    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, ShortTermMemory,
-    SpaceToolRegistry, Task, TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage,
-    WorkItem,
+    Agent, AgentKind, ConversationMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryRole,
+    ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
+    ExperienceConsolidationRequestMessage, ExperienceGovernanceRequestMessage, ExperienceKindHint,
+    ExperienceStore, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
+    TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemType,
 };
 
 /// 任务终态经验收集触发系统：任务进入终态后统一生成经验收集请求。
@@ -108,7 +108,18 @@ pub(crate) fn experience_collection_workitem_system(
             "spawning experience collection work item"
         );
 
-        commands.spawn(work_item);
+        commands.spawn((
+            work_item,
+            PendingDispatch {
+                kind: DispatchKind::WorkItem(WorkItemType::ExperienceCollection),
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            },
+        ));
         commands.entity(entity).despawn();
     }
 }
