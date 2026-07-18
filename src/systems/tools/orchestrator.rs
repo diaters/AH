@@ -4,7 +4,7 @@
 
 use crate::prelude::*;
 use serde::Serialize;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::app::Clock;
@@ -1063,6 +1063,9 @@ pub fn handle_tool_action<B: SessionBackend>(
         }) => {
             // skill_id / base_version / new_version 由 orchestrator 从
             // SkillUpdateContext 服务端权威注入，避免 LLM 臆造 skill_id。
+            //
+            // work_item_id（Uuid）仍需要保留：用于 SkillUpdateCompletedMessage.work_item_id
+            // 字段与日志关联。work_item_entity（Entity）则用于 O(1) 直接查询 context。
             let work_item_id = match request.request.work_item_id {
                 Some(id) => id,
                 None => {
@@ -1084,24 +1087,76 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             };
 
-            let Some((_, _, Some(context), _)) = context_queries
-                .iter()
-                .find(|(_, _, skill, wi)| skill.is_some() && wi.id == work_item_id)
-            else {
+            // [重要-1] 修复：work_item_entity 为 None 是不可达路径。
+            // 前置条件：llm_response.rs 中 work_item_entity 是基于同一 WorkItem query 设置的，
+            // 反查 work_item_id 成功意味着 work_item_entity 也应为 Some。
+            // 原实现为 warn + spawn 独立 entity，但独立 entity 没有 SkillUpdateContext，
+            // 会被 completion_system 的 fallback 路径 despawn，形成"fallback 必然失败"链。
+            // 改为 error! + 直接拒绝，与其他错误路径风格一致，避免伪精细控制面。
+            let work_item_entity = match request.work_item_entity {
+                Some(e) => e,
+                None => {
+                    error!(
+                        event = "SkillUpdateMissingWorkItemEntity",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        work_item_id = %work_item_id,
+                        "work_item_entity is None despite context lookup succeeded; \
+                         rejecting submit_skill_update"
+                    );
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(
+                            "work_item_entity missing for submit_skill_update \
+                             (framework state inconsistency)"
+                                .to_string(),
+                        ),
+                    );
+                    return;
+                }
+            };
+
+            // [重要-2] 修复：用 work_item_entity 做 O(1) 直接查询，替代 O(n) Uuid 反查。
+            // 三层错误分支覆盖所有失败情况，每条路径都 spawn_tool_error 直接拒绝。
+            let Some((_, _, context_opt, _)) = context_queries.get(work_item_entity).ok() else {
                 warn!(
-                    event = "SkillUpdateContextNotFound",
+                    event = "SkillUpdateWorkItemNotInContextQueries",
                     task_id = %request.request.task_id,
                     agent_id = %request.request.agent_id,
                     work_item_id = %work_item_id,
-                    "SkillUpdateContext not found for work_item_id, rejecting submit_skill_update"
+                    work_item_entity = ?work_item_entity,
+                    "WorkItem entity not found in context_queries, rejecting submit_skill_update"
                 );
                 spawn_tool_error(
                     commands,
                     request_entity,
                     request,
                     ToolError::InternalState(format!(
-                        "SkillUpdateContext not found for work_item_id={}",
-                        work_item_id
+                        "WorkItem entity {:?} not in context_queries for work_item_id={}",
+                        work_item_entity, work_item_id
+                    )),
+                );
+                return;
+            };
+
+            let Some(context) = context_opt else {
+                warn!(
+                    event = "SkillUpdateContextNotFound",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    work_item_id = %work_item_id,
+                    work_item_entity = ?work_item_entity,
+                    "SkillUpdateContext not found on work_item_entity, rejecting submit_skill_update"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InternalState(format!(
+                        "SkillUpdateContext not found on work_item_entity {:?} for work_item_id={}",
+                        work_item_entity, work_item_id
                     )),
                 );
                 return;
@@ -1171,6 +1226,7 @@ pub fn handle_tool_action<B: SessionBackend>(
             // dry-run 通过，将 SkillUpdateCompletedMessage insert 到 WorkItem entity 上
             // （而非 spawn 独立 entity），让 skill_update_completion_system 通过同 entity 的
             // Component 查询直接拿到 SkillUpdateContext，避免用 work_item_id 反查。
+            // work_item_entity 已在前面校验为 Some（None 路径已 early return）。
             let completed_message = crate::domain::SkillUpdateCompletedMessage {
                 work_item_id,
                 task_id: request.request.task_id,
@@ -1181,22 +1237,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 operations: operations.clone(),
                 rationale: rationale.clone(),
             };
-            match request.work_item_entity {
-                Some(wi_entity) => {
-                    commands.entity(wi_entity).insert(completed_message);
-                }
-                None => {
-                    warn!(
-                        event = "SkillUpdateMissingWorkItemEntity",
-                        task_id = %request.request.task_id,
-                        agent_id = %request.request.agent_id,
-                        work_item_id = %work_item_id,
-                        "work_item_entity is None on ToolExecutionRequestMessage, \
-                         falling back to spawn independent entity"
-                    );
-                    commands.spawn(completed_message);
-                }
-            }
+            commands.entity(work_item_entity).insert(completed_message);
 
             // 返回工具执行结果给 LLM
             let output = serde_json::json!({

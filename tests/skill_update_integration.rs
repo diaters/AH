@@ -1200,3 +1200,177 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
 
     drop(tmp);
 }
+
+/// [次要-1] 回归测试：当 `ToolExecutionRequestMessage.work_item_entity` 为 None
+/// 但 `request.work_item_id` 为 Some 时（不可达路径），orchestrator 应直接拒绝。
+///
+/// 验证 [重要-1] 修复后的行为：
+/// - 不 spawn `SkillUpdateCompletedMessage`（既不 insert 到 WorkItem，也不 spawn 独立 entity）
+/// - 通过 `spawn_tool_error` 返回错误给 LLM（`ToolCallingState.pending_tool_call_ids` 清空）
+/// - SKILL.md 内容不变
+/// - SkillRegistry version 仍是 1
+/// - 候选状态保持 GovernanceResolved（未推进到 Persisted）
+///
+/// 该路径在实践中不可达：`llm_response.rs` 中 `work_item_entity` 是基于同一 WorkItem
+/// query 设置的，反查 work_item_id 成功意味着 work_item_entity 也应为 Some。本测试
+/// 通过手动构造异常请求验证 orchestrator 的防御性拒绝行为。
+#[test]
+fn submit_skill_update_rejects_when_work_item_entity_is_none() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    // 覆盖 SkillLoader 指向临时目录
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    // 预置 GovernanceResolved 候选
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    // Spawn skill-updater Agent
+    let agent_id = Uuid::new_v4();
+    app.world_mut().spawn(Agent {
+        id: agent_id,
+        profile: AgentProfile {
+            name: "skill-updater".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["skill-updater".to_string()],
+            description: "skill-updater agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    });
+
+    // Spawn Task + ShortTermMemory
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("skill update task", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    // Spawn WorkItem + SkillUpdateContext（让 work_item_id 存在但请求中不引用 entity）
+    let (work_item_id, _work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    // Spawn ToolCallingState
+    let calling_state_entity = app
+        .world_mut()
+        .spawn(ToolCallingState {
+            task_id,
+            agent_id,
+            pending_tool_call_ids: vec!["call_test".to_string()],
+            iteration: 1,
+            max_iterations: 5,
+            conversation: Vec::new(),
+            tools: Vec::new(),
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            work_item_id: Some(work_item_id),
+        })
+        .id();
+
+    // 构造异常 ToolExecutionRequestMessage：work_item_id 为 Some（通过第一道检查），
+    // 但 work_item_entity 为 None（触发 [重要-1] 修复后的 error! + spawn_tool_error 路径）。
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: Vec::new(),
+            conversation: None,
+            work_item_id: Some(work_item_id),
+            model_override: None,
+        },
+        tool_name: "submit_skill_update".to_string(),
+        tool_input: serde_json::json!({
+            "operations": [
+                {"action": "replace_section", "section": "## Usage", "content": "New usage content."}
+            ],
+            "rationale": "should be rejected due to missing work_item_entity"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_test".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: None,
+    });
+
+    // 运行多帧让 dispatch → handle_tool_action → error! + spawn_tool_error → tool_calling_orchestrator 完成
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 1. 不应 spawn 任何 SkillUpdateCompletedMessage（不 insert 到 WorkItem，也不 spawn 独立 entity）
+    let completed_count = {
+        let mut q = app.world_mut().query::<&SkillUpdateCompletedMessage>();
+        q.iter(app.world()).count()
+    };
+    assert_eq!(
+        completed_count, 0,
+        "should not spawn SkillUpdateCompletedMessage when work_item_entity is None"
+    );
+
+    // 2. ToolCallingState 的 pending_tool_call_ids 应被清空（spawn_tool_error 已被消费）
+    let calling_state = app
+        .world()
+        .get::<ToolCallingState>(calling_state_entity)
+        .expect("ToolCallingState should still exist");
+    assert!(
+        calling_state.pending_tool_call_ids.is_empty(),
+        "spawn_tool_error result should be consumed by tool_calling_orchestrator_system, \
+         clearing pending_tool_call_ids"
+    );
+
+    // 3. SKILL.md 内容未被修改（仍含原 Usage 内容）
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("Do the thing."),
+        "SKILL.md should be unchanged when work_item_entity is None"
+    );
+
+    // 4. SkillRegistry version 仍是 1（completion_system 未被触发）
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 1,
+        "registry version should remain 1 when work_item_entity is None"
+    );
+
+    // 5. 候选状态保持 GovernanceResolved（未推进到 Persisted）
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::GovernanceResolved,
+        "candidate status should remain GovernanceResolved when work_item_entity is None"
+    );
+
+    drop(tmp);
+}
