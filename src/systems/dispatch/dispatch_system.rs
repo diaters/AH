@@ -6,12 +6,12 @@
 //!
 //! Task 和 WorkItem 是不同 entity，两个 mut Query 不会冲突。
 //!
-//! ## 并存策略
+//! ## 当前状态
 //!
-//! 阶段 2：与旧 system（`task_dispatch_system` / `workitem_dispatch_system` /
-//! `brain_dispatch_system`）并存。本 system 注册到 plugin 但当前无 entity
-//! 附加 `PendingDispatch`，因此实际不会处理任何 entity。阶段 3 起将逐步把
-//! 派发请求生成器切换到附加 `PendingDispatch` 的方式。
+//! 阶段 5：`task_dispatch_system` 与 `workitem_dispatch_system` 已退役，
+//! 所有派发请求统一通过 `PendingDispatch` 流入本 system 处理。
+//! DirectDelegate 分支复用 `prompt_builder::build_prompt_with_context`，
+//! 与原 `task_dispatch_system` 行为对齐（LTM/STM/通道上下文 + skills 系统提示）。
 
 use crate::prelude::*;
 use tracing::{debug, warn};
@@ -20,27 +20,16 @@ use crate::{
     app::Clock,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        AgentSpawnRequestMessage, AwaitingBrainDecision, ChannelId, DispatchHint, DispatchKind,
-        DispatchStrategy, ExecutionError, MessageDispatchedHookPending, PendingDispatch,
-        ShortTermMemory, SpaceToolRegistry, Task, TaskInjectedSkill, TaskStatus, ToolPermission,
-        WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
+        AgentSpawnRequestMessage, AwaitingBrainDecision, DispatchHint, DispatchKind,
+        DispatchStrategy, ExecutionError, LongTermMemory, MessageDispatchedHookPending,
+        PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskInjectedSkill, TaskStatus,
+        ToolPermission, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
+    infrastructure::skills::{PluginSkillContributions, SkillLoader},
     user_plugins::hook_point::HookPoint,
 };
 
-use super::build_brain_execution_request;
-
-/// 在 task content 前追加当前通道上下文，
-/// 确保被委派 Agent 知道通过哪个 IM 通道回发文件/消息。
-fn augment_prompt_with_channel(task_content: &str, origin_channel: Option<&ChannelId>) -> String {
-    match origin_channel {
-        Some(ch) => {
-            let context = ch.to_prompt_context();
-            format!("{context}\n\n{task_content}")
-        }
-        None => task_content.to_string(),
-    }
-}
+use super::{build_brain_execution_request, prompt_builder::build_prompt_with_context};
 
 /// 统一派发 System
 ///
@@ -50,8 +39,10 @@ fn augment_prompt_with_channel(task_content: &str, origin_channel: Option<&Chann
 pub fn dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
-    agents: Query<&Agent>,
+    agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
+    skill_loader: Res<SkillLoader>,
+    plugin_skills: Res<PluginSkillContributions>,
     mut tasks: Query<(
         Entity,
         &mut Task,
@@ -61,7 +52,7 @@ pub fn dispatch_system(
     mut work_items: Query<(Entity, &mut WorkItem, Option<&PendingDispatch>)>,
 ) {
     // 收集 agents 引用，便于复用 brain_llm_builder 与按 tag/name 查找
-    let agent_refs: Vec<&Agent> = agents.iter().collect();
+    let agent_refs: Vec<&Agent> = agents.iter().map(|(a, _)| a).collect();
 
     // ---------- 处理 WorkItem 派发 ----------
     for (entity, mut work_item, pending) in &mut work_items {
@@ -227,16 +218,15 @@ pub fn dispatch_system(
                 );
             }
             DispatchStrategy::DirectDelegate => {
-                // 按 preferred_agent_name 查找 Persistent Agent
+                // 按 preferred_agent_name 查找 Persistent Agent（同时取出 LongTermMemory）
                 let preferred_name = hint.preferred_agent_name.as_deref();
-                let agent = preferred_name.and_then(|name| {
-                    agent_refs
+                let agent_with_ltm = preferred_name.and_then(|name| {
+                    agents
                         .iter()
-                        .copied()
-                        .find(|a| a.kind == AgentKind::Persistent && a.profile.name == name)
+                        .find(|(a, _)| a.kind == AgentKind::Persistent && a.profile.name == name)
                 });
 
-                if let Some(agent) = agent {
+                if let Some((agent, long_term)) = agent_with_ltm {
                     // 注入 TaskInjectedSkill（如果 hint 携带 required_skill_id）
                     if let Some(skill_id) = &hint.required_skill_id {
                         commands.entity(task_entity).insert(TaskInjectedSkill {
@@ -263,16 +253,37 @@ pub fn dispatch_system(
                         .cloned()
                         .collect();
 
-                    // 构建 prompt：task.content + 通道上下文
-                    let prompt =
-                        augment_prompt_with_channel(&task.content, task.origin_channel.as_ref());
+                    // 构建 prompt：完整 LTM/STM/通道上下文（与原 task_dispatch 行为对齐）
+                    let prompt = build_prompt_with_context(
+                        &task.content,
+                        short_term,
+                        long_term,
+                        task.origin_channel.as_ref(),
+                    );
+
+                    // 构建 skills 系统提示（内置 + 插件贡献）
+                    let mut skills = skill_loader.load_skills(&agent.profile.name);
+                    skills.extend(
+                        skill_loader.load_plugin_skills(&plugin_skills, &agent.profile.name),
+                    );
+                    let skills_prompt = SkillLoader::format_skills_prompt(&skills);
+                    // 优先级：skills_prompt 非空时用 skills_prompt，否则用 agent.system_prompt
+                    let system_prompt = if !skills_prompt.is_empty() {
+                        Some(skills_prompt)
+                    } else {
+                        agent.system_prompt.clone()
+                    };
+
+                    let stm_entries = short_term.map(|s| s.entries.len()).unwrap_or(0);
+                    let stm_tokens = short_term.map(|s| s.estimated_tokens).unwrap_or(0);
+                    let ltm_entries = long_term.map(|l| l.entries.len()).unwrap_or(0);
 
                     let request = AgentExecutionRequest {
                         task_id: task.id,
                         agent_id: agent.id,
                         request_kind: AgentRequestKind::LlmCompletion,
                         prompt,
-                        system_prompt: agent.system_prompt.clone(),
+                        system_prompt,
                         tools,
                         conversation: None,
                         work_item_id: None,
@@ -291,6 +302,9 @@ pub fn dispatch_system(
                         task_id = %task.id,
                         agent_id = %agent.id,
                         agent_name = %agent.profile.name,
+                        stm_entries = stm_entries,
+                        stm_tokens = stm_tokens,
+                        ltm_entries = ltm_entries,
                         "task directly delegated to existing agent"
                     );
                     continue;

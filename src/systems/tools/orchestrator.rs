@@ -11,13 +11,14 @@ use crate::app::Clock;
 use crate::contracts::SessionBackend;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, BatchTaskState,
-    ChannelId, ChatRoundStartedMessage, ChatSession, EntryRole, ExperienceCandidate,
-    ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
-    FrontendKind, OutputContent, PendingExperienceHooks, ProfileGenerationContext, SessionSummary,
-    ShellExecResult, ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
-    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
+    ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind, DispatchStrategy,
+    EntryRole, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
+    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingDispatch,
+    PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellExecResult,
+    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
@@ -733,9 +734,20 @@ pub fn handle_tool_action<B: SessionBackend>(
                     .map(|s| s.child_agent_name.clone())
                     .unwrap_or_default();
                 commands.entity(child_entity).insert(ChatSession {
-                    child_agent_name,
+                    child_agent_name: child_agent_name.clone(),
                     parent_tool_call_id: parent_tool_call_id.clone(),
                     current_batch_id: new_batch_id,
+                });
+
+                // 附加 PendingDispatch，由 dispatch_system 处理 DirectDelegate 派发
+                commands.entity(child_entity).insert(PendingDispatch {
+                    kind: DispatchKind::Task,
+                    hint: DispatchHint {
+                        strategy: DispatchStrategy::DirectDelegate,
+                        preferred_agent_name: Some(child_agent_name),
+                        required_skill_id: None,
+                        agent_spawn_spec: None,
+                    },
                 });
 
                 // 唤醒子任务
@@ -814,6 +826,15 @@ pub fn handle_tool_action<B: SessionBackend>(
                         child_agent_name: agent.profile.name.clone(),
                         parent_tool_call_id: parent_tool_call_id.clone(),
                         current_batch_id: batch_id,
+                    },
+                    PendingDispatch {
+                        kind: DispatchKind::Task,
+                        hint: DispatchHint {
+                            strategy: DispatchStrategy::DirectDelegate,
+                            preferred_agent_name: Some(agent.profile.name.clone()),
+                            required_skill_id: None,
+                            agent_spawn_spec: None,
+                        },
                     },
                 ));
 

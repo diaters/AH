@@ -43,7 +43,7 @@ use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
 
 /// WorkItem 生命周期观察 hook companion 系统。
 ///
-/// 在 `HarnessSet::Dispatch` 集合中运行，在 `workitem_dispatch_system` 之后执行。
+/// 在 `HarnessSet::Dispatch` 集合中运行，在 `dispatch_system` 之后执行。
 /// 无 `PluginRegistry` 时 noop 不 panic（标记保留，待下帧 registry 存在时清理，
 /// 或随 entity despawn 自然消失）。
 pub fn workitem_lifecycle_hook_system(world: &mut World) {

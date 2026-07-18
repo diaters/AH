@@ -6,8 +6,9 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutorFuture, HarnessConfig,
-    WorkItem, WorkItemStatus, build_harness_app, llm::ExecutorRegistry,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, DispatchHint, DispatchKind,
+    DispatchStrategy, ExecutorFuture, HarnessConfig, PendingDispatch, WorkItem, WorkItemStatus,
+    WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -75,7 +76,18 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
     let task_id = uuid::Uuid::new_v4();
     let work_item = WorkItem::evaluation(task_id, "评估任务状态".to_string(), None);
     let work_item_id = work_item.id;
-    app.world_mut().spawn(work_item);
+    app.world_mut().spawn((
+        work_item,
+        PendingDispatch {
+            kind: DispatchKind::WorkItem(WorkItemType::Evaluation),
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: None,
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     // Run systems - the workitem should be dispatched
     app.update();
@@ -127,7 +139,18 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
         harness::SummarizationTrigger::TaskComplete,
     );
     let work_item_id = work_item.id;
-    app.world_mut().spawn(work_item);
+    app.world_mut().spawn((
+        work_item,
+        PendingDispatch {
+            kind: DispatchKind::WorkItem(WorkItemType::Summarization),
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: None,
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     // Run systems - the workitem should be dispatched
     app.update();
@@ -181,7 +204,18 @@ fn workitem_without_matching_agent_is_marked_failed() {
         "Execute this task".to_string(),
         harness::contracts::TagSet::from_tags(["nonexistent-tag"]),
     );
-    app.world_mut().spawn(work_item);
+    app.world_mut().spawn((
+        work_item,
+        PendingDispatch {
+            kind: DispatchKind::WorkItem(WorkItemType::Execution),
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: None,
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     // Run systems
     for _ in 0..5 {
@@ -247,7 +281,18 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         uuid::Uuid::new_v4(),
     );
     let work_item_id = work_item.id;
-    app.world_mut().spawn(work_item);
+    app.world_mut().spawn((
+        work_item,
+        PendingDispatch {
+            kind: DispatchKind::WorkItem(WorkItemType::ExperienceCollection),
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: None,
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     app.update();
 
@@ -299,7 +344,18 @@ fn experience_collection_workitem_without_collector_is_failed() {
         vec![tool],
         uuid::Uuid::new_v4(),
     );
-    app.world_mut().spawn(work_item);
+    app.world_mut().spawn((
+        work_item,
+        PendingDispatch {
+            kind: DispatchKind::WorkItem(WorkItemType::ExperienceCollection),
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: None,
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     for _ in 0..5 {
         app.update();

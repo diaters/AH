@@ -7,9 +7,10 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutionError, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
+    DispatchStrategy, ExecutionError, ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig,
+    LongTermMemory, PendingDispatch, Task, TaskRoutingPolicy, TaskStatus, WaitingReason,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -72,6 +73,20 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
     ));
 }
 
+/// 构造测试用 PendingDispatch(DirectDelegate) Component，
+/// 指向 `spawn_default_agent` 创建的 `default-llm-agent`。
+fn pending_dispatch_to_default_agent() -> PendingDispatch {
+    PendingDispatch {
+        kind: DispatchKind::Task,
+        hint: DispatchHint {
+            strategy: DispatchStrategy::DirectDelegate,
+            preferred_agent_name: Some("default-llm-agent".to_string()),
+            required_skill_id: None,
+            agent_spawn_spec: None,
+        },
+    }
+}
+
 /// Test: Task enters RetryBackoff on retryable errors
 #[test]
 fn task_enters_retry_backoff_on_rate_limit_error() {
@@ -111,6 +126,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
         .spawn((
             Task::from_user_input_ready("test retry", 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ))
         .id();
 
@@ -176,6 +192,7 @@ fn non_retryable_error_causes_immediate_failure() {
         .spawn((
             Task::from_user_input_ready("test non-retryable", 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ))
         .id();
 
@@ -411,6 +428,7 @@ fn multiple_concurrent_tasks_are_handled() {
         app.world_mut().spawn((
             Task::from_user_input_ready(format!("task {}", i), 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ));
     }
 
@@ -560,6 +578,7 @@ fn task_failure_sets_error_message() {
         .spawn((
             Task::from_user_input_ready("test failure", 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ))
         .id();
 

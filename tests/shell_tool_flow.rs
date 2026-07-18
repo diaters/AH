@@ -589,6 +589,12 @@ fn shell_start_passes_env_to_child_process() {
             .to_string()
     };
 
+    // printf 子进程退出快，但 NativeProcessBackend 的 background reader thread
+    // 异步读取 stdout，可能在 shell_read 调用时还未捕获输出。
+    // 这里推进一帧 ECS 循环并短暂等待，确保 background reader 完成读取。
+    app.update();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
             task_id,

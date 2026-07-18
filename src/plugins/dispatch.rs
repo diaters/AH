@@ -8,8 +8,8 @@ use crate::systems::{
     HarnessSet, agent_started_hook_system, agent_stopped_hook_system, approval_dispatch_system,
     approval_result_system, brain_decision_system, brain_dispatch_system, dispatch_system,
     evaluation_trigger_system, on_approval_requested_hook_system, on_approval_resolved_hook_system,
-    on_message_dispatched_hook_system, subtask_dispatch_preparation_system, task_dispatch_system,
-    tool_confirmation_result_system, workitem_dispatch_system, workitem_lifecycle_hook_system,
+    on_message_dispatched_hook_system, subtask_dispatch_preparation_system,
+    tool_confirmation_result_system, workitem_lifecycle_hook_system,
 };
 
 /// 派发 Plugin
@@ -22,35 +22,26 @@ impl Plugin for DispatchPlugin {
         app.add_systems(
             Update,
             (
-                // Brain 派发系统
+                // Brain 派发系统（处理无 PendingDispatch 的旧路径，由 Brain 选 Agent）
+                // 注：保留 .before(subtask_dispatch_preparation_system) 以确保 brain_dispatch
+                // 优先处理 SubTask 路径（brain_dispatch 仍保留旧 SubTask 直派发逻辑）。
+                // subtask_dispatch_preparation_system 仅在 brain_dispatch 未处理时附加 PendingDispatch。
                 brain_decision_system
                     .in_set(HarnessSet::Transform)
                     .after(crate::systems::ingest_execution_results_system),
                 brain_dispatch_system
                     .in_set(HarnessSet::Dispatch)
-                    .before(task_dispatch_system),
-                // 任务派发系统
-                task_dispatch_system.in_set(HarnessSet::Dispatch),
-                // WorkItem 派发系统
-                workitem_dispatch_system
-                    .in_set(HarnessSet::Dispatch)
-                    .after(task_dispatch_system),
-                // 统一派发系统（阶段 2：与旧 system 并存）
-                dispatch_system
-                    .in_set(HarnessSet::Dispatch)
-                    .after(workitem_dispatch_system),
-                // SubTask 派发前置系统（阶段 3 启用）
+                    .before(subtask_dispatch_preparation_system),
+                // 统一派发系统（处理带 PendingDispatch 的 Task / WorkItem）
+                dispatch_system.in_set(HarnessSet::Dispatch),
+                // SubTask 派发前置系统（为 SubTask 附加 PendingDispatch）
                 subtask_dispatch_preparation_system
                     .in_set(HarnessSet::Dispatch)
                     .before(dispatch_system),
                 // WorkItem 生命周期 hook companion 系统
-                workitem_lifecycle_hook_system
-                    .in_set(HarnessSet::Dispatch)
-                    .after(workitem_dispatch_system),
+                workitem_lifecycle_hook_system.in_set(HarnessSet::Dispatch),
                 // on_message_dispatched 观察 hook companion 系统
-                on_message_dispatched_hook_system
-                    .in_set(HarnessSet::Dispatch)
-                    .after(workitem_dispatch_system),
+                on_message_dispatched_hook_system.in_set(HarnessSet::Dispatch),
                 // Agent 生命周期 hook companion 系统
                 // 两者均放在 Maintenance 集合中：
                 // - agent_started_hook_system 使用 Added<Agent>，与 agent_factory_system 在同一帧即可触发

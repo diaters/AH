@@ -3,8 +3,9 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
-    HarnessConfig, LongTermMemory, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
+    DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, PendingDispatch,
+    Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -100,9 +101,23 @@ fn completes_single_turn_conversation_flow() {
     spawn_default_agent(&mut app);
 
     // 创建一个 Ready 状态的任务（单轮场景）
+    // 注：统一 dispatch_system 要求 Task 携带 PendingDispatch 才会派发，
+    // 这里附加 PendingDispatch(DirectDelegate) 直接委派给 default-llm-agent
+    // （test_config 中 brain: None，无法走 BrainLlm 路径）。
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
-    app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+    app.world_mut().spawn((
+        task,
+        harness::ShortTermMemory::default(),
+        PendingDispatch {
+            kind: DispatchKind::Task,
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: Some("default-llm-agent".to_string()),
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     for _ in 0..8 {
         app.update();

@@ -24,6 +24,10 @@ pub fn match_score(agent: &Agent, task_content: &str) -> usize {
 /// 1. 按 task content 与 agent tags 的匹配度评分；
 /// 2. 所有评分为 0 时，fallback 到带 "default" tag 的 agent；
 /// 3. 同分或均无匹配时，优先 tag 数量更多的 agent；若仍平局，则保留后出现的最大元素（`max_by_key` 行为）。
+//
+// 注：原 task_dispatch_system 删除后无运行时调用方，仅保留供单元测试与 Task 5.2
+// 整合使用。Task 5.2 完成后整个 agent_selection 模块会被重构。
+#[allow(dead_code)]
 pub fn select_agent_with_memory<'a>(
     agents: impl Iterator<Item = (&'a Agent, Option<&'a LongTermMemory>)>,
     task_content: &str,
