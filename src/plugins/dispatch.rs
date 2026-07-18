@@ -39,6 +39,10 @@ impl Plugin for DispatchPlugin {
                 dispatch_system
                     .in_set(HarnessSet::Dispatch)
                     .after(workitem_dispatch_system),
+                // SubTask 派发前置系统（阶段 3 启用）
+                // subtask_dispatch_preparation_system
+                //     .in_set(HarnessSet::Dispatch)
+                //     .before(dispatch_system),
                 // WorkItem 生命周期 hook companion 系统
                 workitem_lifecycle_hook_system
                     .in_set(HarnessSet::Dispatch)
