@@ -8,6 +8,7 @@ mod chat_session;
 mod command;
 mod confirmation;
 mod contribution;
+mod dispatch;
 mod error;
 mod evaluation;
 mod execution;
@@ -155,6 +156,12 @@ pub use work_item::{
     WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage, WorkItemInput,
     WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
     WorkItemWritebackTarget,
+};
+
+// dispatch
+pub use dispatch::{
+    AgentSpawnSpec, AwaitingBrainDecision, DispatchHint, DispatchKind, DispatchStrategy,
+    PendingDispatch,
 };
 
 // workflow
