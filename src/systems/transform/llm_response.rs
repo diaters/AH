@@ -12,9 +12,9 @@ use crate::{
         AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
         ChatRoundReadyMessage, ChatSession, ConversationMessage, EntryMetadata, EntryRole,
         ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
-        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ShortTermMemory,
-        SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState,
-        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ProfileGenerationContext,
+        ShortTermMemory, SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending,
+        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
         WorkItemLifecycleHookPending, WorkItemType,
     },
@@ -77,10 +77,12 @@ fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::Ta
 /// - exception_count + 1 >= MAX_PROFILE_EXCEPTIONS：spawn 失败完成消息，
 ///   由 completion_system 根据 exception_count 判断走失败路径
 ///
-/// context 已被前序完成消息消费时（如 skip/submit 已完成），直接清理 WorkItem。
+/// `ctx`：通过 Query 从 WorkItem Entity 读取的 `ProfileGenerationContext` Component 引用。
+///   若为 None，表示 context 已被前序完成消息消费（如 skip/submit 已完成），直接清理 WorkItem。
 fn handle_profile_generation_invalid(
     commands: &mut Commands,
     experience_store: &ExperienceStore,
+    ctx: Option<&ProfileGenerationContext>,
     work_item: &WorkItem,
     result_entity: Entity,
     work_item_entity: Entity,
@@ -91,10 +93,7 @@ fn handle_profile_generation_invalid(
         ProfileGenerationRequestMessage,
     };
 
-    let Some(ctx) = experience_store
-        .profile_generation_context
-        .get(&work_item.task_id)
-    else {
+    let Some(ctx) = ctx else {
         // context 已被前序 ProfileGenerationCompletedMessage 消费
         // （例如 skip_profile_update 或 submit_profile_update 已完成流程），
         // 无需再次 spawn 完成消息，直接清理 WorkItem
@@ -697,6 +696,7 @@ pub fn llm_response_system(
     calling_states: Query<(Entity, &ToolCallingState)>,
     mut work_items: Query<(Entity, &mut WorkItem)>,
     experience_store: Res<ExperienceStore>,
+    profile_contexts: Query<&ProfileGenerationContext>,
 ) {
     // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
     struct CallingStateInfo {
@@ -819,6 +819,8 @@ pub fn llm_response_system(
                     }
                 }
                 WorkItemType::ProfileGeneration => {
+                    // 通过 Query 从 WorkItem Entity 读取 ProfileGenerationContext Component
+                    let pg_ctx = profile_contexts.get(work_item_entity).ok();
                     match &result.result {
                         Ok(AgentExecutionOutput {
                             content: OutputContent::ToolCalls(calls),
@@ -837,6 +839,7 @@ pub fn llm_response_system(
                                 handle_profile_generation_invalid(
                                     &mut commands,
                                     &experience_store,
+                                    pg_ctx,
                                     work_item,
                                     entity,
                                     work_item_entity,
@@ -849,6 +852,7 @@ pub fn llm_response_system(
                                 handle_profile_generation_invalid(
                                     &mut commands,
                                     &experience_store,
+                                    pg_ctx,
                                     work_item,
                                     entity,
                                     work_item_entity,
@@ -863,6 +867,7 @@ pub fn llm_response_system(
                             handle_profile_generation_invalid(
                                 &mut commands,
                                 &experience_store,
+                                pg_ctx,
                                 work_item,
                                 entity,
                                 work_item_entity,
@@ -875,11 +880,60 @@ pub fn llm_response_system(
                             handle_profile_generation_invalid(
                                 &mut commands,
                                 &experience_store,
+                                pg_ctx,
                                 work_item,
                                 entity,
                                 work_item_entity,
                                 "llm_error",
                             );
+                            continue;
+                        }
+                    }
+                }
+                WorkItemType::SkillUpdate => {
+                    // - ToolCalls（submit_skill_update）：fall through，让 tool calling loop 处理，
+                    //   orchestrator 会 spawn SkillUpdateCompletedMessage，由
+                    //   skill_update_completion_system 消费并 despawn WorkItem。
+                    // - text / error：LLM 未调用工具，无 operations 可应用；
+                    //   直接 despawn WorkItem + SkillUpdateContext entity + result entity，
+                    //   候选状态保持 GovernanceResolved，由后续治理重新评估。
+                    match &result.result {
+                        Ok(AgentExecutionOutput {
+                            content: OutputContent::ToolCalls(_),
+                            ..
+                        }) => {
+                            // 不 continue，让下面的 tool calling loop 处理 tool calls
+                        }
+                        Ok(_) => {
+                            warn!(
+                                event = "SkillUpdateWorkItemNoToolCall",
+                                work_item_id = %work_item.id,
+                                task_id = %work_item.task_id,
+                                error = "LLM returned text without calling submit_skill_update",
+                                error_type = "NoToolCall",
+                                "skill update LLM finished without tool call, cleaning up work item"
+                            );
+                            commands
+                                .entity(work_item_entity)
+                                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+                            commands.entity(work_item_entity).despawn();
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!(
+                                event = "SkillUpdateWorkItemLlmFailed",
+                                work_item_id = %work_item.id,
+                                task_id = %work_item.task_id,
+                                error = "LLM execution returned Err",
+                                error_type = "LlmExecutionFailed",
+                                "skill update LLM failed, cleaning up work item"
+                            );
+                            commands
+                                .entity(work_item_entity)
+                                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+                            commands.entity(work_item_entity).despawn();
+                            commands.entity(entity).despawn();
                             continue;
                         }
                     }

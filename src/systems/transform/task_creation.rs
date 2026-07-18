@@ -11,7 +11,8 @@ use tracing::{debug, info};
 use crate::{
     app::HarnessSettings,
     domain::{
-        CreateTaskMessage, EntryMetadata, EntryRole, NewlyCreatedTask, ShortTermMemory, Task,
+        CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
+        NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
     },
     user_plugins::{
         dispatcher::{
@@ -84,7 +85,20 @@ pub fn user_message_to_task_system(
             "new task spawned from user message"
         );
 
-        commands.spawn((task, stm, NewlyCreatedTask));
+        commands.spawn((
+            task,
+            stm,
+            NewlyCreatedTask,
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::BrainLlm,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            },
+        ));
         commands.entity(entity).despawn();
     }
 }

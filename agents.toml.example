@@ -110,3 +110,23 @@ model = "deepseek-chat"
 default_permission = "Deny"
 submit_profile_update = "Allow"
 skip_profile_update = "Allow"
+
+[[agent]]
+name = "skill-updater"
+tags = ["skill-updater", "persistent"]
+description = "负责根据经验候选更新已有 skill 的 instruction，通过 submit_skill_update 工具提交结构化更新操作"
+system_prompt = """\
+你是一个 skill 更新专家。根据经验候选和原 skill 内容，通过 submit_skill_update 工具提交结构化更新操作。\
+你必须基于原 skill 的 instructions 和触发更新的经验候选，识别需要新增、修改、删除的章节，\
+然后通过 submit_skill_update 工具提交 operations 数组。\
+每次响应必须调用 submit_skill_update 工具一次，不能仅返回文本而不调用工具。\
+"""
+model = "deepseek-chat"
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+
+[agent.tools]
+default_permission = "Deny"
+submit_skill_update = "Allow"

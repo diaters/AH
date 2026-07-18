@@ -4,7 +4,8 @@ use tracing::debug;
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
-    PendingExperienceHooks, ProfileGenerationRequestMessage, ToolConfirmationResponseMessage,
+    PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationRequestMessage,
+    ToolConfirmationResponseMessage, WorkItem,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -18,6 +19,7 @@ pub(crate) fn experience_approval_result_system(
     mut pending_hooks: ResMut<PendingExperienceHooks>,
     pending_decisions: Query<(Entity, &ExperienceGovernanceDecision)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {
     for (entity, response) in &responses {
         let candidate_id = match store
@@ -147,7 +149,10 @@ pub(crate) fn experience_approval_result_system(
                     .candidates
                     .get(&candidate_id)
                     .map(|c| c.producer_task_id)
-                && let Some(ctx) = store.profile_generation_context.get(&task_id).cloned()
+                && let Some(ctx) = profile_contexts
+                    .iter()
+                    .find(|(_, _, wi)| wi.task_id == task_id)
+                    .map(|(_, ctx, _)| ctx.clone())
             {
                 // 候选回到 ProfileGenerationPending，等待重新生成
                 if let Some(c) = store.candidates.get_mut(&candidate_id) {
@@ -241,6 +246,7 @@ mod tests {
         ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
         ExperienceKindHint, ExperienceStore, PendingExperienceHooks, ProfileGenerationContext,
         ProfileGenerationKind, ProfileGenerationRequestMessage, ToolConfirmationResponseMessage,
+        WorkItem,
     };
     use bevy_ecs::system::RunSystemOnce;
 
@@ -315,18 +321,24 @@ mod tests {
         store.stage_root_candidate(candidate);
         store.bind_approval_request(request_id, candidate_id);
 
-        // 存入 profile 生成上下文（exception_count = 0）
-        store.profile_generation_context.insert(
-            task_id,
+        let mut world = make_test_world(store);
+        // 通过 spawn WorkItem + ProfileGenerationContext Component 注入上下文（exception_count = 0）
+        world.spawn((
+            WorkItem::profile_generation(
+                task_id,
+                String::new(),
+                vec![],
+                vec![],
+                uuid::Uuid::nil(),
+                ProfileGenerationKind::Incubation,
+            ),
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
                 exception_count: 0,
                 existing_profile: None,
                 generated_profile: None,
             },
-        );
-
-        let mut world = make_test_world(store);
+        ));
         world.spawn(ToolConfirmationResponseMessage {
             request_id,
             selected_option: "reject_with_feedback".to_string(),
@@ -381,18 +393,24 @@ mod tests {
         store.stage_root_candidate(candidate);
         store.bind_approval_request(request_id, candidate_id);
 
-        // 存入 profile 生成上下文（exception_count = 2，模拟之前有 LLM 异常）
-        store.profile_generation_context.insert(
-            task_id,
+        let mut world = make_test_world(store);
+        // 通过 spawn WorkItem + ProfileGenerationContext Component 注入上下文（exception_count = 2，模拟之前有 LLM 异常）
+        world.spawn((
+            WorkItem::profile_generation(
+                task_id,
+                String::new(),
+                vec![],
+                vec![],
+                uuid::Uuid::nil(),
+                ProfileGenerationKind::Incubation,
+            ),
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
                 exception_count: 2,
                 existing_profile: None,
                 generated_profile: None,
             },
-        );
-
-        let mut world = make_test_world(store);
+        ));
         world.spawn(ToolConfirmationResponseMessage {
             request_id,
             selected_option: "reject_with_feedback".to_string(),
@@ -428,18 +446,24 @@ mod tests {
         store.stage_root_candidate(candidate);
         store.bind_approval_request(request_id, candidate_id);
 
-        // 存入 profile 生成上下文（exception_count 已达上限值）
-        store.profile_generation_context.insert(
-            task_id,
+        let mut world = make_test_world(store);
+        // 通过 spawn WorkItem + ProfileGenerationContext Component 注入上下文（exception_count 已达上限值）
+        world.spawn((
+            WorkItem::profile_generation(
+                task_id,
+                String::new(),
+                vec![],
+                vec![],
+                uuid::Uuid::nil(),
+                ProfileGenerationKind::Incubation,
+            ),
             ProfileGenerationContext {
                 kind: ProfileGenerationKind::Incubation,
                 exception_count: crate::domain::MAX_PROFILE_EXCEPTIONS,
                 existing_profile: None,
                 generated_profile: None,
             },
-        );
-
-        let mut world = make_test_world(store);
+        ));
         world.spawn(ToolConfirmationResponseMessage {
             request_id,
             selected_option: "reject_with_feedback".to_string(),

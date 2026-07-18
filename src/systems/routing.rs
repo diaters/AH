@@ -4,9 +4,10 @@ use tracing::debug;
 use crate::{
     app::Clock,
     domain::{
-        ContinueTaskMessage, CreateTaskMessage, EntryMetadata, EntryRole, ShortTermMemory,
-        SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage,
-        UserCommand, UserInputMessage, WaitingReason,
+        ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
+        EntryMetadata, EntryRole, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
+        TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, UserCommand,
+        UserInputMessage, WaitingReason,
     },
 };
 
@@ -128,16 +129,19 @@ pub(crate) fn continue_task_system(
     mut commands: Commands,
     clock: Res<Clock>,
     continue_messages: Query<(Entity, &ContinueTaskMessage)>,
-    mut tasks: Query<(&mut Task, Option<&mut ShortTermMemory>)>,
+    mut tasks: Query<(Entity, &mut Task, Option<&mut ShortTermMemory>)>,
 ) {
     for (entity, msg) in &continue_messages {
         // 更新任务状态和追加用户输入到 ShortTermMemory
-        if let Some((mut task, short_term)) = tasks.iter_mut().find(|(t, _)| t.id == msg.task_id) {
+        if let Some((task_entity, mut task, short_term)) =
+            tasks.iter_mut().find(|(_, t, _)| t.id == msg.task_id)
+        {
             let stm_entries_before = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
             let stm_tokens_before = short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
 
             let old_status = task.status.clone();
             let prev_content = task.content.clone();
+            let prev_delegate = task.delegate;
             task.status = TaskStatus::Ready;
             task.content = msg.user_input.clone();
             task.updated_at = clock.0;
@@ -156,6 +160,7 @@ pub(crate) fn continue_task_system(
                     new_content = %task.content,
                     old_status = ?old_status,
                     new_status = ?task.status,
+                    prev_delegate = ?prev_delegate,
                     stm_entries_before = stm_entries_before,
                     stm_entries_after = stm_entries_after,
                     stm_tokens_before = stm_tokens_before,
@@ -171,10 +176,26 @@ pub(crate) fn continue_task_system(
                     new_content = %task.content,
                     old_status = ?old_status,
                     new_status = ?task.status,
+                    prev_delegate = ?prev_delegate,
                     has_stm = false,
                     "task continued (no STM attached)"
                 );
             }
+
+            // 清除 delegate 并附加 PendingDispatch(BrainLlm)，使统一 dispatch_system 接续派发
+            // （TopLevelTask 多轮对话续轮：与 user_message_to_task_system 新任务路径一致）
+            // delegate 在第一轮由 BrainLlm 派发设置为 brain_agent_id；保留它会让
+            // dispatch_system BrainLlm 分支误判"已有 delegate"而跳过。续轮应重新走 Brain 决策。
+            task.delegate = None;
+            commands.entity(task_entity).insert(PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::BrainLlm,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            });
         }
 
         commands.entity(entity).despawn();

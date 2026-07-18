@@ -2,8 +2,9 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
-    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
-    ExperienceConsolidationRequestMessage, ExperienceKindHint, ExperienceStore, WorkItem,
+    DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidate, ExperienceCandidatePayload,
+    ExperienceCandidateStatus, ExperienceConsolidationRequestMessage, ExperienceKindHint,
+    ExperienceStore, PendingDispatch, WorkItem, WorkItemType,
 };
 
 /// 经验合并触发系统：当非顶层汇聚完成且候选数 > 1 时，创建合并 WorkItem。
@@ -59,7 +60,18 @@ pub(crate) fn experience_consolidation_trigger_system(
             request.governing_agent_id,
         );
 
-        commands.spawn(work_item);
+        commands.spawn((
+            work_item,
+            PendingDispatch {
+                kind: DispatchKind::WorkItem(WorkItemType::ExperienceCollection),
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            },
+        ));
         commands.entity(entity).despawn();
     }
 }

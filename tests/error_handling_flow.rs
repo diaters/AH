@@ -7,9 +7,10 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutionError, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
+    DispatchStrategy, ExecutionError, ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig,
+    LongTermMemory, PendingDispatch, Task, TaskRoutingPolicy, TaskStatus, WaitingReason,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -72,6 +73,20 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
     ));
 }
 
+/// 构造测试用 PendingDispatch(DirectDelegate) Component，
+/// 指向 `spawn_default_agent` 创建的 `default-llm-agent`。
+fn pending_dispatch_to_default_agent() -> PendingDispatch {
+    PendingDispatch {
+        kind: DispatchKind::Task,
+        hint: DispatchHint {
+            strategy: DispatchStrategy::DirectDelegate,
+            preferred_agent_name: Some("default-llm-agent".to_string()),
+            required_skill_id: None,
+            agent_spawn_spec: None,
+        },
+    }
+}
+
 /// Test: Task enters RetryBackoff on retryable errors
 #[test]
 fn task_enters_retry_backoff_on_rate_limit_error() {
@@ -111,6 +126,7 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
         .spawn((
             Task::from_user_input_ready("test retry", 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ))
         .id();
 
@@ -176,6 +192,7 @@ fn non_retryable_error_causes_immediate_failure() {
         .spawn((
             Task::from_user_input_ready("test non-retryable", 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ))
         .id();
 
@@ -268,18 +285,31 @@ fn empty_user_input_creates_task() {
 fn large_input_is_handled() {
     let runtime = Arc::new(Runtime::new().unwrap());
 
+    // EchoExecutor 区分 BrainDecision（返回 JSON 决策）与其他请求（返回文本）。
+    // TopLevelTask 经 user_message_to_task_system 创建时会附加 PendingDispatch(BrainLlm)，
+    // 需要走 BrainLlm 派发路径，故需启用 brain 并 spawn brain agent。
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            Box::pin(async move {
-                Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text(format!(
-                        "processed {} chars",
-                        request.prompt.len()
-                    )),
-                    reasoning_content: None,
-                })
-            })
+            match request.request_kind {
+                harness::AgentRequestKind::BrainDecision => Box::pin(async move {
+                    Ok(AgentExecutionOutput {
+                        content: harness::OutputContent::Text(
+                            r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
+                        ),
+                        reasoning_content: None,
+                    })
+                }),
+                _ => Box::pin(async move {
+                    Ok(AgentExecutionOutput {
+                        content: harness::OutputContent::Text(format!(
+                            "processed {} chars",
+                            request.prompt.len()
+                        )),
+                        reasoning_content: None,
+                    })
+                }),
+            }
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -287,7 +317,10 @@ fn large_input_is_handled() {
 
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
-        test_config(),
+        HarnessConfig {
+            brain: Some(harness::BrainConfig { enabled: true }),
+            ..test_config()
+        },
         runtime,
         executor_registry,
         input_rx,
@@ -298,6 +331,26 @@ fn large_input_is_handled() {
     // Initialize
     app.update();
     spawn_default_agent(&mut app);
+    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
+    app.world_mut().spawn((
+        Agent {
+            id: Uuid::new_v4(),
+            profile: AgentProfile {
+                name: "brain".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["brain".to_string()],
+                description: "Brain Agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        },
+        LongTermMemory::default(),
+    ));
 
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);
@@ -375,6 +428,7 @@ fn multiple_concurrent_tasks_are_handled() {
         app.world_mut().spawn((
             Task::from_user_input_ready(format!("task {}", i), 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ));
     }
 
@@ -524,6 +578,7 @@ fn task_failure_sets_error_message() {
         .spawn((
             Task::from_user_input_ready("test failure", 3, default_channel()),
             harness::ShortTermMemory::default(),
+            pending_dispatch_to_default_agent(),
         ))
         .id();
 

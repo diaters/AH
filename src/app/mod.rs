@@ -290,8 +290,12 @@ pub fn build_harness_app(
     app.insert_resource(SharedKnowledgeBase::default());
     app.insert_resource(PendingKnowledgeWriteHooks::default());
 
-    // Skill 加载器
-    app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
+    // Skill 加载器与注册表：由 brain_dispatch / experience_governance 等 system 通过 Res 读取。
+    // build_registry 扫描 .harness/assets/agents/<owner>/skills/<name>/SKILL.md 构造 SkillRegistry。
+    let skill_loader = crate::infrastructure::skills::SkillLoader::default_path();
+    let skill_registry = skill_loader.build_registry();
+    app.insert_resource(skill_loader);
+    app.insert_resource(skill_registry);
 
     // Signal 触发路由（默认空，由 main.rs 根据 triggers.toml 配置覆盖）
     app.insert_resource(crate::domain::SignalTriggerRegistry::default());

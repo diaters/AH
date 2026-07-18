@@ -22,8 +22,8 @@ pub(crate) use command::{
     command_parse_system, reload_plugins_system, reload_triggers_message_consumer_system,
 };
 pub(crate) use dispatch::{
-    agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system,
-    on_message_dispatched_hook_system, task_dispatch_system, workitem_dispatch_system,
+    agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system, dispatch_system,
+    on_message_dispatched_hook_system, subtask_dispatch_preparation_system,
     workitem_lifecycle_hook_system,
 };
 pub(crate) use evaluation::evaluation_trigger_system;
@@ -33,8 +33,8 @@ pub(crate) use experience::{
     experience_collection_workitem_system, experience_consolidation_trigger_system,
     experience_governance_system, experience_writeback_system, on_experience_hook_system,
     profile_generation_completion_system, profile_generation_workitem_system,
-    profile_update_trigger_system, profile_update_writeback_system,
-    task_terminated_experience_trigger_system,
+    profile_update_trigger_system, profile_update_writeback_system, skill_update_completion_system,
+    skill_update_workitem_system, task_terminated_experience_trigger_system,
 };
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;

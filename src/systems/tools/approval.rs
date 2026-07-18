@@ -10,9 +10,10 @@ use crate::{
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, ExecutionError, ExperienceStore,
-        GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,
-        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
+        GrantMode, PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase,
+        ShortTermMemory, Task, TaskStatus, ToolCallingState, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+        WaitingReason, WorkItem,
     },
     systems::NativeProcessBackend,
 };
@@ -104,6 +105,7 @@ pub fn approval_result_system(
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<&ToolCallingState>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
     clock: Res<Clock>,
@@ -262,6 +264,7 @@ pub fn approval_result_system(
                         &mut pending_experience_hooks,
                         None,
                         &clock,
+                        &profile_contexts,
                     );
                 }
 

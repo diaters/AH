@@ -1,7 +1,10 @@
 use crate::prelude::*;
 use tracing::{debug, info};
 
-use crate::domain::{Agent, ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem};
+use crate::domain::{
+    Agent, DispatchHint, DispatchKind, DispatchStrategy, PendingDispatch, ShortTermMemory, Task,
+    TaskStatus, WaitingReason, WorkItem, WorkItemType,
+};
 
 /// 评估器触发系统：检测评估条件并生成 WorkItem
 pub(crate) fn evaluation_trigger_system(
@@ -65,7 +68,18 @@ pub(crate) fn evaluation_trigger_system(
                             turn_count, max_turns
                         )),
                     );
-                    commands.spawn(work_item);
+                    commands.spawn((
+                        work_item,
+                        PendingDispatch {
+                            kind: DispatchKind::WorkItem(WorkItemType::Evaluation),
+                            hint: DispatchHint {
+                                strategy: DispatchStrategy::DirectDelegate,
+                                preferred_agent_name: None,
+                                required_skill_id: None,
+                                agent_spawn_spec: None,
+                            },
+                        },
+                    ));
 
                     // 记录本次评估对应的轮数
                     task.record_evaluation_at_turn(turn_count);

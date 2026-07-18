@@ -228,6 +228,18 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
         system_prompt: None,
     });
 
+    // 任务 18 改造后 experience_collection_completion_system 需要 Task 实体来判定
+    // delegate_is_persistent 并路由到 route_persistent_agent_experience；
+    // 此处显式 spawn 一个 delegate 指向 persistent agent 的 Task。
+    let now = chrono::Utc::now();
+    let mut task = Task::from_user_input("governance target".to_string(), 3, default_channel());
+    task.id = task_id;
+    task.delegate = Some(governing_agent_id);
+    task.status = TaskStatus::Done;
+    task.created_at = now;
+    task.updated_at = now;
+    app.world_mut().spawn(task);
+
     let candidate = harness::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
@@ -251,7 +263,8 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     app.update();
 
     // 验证候选的 governing_agent_id 被设置为原任务治理者，而非 collector。
-    // experience_governance_system 会在治理阶段将 request.agent_id 写入 governing_agent_id。
+    // route_persistent_agent_experience 在入口对保留候选统一写入 governing_agent_id
+    // （与 governance system 的行为对齐）。
     let store = app.world().resource::<harness::ExperienceStore>();
     let candidate = store.candidates.get(&candidate_id).unwrap();
     assert_eq!(

@@ -12,6 +12,7 @@
 | `plans/2026-07-05-per-user-turn-tool-limit.md` | 单轮工具调用软限制实施 | 活跃 |
 | `plans/2026-07-07-dynamic-scheduled-task-approval-routing.md` | 动态 scheduled task 审批路由与事件任务审批通道检查实施 | 活跃 |
 | `plans/2026-07-08-im-channel-task-identification.md` | IM 通道任务标识实施 | 活跃 |
+| `plans/2026-07-18-skill-first-class-and-experience-governance.md` | Skill 一等公民与经验治理改造实施 | 活跃 |
 
 ### 活跃规格
 

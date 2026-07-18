@@ -1,77 +1,42 @@
 //! Profile 生成系统
 //!
 //! 处理 ProfileGenerationRequestMessage：
-//! - 创建 profile 生成 WorkItem 并分配给 profile-designer Agent
+//! - 创建 profile 生成 WorkItem + 附加 ProfileGenerationContext + PendingDispatch，
+//!   由统一 dispatch_system 查找 profile-designer Agent 并派发执行请求
 //! - LLM 完成后消费 ProfileGenerationCompletedMessage，创建 proposal 并发起审批
 //!
 //! 参考模式：
 //! - collection.rs 的 experience_collection_workitem_system
-//! - governance.rs 的 spawn_experience_confirmation
+//! - skill_update.rs 的 skill_update_workitem_system
 
 use crate::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::domain::{
-    Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentProfile, AgentRequestKind,
-    ConfirmationOption, ConfirmationSource, ExperienceCandidatePayload, ExperienceStore,
-    MessageDispatchedHookPending, PendingExperienceHooks, ProfileGenerationCompletedMessage,
+    Agent, AgentExecutionRequest, AgentProfile, AgentRequestKind, ConfirmationOption,
+    ConfirmationSource, DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidatePayload,
+    ExperienceStore, PendingDispatch, PendingExperienceHooks, ProfileGenerationCompletedMessage,
     ProfileGenerationContext, ProfileGenerationKind, ProfileGenerationRequestMessage,
     SpaceToolRegistry, TaskId, ToolCalledHookPending, ToolConfirmationRequestMessage,
-    ToolExecutionRequestMessage, WorkItem, WorkItemLifecycleHookPending,
+    ToolExecutionRequestMessage, WorkItem, WorkItemType,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
-/// profile 生成 WorkItem 创建系统：将生成请求转换为独立 WorkItem 分配给 profile-designer。
+/// profile 生成 WorkItem 创建系统：将生成请求转换为 WorkItem + ProfileGenerationContext Component
+/// + PendingDispatch，由统一 dispatch_system 查找 profile-designer Agent 并派发执行请求。
 #[allow(dead_code)] // 任务 11 系统注册时启用
 pub(crate) fn profile_generation_workitem_system(
     mut commands: Commands,
     requests: Query<(Entity, &ProfileGenerationRequestMessage)>,
-    agents: Query<&Agent>,
-    mut store: ResMut<ExperienceStore>,
-    mut pending_hooks: ResMut<PendingExperienceHooks>,
+    store: Res<ExperienceStore>,
     registry: Res<SpaceToolRegistry>,
+    agents: Query<&Agent>,
 ) {
     for (entity, request) in &requests {
-        // 1. 查找 profile-designer Agent（按 tags 匹配 "profile"）
-        let profile_designer = agents
-            .iter()
-            .find(|a| a.capabilities.tags.iter().any(|t| t == "profile"));
-
-        let profile_designer_id = match profile_designer {
-            Some(a) => a.id,
-            None => {
-                warn!(
-                    event = "ProfileDesignerNotFound",
-                    task_id = %request.task_id,
-                    "profile-designer agent not found, failing profile generation"
-                );
-                handle_profile_designer_missing(
-                    &mut commands,
-                    &mut store,
-                    &mut pending_hooks,
-                    request,
-                );
-                commands.entity(entity).despawn();
-                continue;
-            }
-        };
-
-        // 2. 暂存 kind/exception_count/existing_profile 到 ExperienceStore，
-        //    供 orchestrator/completion/approval 读取
-        store.profile_generation_context.insert(
-            request.task_id,
-            ProfileGenerationContext {
-                kind: request.kind.clone(),
-                exception_count: request.exception_count,
-                existing_profile: request.existing_profile.clone(),
-                generated_profile: None,
-            },
-        );
-
-        // 3. 构建 prompt
+        // 1. 构建 prompt
         let prompt = build_profile_generation_prompt(request, &store, &agents);
 
-        // 4. 收集工具定义（仅 submit_profile_update 和 skip_profile_update）
+        // 2. 收集工具定义（仅 submit_profile_update 和 skip_profile_update）
         let tools: Vec<crate::domain::ToolDefinition> = registry
             .iter()
             .filter(|tool| {
@@ -80,12 +45,12 @@ pub(crate) fn profile_generation_workitem_system(
             .cloned()
             .collect();
 
-        // 5. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
+        // 3. 构建 conversation（无历史对话，仅作为 WorkItem 上下文占位）
         let conversation = Vec::new();
 
-        // 6. 创建 WorkItem 并分配给 profile-designer，直接启动并派发执行请求
-        //    （workitem_dispatch_system 不处理 ProfileGeneration 类型，故在此直接调度）
-        let mut work_item = WorkItem::profile_generation(
+        // 4. 创建 WorkItem，并附加 ProfileGenerationContext Component + PendingDispatch，
+        //    由 dispatch_system 通过 required_tag() = "profile" 查找 Agent 并派发执行请求
+        let work_item = WorkItem::profile_generation(
             request.task_id,
             prompt,
             conversation,
@@ -93,18 +58,6 @@ pub(crate) fn profile_generation_workitem_system(
             request.agent_id,
             request.kind.clone(),
         );
-        // 若 Agent 配置了 system_prompt（来自 agents.toml），覆盖 WorkItem 的默认 system_prompt
-        if let Some(agent_system_prompt) = profile_designer.and_then(|a| a.system_prompt.as_ref()) {
-            work_item.input.context.system_prompt = Some(agent_system_prompt.clone());
-        }
-        work_item.assign(profile_designer_id);
-        work_item.start();
-
-        let work_item_id = work_item.id;
-        let exec_prompt = work_item.input.prompt.clone();
-        let exec_system_prompt = work_item.input.context.system_prompt.clone();
-        let exec_tools = work_item.input.context.tools.clone();
-        let exec_conversation = work_item.input.context.conversation.clone();
 
         debug!(
             event = "ProfileGenerationWorkItemCreated",
@@ -118,23 +71,21 @@ pub(crate) fn profile_generation_workitem_system(
 
         commands.spawn((
             work_item,
-            WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted),
-        ));
-        commands.spawn((
-            AgentExecutionRequestMessage {
-                request: AgentExecutionRequest {
-                    task_id: request.task_id,
-                    agent_id: profile_designer_id,
-                    request_kind: AgentRequestKind::LlmCompletion,
-                    prompt: exec_prompt,
-                    system_prompt: exec_system_prompt,
-                    tools: exec_tools,
-                    conversation: exec_conversation,
-                    work_item_id: Some(work_item_id),
-                    model_override: None,
+            ProfileGenerationContext {
+                kind: request.kind.clone(),
+                exception_count: request.exception_count,
+                existing_profile: request.existing_profile.clone(),
+                generated_profile: None,
+            },
+            PendingDispatch {
+                kind: DispatchKind::WorkItem(WorkItemType::ProfileGeneration),
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
                 },
             },
-            MessageDispatchedHookPending,
         ));
         commands.entity(entity).despawn();
     }
@@ -237,47 +188,31 @@ fn build_profile_generation_prompt(
     prompt
 }
 
-/// 处理 profile-designer Agent 不存在的情况。
-///
-/// 两个场景均走失败路径：
-/// - 孵化场景：候选标记 ProfileGenerationFailed，通知用户配置 profile-designer Agent。
-/// - 更新场景：静默跳过（保持现有 profile 不变），日志记录。
-fn handle_profile_designer_missing(
-    commands: &mut Commands,
-    store: &mut ExperienceStore,
-    pending_hooks: &mut PendingExperienceHooks,
-    request: &ProfileGenerationRequestMessage,
-) {
-    handle_profile_generation_failure(
-        commands,
-        store,
-        pending_hooks,
-        request.task_id,
-        request.kind.clone(),
-        "profile-designer Agent 未配置，请在 agents.toml 中添加 profile-designer Agent",
-    );
-}
-
 /// 处理 profile 生成失败。
 ///
 /// 孵化场景：
 /// - 候选状态 → ProfileGenerationFailed
-/// - 清理 profile_generation_context
+/// - 清理 ProfileGenerationContext Component（通过 despawn 或 remove Component）
 /// - 防御性删除 proposals（reject_with_feedback 后重试失败时可能存在）
 /// - 派发 OnAgentProfileGenerationFailed hook
 /// - spawn SystemOutputMessage 通知用户
 ///
 /// 更新场景：
 /// - 候选保持原状态（Persisted），不改状态
-/// - 清理 profile_generation_context
+/// - 清理 ProfileGenerationContext Component
 /// - 日志记录（不通知 TUI，更新失败用户感知弱）
-fn handle_profile_generation_failure(
+///
+/// `work_item_entity`：对应的 WorkItem Entity，用于清理 ProfileGenerationContext Component。
+///   若 WorkItem 已被 despawn（例如 LLM 异常路径中 WorkItem 已被 llm_response_system despawn），
+///   传入 None 时跳过 Component 清理（此时 Component 已随 Entity 一起消失）。
+pub(crate) fn handle_profile_generation_failure(
     commands: &mut Commands,
     store: &mut ExperienceStore,
     pending_hooks: &mut PendingExperienceHooks,
     task_id: TaskId,
     kind: ProfileGenerationKind,
     reason: &str,
+    work_item_entity: Option<Entity>,
 ) {
     match kind {
         ProfileGenerationKind::Incubation => {
@@ -326,8 +261,10 @@ fn handle_profile_generation_failure(
         }
     }
 
-    // 清理 context
-    store.profile_generation_context.remove(&task_id);
+    // 清理 ProfileGenerationContext Component
+    if let Some(entity) = work_item_entity {
+        commands.entity(entity).remove::<ProfileGenerationContext>();
+    }
 }
 
 /// profile 生成完成处理系统：消费完成消息，创建 proposal 并发起审批。
@@ -338,11 +275,20 @@ pub(crate) fn profile_generation_completion_system(
     mut pending_hooks: ResMut<PendingExperienceHooks>,
     agents: Query<&Agent>,
     messages: Query<(Entity, &ProfileGenerationCompletedMessage)>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {
     for (entity, msg) in &messages {
-        // 从 store 读取暂存的 context（kind, exception_count, existing_profile）
-        // 注意：不 remove，因为审批阶段（reject_with_feedback）仍需读取此上下文
-        let ctx = store.profile_generation_context.get(&msg.task_id).cloned();
+        // 通过 WorkItem Entity 查找 ProfileGenerationContext Component（与 WorkItem 同 entity）
+        // 注意：不 remove Component，因为审批阶段（reject_with_feedback）仍需读取此上下文
+        let ctx_match = profile_contexts
+            .iter()
+            .find(|(_, _, wi)| wi.task_id == msg.task_id)
+            .map(|(e, ctx, _)| (e, ctx.clone()));
+
+        let (work_item_entity, ctx) = match ctx_match {
+            Some((e, ctx)) => (Some(e), Some(ctx)),
+            None => (None, None),
+        };
 
         match msg.kind {
             ProfileGenerationKind::Incubation => {
@@ -353,6 +299,7 @@ pub(crate) fn profile_generation_completion_system(
                     &agents,
                     msg,
                     ctx.as_ref(),
+                    work_item_entity,
                 );
             }
             ProfileGenerationKind::Update => {
@@ -362,6 +309,7 @@ pub(crate) fn profile_generation_completion_system(
                     &mut pending_hooks,
                     msg,
                     ctx.as_ref(),
+                    work_item_entity,
                 );
             }
         }
@@ -384,6 +332,7 @@ fn handle_incubation_profile_completed(
     agents: &Query<&Agent>,
     msg: &ProfileGenerationCompletedMessage,
     ctx: Option<&ProfileGenerationContext>,
+    work_item_entity: Option<Entity>,
 ) {
     use crate::domain::MAX_PROFILE_EXCEPTIONS;
 
@@ -403,6 +352,7 @@ fn handle_incubation_profile_completed(
                 task_id,
                 ProfileGenerationKind::Incubation,
                 "LLM 连续异常达到上限",
+                work_item_entity,
             );
         } else {
             // skip 场景：孵化场景不应出现 skip，但防御性处理
@@ -411,7 +361,9 @@ fn handle_incubation_profile_completed(
                 task_id = %task_id,
                 "incubation completed without profile (skip in incubation scenario)"
             );
-            store.profile_generation_context.remove(&task_id);
+            if let Some(entity) = work_item_entity {
+                commands.entity(entity).remove::<ProfileGenerationContext>();
+            }
         }
         return;
     };
@@ -446,9 +398,14 @@ fn handle_incubation_profile_completed(
         store.merge_into_proposal(task_id, agent_id, agent_profile, &candidate);
     }
 
-    // 将 LLM 生成的 profile 存入 context，供 writeback_incubation_proposal 读取
-    if let Some(context) = store.profile_generation_context.get_mut(&task_id) {
-        context.generated_profile = Some(generated.clone());
+    // 将 LLM 生成的 profile 写入 ProfileGenerationContext Component，
+    // 供 writeback_incubation_proposal 通过 Query 读取。
+    if let Some(entity) = work_item_entity
+        && let Some(ctx) = ctx
+    {
+        let mut new_ctx = ctx.clone();
+        new_ctx.generated_profile = Some(generated.clone());
+        commands.entity(entity).insert(new_ctx);
     }
 
     // 4. 发起审批（选项包含 Approve、Reject、Reject & Feedback）
@@ -488,15 +445,21 @@ fn handle_update_profile_completed(
     pending_hooks: &mut PendingExperienceHooks,
     msg: &ProfileGenerationCompletedMessage,
     ctx: Option<&ProfileGenerationContext>,
+    work_item_entity: Option<Entity>,
 ) {
     use crate::domain::MAX_PROFILE_EXCEPTIONS;
 
     let exception_count = ctx.map(|c| c.exception_count).unwrap_or(0);
 
     if let Some(generated) = &msg.generated_profile {
-        // 将 LLM 生成的 profile 存入 context，供 profile_update_writeback_system 读取
-        if let Some(context) = store.profile_generation_context.get_mut(&msg.task_id) {
-            context.generated_profile = Some(generated.clone());
+        // 将 LLM 生成的 profile 写入 ProfileGenerationContext Component，
+        // 供 profile_update_writeback_system 通过 Query 读取。
+        if let Some(entity) = work_item_entity
+            && let Some(ctx) = ctx
+        {
+            let mut new_ctx = ctx.clone();
+            new_ctx.generated_profile = Some(generated.clone());
+            commands.entity(entity).insert(new_ctx);
         }
 
         info!(
@@ -537,6 +500,7 @@ fn handle_update_profile_completed(
                 msg.task_id,
                 ProfileGenerationKind::Update,
                 "LLM 连续异常达到上限",
+                work_item_entity,
             );
         } else {
             info!(
@@ -544,8 +508,10 @@ fn handle_update_profile_completed(
                 task_id = %msg.task_id,
                 "profile update skipped by LLM"
             );
-            // skip 时清理 context
-            store.profile_generation_context.remove(&msg.task_id);
+            // skip 时清理 Component
+            if let Some(entity) = work_item_entity {
+                commands.entity(entity).remove::<ProfileGenerationContext>();
+            }
         }
     }
 }
@@ -845,10 +811,12 @@ mod tests {
     }
 
     #[test]
-    fn handle_profile_designer_missing_incubation_fails() {
-        // 测试 handle_profile_designer_missing 的行为：
-        // 孵化场景 → 候选 ProfileGenerationFailed + 通知用户 + 清理 context
-        // （不直接调用函数以避免 Bevy borrow 冲突，改为内联验证行为）
+    fn handle_profile_generation_failure_incubation_fails() {
+        // 测试 handle_profile_generation_failure 在孵化场景的行为：
+        // - 候选状态 → ProfileGenerationFailed
+        // - spawn SystemOutputMessage 通知用户
+        // - 派发 OnAgentProfileGenerationFailed hook
+        // - 移除 WorkItem Entity 上的 ProfileGenerationContext Component
         let mut world = World::new();
         let task_id = uuid::Uuid::new_v4();
         let agent_id = uuid::Uuid::new_v4();
@@ -873,29 +841,46 @@ mod tests {
         world.insert_resource(store);
         world.insert_resource(PendingExperienceHooks::default());
 
-        // 内联执行 handle_profile_generation_failure 的逻辑
-        {
-            let mut store = world.resource_mut::<ExperienceStore>();
-            for c in store.candidates.values_mut() {
-                if c.producer_task_id == task_id {
-                    c.status = ExperienceCandidateStatus::ProfileGenerationFailed;
-                }
-            }
-            store.proposals.remove(&task_id);
-            store.profile_generation_context.remove(&task_id);
-        }
-        world.spawn(crate::domain::SystemOutputMessage {
+        // spawn WorkItem + ProfileGenerationContext Entity，模拟 profile_generation_workitem_system 的产出
+        let work_item = WorkItem::profile_generation(
             task_id,
-            content: "孵化失败：profile-designer Agent 未配置".to_string(),
-        });
-        {
-            let mut hooks = world.resource_mut::<PendingExperienceHooks>();
-            hooks
-                .0
-                .push((HookPoint::OnAgentProfileGenerationFailed, task_id));
-        }
+            "prompt".to_string(),
+            Vec::new(),
+            Vec::new(),
+            agent_id,
+            ProfileGenerationKind::Incubation,
+        );
+        let work_item_entity = world
+            .spawn((
+                work_item,
+                ProfileGenerationContext {
+                    kind: ProfileGenerationKind::Incubation,
+                    exception_count: 0,
+                    existing_profile: None,
+                    generated_profile: None,
+                },
+            ))
+            .id();
 
-        // 验证：不 spawn ProfileGenerationCompletedMessage（不再回退）
+        // 调用 handle_profile_generation_failure
+        // 使用 resource_scope 避免 world 同时被多次可变借用
+        world.resource_scope(|world, mut store: Mut<ExperienceStore>| {
+            world.resource_scope(|world, mut pending_hooks: Mut<PendingExperienceHooks>| {
+                let mut commands = world.commands();
+                handle_profile_generation_failure(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    task_id,
+                    ProfileGenerationKind::Incubation,
+                    "profile-designer Agent 未配置",
+                    Some(work_item_entity),
+                );
+            });
+        });
+        world.flush();
+
+        // 验证：不 spawn ProfileGenerationCompletedMessage
         let completion_count = world
             .query::<&ProfileGenerationCompletedMessage>()
             .iter(&world)
@@ -917,10 +902,14 @@ mod tests {
             "candidate should be ProfileGenerationFailed"
         );
 
-        // 验证：context 已清理
+        // 验证：ProfileGenerationContext Component 已被移除（Entity 仍存在）
+        let has_context = world
+            .query::<&ProfileGenerationContext>()
+            .iter(&world)
+            .any(|c| c.kind == ProfileGenerationKind::Incubation);
         assert!(
-            !store.profile_generation_context.contains_key(&task_id),
-            "context should be cleaned up"
+            !has_context,
+            "ProfileGenerationContext Component should be removed from WorkItem Entity"
         );
 
         // 验证：hook 已派发
@@ -934,29 +923,57 @@ mod tests {
     }
 
     #[test]
-    fn handle_profile_designer_missing_update_skips_silently() {
-        // 测试 handle_profile_designer_missing 的行为：
-        // 更新场景 → 静默跳过 + 清理 context（不 spawn 任何消息，不改候选状态）
+    fn handle_profile_generation_failure_update_skips_silently() {
+        // 测试 handle_profile_generation_failure 在更新场景的行为：
+        // - 不 spawn 任何消息
+        // - 不改候选状态
+        // - 移除 WorkItem Entity 上的 ProfileGenerationContext Component
         let mut world = World::new();
         let task_id = uuid::Uuid::new_v4();
+        let agent_id = uuid::Uuid::new_v4();
 
-        let mut store = ExperienceStore::default();
-        store.profile_generation_context.insert(
-            task_id,
-            ProfileGenerationContext {
-                kind: ProfileGenerationKind::Update,
-                exception_count: 0,
-                existing_profile: None,
-                generated_profile: None,
-            },
-        );
+        let store = ExperienceStore::default();
         world.insert_resource(store);
+        world.insert_resource(PendingExperienceHooks::default());
 
-        // 内联执行 handle_profile_generation_failure 的逻辑（Update 分支）
-        {
-            let mut store = world.resource_mut::<ExperienceStore>();
-            store.profile_generation_context.remove(&task_id);
-        }
+        // spawn WorkItem + ProfileGenerationContext Entity，模拟 profile_generation_workitem_system 的产出
+        let work_item = WorkItem::profile_generation(
+            task_id,
+            "prompt".to_string(),
+            Vec::new(),
+            Vec::new(),
+            agent_id,
+            ProfileGenerationKind::Update,
+        );
+        let work_item_entity = world
+            .spawn((
+                work_item,
+                ProfileGenerationContext {
+                    kind: ProfileGenerationKind::Update,
+                    exception_count: 0,
+                    existing_profile: None,
+                    generated_profile: None,
+                },
+            ))
+            .id();
+
+        // 调用 handle_profile_generation_failure（Update 分支）
+        // 使用 resource_scope 避免 world 同时被多次可变借用
+        world.resource_scope(|world, mut store: Mut<ExperienceStore>| {
+            world.resource_scope(|world, mut pending_hooks: Mut<PendingExperienceHooks>| {
+                let mut commands = world.commands();
+                handle_profile_generation_failure(
+                    &mut commands,
+                    &mut store,
+                    &mut pending_hooks,
+                    task_id,
+                    ProfileGenerationKind::Update,
+                    "LLM 连续异常达到上限",
+                    Some(work_item_entity),
+                );
+            });
+        });
+        world.flush();
 
         // 验证：不 spawn 任何消息
         let completion_count = world
@@ -977,11 +994,14 @@ mod tests {
             "update scenario should not spawn notification"
         );
 
-        // 验证：context 已清理
-        let store = world.resource::<ExperienceStore>();
+        // 验证：ProfileGenerationContext Component 已被移除
+        let has_context = world
+            .query::<&ProfileGenerationContext>()
+            .iter(&world)
+            .any(|c| c.kind == ProfileGenerationKind::Update);
         assert!(
-            !store.profile_generation_context.contains_key(&task_id),
-            "context should be cleaned up"
+            !has_context,
+            "ProfileGenerationContext Component should be removed from WorkItem Entity"
         );
     }
 

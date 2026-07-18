@@ -11,13 +11,14 @@ use crate::app::Clock;
 use crate::contracts::SessionBackend;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, BatchTaskState,
-    ChannelId, ChatRoundStartedMessage, ChatSession, EntryRole, ExperienceCandidate,
-    ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
-    FrontendKind, OutputContent, PendingExperienceHooks, SessionSummary, ShellExecResult,
+    ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind, DispatchStrategy,
+    EntryRole, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
+    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingDispatch,
+    PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellExecResult,
     ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
     SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
     ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-    WaitingForTasksInfo, WaitingReason,
+    WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
@@ -357,6 +358,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
     clock: &Clock,
+    profile_contexts: &Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -732,9 +734,20 @@ pub fn handle_tool_action<B: SessionBackend>(
                     .map(|s| s.child_agent_name.clone())
                     .unwrap_or_default();
                 commands.entity(child_entity).insert(ChatSession {
-                    child_agent_name,
+                    child_agent_name: child_agent_name.clone(),
                     parent_tool_call_id: parent_tool_call_id.clone(),
                     current_batch_id: new_batch_id,
+                });
+
+                // 附加 PendingDispatch，由 dispatch_system 处理 DirectDelegate 派发
+                commands.entity(child_entity).insert(PendingDispatch {
+                    kind: DispatchKind::Task,
+                    hint: DispatchHint {
+                        strategy: DispatchStrategy::DirectDelegate,
+                        preferred_agent_name: Some(child_agent_name),
+                        required_skill_id: None,
+                        agent_spawn_spec: None,
+                    },
                 });
 
                 // 唤醒子任务
@@ -813,6 +826,15 @@ pub fn handle_tool_action<B: SessionBackend>(
                         child_agent_name: agent.profile.name.clone(),
                         parent_tool_call_id: parent_tool_call_id.clone(),
                         current_batch_id: batch_id,
+                    },
+                    PendingDispatch {
+                        kind: DispatchKind::Task,
+                        hint: DispatchHint {
+                            strategy: DispatchStrategy::DirectDelegate,
+                            preferred_agent_name: Some(agent.profile.name.clone()),
+                            required_skill_id: None,
+                            agent_spawn_spec: None,
+                        },
                     },
                 ));
 
@@ -893,16 +915,19 @@ pub fn handle_tool_action<B: SessionBackend>(
             tags,
             description,
         }) => {
-            // 从 ExperienceStore 读取 kind 并重置 exception_count（LLM 成功调用工具，异常计数归 0）
-            let kind = if let Some(ctx) = experience_store
-                .profile_generation_context
-                .get_mut(&request.request.task_id)
+            // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
+            // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
+            let mut resolved_kind = crate::domain::ProfileGenerationKind::Incubation;
+            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+                .iter()
+                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
             {
-                ctx.exception_count = 0;
-                ctx.kind.clone()
-            } else {
-                crate::domain::ProfileGenerationKind::Incubation
-            };
+                resolved_kind = ctx.kind.clone();
+                // 重置 exception_count：clone + modify + insert（不可变 Query + Commands 写回）
+                let mut new_ctx = ctx.clone();
+                new_ctx.exception_count = 0;
+                commands.entity(wi_entity).insert(new_ctx);
+            }
 
             // spawn ProfileGenerationCompletedMessage 供 profile_generation_completion_system 消费
             commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
@@ -913,7 +938,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     tags: tags.clone(),
                     description: description.clone(),
                 }),
-                kind: kind.clone(),
+                kind: resolved_kind.clone(),
             });
 
             // 返回工具执行结果给 LLM
@@ -955,30 +980,32 @@ pub fn handle_tool_action<B: SessionBackend>(
                 event = "ProfileUpdateSubmitted",
                 task_id = %request.request.task_id,
                 agent_id = %request.request.agent_id,
-                kind = ?kind,
+                kind = ?resolved_kind,
                 "profile update submitted by LLM"
             );
 
             commands.entity(request_entity).despawn();
         }
         Ok(ToolAction::SkipProfileUpdate) => {
-            // 从 ExperienceStore 读取 kind 并重置 exception_count（LLM 成功调用工具，异常计数归 0）
-            let kind = if let Some(ctx) = experience_store
-                .profile_generation_context
-                .get_mut(&request.request.task_id)
+            // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
+            // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
+            let mut resolved_kind = crate::domain::ProfileGenerationKind::Update;
+            if let Some((wi_entity, ctx, _wi)) = profile_contexts
+                .iter()
+                .find(|(_, _, wi)| wi.task_id == request.request.task_id)
             {
-                ctx.exception_count = 0;
-                ctx.kind.clone()
-            } else {
-                crate::domain::ProfileGenerationKind::Update
-            };
+                resolved_kind = ctx.kind.clone();
+                let mut new_ctx = ctx.clone();
+                new_ctx.exception_count = 0;
+                commands.entity(wi_entity).insert(new_ctx);
+            }
 
             // spawn ProfileGenerationCompletedMessage（None 表示 skip）
             commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,
                 generated_profile: None,
-                kind: kind.clone(),
+                kind: resolved_kind.clone(),
             });
 
             let output = serde_json::json!({"status": "skipped"});
@@ -1014,8 +1041,84 @@ pub fn handle_tool_action<B: SessionBackend>(
                 event = "ProfileUpdateSkipped",
                 task_id = %request.request.task_id,
                 agent_id = %request.request.agent_id,
-                kind = ?kind,
+                kind = ?resolved_kind,
                 "profile update skipped by LLM"
+            );
+
+            commands.entity(request_entity).despawn();
+        }
+        Ok(ToolAction::SubmitSkillUpdate {
+            skill_id,
+            base_version,
+            new_version,
+            operations,
+            rationale,
+        }) => {
+            // spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
+            // work_item_id 从 AgentExecutionRequest 透传，便于 completion_system 反查
+            // 同 entity 上的 SkillUpdateContext Component。
+            commands.spawn(crate::domain::SkillUpdateCompletedMessage {
+                work_item_id: request.request.work_item_id.unwrap_or(uuid::Uuid::nil()),
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                skill_id: skill_id.clone(),
+                base_version,
+                new_version,
+                operations: operations.clone(),
+                rationale: rationale.clone(),
+            });
+
+            // 返回工具执行结果给 LLM
+            let output = serde_json::json!({
+                "status": "submitted",
+                "skill_id": skill_id.as_string(),
+                "base_version": base_version,
+                "new_version": new_version,
+                "operations_count": operations.len(),
+                "rationale": rationale,
+            });
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!(
+                        "skill update submitted: {} (v{} -> v{})",
+                        skill_id.as_string(),
+                        base_version,
+                        new_version
+                    )),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "submit_skill_update".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            debug!(
+                event = "SkillUpdateSubmitted",
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                skill_id = %skill_id.as_string(),
+                base_version,
+                new_version,
+                operations_count = operations.len(),
+                "skill update submitted by LLM"
             );
 
             commands.entity(request_entity).despawn();

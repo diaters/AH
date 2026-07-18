@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{AgentId, TaskId};
+use crate::infrastructure::skills::SkillId;
 use crate::user_plugins::hook_point::HookPoint;
 
 /// 经验候选类型提示。
@@ -46,6 +47,8 @@ pub enum ExperienceCandidateStatus {
     ProfileGenerationPending,
     /// profile 生成失败：LLM 连续异常达到上限，或 profile-designer Agent 缺失。
     ProfileGenerationFailed,
+    /// 被 experience_kind_filter 过滤
+    Discarded,
 }
 
 /// 经验写回目标：治理决议后的唯一最终去向。
@@ -55,6 +58,8 @@ pub enum ExperienceWritebackDestination {
     SkillPackage,
     IncubationProposal,
     Rejected,
+    /// skill-updater 自我迭代：由任务 20 的 skill_update_workitem_system 处理。
+    SkillUpdate,
 }
 
 /// 经验治理决议：顶层治理对单个候选给出的最终判定。
@@ -220,23 +225,22 @@ pub struct ExperienceStore {
     pub proposals: std::collections::HashMap<TaskId, IncubationProposal>,
     /// 审批请求 ID 到候选 ID 的精确绑定。
     approval_bindings: std::collections::HashMap<uuid::Uuid, uuid::Uuid>,
-    /// profile 生成上下文：以 task_id 为 key 暂存 kind 与 retry_count，
-    /// 由 `profile_generation_workitem_system` 写入，
-    /// 由 orchestrator 的 SubmitProfileUpdate/SkipProfileUpdate 分支读取后清理。
-    pub profile_generation_context: std::collections::HashMap<TaskId, ProfileGenerationContext>,
     /// 已触发 profile 更新评估的候选 ID 集合，避免重复触发。
     pub profile_update_triggered: std::collections::HashSet<uuid::Uuid>,
 }
 
-/// profile 生成运行时上下文：在 ExperienceStore 中暂存，
-/// 用于在 orchestrator（工具执行）、completion_system（完成处理）与
-/// approval_system（拒绝并反馈重试）之间传递 kind/exception_count/existing_profile。
+/// profile 生成运行时上下文 Component：附加在 WorkItem Entity 上，
+/// 与 `SkillUpdateContext` 存储模型一致。
+///
+/// 由 `profile_generation_workitem_system` 在 spawn `WorkItemType::ProfileGeneration` workitem 时
+/// 一并注入到同一 entity，供 orchestrator（工具执行）、completion_system（完成处理）与
+/// approval_system（拒绝并反馈重试）通过 Query 读取。
 ///
 /// `exception_count` 语义：仅累计 LLM 异常（未调工具 / 互斥冲突 / Err / 调用非相关工具）。
 /// - LLM 成功调用 submit_profile_update 或 skip_profile_update 后，由 orchestrator 归 0。
 /// - reject_with_feedback 不占用计数（透传不变）。
 /// - 达到 `MAX_PROFILE_EXCEPTIONS` 后不再重试，走失败路径。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct ProfileGenerationContext {
     pub kind: ProfileGenerationKind,
     pub exception_count: u32,
@@ -627,6 +631,53 @@ impl IncubationProposal {
     }
 }
 
+/// skill-updater workitem 的上下文 Component
+///
+/// 由 orchestrator 在 spawn `WorkItemType::SkillUpdate` workitem 时一并注入到同一 entity，
+/// skill-updater Agent 通过读取该 Component 获取待更新 skill 的基线版本与来源候选，
+/// 完成后由 orchestrator 读取并构造 `SkillUpdateCompletedMessage`。
+#[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
+#[derive(Component, Debug, Clone)]
+pub struct SkillUpdateContext {
+    pub skill_id: SkillId,
+    pub base_version: u32,
+    pub experience_candidate_id: uuid::Uuid,
+    pub governing_agent_id: AgentId,
+}
+
+/// skill 更新的结构化 diff 操作
+#[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "action")]
+pub enum SkillUpdateOperation {
+    #[serde(rename = "replace_section")]
+    ReplaceSection { section: String, content: String },
+    #[serde(rename = "add_section")]
+    AddSection {
+        after: String,
+        section: String,
+        content: String,
+    },
+    #[serde(rename = "remove_section")]
+    RemoveSection { section: String },
+    #[serde(rename = "replace_frontmatter")]
+    ReplaceFrontmatter { field: String, value: String },
+}
+
+/// skill-updater workitem 完成后由 orchestrator spawn
+#[allow(dead_code)] // 由后续 orchestrator/skill-updater 链路使用
+#[derive(Debug, Clone, Component)]
+pub struct SkillUpdateCompletedMessage {
+    pub work_item_id: uuid::Uuid,
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub skill_id: SkillId,
+    pub base_version: u32,
+    pub new_version: u32,
+    pub operations: Vec<SkillUpdateOperation>,
+    pub rationale: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,5 +909,62 @@ mod tests {
         assert!(result.contains(&"calculation".to_string()));
         assert!(!result.contains(&"incubated".to_string()));
         // incubated 由写回逻辑注入，不在 sanitize_tags 中
+    }
+}
+
+#[cfg(test)]
+mod skill_update_operation_tests {
+    use super::*;
+
+    #[test]
+    fn serialize_replace_section() {
+        let op = SkillUpdateOperation::ReplaceSection {
+            section: "## Steps".to_string(),
+            content: "new content".to_string(),
+        };
+        let json = serde_json::to_string(&op).expect("serialize ReplaceSection");
+        assert!(
+            json.contains("\"replace_section\""),
+            "expected JSON to contain replace_section tag, got: {json}"
+        );
+        assert!(json.contains("## Steps"));
+        assert!(json.contains("new content"));
+    }
+
+    #[test]
+    fn deserialize_add_section() {
+        let json = "{\"action\":\"add_section\",\"after\":\"## Intro\",\"section\":\"## Tips\",\"content\":\"be careful\"}";
+        let op: SkillUpdateOperation = serde_json::from_str(json).expect("deserialize AddSection");
+        match op {
+            SkillUpdateOperation::AddSection {
+                after,
+                section,
+                content,
+            } => {
+                assert_eq!(after, "## Intro");
+                assert_eq!(section, "## Tips");
+                assert_eq!(content, "be careful");
+            }
+            other => panic!("expected AddSection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn replace_frontmatter_preserves_arbitrary_field_through_serde_roundtrip() {
+        // 枚举本身允许任意 field 值；白名单检查应在 apply 层
+        let op = SkillUpdateOperation::ReplaceFrontmatter {
+            field: "arbitrary_field".to_string(),
+            value: "arbitrary_value".to_string(),
+        };
+        let json = serde_json::to_string(&op).expect("serialize ReplaceFrontmatter");
+        let de: SkillUpdateOperation =
+            serde_json::from_str(&json).expect("deserialize ReplaceFrontmatter");
+        match de {
+            SkillUpdateOperation::ReplaceFrontmatter { field, value } => {
+                assert_eq!(field, "arbitrary_field");
+                assert_eq!(value, "arbitrary_value");
+            }
+            other => panic!("expected ReplaceFrontmatter, got {other:?}"),
+        }
     }
 }

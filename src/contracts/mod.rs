@@ -8,12 +8,7 @@ mod memory;
 mod sessions;
 mod tools;
 
-pub use dispatch::{
-    AgentCapabilitySummary, AgentSelector, AllMatchTagMatcher, AssignmentResult,
-    BrainSelectionPolicy, DefaultDispatchPolicy, DispatchContext, DispatchPolicy, FirstBrainPolicy,
-    FirstByTagPolicy, FirstSummarizerPolicy, SummarizerSelectionPolicy, TagBasedSelector,
-    TagMatcher, TagSet,
-};
+pub use dispatch::{AgentCapabilitySummary, BrainSelectionPolicy, FirstBrainPolicy, TagSet};
 pub use execution::{ExecutionBackend, ExecutionPolicy};
 pub use memory::{
     CompressionTrigger, ContributionPolicy, DefaultCompactionPolicy, DefaultContributionPolicy,

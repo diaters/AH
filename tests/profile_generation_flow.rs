@@ -238,6 +238,11 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
 /// - spawn SystemOutputMessage 通知用户配置 profile-designer Agent
 /// - 候选状态变为 ProfileGenerationFailed
 /// - profile_generation_context 已清理
+///
+/// 失败路径（任务 4.4）：`dispatch_system` 找不到 profile-designer Agent →
+/// 标记 WorkItem Failed + `OnWorkItemFailed` hook →
+/// `workitem_lifecycle_hook_system` 按 Context Component 分流到
+/// `handle_profile_generation_failure`。
 #[test]
 fn incubation_fails_when_profile_designer_missing() {
     let config_dir = TempDir::new().unwrap();
@@ -346,11 +351,14 @@ default_permission = "Allow"
         "候选应被标记为 ProfileGenerationFailed"
     );
 
-    // 验证：profile_generation_context 已清理
-    let context_exists = app
-        .world()
-        .resource::<ExperienceStore>()
-        .profile_generation_context
-        .contains_key(&task_id);
-    assert!(!context_exists, "profile_generation_context 应已被清理");
+    // 验证：profile_generation_context 已清理（迁移后为 Entity Component，通过 Query 检查）
+    let context_count = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ProfileGenerationContext>();
+        query.iter(world).count()
+    };
+    assert_eq!(
+        context_count, 0,
+        "ProfileGenerationContext Component 应已被清理"
+    );
 }

@@ -8,6 +8,7 @@ mod chat_session;
 mod command;
 mod confirmation;
 mod contribution;
+mod dispatch;
 mod error;
 mod evaluation;
 mod execution;
@@ -20,6 +21,7 @@ mod signal_trigger;
 mod space;
 mod summarization;
 mod task;
+mod task_experience;
 mod tool_runtime;
 mod work_item;
 mod workflow;
@@ -66,7 +68,7 @@ pub use contribution::{
     GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_EXCEPTIONS,
     PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
     ProfileGenerationKind, ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole,
-    sanitize_tags,
+    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, sanitize_tags,
 };
 
 // error
@@ -106,11 +108,11 @@ pub use message::{
     LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
     ModelChainStateUpdate, OutputKind, OutputMessage, PendingChannelSend, ReloadPluginsMessage,
     ReloadTriggersMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
-    SessionStartedMessage, Signal, SignalPayload, SubTaskBatchCreatedMessage,
-    SubTaskCompletedMessage, SummarizationRequestMessage, SystemOutputMessage,
-    TaskTerminatedMessage, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage,
-    UserOutputMessage, WaitingReason,
+    SessionStartedMessage, Signal, SignalPayload, SkillUpdateRequestMessage,
+    SubTaskBatchCreatedMessage, SubTaskCompletedMessage, SummarizationRequestMessage,
+    SystemOutputMessage, TaskTerminatedMessage, ToolConfirmationRequestMessage,
+    ToolConfirmationResponseMessage, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+    TriggerTaskMessage, UserInputMessage, UserOutputMessage, WaitingReason,
 };
 
 // model_chain
@@ -143,6 +145,9 @@ pub use task::{
     ToolReturnedHookPending, WaitingForSessionInfo, WaitingForTasksInfo,
 };
 
+// task_experience
+pub use task_experience::{ExperienceKindFilter, TaskExperiencePolicy, TaskInjectedSkill};
+
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
 
@@ -151,6 +156,12 @@ pub use work_item::{
     WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage, WorkItemInput,
     WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
     WorkItemWritebackTarget,
+};
+
+// dispatch
+pub use dispatch::{
+    AgentSpawnSpec, AwaitingBrainDecision, DispatchHint, DispatchKind, DispatchStrategy,
+    PendingDispatch,
 };
 
 // workflow

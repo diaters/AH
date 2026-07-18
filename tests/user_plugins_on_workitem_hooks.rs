@@ -17,7 +17,6 @@ use crossbeam_channel::unbounded;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-use harness::contracts::TagSet;
 use harness::user_plugins::hook_point::HookPoint;
 use harness::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
@@ -41,7 +40,6 @@ fn make_work_item(status: WorkItemStatus) -> WorkItem {
         uuid::Uuid::nil(),
         WorkItemType::Evaluation,
         WorkItemInput::new("test".to_string()),
-        TagSet::empty(),
         WorkItemOrigin::Evaluation,
         WorkItemWritebackTarget::TaskResult,
     );

@@ -8,15 +8,15 @@ use tracing::{debug, info};
 use crate::{
     app::Clock,
     domain::{
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
-        WorkItem,
+        DispatchHint, DispatchKind, DispatchStrategy, PendingDispatch, SummarizationRequestMessage,
+        SummarizationTrigger, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType,
     },
 };
 
 /// 摘要调度系统：将摘要请求转为 WorkItem
 ///
 /// 仅负责将 SummarizationRequestMessage 转换为 WorkItem，
-/// Agent 选择由 workitem_dispatch_system 统一处理。
+/// Agent 选择由 `dispatch_system` 统一处理（WorkItem 派发路径）。
 pub(crate) fn summarization_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
@@ -50,7 +50,18 @@ pub(crate) fn summarization_dispatch_system(
             request.target_tokens as usize,
             request.trigger,
         );
-        commands.spawn(work_item);
+        commands.spawn((
+            work_item,
+            PendingDispatch {
+                kind: DispatchKind::WorkItem(WorkItemType::Summarization),
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            },
+        ));
 
         debug!(
             event = "SummarizationWorkItemCreated",

@@ -9,10 +9,11 @@ use crate::{
     app::{Clock, HarnessSettings},
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
-        ExperienceStore, GrantMode, PendingExperienceHooks, SharedKnowledgeBase, ShortTermMemory,
-        Task, ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolPermission, ToolReturnedHookPending,
+        ExperienceStore, GrantMode, PendingExperienceHooks, ProfileGenerationContext,
+        SharedKnowledgeBase, ShortTermMemory, Task, ToolCallingState,
+        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+        ToolReturnedHookPending, WorkItem,
     },
     systems::NativeProcessBackend,
 };
@@ -50,6 +51,7 @@ pub fn tool_confirmation_result_system(
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<&ToolCallingState>,
+    profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
     clock: Res<Clock>,
@@ -247,6 +249,7 @@ pub fn tool_confirmation_result_system(
                         &mut pending_experience_hooks,
                         None,
                         &clock,
+                        &profile_contexts,
                     );
                 }
 

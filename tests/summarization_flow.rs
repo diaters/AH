@@ -7,9 +7,10 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, DispatchHint,
+    DispatchKind, DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory,
+    PendingDispatch, ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -190,6 +191,15 @@ fn task_completion_triggers_summarization() {
                 estimated_tokens: 100,
                 last_cached_tokens: None,
             },
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: Some("default-llm-agent".to_string()),
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            },
         ))
         .id();
 
@@ -304,6 +314,8 @@ fn summarization_preserves_terminal_task_status() {
     spawn_default_agent(&mut app);
 
     // Create a task that will complete (single-turn)
+    // 注：统一 dispatch_system 要求 Task 携带 PendingDispatch 才会派发，
+    // 这里附加 PendingDispatch(DirectDelegate) 直接委派给 default-llm-agent。
     let entity_id = app
         .world_mut()
         .spawn((
@@ -313,6 +325,15 @@ fn summarization_preserves_terminal_task_status() {
                 summary_prefix: None,
                 estimated_tokens: 50,
                 last_cached_tokens: None,
+            },
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: Some("default-llm-agent".to_string()),
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
             },
         ))
         .id();
@@ -373,6 +394,7 @@ fn execution_populates_memory_and_triggers_summarization() {
 
     // Create a single-turn task with pre-populated ShortTermMemory
     // (simulating what happens after llm_response_system runs)
+    // 注：统一 dispatch_system 要求 Task 携带 PendingDispatch 才会派发。
     let entity_id = app
         .world_mut()
         .spawn((
@@ -385,6 +407,15 @@ fn execution_populates_memory_and_triggers_summarization() {
                 summary_prefix: None,
                 estimated_tokens: 50,
                 last_cached_tokens: None,
+            },
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: Some("default-llm-agent".to_string()),
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
             },
         ))
         .id();

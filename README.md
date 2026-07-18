@@ -19,6 +19,10 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 记忆治理：ShortTermMemory、LongTermMemory、SharedKnowledgeBase 三层收敛，
   支持衰退淘汰与 JSON 文件持久化
 - 经验候选治理：两层分层汇聚模型，顶层治理后知识/技能落盘与孵化提案
+- Skill 一等公民与自更新：`SkillRegistry` Resource + Brain 派发时 LLM 选 Agent + 0/1 skill；
+  持久 Agent 直接吸收子任务经验（Skill → skill-updater WorkItem / Knowledge → 长期记忆）；
+  skill-updater Agent 通过 `submit_skill_update` 工具提交结构化 diff，
+  `skill_update_completion_system` apply 到 SKILL.md 并备份历史版本
 - 插件系统：Rhai 脚本扩展，20 个 hook 点，支持贡献工具、技能和 Agent
 - IM 通道：Telegram（长轮询、白名单、媒体附件）+ QQ（WebSocket Gateway、OAuth2、
   富媒体），跨通道隔离，出向-自动回执
@@ -28,6 +32,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 ### 待完善
 
 - 父 Agent 审批仍为 MVP 自动通过实现，尚未接入真实 LLM 审查
+- Brain 中 `select_agent_for_sub_task_with_skill` 仍为占位实现，未接入真实 LLM 选 skill 调用
 - 部分历史设计文档仍需持续整理状态标注
 - 更多真实场景下的 provider 兼容性与复杂任务策略验证
 - 飞书通道仅有占位模块，尚未接入实际 API
@@ -161,5 +166,7 @@ Shell 相关运行参数见 `docs/configuration.md`。
   [`docs/design/2026-06-06-workitem-boundary-design.md`](docs/design/2026-06-06-workitem-boundary-design.md)
 - Plan / Evaluation 重评估：
   [`docs/design/2026-06-06-plan-evaluation-reassessment-design.md`](docs/design/2026-06-06-plan-evaluation-reassessment-design.md)
+- Skill 一等公民与经验治理改造（ADR-004）：
+  [`docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md`](docs/adr/ADR-004-skill-first-class-and-experience-governance-reform.md)
 - Shell 工具精简设计：
   [`docs/archive/superpowers/specs/2026-06-08-shell-tool-simplification-design.md`](docs/archive/superpowers/specs/2026-06-08-shell-tool-simplification-design.md)
