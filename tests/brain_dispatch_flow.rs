@@ -3,9 +3,9 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, BrainConfig, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, LongTermMemory, Task, TaskStatus, build_harness_app,
-    llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, BrainConfig, ChannelId, DispatchHint,
+    DispatchKind, DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory,
+    PendingDispatch, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -158,10 +158,23 @@ fn completes_brain_dispatch_flow() {
         LongTermMemory::default(),
     ));
 
-    // 创建一个 Ready 状态的任务
+    // 创建一个 Ready 状态的任务并附加 PendingDispatch(BrainLlm)
+    // 老的 brain_dispatch_system 兜底路径已移除，所有 TopLevelTask 必须通过
+    // PendingDispatch 流入 dispatch_system 走统一派发。
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
-    app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+    app.world_mut().spawn((
+        task,
+        harness::ShortTermMemory::default(),
+        PendingDispatch {
+            kind: DispatchKind::Task,
+            hint: DispatchHint {
+                strategy: DispatchStrategy::BrainLlm,
+                preferred_agent_name: None,
+                required_skill_id: None,
+                agent_spawn_spec: None,
+            },
+        },
+    ));
 
     for _ in 0..16 {
         app.update();

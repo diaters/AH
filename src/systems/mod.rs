@@ -22,7 +22,7 @@ pub(crate) use command::{
     command_parse_system, reload_plugins_system, reload_triggers_message_consumer_system,
 };
 pub(crate) use dispatch::{
-    agent_started_hook_system, agent_stopped_hook_system, brain_dispatch_system, dispatch_system,
+    agent_started_hook_system, agent_stopped_hook_system, dispatch_system,
     on_message_dispatched_hook_system, subtask_dispatch_preparation_system,
     workitem_lifecycle_hook_system,
 };

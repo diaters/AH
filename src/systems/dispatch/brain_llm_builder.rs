@@ -11,10 +11,11 @@ use crate::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task, ToolPermission,
     },
+    infrastructure::skills::SkillRegistry,
 };
 
 use super::brain_dispatch::{
-    AgentDescription, brain_user_prompt_from_descriptions, build_prompt_with_history,
+    AgentDescription, SkillSummary, brain_user_prompt_from_descriptions, build_prompt_with_history,
 };
 
 /// 查找 Brain Agent
@@ -35,22 +36,37 @@ pub fn find_brain_agent<'a>(agents: &'a [&Agent]) -> Option<&'a Agent> {
 }
 
 /// 构建所有 Persistent Agent 的描述列表（供 Brain LLM prompt 使用）
+///
+/// 每个 Agent 的 `skills` 字段从 `SkillRegistry` 取其名下所有 skill 的精简视图
+/// （`name + description + owner_agent_name`，不含 `instructions`），依据 ADR-004 §2.1。
 pub fn build_agent_descriptions<'a>(
     agents: impl Iterator<Item = &'a Agent>,
+    skill_registry: &SkillRegistry,
 ) -> Vec<AgentDescription> {
     agents
         .filter(|a| a.kind == AgentKind::Persistent)
-        .map(|agent| AgentDescription {
-            name: agent.profile.name.clone(),
-            model: agent.profile.model.clone(),
-            tags: agent.capabilities.tags.clone(),
-            description: agent.capabilities.description.clone(),
+        .map(|agent| {
+            let skills = skill_registry
+                .list_by_owner(&agent.profile.name)
+                .into_iter()
+                .map(|entry| SkillSummary {
+                    name: entry.name.clone(),
+                    description: entry.description.clone(),
+                    owner_agent_name: entry.owner_agent_name.clone(),
+                })
+                .collect();
+            AgentDescription {
+                name: agent.profile.name.clone(),
+                model: agent.profile.model.clone(),
+                tags: agent.capabilities.tags.clone(),
+                description: agent.capabilities.description.clone(),
+                skills,
+            }
         })
         .collect()
 }
 
 /// 构建 Brain LLM 的工具列表（非 Deny）
-#[allow(dead_code)] // 阶段 2.2 dispatch_system 接入后移除
 pub fn build_brain_tools(
     registry: &SpaceToolRegistry,
     brain_agent: &Agent,
@@ -69,19 +85,19 @@ pub fn build_brain_tools(
 
 /// 构建 Brain LLM 执行请求
 ///
-/// 组合 Brain Agent 选择、prompt 构建、工具过滤，产出 `AgentExecutionRequestMessage`。
-/// 调用方负责 spawn 返回的 request。
+/// 组合 Brain Agent 选择、prompt 构建（含候选 Agent 名下 skills 清单）、工具过滤，
+/// 产出 `AgentExecutionRequestMessage`。调用方负责 spawn 返回的 request。
 ///
 /// 返回 `None` 表示未找到 Brain Agent。
-#[allow(dead_code)] // 阶段 2.2 dispatch_system 接入后移除
 pub fn build_brain_execution_request(
     task: &Task,
     short_term: Option<&ShortTermMemory>,
     agents: &[&Agent],
     registry: &SpaceToolRegistry,
+    skill_registry: &SkillRegistry,
 ) -> Option<(AgentExecutionRequestMessage, MessageDispatchedHookPending)> {
     let brain_agent = find_brain_agent(agents)?;
-    let all_agent_descriptions = build_agent_descriptions(agents.iter().copied());
+    let all_agent_descriptions = build_agent_descriptions(agents.iter().copied(), skill_registry);
 
     let prompt_with_history = build_prompt_with_history(&task.content, short_term);
     let prompt = brain_user_prompt_from_descriptions(&prompt_with_history, &all_agent_descriptions);
@@ -95,6 +111,7 @@ pub fn build_brain_execution_request(
         brain_agent_name = %brain_agent.profile.name,
         prompt_len = prompt.len(),
         tools_count = tools.len(),
+        candidate_agents = all_agent_descriptions.len(),
         "built brain llm execution request"
     );
 
@@ -120,6 +137,7 @@ pub fn build_brain_execution_request(
 mod tests {
     use super::*;
     use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
+    use crate::infrastructure::skills::{SkillEntry, SkillId};
     use uuid::Uuid;
 
     fn make_persistent_agent(name: &str, tags: Vec<String>) -> Agent {
@@ -141,6 +159,18 @@ mod tests {
         }
     }
 
+    fn make_skill_entry(owner: &str, skill_name: &str, desc: &str) -> SkillEntry {
+        SkillEntry {
+            skill_id: SkillId::new(owner, skill_name),
+            name: skill_name.to_string(),
+            description: desc.to_string(),
+            instructions: "instructions".to_string(),
+            version: 1,
+            owner_agent_name: owner.to_string(),
+            self_updatable: true,
+        }
+    }
+
     #[test]
     fn build_agent_descriptions_filters_persistent_only() {
         let persistent = make_persistent_agent("p", vec![]);
@@ -149,9 +179,11 @@ mod tests {
         scoped.profile.name = "s".to_string();
 
         let agents = [persistent, scoped];
-        let descriptions = build_agent_descriptions(agents.iter());
+        let reg = SkillRegistry::default();
+        let descriptions = build_agent_descriptions(agents.iter(), &reg);
         assert_eq!(descriptions.len(), 1);
         assert_eq!(descriptions[0].name, "p");
+        assert!(descriptions[0].skills.is_empty());
     }
 
     #[test]
@@ -168,5 +200,36 @@ mod tests {
         let found = find_brain_agent(&agents);
         assert!(found.is_some());
         assert_eq!(found.unwrap().profile.name, "brain");
+    }
+
+    #[test]
+    fn build_agent_descriptions_attaches_skills_by_owner() {
+        let agent_a = make_persistent_agent("agent-a", vec![]);
+        let agent_b = make_persistent_agent("agent-b", vec![]);
+
+        let mut reg = SkillRegistry::default();
+        reg.upsert(make_skill_entry("agent-a", "coding", "代码编写"));
+        reg.upsert(make_skill_entry("agent-a", "review", "代码审查"));
+        reg.upsert(make_skill_entry("agent-b", "summary", "摘要生成"));
+
+        let agents = [agent_a, agent_b];
+        let descriptions = build_agent_descriptions(agents.iter(), &reg);
+        assert_eq!(descriptions.len(), 2);
+
+        let a_desc = descriptions
+            .iter()
+            .find(|d| d.name == "agent-a")
+            .expect("agent-a exists");
+        assert_eq!(a_desc.skills.len(), 2);
+        let skill_names: Vec<_> = a_desc.skills.iter().map(|s| s.name.as_str()).collect();
+        assert!(skill_names.contains(&"coding"));
+        assert!(skill_names.contains(&"review"));
+
+        let b_desc = descriptions
+            .iter()
+            .find(|d| d.name == "agent-b")
+            .expect("agent-b exists");
+        assert_eq!(b_desc.skills.len(), 1);
+        assert_eq!(b_desc.skills[0].name, "summary");
     }
 }

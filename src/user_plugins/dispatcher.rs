@@ -8,12 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::prelude::World;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use tracing::{debug, warn};
 
-use crate::domain::{ChannelId, FrontendKind, Task};
+use crate::domain::{
+    ChannelId, DispatchHint, DispatchKind, DispatchStrategy, FrontendKind, PendingDispatch, Task,
+};
+use crate::prelude::World;
 use crate::user_plugins::hook_point::HookPoint;
 use crate::user_plugins::host_api;
 use crate::user_plugins::host_api::approval::ApprovalContext;
@@ -213,7 +215,21 @@ fn apply_world_command(world: &mut World, cmd: WorldCommand) {
                 thread_id: None,
             };
             let task = Task::from_user_input(title, 0, channel);
-            world.spawn((task, crate::domain::ShortTermMemory::default()));
+            // 与其他 TopLevelTask 入口一致：spawn 时直接附加 PendingDispatch(BrainLlm)，
+            // 由 dispatch_system 走 Brain LLM 选 Agent + skill 的统一派发路径。
+            world.spawn((
+                task,
+                crate::domain::ShortTermMemory::default(),
+                PendingDispatch {
+                    kind: DispatchKind::Task,
+                    hint: DispatchHint {
+                        strategy: DispatchStrategy::BrainLlm,
+                        preferred_agent_name: None,
+                        required_skill_id: None,
+                        agent_spawn_spec: None,
+                    },
+                },
+            ));
         }
         WorldCommand::SetTaskMetadata {
             task_id,
