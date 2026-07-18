@@ -170,6 +170,7 @@ fn allowed_tool_executes_directly() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行几帧让系统处理
@@ -273,6 +274,7 @@ fn denied_tool_does_not_execute() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行几帧让系统处理
@@ -355,6 +357,7 @@ fn confirm_tool_requires_user_confirmation() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行几帧让系统处理
@@ -449,6 +452,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行几帧让系统处理
@@ -561,6 +565,7 @@ fn user_denies_tool_confirmation() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行让确认请求生成
@@ -665,6 +670,7 @@ fn user_allows_tool_once() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行让确认请求生成
@@ -850,6 +856,7 @@ fn child_agent_confirm_routes_to_parent() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行系统
@@ -996,6 +1003,7 @@ fn confirmation_denied_rejects_tool() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行让审批流程处理（父 Agent 审批 → auto-approve）
@@ -1110,6 +1118,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行系统
@@ -1193,6 +1202,7 @@ fn user_allows_tool_always() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // 运行让确认请求生成

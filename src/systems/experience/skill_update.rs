@@ -273,29 +273,39 @@ pub(crate) fn skill_update_workitem_system(
 /// 备份原版本到 history 目录，刷新 `SkillRegistry`，将候选置为 `Persisted`，
 /// 最后标记 WorkItem 完成并清理实体。
 ///
+/// 实现说明（Bug B 修复）：`SkillUpdateCompletedMessage` 由 orchestrator insert 到
+/// WorkItem entity 上（与 `SkillUpdateContext` + `WorkItem` 同 entity），本系统直接
+/// 通过 Component 查询同 entity 上的 `SkillUpdateContext`，不再用 `work_item_id` 反查。
+/// fallback 路径（`work_item_entity` 为 None，不应发生）：仅 `SkillUpdateCompletedMessage`，
+/// 此时 `SkillUpdateContext` 缺失，记 warn 并 despawn。
+///
 /// 错误处理：文件读取 / apply / 写入失败时候选状态保持不变（仍为 `GovernanceResolved`），
 /// 仅记录 warn 日志并 despawn 消息。history 备份与清理失败不阻断主流程。
 pub(crate) fn skill_update_completion_system(
     mut commands: Commands,
-    messages: Query<(Entity, &SkillUpdateCompletedMessage)>,
-    contexts: Query<(Entity, &SkillUpdateContext, &WorkItem)>,
+    // 同一 entity 上的 SkillUpdateCompletedMessage + (optional) SkillUpdateContext。
+    // 正常路径：orchestrator 把 SkillUpdateCompletedMessage insert 到 WorkItem entity 上，
+    // 该 entity 已有 SkillUpdateContext + WorkItem。
+    completed: Query<(
+        Entity,
+        &SkillUpdateCompletedMessage,
+        Option<&SkillUpdateContext>,
+    )>,
     mut store: ResMut<ExperienceStore>,
     mut skill_registry: ResMut<SkillRegistry>,
     skill_loader: Res<SkillLoader>,
 ) {
-    for (entity, msg) in &messages {
-        // 1. 通过 work_item_id 反查 SkillUpdateContext（与 WorkItem 同 entity）
-        let Some((context_entity, context, _work_item)) =
-            contexts.iter().find(|(_, _, wi)| wi.id == msg.work_item_id)
-        else {
+    for (entity, msg, context_opt) in &completed {
+        // 1. 从同 entity 取 SkillUpdateContext（fallback 路径下为 None）
+        let Some(context) = context_opt else {
             warn!(
-                event = "SkillUpdateContextNotFound",
+                event = "SkillUpdateContextMissingOnEntity",
                 task_id = %msg.task_id,
                 work_item_id = %msg.work_item_id,
                 skill_id = %msg.skill_id.as_string(),
-                error = "no SkillUpdateContext found for work_item_id",
+                error = "SkillUpdateCompletedMessage has no SkillUpdateContext on same entity",
                 error_type = "ContextNotFound",
-                "SkillUpdateContext not found, skipping completion"
+                "SkillUpdateContext not found on same entity, despawning SkillUpdateCompletedMessage"
             );
             commands.entity(entity).despawn();
             continue;
@@ -422,11 +432,11 @@ pub(crate) fn skill_update_completion_system(
             c.status = ExperienceCandidateStatus::Persisted;
         }
 
-        // 10. 标记 WorkItem 完成（llm_response.rs 不再 despawn 该 entity，交由本系统清理）
+        // 10. 标记 WorkItem 完成（同 entity 上 insert 钩子组件，然后 despawn 一次清理所有 Component）
         commands
-            .entity(context_entity)
+            .entity(entity)
             .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemCompleted));
-        commands.entity(context_entity).despawn();
+        commands.entity(entity).despawn();
 
         debug!(
             event = "SkillUpdateCompleted",
@@ -436,8 +446,6 @@ pub(crate) fn skill_update_completion_system(
             new_version = msg.new_version,
             "skill updated successfully"
         );
-
-        commands.entity(entity).despawn();
     }
 }
 
@@ -892,12 +900,12 @@ mod completion_system_tests {
     }
 
     /// 构造测试用 SkillUpdateContext + WorkItem（同 entity）并 spawn 到 world。
-    /// 返回 (work_item_id, candidate_id)。
+    /// 返回 (work_item_id, candidate_id, work_item_entity)。
     fn spawn_work_item_with_context(
         world: &mut World,
         skill_id: SkillId,
         base_version: u32,
-    ) -> (Uuid, Uuid) {
+    ) -> (Uuid, Uuid, Entity) {
         let candidate_id = Uuid::new_v4();
         let governing_agent_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
@@ -910,16 +918,18 @@ mod completion_system_tests {
         );
         work_item.start();
         let work_item_id = work_item.id;
-        world.spawn((
-            work_item,
-            SkillUpdateContext {
-                skill_id: skill_id.clone(),
-                base_version,
-                experience_candidate_id: candidate_id,
-                governing_agent_id,
-            },
-        ));
-        (work_item_id, candidate_id)
+        let work_item_entity = world
+            .spawn((
+                work_item,
+                SkillUpdateContext {
+                    skill_id: skill_id.clone(),
+                    base_version,
+                    experience_candidate_id: candidate_id,
+                    governing_agent_id,
+                },
+            ))
+            .id();
+        (work_item_id, candidate_id, work_item_entity)
     }
 
     /// 在 ExperienceStore 中插入一个 GovernanceResolved 状态的候选，返回 candidate_id。
@@ -990,7 +1000,7 @@ mod completion_system_tests {
         world.insert_resource(loader);
 
         let candidate_id = stage_resolved_candidate(&mut world.resource_mut::<ExperienceStore>());
-        let (work_item_id, _) = {
+        let (work_item_id, work_item_entity) = {
             // 用同样的 skill_id 调用 spawn helper，但手动覆盖 candidate_id
             let governing_agent_id = Uuid::new_v4();
             let task_id = Uuid::new_v4();
@@ -1003,16 +1013,18 @@ mod completion_system_tests {
             );
             work_item.start();
             let work_item_id = work_item.id;
-            world.spawn((
-                work_item,
-                SkillUpdateContext {
-                    skill_id: skill_id.clone(),
-                    base_version: 1,
-                    experience_candidate_id: candidate_id,
-                    governing_agent_id,
-                },
-            ));
-            (work_item_id, candidate_id)
+            let work_item_entity = world
+                .spawn((
+                    work_item,
+                    SkillUpdateContext {
+                        skill_id: skill_id.clone(),
+                        base_version: 1,
+                        experience_candidate_id: candidate_id,
+                        governing_agent_id,
+                    },
+                ))
+                .id();
+            (work_item_id, work_item_entity)
         };
 
         // 用 ReplaceSection 操作替换 Usage section 内容
@@ -1020,13 +1032,15 @@ mod completion_system_tests {
             section: "## Usage".to_string(),
             content: "New usage content.".to_string(),
         }];
-        world.spawn(make_completed_message(
-            work_item_id,
-            skill_id.clone(),
-            1,
-            2,
-            operations,
-        ));
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(
+                work_item_id,
+                skill_id.clone(),
+                1,
+                2,
+                operations,
+            ));
 
         let _ = world.run_system_once(skill_update_completion_system);
 
@@ -1078,12 +1092,15 @@ mod completion_system_tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let (work_item_id, _) = spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        let (work_item_id, _, work_item_entity) =
+            spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
         // 覆盖 candidate_id：直接重新 spawn 不方便，这里用 nil candidate_id 验证候选不变即可
         // 实际上 spawn_work_item_with_context 用的是随机 candidate_id，不影响测试逻辑：
         // 文件读取失败时候选状态保持不变，store 中无该 candidate_id 也算"不变"。
 
-        world.spawn(make_completed_message(work_item_id, skill_id, 1, 2, vec![]));
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(work_item_id, skill_id, 1, 2, vec![]));
 
         let _ = world.run_system_once(skill_update_completion_system);
 
@@ -1113,7 +1130,7 @@ mod completion_system_tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader.clone());
 
-        let (work_item_id, context_candidate_id) =
+        let (work_item_id, context_candidate_id, work_item_entity) =
             spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
         // 把 store 中的 candidate_id 与 context 对齐
         world
@@ -1139,13 +1156,15 @@ mod completion_system_tests {
             section: "## NonExistent".to_string(),
             content: "x".to_string(),
         }];
-        world.spawn(make_completed_message(
-            work_item_id,
-            skill_id.clone(),
-            1,
-            2,
-            operations,
-        ));
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(
+                work_item_id,
+                skill_id.clone(),
+                1,
+                2,
+                operations,
+            ));
 
         let _ = world.run_system_once(skill_update_completion_system);
 

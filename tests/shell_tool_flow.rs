@@ -173,6 +173,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_read_case".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -206,6 +207,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_read_case".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -266,6 +268,7 @@ fn shell_list_returns_only_active_sessions() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_list_case".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -288,6 +291,7 @@ fn shell_list_returns_only_active_sessions() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_list_case".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -355,6 +359,7 @@ fn shell_exec_returns_result_message() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_exec".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // Check result after first update (tool_result_system despawns results after processing)
@@ -432,6 +437,7 @@ fn shell_exec_passes_env_to_child_process() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_exec_env".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -499,6 +505,7 @@ fn shell_start_returns_running_handle() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_start".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // Check result after first update
@@ -570,6 +577,7 @@ fn shell_start_passes_env_to_child_process() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_start_env".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -617,6 +625,7 @@ fn shell_start_passes_env_to_child_process() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_read_env".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -687,6 +696,7 @@ fn shell_exec_with_exit_code_error() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_exec_error".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     // Check result after first update
@@ -760,6 +770,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_start_for_stop".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -798,6 +809,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_stop".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -897,6 +909,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_start_missing_stdin".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -935,6 +948,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_input_missing_stdin".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1038,6 +1052,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shape_exec".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1048,6 +1063,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shape_start".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1117,6 +1133,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_exec_timeout".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -1182,6 +1199,7 @@ fn shell_read_returns_output_text() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_start_for_read".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1225,6 +1243,7 @@ fn shell_read_returns_output_text() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_read_text".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1291,6 +1310,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_shell_exec_timeout_with_tail".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -1369,6 +1389,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_exec_timeout_default".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
 
     app.update();
@@ -1499,6 +1520,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_task_a".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1531,6 +1553,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_list_task_b".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1602,6 +1625,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
             pending_confirmation_id: None,
             tool_call_id: Some(tool_call_id.to_string()),
             pending_confirmation_options: None,
+            work_item_entity: None,
         });
         app.update();
     }
@@ -1731,6 +1755,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_read_reject".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1779,6 +1804,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_read_cross_task".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1853,6 +1879,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_input_reject".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1901,6 +1928,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_input_cross_task".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -1974,6 +2002,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_stop_reject".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -2022,6 +2051,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_stop_cross_task".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -2095,6 +2125,7 @@ fn task_termination_stops_owned_shell_sessions() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_termination".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 
@@ -2174,6 +2205,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_start_failed_task".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: None,
     });
     app.update();
 

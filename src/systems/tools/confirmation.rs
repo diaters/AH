@@ -399,6 +399,7 @@ mod tests {
             pending_confirmation_id: Some(request_id),
             tool_call_id: None,
             pending_confirmation_options: Some(ConfirmationOption::default_options()),
+            work_item_entity: None,
         }
     }
 

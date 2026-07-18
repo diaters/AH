@@ -1168,8 +1168,10 @@ pub fn handle_tool_action<B: SessionBackend>(
                 return;
             }
 
-            // dry-run 通过，spawn SkillUpdateCompletedMessage 供 skill_update_completion_system 消费。
-            commands.spawn(crate::domain::SkillUpdateCompletedMessage {
+            // dry-run 通过，将 SkillUpdateCompletedMessage insert 到 WorkItem entity 上
+            // （而非 spawn 独立 entity），让 skill_update_completion_system 通过同 entity 的
+            // Component 查询直接拿到 SkillUpdateContext，避免用 work_item_id 反查。
+            let completed_message = crate::domain::SkillUpdateCompletedMessage {
                 work_item_id,
                 task_id: request.request.task_id,
                 agent_id: request.request.agent_id,
@@ -1178,7 +1180,23 @@ pub fn handle_tool_action<B: SessionBackend>(
                 new_version,
                 operations: operations.clone(),
                 rationale: rationale.clone(),
-            });
+            };
+            match request.work_item_entity {
+                Some(wi_entity) => {
+                    commands.entity(wi_entity).insert(completed_message);
+                }
+                None => {
+                    warn!(
+                        event = "SkillUpdateMissingWorkItemEntity",
+                        task_id = %request.request.task_id,
+                        agent_id = %request.request.agent_id,
+                        work_item_id = %work_item_id,
+                        "work_item_entity is None on ToolExecutionRequestMessage, \
+                         falling back to spawn independent entity"
+                    );
+                    commands.spawn(completed_message);
+                }
+            }
 
             // 返回工具执行结果给 LLM
             let output = serde_json::json!({

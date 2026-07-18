@@ -284,6 +284,10 @@ pub struct ToolExecutionRequestMessage {
     pub tool_call_id: Option<String>,
     /// 确认请求的选项列表（用于匹配用户响应，避免硬编码 default_options）
     pub pending_confirmation_options: Option<Vec<super::ConfirmationOption>>,
+    /// 关联的 WorkItem Entity（ECS 侧引用，用于将 SkillUpdateCompletedMessage
+    /// 等"工具产物"直接 insert 到 WorkItem entity 上，避免用 work_item_id 反查）。
+    /// 仅在同步侧使用，不跨异步边界（AgentExecutionRequest 跨异步边界，不应携带 Entity）。
+    pub work_item_entity: Option<Entity>,
 }
 
 /// Tool 执行结果消息

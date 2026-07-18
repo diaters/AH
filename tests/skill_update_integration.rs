@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use bevy_ecs::entity::Entity;
 use crossbeam_channel::unbounded;
 use harness::infrastructure::skills::{SkillEntry, SkillId, SkillLoader, SkillRegistry};
 use harness::{
@@ -508,12 +509,15 @@ fn setup_skill_dir(skill_id: &SkillId, content: &str) -> (TempDir, SkillLoader) 
 }
 
 /// 构造测试用 SkillUpdateContext + WorkItem（同 entity）并 spawn 到 world。
+/// 返回 (work_item_id, work_item_entity)：work_item_id 用于日志/Uuid 匹配，
+/// work_item_entity 用于把 SkillUpdateCompletedMessage / ToolExecutionRequestMessage.work_item_entity
+/// 关联到同一 entity（Bug B 修复后的 insert 模式）。
 fn spawn_work_item_with_context(
     world: &mut bevy_ecs::world::World,
     skill_id: SkillId,
     base_version: u32,
     candidate_id: Uuid,
-) -> Uuid {
+) -> (Uuid, Entity) {
     let governing_agent_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let mut work_item = WorkItem::skill_update(
@@ -525,16 +529,18 @@ fn spawn_work_item_with_context(
     );
     work_item.start();
     let work_item_id = work_item.id;
-    world.spawn((
-        work_item,
-        SkillUpdateContext {
-            skill_id: skill_id.clone(),
-            base_version,
-            experience_candidate_id: candidate_id,
-            governing_agent_id,
-        },
-    ));
-    work_item_id
+    let work_item_entity = world
+        .spawn((
+            work_item,
+            SkillUpdateContext {
+                skill_id: skill_id.clone(),
+                base_version,
+                experience_candidate_id: candidate_id,
+                governing_agent_id,
+            },
+        ))
+        .id();
+    (work_item_id, work_item_entity)
 }
 
 /// 构造 SkillUpdateCompletedMessage。
@@ -596,7 +602,7 @@ fn skill_update_increments_version_and_keeps_history() {
         producer_task_id,
     );
 
-    let work_item_id =
+    let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
 
     // 用 ReplaceSection 操作替换 Usage section 内容
@@ -604,13 +610,15 @@ fn skill_update_increments_version_and_keeps_history() {
         section: "## Usage".to_string(),
         content: "New usage content.".to_string(),
     }];
-    app.world_mut().spawn(make_completed_message(
-        work_item_id,
-        skill_id.clone(),
-        1,
-        2,
-        operations,
-    ));
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
 
     app.update();
 
@@ -671,7 +679,7 @@ fn skill_update_apply_failure_preserves_state() {
         producer_task_id,
     );
 
-    let work_item_id =
+    let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
 
     // 用不存在的 section 触发 ApplyError::SectionNotFound
@@ -679,13 +687,15 @@ fn skill_update_apply_failure_preserves_state() {
         section: "## NonExistent".to_string(),
         content: "x".to_string(),
     }];
-    app.world_mut().spawn(make_completed_message(
-        work_item_id,
-        skill_id.clone(),
-        1,
-        2,
-        operations,
-    ));
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
 
     app.update();
 
@@ -933,7 +943,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
     // Spawn WorkItem + SkillUpdateContext（让 orchestrator 能反查 context 注入 skill_id）
-    let work_item_id =
+    let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
 
     // Spawn ToolCallingState（restore_task_after_tool / tool_calling_orchestrator_system 会查询）
@@ -979,6 +989,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: Some(work_item_entity),
     });
 
     // 运行多帧让 dispatch → handle_tool_action → dry-run → tool_calling_orchestrator 完成
@@ -1104,7 +1115,7 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
 
-    let work_item_id =
+    let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
 
     app.world_mut().spawn(ToolCallingState {
@@ -1146,6 +1157,7 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
         pending_confirmation_id: None,
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
+        work_item_entity: Some(work_item_entity),
     });
 
     // 运行多帧：dispatch → dry-run 通过 → spawn SkillUpdateCompletedMessage → completion_system apply

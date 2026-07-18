@@ -619,6 +619,7 @@ fn spawn_profile_approval(
             pending_confirmation_id: Some(request_id),
             tool_call_id: None,
             pending_confirmation_options: Some(options),
+            work_item_entity: None,
         },
     ));
 }

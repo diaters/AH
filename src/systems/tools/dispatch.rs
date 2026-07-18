@@ -495,6 +495,7 @@ mod tests {
                 pending_confirmation_id: None,
                 tool_call_id: None,
                 pending_confirmation_options: None,
+                work_item_entity: None,
             });
         }
 
