@@ -9,9 +9,9 @@ use crate::{
     app::{Clock, MemoryConfig},
     contracts::SessionBackend,
     domain::{
-        FailureReason, FinishTaskMessage, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
-        ToolCallingState, WaitingReason,
+        FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
+        SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
+        TaskTerminatedMessage, ToolCallingState, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -62,133 +62,167 @@ pub fn retry_ready_system(
 /// 任务终止 System
 ///
 /// 处理任务终止，清理状态并触发摘要。
+///
+/// 仅在 Task 状态从"非终态"转换为"终态"时 spawn `TaskTerminatedMessage`，
+/// 依赖 `PreviousTaskStatus` 组件做转换检测。终态内的字段更新（如
+/// `result_summary`、`updated_at` 刷新）不会重复触发。这是 `mark_done`
+/// 幂等化的纵深防御层。
 pub fn task_termination_system(
     mut commands: Commands,
     config: Res<MemoryConfig>,
-    tasks: Query<TaskTerminationQuery, Changed<Task>>,
+    mut tasks: Query<(TaskTerminationQuery, &mut PreviousTaskStatus), Changed<Task>>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
 ) {
-    for (task, memory, sub_task_config) in &tasks {
-        if task.status.is_terminal() {
-            // Clean up any ToolCallingState for this task
-            for (cs_entity, cs) in &calling_states {
-                if cs.task_id == task.id {
-                    debug!(
-                        event = "ToolCallingStateTerminated",
-                        task_id = %task.id,
-                        iteration = cs.iteration,
-                        "cleaning up tool calling state on task termination"
-                    );
-                    commands.entity(cs_entity).despawn();
-                }
-            }
+    for ((task, memory, sub_task_config), mut prev_status) in &mut tasks {
+        let prev = prev_status.0.clone();
+        let curr = task.status.clone();
+        let is_terminal_transition = !prev.is_terminal() && curr.is_terminal();
 
-            // Stop all active shell sessions owned by this task
-            match backend.stop_task_sessions(task.id) {
-                Ok(stopped_sessions) => {
-                    if !stopped_sessions.is_empty() {
-                        debug!(
-                            event = "TaskShellSessionsStopped",
-                            task_id = %task.id,
-                            task_status = ?task.status,
-                            stopped_sessions = ?stopped_sessions,
-                            "stopped active shell sessions on task termination"
-                        );
-                    }
-                }
-                Err(e) => {
-                    debug!(
-                        event = "TaskShellSessionsStopFailed",
-                        task_id = %task.id,
-                        error = %e,
-                        "failed to stop shell sessions on task termination"
-                    );
-                }
-            }
+        // 同步 prev_status 为当前状态，无论是否触发终止处理。
+        // 这保证下次 Changed<Task> 触发时，prev 反映上次观察到的状态。
+        prev_status.0 = curr.clone();
 
-            debug!(
-                event = "TaskTerminated",
-                task_id = %task.id,
-                task_status = ?task.status,
-                task_content = %task.content,
-                result_summary = %task.result_summary,
-                has_stm = memory.is_some(),
-                "task reached terminal state"
-            );
-            info!(
-                event = "TaskTerminated",
-                task_id = %task.id,
-                task_status = ?task.status,
-                result_summary = %task.result_summary,
-                "任务完成：状态={:?}，结果摘要={}",
-                task.status,
-                task.result_summary
-            );
-            commands.spawn(TaskTerminatedMessage { task_id: task.id });
+        if !is_terminal_transition {
+            // 非终态→终态的转换未发生：跳过终止处理。
+            // 典型场景：终态内的字段更新（Done→Done、Failed→Failed），
+            // 或非终态内的状态变化（Pending→Ready、Ready→Running 等）。
+            continue;
+        }
 
-            // 子任务完成时产出 SubTaskCompletedMessage
-            if let Some(parent_id) = task.parent_task_id {
-                let child_name = sub_task_config
-                    .map(|c| c.child_agent_name.clone())
-                    .unwrap_or_else(|| "unknown".to_string());
+        // 以下逻辑仅在"非终态→终态"转换时执行
+        // Clean up any ToolCallingState for this task
+        for (cs_entity, cs) in &calling_states {
+            if cs.task_id == task.id {
                 debug!(
-                    event = "SubTaskTerminated",
+                    event = "ToolCallingStateTerminated",
                     task_id = %task.id,
-                    parent_task_id = %parent_id,
-                    batch_id = ?task.batch_id,
-                    child_name = %child_name,
-                    success = matches!(task.status, TaskStatus::Done),
-                    result_summary = %task.result_summary,
-                    "child task reached terminal state, notifying parent"
+                    iteration = cs.iteration,
+                    "cleaning up tool calling state on task termination"
                 );
-                commands.spawn(crate::domain::SubTaskCompletedMessage {
-                    parent_task_id: parent_id,
-                    batch_id: task.batch_id.unwrap_or_default(),
-                    child_task_id: task.id,
-                    child_task_name: child_name,
-                    result_summary: task.result_summary.clone(),
-                    success: matches!(task.status, TaskStatus::Done),
-                });
-            }
-
-            // 任务完成时触发摘要
-            if let Some(stm) = memory
-                && !stm.entries.is_empty()
-            {
-                let content: String = stm
-                    .entries
-                    .iter()
-                    .map(|e| format!("{:?}: {}", e.role, e.content))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                debug!(
-                    event = "SummarizationTriggered",
-                    task_id = %task.id,
-                    trigger = "TaskComplete",
-                    stm_entries = stm.entries.len(),
-                    stm_tokens = stm.estimated_tokens,
-                    content_len = content.len(),
-                    target_tokens = config.summary_target_tokens,
-                    "triggering summarization on task completion"
-                );
-                info!(
-                    event = "SummarizationTriggered",
-                    task_id = %task.id,
-                    trigger = "TaskComplete",
-                    stm_entries = stm.entries.len(),
-                    "触发摘要：STM {} 条目",
-                    stm.entries.len()
-                );
-                commands.spawn(SummarizationRequestMessage {
-                    task_id: task.id,
-                    content_to_summarize: content,
-                    target_tokens: config.summary_target_tokens,
-                    trigger: SummarizationTrigger::TaskComplete,
-                });
+                commands.entity(cs_entity).despawn();
             }
         }
+
+        // Stop all active shell sessions owned by this task
+        match backend.stop_task_sessions(task.id) {
+            Ok(stopped_sessions) => {
+                if !stopped_sessions.is_empty() {
+                    debug!(
+                        event = "TaskShellSessionsStopped",
+                        task_id = %task.id,
+                        task_status = ?task.status,
+                        stopped_sessions = ?stopped_sessions,
+                        "stopped active shell sessions on task termination"
+                    );
+                }
+            }
+            Err(e) => {
+                debug!(
+                    event = "TaskShellSessionsStopFailed",
+                    task_id = %task.id,
+                    error = %e,
+                    "failed to stop shell sessions on task termination"
+                );
+            }
+        }
+
+        debug!(
+            event = "TaskTerminated",
+            task_id = %task.id,
+            task_status = ?task.status,
+            task_content = %task.content,
+            result_summary = %task.result_summary,
+            has_stm = memory.is_some(),
+            from_status = ?prev,
+            "task reached terminal state"
+        );
+        info!(
+            event = "TaskTerminated",
+            task_id = %task.id,
+            task_status = ?task.status,
+            result_summary = %task.result_summary,
+            "任务完成：状态={:?}，结果摘要={}",
+            task.status,
+            task.result_summary
+        );
+        commands.spawn(TaskTerminatedMessage { task_id: task.id });
+
+        // 子任务完成时产出 SubTaskCompletedMessage
+        if let Some(parent_id) = task.parent_task_id {
+            let child_name = sub_task_config
+                .map(|c| c.child_agent_name.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            debug!(
+                event = "SubTaskTerminated",
+                task_id = %task.id,
+                parent_task_id = %parent_id,
+                batch_id = ?task.batch_id,
+                child_name = %child_name,
+                success = matches!(task.status, TaskStatus::Done),
+                result_summary = %task.result_summary,
+                "child task reached terminal state, notifying parent"
+            );
+            commands.spawn(crate::domain::SubTaskCompletedMessage {
+                parent_task_id: parent_id,
+                batch_id: task.batch_id.unwrap_or_default(),
+                child_task_id: task.id,
+                child_task_name: child_name,
+                result_summary: task.result_summary.clone(),
+                success: matches!(task.status, TaskStatus::Done),
+            });
+        }
+
+        // 任务完成时触发摘要
+        if let Some(stm) = memory
+            && !stm.entries.is_empty()
+        {
+            let content: String = stm
+                .entries
+                .iter()
+                .map(|e| format!("{:?}: {}", e.role, e.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            debug!(
+                event = "SummarizationTriggered",
+                task_id = %task.id,
+                trigger = "TaskComplete",
+                stm_entries = stm.entries.len(),
+                stm_tokens = stm.estimated_tokens,
+                content_len = content.len(),
+                target_tokens = config.summary_target_tokens,
+                "triggering summarization on task completion"
+            );
+            info!(
+                event = "SummarizationTriggered",
+                task_id = %task.id,
+                trigger = "TaskComplete",
+                stm_entries = stm.entries.len(),
+                "触发摘要：STM {} 条目",
+                stm.entries.len()
+            );
+            commands.spawn(SummarizationRequestMessage {
+                task_id: task.id,
+                content_to_summarize: content,
+                target_tokens: config.summary_target_tokens,
+                trigger: SummarizationTrigger::TaskComplete,
+            });
+        }
+    }
+}
+
+/// `PreviousTaskStatus` 初始化 companion System。
+///
+/// 在 Task entity 首次进入 ECS 时（`Added<Task>`）自动插入
+/// `PreviousTaskStatus(TaskStatus::Pending)`，避免在每个 Task 创建点
+/// 手动维护。`task_termination_system` 依赖该组件存在，缺失会导致
+/// Query 过滤掉 Task 终止检测。
+pub fn init_previous_task_status_system(mut commands: Commands, tasks: Query<Entity, Added<Task>>) {
+    for entity in &tasks {
+        commands
+            .entity(entity)
+            .insert(PreviousTaskStatus(TaskStatus::Pending));
     }
 }
 
@@ -280,5 +314,144 @@ mod tests {
             )
         };
         assert_eq!(task_status_failure_reason(&task), None);
+    }
+
+    /// 为 task_termination_system 测试构造最小 Bevy App。
+    ///
+    /// 注册 `init_previous_task_status_system` 与 `task_termination_system`，
+    /// 并插入所需资源（`MemoryConfig`、`NativeProcessBackend`）。
+    fn make_termination_test_app() -> App {
+        use crate::app::{HarnessConfig, HarnessSettings};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(HarnessSettings(HarnessConfig::default()));
+        app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.add_systems(
+            Update,
+            (
+                init_previous_task_status_system,
+                task_termination_system.after(init_previous_task_status_system),
+            ),
+        );
+        app
+    }
+
+    fn count_terminated_messages(app: &mut App) -> usize {
+        app.world_mut()
+            .query::<&TaskTerminatedMessage>()
+            .iter(app.world())
+            .count()
+    }
+
+    fn spawn_pending_task(app: &mut App) -> uuid::Uuid {
+        let task = Task::from_user_input(
+            "test".to_string(),
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+        // 第一次 update：init_previous_task_status_system 插入 PreviousTaskStatus(Pending)。
+        // task_termination_system 此时不触发（Pending 非终态）。
+        app.update();
+        task_id
+    }
+
+    /// 修改 task 字段，避开返回类型 `Mut<Task>` 的生命周期问题。
+    /// 闭包内可对 task 进行任何 mutable 操作。
+    fn with_task_mut<R>(app: &mut App, task_id: uuid::Uuid, f: impl FnOnce(&mut Task) -> R) -> R {
+        let mut task_mut = app
+            .world_mut()
+            .query::<&mut Task>()
+            .iter_mut(app.world_mut())
+            .find(|t| t.id == task_id)
+            .expect("task exists");
+        f(&mut task_mut)
+    }
+
+    /// Pending → Done 转换应 spawn 1 个 TaskTerminatedMessage。
+    #[test]
+    fn pending_to_done_spawns_one_terminated_message() {
+        let mut app = make_termination_test_app();
+        let task_id = spawn_pending_task(&mut app);
+
+        assert_eq!(
+            count_terminated_messages(&mut app),
+            0,
+            "no terminated messages before any terminal transition"
+        );
+
+        // 触发 Pending → Done 转换
+        let now = chrono::Utc::now();
+        with_task_mut(&mut app, task_id, |t| t.mark_done("done", now));
+        app.update();
+
+        assert_eq!(
+            count_terminated_messages(&mut app),
+            1,
+            "Pending → Done transition should spawn exactly one TaskTerminatedMessage"
+        );
+    }
+
+    /// Done → Done（终态字段更新）不应 spawn 新的 TaskTerminatedMessage。
+    /// 这是本次 bug 修复的核心：防止 mark_done 重复调用或终态字段更新
+    /// 触发循环。
+    #[test]
+    fn done_to_done_does_not_spawn_terminated_message() {
+        let mut app = make_termination_test_app();
+        let task_id = spawn_pending_task(&mut app);
+
+        // 第一次：Pending → Done
+        let now = chrono::Utc::now();
+        with_task_mut(&mut app, task_id, |t| t.mark_done("first", now));
+        app.update();
+        assert_eq!(count_terminated_messages(&mut app), 1);
+
+        // 第二次：直接修改 last_error 字段（绕过 mark_done 幂等）
+        // 模拟"终态 Task 被其他 system 修改非状态字段"的场景。
+        with_task_mut(&mut app, task_id, |t| {
+            t.last_error = Some("manual update".to_string());
+        });
+        app.update();
+
+        assert_eq!(
+            count_terminated_messages(&mut app),
+            1,
+            "Done → Done (field update) must not spawn new TaskTerminatedMessage"
+        );
+    }
+
+    /// Pending → Ready → Running → Done 应只 spawn 1 个 TaskTerminatedMessage
+    /// （仅最后一次非终态→终态转换触发）。
+    #[test]
+    fn multiple_non_terminal_transitions_then_done_spawns_one_message() {
+        let mut app = make_termination_test_app();
+        let task_id = spawn_pending_task(&mut app);
+
+        // Pending → Ready
+        with_task_mut(&mut app, task_id, |t| t.status = TaskStatus::Ready);
+        app.update();
+        assert_eq!(count_terminated_messages(&mut app), 0);
+
+        // Ready → Running
+        with_task_mut(&mut app, task_id, |t| t.mark_running(chrono::Utc::now()));
+        app.update();
+        assert_eq!(count_terminated_messages(&mut app), 0);
+
+        // Running → Done
+        with_task_mut(&mut app, task_id, |t| {
+            t.mark_done("done", chrono::Utc::now())
+        });
+        app.update();
+        assert_eq!(
+            count_terminated_messages(&mut app),
+            1,
+            "only the non-terminal → terminal transition should spawn"
+        );
     }
 }

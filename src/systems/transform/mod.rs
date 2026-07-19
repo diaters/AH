@@ -24,7 +24,8 @@ pub use subtask::{sub_task_batch_block_system, sub_task_completion_system};
 pub use task_completion_hook::{TaskTerminalDispatched, task_completion_hook_system};
 pub use task_creation::{on_task_created_hook_system, user_message_to_task_system};
 pub use task_lifecycle::{
-    finish_task_system, retry_ready_system, task_termination_system, tool_calling_turn_reset_system,
+    finish_task_system, init_previous_task_status_system, retry_ready_system,
+    task_termination_system, tool_calling_turn_reset_system,
 };
 pub use trigger_task::trigger_task_routing_system;
 

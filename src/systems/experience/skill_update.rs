@@ -224,7 +224,8 @@ pub(crate) fn skill_update_workitem_system(
                 - 三级标题级：replace_subsection / add_subsection / remove_subsection\n\
                 - 兜底：replace_body（整体替换 body，frontmatter 不变）\n\
              3. operations 中的 section / subsection 名必须与原 SKILL.md 中实际存在的标题一致（系统会做 dry-run 校验，section 不存在会立即拒绝）\n\
-             4. 优先使用颗粒度更细的 operation（subsection 级 > section 级 > replace_body）；replace_body 仅当其他 operation 都无法表达修改意图时才使用，滥用会被评审拒绝",
+             4. **重要**：replace_section / replace_subsection 的 content 字段**不得包含标题行本身**（系统会自动保留原 `## xxx` 或 `### xxx` 标题行），content 只需提供标题下方的正文内容。例如替换 `## Usage` 时，content 应以正文开头，而非以 `## Usage` 开头\n\
+             5. 优先使用颗粒度更细的 operation（subsection 级 > section 级 > replace_body）；replace_body 仅当其他 operation 都无法表达修改意图时才使用，滥用会被评审拒绝",
             candidate_kind_label,
             skill_entry.version,
             skill_md_content,

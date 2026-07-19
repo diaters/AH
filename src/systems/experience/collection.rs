@@ -5,7 +5,7 @@ use crate::domain::{
     Agent, AgentKind, ConversationMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryRole,
     ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
     ExperienceConsolidationRequestMessage, ExperienceGovernanceRequestMessage, ExperienceKindHint,
-    ExperienceStore, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
+    ExperienceStore, LlmToolCall, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
     TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemType,
 };
 
@@ -147,21 +147,53 @@ fn build_experience_collection_conversation(
             .iter()
             .filter(|e| !matches!(e.role, EntryRole::Archive))
         {
-            let msg = match entry.role {
-                EntryRole::User => ConversationMessage::User {
-                    content: entry.content.clone(),
-                },
-                EntryRole::Assistant => ConversationMessage::Assistant {
-                    content: Some(entry.content.clone()),
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                },
-                EntryRole::Summary => ConversationMessage::System {
-                    content: entry.content.clone(),
-                },
+            match entry.role {
+                EntryRole::User => {
+                    messages.push(ConversationMessage::User {
+                        content: entry.content.clone(),
+                    });
+                }
+                EntryRole::Assistant => {
+                    // 保留 tool_calls 信息，让 collector 能看到操作步骤
+                    let tool_calls: Vec<LlmToolCall> = entry
+                        .metadata
+                        .tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, tc)| LlmToolCall {
+                            id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
+                            name: tc.tool_name.clone(),
+                            arguments: tc.input.clone(),
+                        })
+                        .collect();
+
+                    messages.push(ConversationMessage::Assistant {
+                        content: Some(entry.content.clone()),
+                        tool_calls,
+                        reasoning_content: None,
+                    });
+
+                    // 追加工具结果（截断至 500 字符避免上下文膨胀）
+                    for (i, tc) in entry.metadata.tool_calls.iter().enumerate() {
+                        let truncated_output = if tc.output.chars().count() > 500 {
+                            let truncated: String = tc.output.chars().take(500).collect();
+                            format!("{}...[truncated]", truncated)
+                        } else {
+                            tc.output.clone()
+                        };
+                        messages.push(ConversationMessage::Tool {
+                            tool_call_id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
+                            content: truncated_output,
+                        });
+                    }
+                }
+                EntryRole::Summary => {
+                    messages.push(ConversationMessage::System {
+                        content: entry.content.clone(),
+                    });
+                }
                 EntryRole::Archive => continue,
-            };
-            messages.push(msg);
+            }
         }
     }
 

@@ -51,7 +51,7 @@ pub fn tool_confirmation_result_system(
     chat_sessions: Query<&ChatSession>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
-    calling_states: Query<&ToolCallingState>,
+    calling_states: Query<(Entity, &ToolCallingState)>,
     // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
     // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
     // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
@@ -262,6 +262,7 @@ pub fn tool_confirmation_result_system(
                         &clock_and_loader.0,
                         &context_queries,
                         &clock_and_loader.1,
+                        &calling_states,
                     );
                 }
 
