@@ -273,6 +273,30 @@ pub enum ApplyError {
     StructureInvalid(String),
 }
 
+/// 在 SKILL.md 内容的 frontmatter 中设置 version 字段（upsert 语义）。
+///
+/// 由系统在 skill update 写入前调用，确保版本号持久化到文件，
+/// 避免重启后 `parse_skill_md` 因缺少 version 字段而默认回退到 1。
+pub fn set_frontmatter_version(content: &str, version: u32) -> String {
+    let (frontmatter, body) = split_frontmatter(content);
+    let mut lines: Vec<String> = frontmatter.lines().map(|s| s.to_string()).collect();
+    let prefix = "version:";
+    if let Some(line) = lines.iter_mut().find(|l| l.starts_with(prefix)) {
+        *line = format!("version: {}", version);
+    } else {
+        lines.push(format!("version: {}", version));
+    }
+    let mut result = String::new();
+    result.push_str("---\n");
+    for line in &lines {
+        result.push_str(line);
+        result.push('\n');
+    }
+    result.push_str("---\n\n");
+    result.push_str(&body);
+    result
+}
+
 /// 保留最新 keep 代历史，删除超出部分
 pub fn cleanup_skill_history(history_dir: &Path, keep: usize) -> std::io::Result<()> {
     let entries = match std::fs::read_dir(history_dir) {
@@ -709,6 +733,29 @@ mod tests {
         ];
         let result = apply_skill_operations(SAMPLE, &ops);
         assert!(matches!(result, Err(ApplyError::StructureInvalid(_))));
+    }
+
+    #[test]
+    fn set_frontmatter_version_updates_existing_field() {
+        // SAMPLE 已含 version: 1，应被替换为 version: 3
+        let result = set_frontmatter_version(SAMPLE, 3);
+        assert!(result.contains("version: 3"), "got:\n{}", result);
+        assert!(
+            !result.contains("version: 1"),
+            "old version should be replaced"
+        );
+        // body 内容不受影响
+        assert!(result.contains("## Usage"));
+        assert!(result.contains("Do it."));
+    }
+
+    #[test]
+    fn set_frontmatter_version_appends_when_missing() {
+        // SAMPLE_WITH_SUBSECTIONS 无 version 字段，应追加
+        let result = set_frontmatter_version(SAMPLE_WITH_SUBSECTIONS, 2);
+        assert!(result.contains("version: 2"), "got:\n{}", result);
+        // body 内容不受影响
+        assert!(result.contains("## Usage"));
     }
 }
 
