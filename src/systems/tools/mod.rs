@@ -237,7 +237,7 @@ pub fn register_builtin_tools(
     // Experience candidate tools
     registry.register(ToolDefinition {
         name: "submit_experience_candidate".to_string(),
-        description: "提交经验候选。knowledge=事实性知识（知道什么），skill=可复用操作步骤（会做什么，含具体命令/指令/流程）。".to_string(),
+        description: "提交经验候选。knowledge=事实性知识（知道什么），skill=可复用操作步骤（会做什么，含具体命令/指令/流程）。kind=skill 时 instructions 必须是 markdown 格式且至少包含 1 个 `## Section` 二级标题，落盘前框架会做结构校验。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -261,7 +261,7 @@ pub fn register_builtin_tools(
                     },
                     "instructions": {
                         "type": "string",
-                        "description": "skill 类的分步指令正文"
+                        "description": "skill 类的分步指令正文，必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题（如 `## Usage`），可用 `### Subsection` 三级标题组织子章节；不要使用 `####` 或更深层级。落盘前框架会做结构校验，不符合则候选置 WritebackFailed。"
                     },
                     "file_refs": {
                         "type": "array",

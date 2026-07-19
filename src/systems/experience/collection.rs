@@ -74,12 +74,12 @@ pub(crate) fn experience_collection_workitem_system(
 
         let prompt = if task.result_summary.is_empty() {
             format!(
-                "用户目标：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge",
+                "用户目标：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge\n\nSKILL.md 格式要求（kind=skill 时）：\n- instructions 字段必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题\n- 推荐使用 `## Overview` / `## Usage` / `## Examples` / `## Edge Cases` / `## Limitations` 等 section\n- 复杂 skill 可在二级标题下使用 `### Subsection` 三级标题组织内容\n- 不要使用 `####` 或更深层级（update 端不支持作为 operation 锚点）\n- 落盘前框架会做 validate_skill_structure 校验，不符合则候选置 WritebackFailed",
                 task.content
             )
         } else {
             format!(
-                "用户目标：{}\n\n任务结果摘要：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge",
+                "用户目标：{}\n\n任务结果摘要：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge\n\nSKILL.md 格式要求（kind=skill 时）：\n- instructions 字段必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题\n- 推荐使用 `## Overview` / `## Usage` / `## Examples` / `## Edge Cases` / `## Limitations` 等 section\n- 复杂 skill 可在二级标题下使用 `### Subsection` 三级标题组织内容\n- 不要使用 `####` 或更深层级（update 端不支持作为 operation 锚点）\n- 落盘前框架会做 validate_skill_structure 校验，不符合则候选置 WritebackFailed",
                 task.content, task.result_summary
             )
         };
