@@ -3,7 +3,6 @@
 //! 定义项目的核心领域类型。
 
 mod agent;
-mod brain;
 mod chat_session;
 mod command;
 mod confirmation;
@@ -48,9 +47,6 @@ pub use agent::{
 
 // chat_session
 pub use chat_session::ChatSession;
-
-// brain
-pub use brain::{BrainDecisionError, BrainDecisionOutput};
 
 // command
 pub use command::UserCommand;

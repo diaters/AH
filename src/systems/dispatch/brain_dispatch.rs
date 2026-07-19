@@ -89,15 +89,7 @@ pub(crate) fn brain_user_prompt_from_descriptions(
         r#"Task content: "{}"
 
 Available agents:
-{}
-
-Select the best agent for this task and optionally a skill.
-
-Return your decision as JSON:
-{{"agent_name": "<selected_agent_name>", "skill_name": "<skill_name_or_null>"}}
-
-- agent_name: must be one of the available agents listed above
-- skill_name: optional, must be one of the skills listed under the selected agent; use null if no skill is needed"#,
+{}"#,
         task_content,
         agent_descriptions.join("\n"),
     )
@@ -161,8 +153,7 @@ struct BrainSkillSelection {
 /// - `agent_name` 字段缺失或 JSON 格式错误：返回 [`BrainSkillSelectionError::InvalidJson`]
 ///
 /// 输入清洗：调用 [`sanitize_brain_output`] 剥离 LLM 常见的 markdown 代码块包裹、
-/// BOM 与不可见字符，逻辑与 `crate::llm::brain_prompt` 中的私有函数对齐，
-/// 但不跨模块复用以避免引入不必要的耦合。
+/// BOM 与不可见字符。
 pub(crate) fn parse_brain_skill_selection(
     raw: &str,
 ) -> Result<(String, Option<String>), BrainSkillSelectionError> {
@@ -193,10 +184,6 @@ pub(crate) fn parse_brain_skill_selection(
 }
 
 /// 清洗 brain LLM 输出：剥离 markdown 代码块包裹、BOM 与不可见字符。
-///
-/// 与 `crate::llm::brain_prompt::sanitize_json_like_input` +
-/// `extract_json_block` 逻辑对齐，因后者为私有函数且跨模块复用价值有限，
-/// 此处保留本地实现供 brain_dispatch 使用。
 fn sanitize_brain_output(raw: &str) -> String {
     let mut s = raw.trim().to_string();
 
