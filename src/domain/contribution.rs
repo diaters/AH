@@ -662,6 +662,27 @@ pub enum SkillUpdateOperation {
     RemoveSection { section: String },
     #[serde(rename = "replace_frontmatter")]
     ReplaceFrontmatter { field: String, value: String },
+    /// v8 D19：三级标题级 — 在 `## {section}` 范围内替换 `### {subsection}` 内容
+    #[serde(rename = "replace_subsection")]
+    ReplaceSubsection {
+        section: String,
+        subsection: String,
+        content: String,
+    },
+    /// v8 D19：三级标题级 — 在 `## {section}` 范围内 `### {after}` 之后插入新 `### {subsection}`
+    #[serde(rename = "add_subsection")]
+    AddSubsection {
+        section: String,
+        after: String,
+        subsection: String,
+        content: String,
+    },
+    /// v8 D19：三级标题级 — 删除 `## {section}` 下的 `### {subsection}`
+    #[serde(rename = "remove_subsection")]
+    RemoveSubsection { section: String, subsection: String },
+    /// v8 D19：兜底 — 整体替换 body，frontmatter 不变
+    #[serde(rename = "replace_body")]
+    ReplaceBody { content: String },
 }
 
 /// skill-updater workitem 完成后由 orchestrator spawn

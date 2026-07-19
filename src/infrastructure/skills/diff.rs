@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use thiserror::Error;
+use tracing::warn;
 
 use crate::domain::SkillUpdateOperation;
 
@@ -34,10 +35,27 @@ fn split_frontmatter(content: &str) -> (String, String) {
 }
 
 /// 找到 `## {section}` 章节的起始行号和结束行号（不含下一个 ## 标题）
+///
+/// v8 D19 修复 ADR-004 v7 已知局限 1 + 实现偏差 D：
+/// - 标题行比较改用 `l.trim() == header.trim()`，避免尾部空格导致匹配失败
+/// - 同层级同名章节匹配第一个时记录 warn 日志（v7 已知局限 1 落地）
 fn find_section_range(body: &str, section: &str) -> Option<(usize, usize)> {
     let lines: Vec<&str> = body.lines().collect();
     let header = section.trim();
-    let start = lines.iter().position(|l| l.trim_start() == header)?;
+    let start = lines.iter().position(|l| l.trim() == header)?;
+    // 检查是否存在同层级同名章节（已知局限 1：匹配第一个并记录 warn 日志）
+    if lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .any(|(_, l)| l.trim() == header)
+    {
+        warn!(
+            section = header,
+            body_lines = lines.len(),
+            "duplicate section heading, using first match"
+        );
+    }
     let end = lines
         .iter()
         .enumerate()
@@ -45,6 +63,45 @@ fn find_section_range(body: &str, section: &str) -> Option<(usize, usize)> {
         .find(|(_, l)| l.trim_start().starts_with("## "))
         .map(|(i, _)| i)
         .unwrap_or(lines.len());
+    Some((start, end))
+}
+
+/// 在 `## {section}` 范围内找到 `### {subsection}` 的起始行号和结束行号
+///
+/// v8 D19 新增。subsection 结束行 = 下一个 `###` 或 `##` 或父 section_end。
+fn find_subsection_range(body: &str, section: &str, subsection: &str) -> Option<(usize, usize)> {
+    let lines: Vec<&str> = body.lines().collect();
+    let (section_start, section_end) = find_section_range(body, section)?;
+    let subsection_header = subsection.trim();
+    let start = lines
+        .iter()
+        .enumerate()
+        .skip(section_start + 1)
+        .take(section_end.saturating_sub(section_start + 1))
+        .find(|(_, l)| l.trim() == subsection_header)
+        .map(|(i, _)| i)?;
+    // 同层级同名子章节匹配第一个并记录 warn 日志（与 find_section_range 一致）
+    if lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .take(section_end.saturating_sub(start + 1))
+        .any(|(_, l)| l.trim() == subsection_header)
+    {
+        warn!(
+            section = section.trim(),
+            subsection = subsection_header,
+            body_lines = lines.len(),
+            "duplicate subsection heading, using first match"
+        );
+    }
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, l)| l.trim_start().starts_with("### ") || l.trim_start().starts_with("## "))
+        .map(|(i, _)| i)
+        .unwrap_or(section_end);
     Some((start, end))
 }
 
@@ -98,6 +155,48 @@ pub fn apply_skill_operations(
                     frontmatter_lines.push(format!("{}: {}", field, value));
                 }
             }
+            SkillUpdateOperation::ReplaceSubsection {
+                section,
+                subsection,
+                content,
+            } => {
+                let body_str = body_lines.join("\n");
+                let range =
+                    find_subsection_range(&body_str, section, subsection).ok_or_else(|| {
+                        ApplyError::SubsectionNotFound(section.clone(), subsection.clone())
+                    })?;
+                // 保留 `### {subsection}` 标题行，替换后续内容
+                body_lines.splice(range.0 + 1..range.1, content.lines().map(|s| s.to_string()));
+            }
+            SkillUpdateOperation::AddSubsection {
+                section,
+                after,
+                subsection,
+                content,
+            } => {
+                let body_str = body_lines.join("\n");
+                let range = find_subsection_range(&body_str, section, after).ok_or_else(|| {
+                    ApplyError::SubsectionNotFound(section.clone(), after.clone())
+                })?;
+                let mut new_lines: Vec<String> = vec![subsection.clone()];
+                new_lines.extend(content.lines().map(|s| s.to_string()));
+                new_lines.push(String::new()); // 空行分隔
+                body_lines.splice(range.1..range.1, new_lines);
+            }
+            SkillUpdateOperation::RemoveSubsection {
+                section,
+                subsection,
+            } => {
+                let body_str = body_lines.join("\n");
+                let range =
+                    find_subsection_range(&body_str, section, subsection).ok_or_else(|| {
+                        ApplyError::SubsectionNotFound(section.clone(), subsection.clone())
+                    })?;
+                body_lines.drain(range.0..range.1);
+            }
+            SkillUpdateOperation::ReplaceBody { content } => {
+                body_lines = content.lines().map(|s| s.to_string()).collect();
+            }
         }
     }
 
@@ -119,6 +218,8 @@ pub fn apply_skill_operations(
 pub enum ApplyError {
     #[error("section not found: {0}")]
     SectionNotFound(String),
+    #[error("subsection not found: {0} / {1}")]
+    SubsectionNotFound(String, String),
     #[error("frontmatter field not whitelisted: {0}")]
     FieldNotWhitelisted(String),
 }
@@ -160,6 +261,7 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = "---\nname: test\ndescription: A skill\nversion: 1\n---\n\n## Usage\n\nDo it.\n\n## Examples\n\nExample 1.\n";
+    const SAMPLE_WITH_SUBSECTIONS: &str = "---\nname: test\ndescription: A skill\n---\n\n## Usage\n\n### Basic\n\nDo step 1.\n\n### Advanced\n\nDo step 2.\n\n## Examples\n\nExample 1.\n";
 
     #[test]
     fn replace_section_existing() {
@@ -231,6 +333,128 @@ mod tests {
             apply_skill_operations(SAMPLE, &ops),
             Err(ApplyError::FieldNotWhitelisted(_))
         ));
+    }
+
+    #[test]
+    fn replace_frontmatter_upsert_appends_missing_field() {
+        // v8 D19：upsert 语义 — 字段不存在则追加
+        let ops = vec![SkillUpdateOperation::ReplaceFrontmatter {
+            field: "self_updatable".to_string(),
+            value: "false".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops).unwrap();
+        assert!(result.contains("self_updatable: false"));
+    }
+
+    #[test]
+    fn replace_subsection_existing() {
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Advanced".to_string(),
+            content: "Do step 2 with caution.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
+        assert!(result.contains("Do step 2 with caution."));
+        assert!(!result.contains("Do step 2."));
+        // 其他子章节不变
+        assert!(result.contains("Do step 1."));
+    }
+
+    #[test]
+    fn replace_subsection_section_not_found() {
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Missing".to_string(),
+            subsection: "### Advanced".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
+            Err(ApplyError::SubsectionNotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn replace_subsection_subsection_not_found() {
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Missing".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
+            Err(ApplyError::SubsectionNotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn add_subsection_after_existing() {
+        let ops = vec![SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Basic".to_string(),
+            subsection: "### Edge Cases".to_string(),
+            content: "Edge case content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
+        assert!(result.contains("### Edge Cases"));
+        assert!(result.contains("Edge case content."));
+        let basic_idx = result.find("### Basic").unwrap();
+        let edge_idx = result.find("### Edge Cases").unwrap();
+        let advanced_idx = result.find("### Advanced").unwrap();
+        assert!(basic_idx < edge_idx);
+        assert!(edge_idx < advanced_idx);
+    }
+
+    #[test]
+    fn add_subsection_after_not_found() {
+        let ops = vec![SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Missing".to_string(),
+            subsection: "### New".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
+            Err(ApplyError::SubsectionNotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn remove_subsection_existing() {
+        let ops = vec![SkillUpdateOperation::RemoveSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Advanced".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
+        assert!(!result.contains("### Advanced"));
+        assert!(!result.contains("Do step 2."));
+        // 其他子章节不变
+        assert!(result.contains("### Basic"));
+        assert!(result.contains("Do step 1."));
+    }
+
+    #[test]
+    fn replace_body_replaces_body_keeps_frontmatter() {
+        let ops = vec![SkillUpdateOperation::ReplaceBody {
+            content: "## New Section\n\nNew body content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops).unwrap();
+        // frontmatter 保留
+        assert!(result.contains("name: test"));
+        assert!(result.contains("description: A skill"));
+        // body 被整体替换
+        assert!(result.contains("## New Section"));
+        assert!(result.contains("New body content."));
+        // 原 body 内容消失
+        assert!(!result.contains("Do it."));
+        assert!(!result.contains("## Usage"));
+    }
+
+    #[test]
+    fn find_section_range_trailing_whitespace_matches() {
+        // v8 D19 修复 ADR-004 v7 实现偏差 D：trim_start → trim，尾部空格也能匹配
+        let body = "## Usage \n\nDo it.\n";
+        let range = find_section_range(body, "## Usage").unwrap();
+        assert_eq!(range.0, 0);
     }
 }
 
