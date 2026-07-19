@@ -497,6 +497,10 @@ fn temporary_agent_routes_to_parent_inbox() {
 /// 测试用 SKILL.md 模板（version=1，含 Usage 与 Examples 两个 section）。
 const SAMPLE_SKILL_MD: &str = "---\nname: coding\ndescription: A coding skill\nversion: 1\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n\n## Examples\n\nExample 1.\n";
 
+/// v8 D19：包含三级标题（### Subsection）的样本 SKILL.md，
+/// 用于 subsection 级 operation（replace_subsection / add_subsection / remove_subsection）测试。
+const SAMPLE_SKILL_MD_WITH_SUBSECTIONS: &str = "---\nname: coding\ndescription: A coding skill with subsections\nversion: 1\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n\n### Setup\n\nRun `make install`.\n\n### Execution\n\nRun `make run`.\n\n## Examples\n\nExample 1.\n";
+
 /// 在临时目录下写入 SKILL.md，返回 (TempDir, SkillLoader)。
 /// 保留 TempDir 句柄以避免目录被提前清理。
 fn setup_skill_dir(skill_id: &SkillId, content: &str) -> (TempDir, SkillLoader) {
@@ -1370,6 +1374,618 @@ fn submit_skill_update_rejects_when_work_item_entity_is_none() {
         c.status,
         ExperienceCandidateStatus::GovernanceResolved,
         "candidate status should remain GovernanceResolved when work_item_entity is None"
+    );
+
+    drop(tmp);
+}
+
+// ============ v8 D19：subsection 级 operation + replace_body + 结构校验 ============
+
+/// v8 D19：subsection 级 operation（replace_subsection / add_subsection / remove_subsection）
+/// 直接通过 `SkillUpdateCompletedMessage` 注入到 completion_system 验证 apply 行为。
+///
+/// 验证点：
+/// - replace_subsection 替换 `### Setup` 内容
+/// - add_subsection 在 `### Setup` 之后插入 `### Testing`
+/// - remove_subsection 删除 `### Execution`
+/// - SKILL.md 三级标题结构按预期变化
+/// - SkillRegistry version 刷新到 2
+/// - 候选状态推进到 Persisted
+#[test]
+fn skill_update_subsection_operations_apply_correctly() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD_WITH_SUBSECTIONS);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    let operations = vec![
+        SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Setup".to_string(),
+            content: "Run `make setup`.".to_string(),
+        },
+        SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Setup".to_string(),
+            subsection: "### Testing".to_string(),
+            content: "Run `make test`.".to_string(),
+        },
+        SkillUpdateOperation::RemoveSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Execution".to_string(),
+        },
+    ];
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
+
+    app.update();
+
+    let new_content = std::fs::read_to_string(&skill_path).unwrap();
+
+    // 1. Setup 内容已被替换
+    assert!(
+        new_content.contains("Run `make setup`."),
+        "Setup subsection content should be replaced; got:\n{}",
+        new_content
+    );
+    assert!(
+        !new_content.contains("Run `make install`."),
+        "old Setup content should be gone; got:\n{}",
+        new_content
+    );
+
+    // 2. Testing subsection 已新增（在 Setup 之后）
+    assert!(
+        new_content.contains("### Testing"),
+        "Testing subsection should be added; got:\n{}",
+        new_content
+    );
+    assert!(
+        new_content.contains("Run `make test`."),
+        "Testing content should be present; got:\n{}",
+        new_content
+    );
+
+    // 3. Execution subsection 已删除
+    assert!(
+        !new_content.contains("### Execution"),
+        "Execution subsection should be removed; got:\n{}",
+        new_content
+    );
+    assert!(
+        !new_content.contains("Run `make run`."),
+        "Execution content should be gone; got:\n{}",
+        new_content
+    );
+
+    // 4. 顶层 section（## Usage / ## Examples）仍存在
+    assert!(
+        new_content.contains("## Usage") && new_content.contains("## Examples"),
+        "top-level sections should remain; got:\n{}",
+        new_content
+    );
+
+    // 5. SkillRegistry version 已刷新
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 2,
+        "registry version should be 2 after subsection operations"
+    );
+
+    // 6. 候选状态为 Persisted
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::Persisted,
+        "candidate should be Persisted after successful subsection operations"
+    );
+
+    drop(tmp);
+}
+
+/// v8 D19：replace_body 兜底 operation 整体替换 body，frontmatter 保持不变。
+///
+/// 验证点：
+/// - body 全部被替换为新内容
+/// - frontmatter 仍含原 name / description / version / self_updatable
+/// - SkillRegistry version 刷新到 2
+/// - 候选状态推进到 Persisted
+#[test]
+fn skill_update_replace_body_keeps_frontmatter() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD_WITH_SUBSECTIONS);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    let new_body = "## Usage\n\nBrand new body content.\n";
+    let operations = vec![SkillUpdateOperation::ReplaceBody {
+        content: new_body.to_string(),
+    }];
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
+
+    app.update();
+
+    let new_content = std::fs::read_to_string(&skill_path).unwrap();
+
+    // 1. body 已被整体替换
+    assert!(
+        new_content.contains("Brand new body content."),
+        "body should be replaced; got:\n{}",
+        new_content
+    );
+    assert!(
+        !new_content.contains("Do the thing."),
+        "old body content should be gone; got:\n{}",
+        new_content
+    );
+    assert!(
+        !new_content.contains("### Setup"),
+        "old subsections should be gone; got:\n{}",
+        new_content
+    );
+
+    // 2. frontmatter 仍含原字段
+    assert!(
+        new_content.contains("name: coding") && new_content.contains("self_updatable: true"),
+        "frontmatter should be preserved; got:\n{}",
+        new_content
+    );
+
+    // 3. SkillRegistry version 已刷新
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 2,
+        "registry version should be 2 after replace_body"
+    );
+
+    // 4. 候选状态为 Persisted
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::Persisted,
+        "candidate should be Persisted after replace_body"
+    );
+
+    drop(tmp);
+}
+
+/// v8 D19：post-apply `validate_skill_structure` 拦截结构破坏的 operations。
+///
+/// 场景：通过 `replace_body` 把 body 替换为没有任何 `##` 标题的纯文本，
+/// 触发 `ApplyError::StructureInvalid`，整体回滚：
+/// - SKILL.md 内容不变
+/// - SkillRegistry version 仍是 1
+/// - 候选状态保持 GovernanceResolved
+#[test]
+fn skill_update_invalid_structure_after_replace_body_rolls_back() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD_WITH_SUBSECTIONS);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    // 用 replace_body 写入没有任何 `##` 标题的纯文本，触发 StructureInvalid
+    let operations = vec![SkillUpdateOperation::ReplaceBody {
+        content: "no section heading here".to_string(),
+    }];
+    app.world_mut()
+        .entity_mut(work_item_entity)
+        .insert(make_completed_message(
+            work_item_id,
+            skill_id.clone(),
+            1,
+            2,
+            operations,
+        ));
+
+    app.update();
+
+    // 1. SKILL.md 未被修改（仍含原 Setup 内容）
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("Run `make install`."),
+        "SKILL.md should be unchanged after StructureInvalid rollback; got:\n{}",
+        content
+    );
+
+    // 2. SkillRegistry version 仍是 1
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 1,
+        "registry version should remain 1 after StructureInvalid rollback"
+    );
+
+    // 3. 候选状态保持 GovernanceResolved
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::GovernanceResolved,
+        "candidate status should remain GovernanceResolved after StructureInvalid rollback"
+    );
+
+    drop(tmp);
+}
+
+/// v8 D19：subsection 级 operation 的 dry-run 拦截。
+///
+/// 通过 `submit_skill_update` 工具调用路径，验证引用不存在的 subsection 时
+/// orchestrator 的 dry-run 应立即拒绝：
+/// - 不 spawn `SkillUpdateCompletedMessage`
+/// - `ToolCallingState.pending_tool_call_ids` 被清空（错误 result 已被消费）
+/// - SKILL.md 内容不变
+/// - SkillRegistry version 仍是 1
+/// - 候选状态保持 GovernanceResolved
+#[test]
+fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD_WITH_SUBSECTIONS);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    let agent_id = Uuid::new_v4();
+    app.world_mut().spawn(Agent {
+        id: agent_id,
+        profile: AgentProfile {
+            name: "skill-updater".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["skill-updater".to_string()],
+            description: "skill-updater agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    });
+
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("skill update task", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    let calling_state_entity = app
+        .world_mut()
+        .spawn(ToolCallingState {
+            task_id,
+            agent_id,
+            pending_tool_call_ids: vec!["call_test".to_string()],
+            iteration: 1,
+            max_iterations: 5,
+            conversation: Vec::new(),
+            tools: Vec::new(),
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            work_item_id: Some(work_item_id),
+        })
+        .id();
+
+    // 引用不存在的 subsection：### NonExistent
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: Vec::new(),
+            conversation: None,
+            work_item_id: Some(work_item_id),
+            model_override: None,
+        },
+        tool_name: "submit_skill_update".to_string(),
+        tool_input: serde_json::json!({
+            "operations": [
+                {"action": "replace_subsection", "section": "## Usage", "subsection": "### NonExistent", "content": "x"}
+            ],
+            "rationale": "test dry-run rejection for nonexistent subsection"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_test".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: Some(work_item_entity),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 1. 不应 spawn SkillUpdateCompletedMessage
+    let completed_count = {
+        let mut q = app.world_mut().query::<&SkillUpdateCompletedMessage>();
+        q.iter(app.world()).count()
+    };
+    assert_eq!(
+        completed_count, 0,
+        "dry-run should reject nonexistent subsection; no SkillUpdateCompletedMessage spawned"
+    );
+
+    // 2. ToolCallingState pending_tool_call_ids 应被清空
+    let calling_state = app
+        .world()
+        .get::<ToolCallingState>(calling_state_entity)
+        .expect("ToolCallingState should still exist");
+    assert!(
+        calling_state.pending_tool_call_ids.is_empty(),
+        "dry-run failure result should be consumed by tool_calling_orchestrator_system"
+    );
+    let has_dry_run_error_msg = calling_state.conversation.iter().any(|m| match m {
+        ConversationMessage::Tool { content, .. } => content.contains("dry-run failed"),
+        _ => false,
+    });
+    assert!(
+        has_dry_run_error_msg,
+        "ToolCallingState conversation should contain dry-run failure message"
+    );
+
+    // 3. SKILL.md 内容不变
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("Run `make install`."),
+        "SKILL.md should be unchanged after dry-run rejection"
+    );
+
+    // 4. SkillRegistry version 仍是 1
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 1,
+        "registry version should remain 1 after dry-run rejection"
+    );
+
+    // 5. 候选状态保持 GovernanceResolved
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::GovernanceResolved,
+        "candidate status should remain GovernanceResolved after dry-run rejection"
+    );
+
+    drop(tmp);
+}
+
+/// v8 D19：dry-run 通过的 subsection operation 应成功 apply。
+///
+/// 通过 `submit_skill_update` 工具调用路径，验证合法 subsection operation 不被误拒：
+/// - SKILL.md 内容已更新
+/// - SkillRegistry version 刷新到 2
+/// - 候选状态推进到 Persisted
+#[test]
+fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
+    let skill_id = SkillId::new("worker-agent", "coding");
+    let (tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD_WITH_SUBSECTIONS);
+    let skill_path = loader.skill_md_path(&skill_id);
+
+    let mut app = create_test_app(no_brain_test_config());
+    app.insert_resource(loader.clone());
+    app.world_mut()
+        .resource_mut::<SkillRegistry>()
+        .upsert(make_skill_entry(skill_id.clone(), true));
+
+    let producer_task_id = Uuid::new_v4();
+    let candidate_id = stage_resolved_candidate(
+        &mut app.world_mut().resource_mut::<ExperienceStore>(),
+        producer_task_id,
+    );
+
+    let agent_id = Uuid::new_v4();
+    app.world_mut().spawn(Agent {
+        id: agent_id,
+        profile: AgentProfile {
+            name: "skill-updater".to_string(),
+            model: "test-model".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["skill-updater".to_string()],
+            description: "skill-updater agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    });
+
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task::from_user_input_ready("skill update task", 3, default_channel()),
+            ShortTermMemory::default(),
+        ))
+        .id();
+    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+
+    let (work_item_id, work_item_entity) =
+        spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
+
+    app.world_mut().spawn(ToolCallingState {
+        task_id,
+        agent_id,
+        pending_tool_call_ids: vec!["call_test".to_string()],
+        iteration: 1,
+        max_iterations: 5,
+        conversation: Vec::new(),
+        tools: Vec::new(),
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "submit_skill_update".to_string(),
+        },
+        work_item_id: Some(work_item_id),
+    });
+
+    // 合法 replace_subsection：引用实际存在的 ## Usage / ### Setup
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request: AgentExecutionRequest {
+            task_id,
+            agent_id,
+            request_kind: AgentRequestKind::ToolExecution {
+                tool_name: "submit_skill_update".to_string(),
+            },
+            prompt: String::new(),
+            system_prompt: None,
+            tools: Vec::new(),
+            conversation: None,
+            work_item_id: Some(work_item_id),
+            model_override: None,
+        },
+        tool_name: "submit_skill_update".to_string(),
+        tool_input: serde_json::json!({
+            "operations": [
+                {"action": "replace_subsection", "section": "## Usage", "subsection": "### Setup", "content": "Run `make setup`."}
+            ],
+            "rationale": "valid subsection update"
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_test".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: Some(work_item_entity),
+    });
+
+    for _ in 0..5 {
+        app.update();
+    }
+
+    // 1. SKILL.md 已更新
+    let content = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        content.contains("Run `make setup`."),
+        "dry-run should accept valid subsection operation; SKILL.md should be updated"
+    );
+    assert!(
+        !content.contains("Run `make install`."),
+        "old Setup content should be replaced"
+    );
+
+    // 2. SkillRegistry version 已刷新
+    let registry = app.world().resource::<SkillRegistry>();
+    let entry = registry
+        .get(&skill_id)
+        .expect("skill should be in registry");
+    assert_eq!(
+        entry.version, 2,
+        "registry version should be 2 after successful subsection update"
+    );
+
+    // 3. 候选状态为 Persisted
+    let store = app.world().resource::<ExperienceStore>();
+    let c = store
+        .candidates
+        .get(&candidate_id)
+        .expect("candidate exists");
+    assert_eq!(
+        c.status,
+        ExperienceCandidateStatus::Persisted,
+        "candidate should be Persisted after successful subsection update"
     );
 
     drop(tmp);
