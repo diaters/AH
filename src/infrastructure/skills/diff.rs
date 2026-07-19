@@ -8,6 +8,45 @@ use crate::domain::SkillUpdateOperation;
 /// 允许 LLM 修改的 frontmatter 字段白名单
 pub const FRONTMATTER_WHITELIST: &[&str] = &["name", "description", "self_updatable"];
 
+/// v8 D19：SKILL.md body 结构校验错误
+#[derive(Debug, Error)]
+pub enum SkillStructureError {
+    #[error("instructions must contain at least one `##` heading")]
+    NoSectionHeading,
+    #[error("first `##` heading must have non-empty content")]
+    EmptyFirstSection,
+}
+
+/// v8 D19：校验 SKILL.md body 结构
+///
+/// 规则：
+/// 1. 至少包含 1 个 `## ` 二级标题
+/// 2. 首个 `## ` 标题下必须有非空内容（到下一个 `##` 或 body 末尾之间至少 1 行非空）
+pub fn validate_skill_structure(instructions: &str) -> Result<(), SkillStructureError> {
+    let lines: Vec<&str> = instructions.lines().collect();
+    let first_section_idx = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("## "))
+        .ok_or(SkillStructureError::NoSectionHeading)?;
+    // 首个 section 内容范围 = [first_section_idx + 1, 下一个 ## 或末尾)
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(first_section_idx + 1)
+        .find(|(_, l)| l.trim_start().starts_with("## "))
+        .map(|(i, _)| i)
+        .unwrap_or(lines.len());
+    let has_non_empty = lines
+        .iter()
+        .skip(first_section_idx + 1)
+        .take(end.saturating_sub(first_section_idx + 1))
+        .any(|l| !l.trim().is_empty());
+    if !has_non_empty {
+        return Err(SkillStructureError::EmptyFirstSection);
+    }
+    Ok(())
+}
+
 /// 解析 SKILL.md，返回 frontmatter 部分和 body 部分
 fn split_frontmatter(content: &str) -> (String, String) {
     let mut lines = content.lines();
@@ -200,6 +239,13 @@ pub fn apply_skill_operations(
         }
     }
 
+    // v8 D19：post-apply 结构校验，防止 LLM 用 replace_body 或 remove_section
+    // 删除所有章节标题，整体回滚（D13 语义）
+    let new_body: String = body_lines.join("\n");
+    if let Err(e) = validate_skill_structure(&new_body) {
+        return Err(ApplyError::StructureInvalid(e.to_string()));
+    }
+
     let mut result = String::new();
     result.push_str("---\n");
     for line in &frontmatter_lines {
@@ -222,6 +268,9 @@ pub enum ApplyError {
     SubsectionNotFound(String, String),
     #[error("frontmatter field not whitelisted: {0}")]
     FieldNotWhitelisted(String),
+    /// v8 D19：post-apply 结构校验失败（apply 后 body 无 `##` 标题或首个 section 空）
+    #[error("post-apply structure invalid: {0}")]
+    StructureInvalid(String),
 }
 
 /// 保留最新 keep 代历史，删除超出部分
@@ -455,6 +504,66 @@ mod tests {
         let body = "## Usage \n\nDo it.\n";
         let range = find_section_range(body, "## Usage").unwrap();
         assert_eq!(range.0, 0);
+    }
+
+    #[test]
+    fn validate_skill_structure_compliant() {
+        let body = "## Usage\n\nDo it.\n\n## Examples\n\nExample.\n";
+        assert!(validate_skill_structure(body).is_ok());
+    }
+
+    #[test]
+    fn validate_skill_structure_no_section_heading() {
+        let body = "Just plain text without any heading.";
+        assert!(matches!(
+            validate_skill_structure(body),
+            Err(SkillStructureError::NoSectionHeading)
+        ));
+    }
+
+    #[test]
+    fn validate_skill_structure_empty_first_section() {
+        // 首个 ## 标题下到下一个 ## 之间无非空内容
+        let body = "## First\n\n## Second\n\nContent.\n";
+        assert!(matches!(
+            validate_skill_structure(body),
+            Err(SkillStructureError::EmptyFirstSection)
+        ));
+    }
+
+    #[test]
+    fn apply_replace_body_with_compliant_structure_passes() {
+        // v8 D19：replace_body 后 body 仍有 ## 标题，应通过 post-apply 校验
+        let ops = vec![SkillUpdateOperation::ReplaceBody {
+            content: "## New Section\n\nNew content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn apply_replace_body_with_no_section_heading_rolls_back() {
+        // v8 D19：replace_body 后 body 无 ## 标题，post-apply 校验应返回 StructureInvalid
+        let ops = vec![SkillUpdateOperation::ReplaceBody {
+            content: "Just plain text without heading.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops);
+        assert!(matches!(result, Err(ApplyError::StructureInvalid(_))));
+    }
+
+    #[test]
+    fn apply_remove_all_sections_rolls_back() {
+        // v8 D19：删除所有 ## 章节后 body 无 ## 标题，应回滚
+        let ops = vec![
+            SkillUpdateOperation::RemoveSection {
+                section: "## Usage".to_string(),
+            },
+            SkillUpdateOperation::RemoveSection {
+                section: "## Examples".to_string(),
+            },
+        ];
+        let result = apply_skill_operations(SAMPLE, &ops);
+        assert!(matches!(result, Err(ApplyError::StructureInvalid(_))));
     }
 }
 
