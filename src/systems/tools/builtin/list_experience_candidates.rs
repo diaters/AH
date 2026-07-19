@@ -25,8 +25,9 @@ impl crate::domain::BuiltinTool for ListExperienceCandidatesTool {
                 let kind = format!("{:?}", candidate.kind_hint);
                 let summary = match &candidate.payload {
                     crate::domain::ExperienceCandidatePayload::Knowledge { content } => {
-                        if content.len() > 200 {
-                            format!("{}…", &content[..200])
+                        if content.chars().count() > 200 {
+                            let truncated: String = content.chars().take(200).collect();
+                            format!("{}…", truncated)
                         } else {
                             content.clone()
                         }

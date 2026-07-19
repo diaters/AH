@@ -24,6 +24,40 @@ use crate::{
 /// 绝对硬上限倍数：iteration 超过此值 × max_iterations 时强制失败任务
 const HARD_LIMIT_MULTIPLIER: u32 = 2;
 
+/// `ToolCallingState` 的快照，用于在 `llm_response_system` 内避开 Bevy 借用冲突。
+///
+/// 字段语义与 `ToolCallingState` 一致；`work_item_id` 区分 Task 级（None）与
+/// WorkItem 级（Some）调用循环，是 `(task_id, work_item_id)` 索引键的一部分。
+struct CallingStateInfo {
+    entity: Entity,
+    task_id: crate::domain::TaskId,
+    iteration: u32,
+    max_iterations: u32,
+    conversation: Vec<ConversationMessage>,
+    tools: Vec<ToolDefinition>,
+    request_kind: AgentRequestKind,
+    work_item_id: Option<uuid::Uuid>,
+}
+
+/// 在 `state_info` 中按 `(task_id, work_item_id)` 严格匹配查找 ToolCallingState。
+///
+/// 设计原则：WorkItem 是执行单位，Task 是组织单位。同一 Task 下不同 WorkItem
+/// 的工具循环互不复用 State。这避免了"collector 残留 State 被 skill-updater
+/// 误复用"类的循环 bug。
+///
+/// `work_item_id = None` 表示 Task 级调用，仅匹配 `work_item_id = None` 的 State；
+/// `work_item_id = Some(x)` 表示 WorkItem 级调用，仅匹配 `work_item_id = Some(x)`
+/// 的 State。跨 Task / 跨 WorkItem 都不会误匹配。
+fn find_calling_state(
+    state_info: &[CallingStateInfo],
+    task_id: crate::domain::TaskId,
+    work_item_id: Option<uuid::Uuid>,
+) -> Option<&CallingStateInfo> {
+    state_info
+        .iter()
+        .find(|i| i.task_id == task_id && i.work_item_id == work_item_id)
+}
+
 /// 从子任务输出中提取 <<<RESULT>>>...<<</RESULT>>> 标记对内容。
 /// 提取最后一对标记。如果未找到，返回 None。
 fn extract_result_summary(text: &str) -> Option<String> {
@@ -699,16 +733,6 @@ pub fn llm_response_system(
     profile_contexts: Query<&ProfileGenerationContext>,
 ) {
     // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
-    struct CallingStateInfo {
-        entity: Entity,
-        task_id: crate::domain::TaskId,
-        iteration: u32,
-        max_iterations: u32,
-        conversation: Vec<ConversationMessage>,
-        tools: Vec<ToolDefinition>,
-        request_kind: AgentRequestKind,
-        work_item_id: Option<uuid::Uuid>,
-    }
     let state_info: Vec<CallingStateInfo> = calling_states
         .iter()
         .map(|(e, s)| CallingStateInfo {
@@ -727,218 +751,240 @@ pub fn llm_response_system(
         let result = &result_message.result;
 
         // 处理 WorkItem 结果（Evaluation、Summarization 等）
-        if let Some(work_item_id) = result.work_item_id
-            && let Some((work_item_entity, work_item)) =
-                work_items.iter().find(|(_, wi)| wi.id == work_item_id)
-        {
-            match work_item.work_type {
-                WorkItemType::Evaluation => {
-                    handle_evaluation_work_item_result(
-                        &mut commands,
-                        &mut tasks,
-                        entity,
-                        work_item_entity,
-                        work_item,
-                        result,
-                        clock.0,
-                        &eval_config,
-                    );
-                    continue;
-                }
-                WorkItemType::Summarization => {
-                    handle_summarization_work_item_result(
-                        &mut commands,
-                        &mut tasks,
-                        entity,
-                        work_item_entity,
-                        work_item,
-                        result,
-                        clock.0,
-                        &config,
-                    );
-                    continue;
-                }
-                WorkItemType::ExperienceCollection => {
-                    match &result.result {
-                        Ok(AgentExecutionOutput {
-                            content: OutputContent::ToolCalls(_),
-                            ..
-                        }) => {
-                            // 不 continue，让下面的 tool calling loop 处理 tool calls
-                        }
-                        Ok(_) => {
-                            // LLM 返回普通文本：检查是否有候选提交
-                            let had_submission =
-                                has_experience_submission(&experience_store, work_item.task_id);
+        // 按 work_item_id 严格路由：声明属于 WorkItem 的响应必须由 WorkItem 分支处理；
+        // 找不到对应 WorkItem（已 despawn / 异步错配）时显式丢弃，不 fall through 到
+        // task 级 mark_done。这避免"无主响应误触发 Task 完成"类的循环 bug。
+        if let Some(work_item_id) = result.work_item_id {
+            let work_item_lookup = work_items
+                .iter()
+                .find(|(_, wi)| wi.id == work_item_id)
+                .map(|(e, w)| (e, w.clone()));
 
-                            let completed_task_id = work_item.task_id;
-                            let completed_parent_task_id = work_item.parent_task_id;
-                            let completed_agent_id =
-                                work_item.assigned_agent.unwrap_or(uuid::Uuid::nil());
-                            let governing_agent_id =
-                                work_item.governing_agent_id.unwrap_or(completed_agent_id);
+            if let Some((work_item_entity, work_item)) = work_item_lookup {
+                match work_item.work_type {
+                    WorkItemType::Evaluation => {
+                        handle_evaluation_work_item_result(
+                            &mut commands,
+                            &mut tasks,
+                            entity,
+                            work_item_entity,
+                            &work_item,
+                            result,
+                            clock.0,
+                            &eval_config,
+                        );
+                        continue;
+                    }
+                    WorkItemType::Summarization => {
+                        handle_summarization_work_item_result(
+                            &mut commands,
+                            &mut tasks,
+                            entity,
+                            work_item_entity,
+                            &work_item,
+                            result,
+                            clock.0,
+                            &config,
+                        );
+                        continue;
+                    }
+                    WorkItemType::ExperienceCollection => {
+                        match &result.result {
+                            Ok(AgentExecutionOutput {
+                                content: OutputContent::ToolCalls(_),
+                                ..
+                            }) => {
+                                // 不 continue，让下面的 tool calling loop 处理 tool calls
+                            }
+                            Ok(_) => {
+                                // LLM 返回普通文本：检查是否有候选提交
+                                let had_submission =
+                                    has_experience_submission(&experience_store, work_item.task_id);
 
-                            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
-                                if had_submission {
-                                    wi.1.complete();
-                                    commands.entity(work_item_entity).insert(
-                                        WorkItemLifecycleHookPending(
-                                            HookPoint::OnWorkItemCompleted,
-                                        ),
-                                    );
-                                } else {
+                                let completed_task_id = work_item.task_id;
+                                let completed_parent_task_id = work_item.parent_task_id;
+                                let completed_agent_id =
+                                    work_item.assigned_agent.unwrap_or(uuid::Uuid::nil());
+                                let governing_agent_id =
+                                    work_item.governing_agent_id.unwrap_or(completed_agent_id);
+
+                                if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                    if had_submission {
+                                        wi.1.complete();
+                                        commands.entity(work_item_entity).insert(
+                                            WorkItemLifecycleHookPending(
+                                                HookPoint::OnWorkItemCompleted,
+                                            ),
+                                        );
+                                    } else {
+                                        wi.1.fail();
+                                        commands.entity(work_item_entity).insert(
+                                            WorkItemLifecycleHookPending(
+                                                HookPoint::OnWorkItemFailed,
+                                            ),
+                                        );
+                                    }
+                                }
+
+                                commands.spawn(ExperienceCollectionCompletedMessage {
+                                    task_id: completed_task_id,
+                                    parent_task_id: completed_parent_task_id,
+                                    agent_id: completed_agent_id,
+                                    governing_agent_id,
+                                });
+
+                                commands.entity(work_item_entity).despawn();
+                                commands.entity(entity).despawn();
+                                continue;
+                            }
+                            Err(_) => {
+                                if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
                                     wi.1.fail();
                                     commands.entity(work_item_entity).insert(
                                         WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
                                     );
                                 }
+                                commands.entity(work_item_entity).despawn();
+                                commands.entity(entity).despawn();
+                                continue;
                             }
-
-                            commands.spawn(ExperienceCollectionCompletedMessage {
-                                task_id: completed_task_id,
-                                parent_task_id: completed_parent_task_id,
-                                agent_id: completed_agent_id,
-                                governing_agent_id,
-                            });
-
-                            commands.entity(work_item_entity).despawn();
-                            commands.entity(entity).despawn();
-                            continue;
                         }
-                        Err(_) => {
-                            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
-                                wi.1.fail();
+                    }
+                    WorkItemType::ProfileGeneration => {
+                        // 通过 Query 从 WorkItem Entity 读取 ProfileGenerationContext Component
+                        let pg_ctx = profile_contexts.get(work_item_entity).ok();
+                        match &result.result {
+                            Ok(AgentExecutionOutput {
+                                content: OutputContent::ToolCalls(calls),
+                                ..
+                            }) => {
+                                // 互斥检测 + 非相关工具检测
+                                let has_submit =
+                                    calls.iter().any(|c| c.name == "submit_profile_update");
+                                let has_skip =
+                                    calls.iter().any(|c| c.name == "skip_profile_update");
+                                let has_other = calls.iter().any(|c| {
+                                    c.name != "submit_profile_update"
+                                        && c.name != "skip_profile_update"
+                                });
+
+                                if has_submit && has_skip {
+                                    // 互斥冲突：两个工具同时调用
+                                    handle_profile_generation_invalid(
+                                        &mut commands,
+                                        &experience_store,
+                                        pg_ctx,
+                                        &work_item,
+                                        entity,
+                                        work_item_entity,
+                                        "tool_conflict",
+                                    );
+                                    continue;
+                                }
+                                if has_other || (!has_submit && !has_skip) {
+                                    // 调用非相关工具，或未调用任何相关工具
+                                    handle_profile_generation_invalid(
+                                        &mut commands,
+                                        &experience_store,
+                                        pg_ctx,
+                                        &work_item,
+                                        entity,
+                                        work_item_entity,
+                                        "non_relevant_tool",
+                                    );
+                                    continue;
+                                }
+                                // 单一工具调用（submit 或 skip）：放行给 orchestrator 处理
+                            }
+                            Ok(_) => {
+                                // LLM 返回普通文本（未调用工具）：异常
+                                handle_profile_generation_invalid(
+                                    &mut commands,
+                                    &experience_store,
+                                    pg_ctx,
+                                    &work_item,
+                                    entity,
+                                    work_item_entity,
+                                    "no_tool_call",
+                                );
+                                continue;
+                            }
+                            Err(_) => {
+                                // LLM 调用报错：异常
+                                handle_profile_generation_invalid(
+                                    &mut commands,
+                                    &experience_store,
+                                    pg_ctx,
+                                    &work_item,
+                                    entity,
+                                    work_item_entity,
+                                    "llm_error",
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    WorkItemType::SkillUpdate => {
+                        // - ToolCalls（submit_skill_update）：fall through，让 tool calling loop 处理，
+                        //   orchestrator 会 spawn SkillUpdateCompletedMessage，由
+                        //   skill_update_completion_system 消费并 despawn WorkItem。
+                        // - text / error：LLM 未调用工具，无 operations 可应用；
+                        //   直接 despawn WorkItem + SkillUpdateContext entity + result entity，
+                        //   候选状态保持 GovernanceResolved，由后续治理重新评估。
+                        match &result.result {
+                            Ok(AgentExecutionOutput {
+                                content: OutputContent::ToolCalls(_),
+                                ..
+                            }) => {
+                                // 不 continue，让下面的 tool calling loop 处理 tool calls
+                            }
+                            Ok(_) => {
+                                warn!(
+                                    event = "SkillUpdateWorkItemNoToolCall",
+                                    work_item_id = %work_item.id,
+                                    task_id = %work_item.task_id,
+                                    error = "LLM returned text without calling submit_skill_update",
+                                    error_type = "NoToolCall",
+                                    "skill update LLM finished without tool call, cleaning up work item"
+                                );
                                 commands.entity(work_item_entity).insert(
                                     WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
                                 );
-                            }
-                            commands.entity(work_item_entity).despawn();
-                            commands.entity(entity).despawn();
-                            continue;
-                        }
-                    }
-                }
-                WorkItemType::ProfileGeneration => {
-                    // 通过 Query 从 WorkItem Entity 读取 ProfileGenerationContext Component
-                    let pg_ctx = profile_contexts.get(work_item_entity).ok();
-                    match &result.result {
-                        Ok(AgentExecutionOutput {
-                            content: OutputContent::ToolCalls(calls),
-                            ..
-                        }) => {
-                            // 互斥检测 + 非相关工具检测
-                            let has_submit =
-                                calls.iter().any(|c| c.name == "submit_profile_update");
-                            let has_skip = calls.iter().any(|c| c.name == "skip_profile_update");
-                            let has_other = calls.iter().any(|c| {
-                                c.name != "submit_profile_update" && c.name != "skip_profile_update"
-                            });
-
-                            if has_submit && has_skip {
-                                // 互斥冲突：两个工具同时调用
-                                handle_profile_generation_invalid(
-                                    &mut commands,
-                                    &experience_store,
-                                    pg_ctx,
-                                    work_item,
-                                    entity,
-                                    work_item_entity,
-                                    "tool_conflict",
-                                );
+                                commands.entity(work_item_entity).despawn();
+                                commands.entity(entity).despawn();
                                 continue;
                             }
-                            if has_other || (!has_submit && !has_skip) {
-                                // 调用非相关工具，或未调用任何相关工具
-                                handle_profile_generation_invalid(
-                                    &mut commands,
-                                    &experience_store,
-                                    pg_ctx,
-                                    work_item,
-                                    entity,
-                                    work_item_entity,
-                                    "non_relevant_tool",
+                            Err(_) => {
+                                warn!(
+                                    event = "SkillUpdateWorkItemLlmFailed",
+                                    work_item_id = %work_item.id,
+                                    task_id = %work_item.task_id,
+                                    error = "LLM execution returned Err",
+                                    error_type = "LlmExecutionFailed",
+                                    "skill update LLM failed, cleaning up work item"
                                 );
+                                commands.entity(work_item_entity).insert(
+                                    WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
+                                );
+                                commands.entity(work_item_entity).despawn();
+                                commands.entity(entity).despawn();
                                 continue;
                             }
-                            // 单一工具调用（submit 或 skip）：放行给 orchestrator 处理
-                        }
-                        Ok(_) => {
-                            // LLM 返回普通文本（未调用工具）：异常
-                            handle_profile_generation_invalid(
-                                &mut commands,
-                                &experience_store,
-                                pg_ctx,
-                                work_item,
-                                entity,
-                                work_item_entity,
-                                "no_tool_call",
-                            );
-                            continue;
-                        }
-                        Err(_) => {
-                            // LLM 调用报错：异常
-                            handle_profile_generation_invalid(
-                                &mut commands,
-                                &experience_store,
-                                pg_ctx,
-                                work_item,
-                                entity,
-                                work_item_entity,
-                                "llm_error",
-                            );
-                            continue;
                         }
                     }
+                    _ => {}
                 }
-                WorkItemType::SkillUpdate => {
-                    // - ToolCalls（submit_skill_update）：fall through，让 tool calling loop 处理，
-                    //   orchestrator 会 spawn SkillUpdateCompletedMessage，由
-                    //   skill_update_completion_system 消费并 despawn WorkItem。
-                    // - text / error：LLM 未调用工具，无 operations 可应用；
-                    //   直接 despawn WorkItem + SkillUpdateContext entity + result entity，
-                    //   候选状态保持 GovernanceResolved，由后续治理重新评估。
-                    match &result.result {
-                        Ok(AgentExecutionOutput {
-                            content: OutputContent::ToolCalls(_),
-                            ..
-                        }) => {
-                            // 不 continue，让下面的 tool calling loop 处理 tool calls
-                        }
-                        Ok(_) => {
-                            warn!(
-                                event = "SkillUpdateWorkItemNoToolCall",
-                                work_item_id = %work_item.id,
-                                task_id = %work_item.task_id,
-                                error = "LLM returned text without calling submit_skill_update",
-                                error_type = "NoToolCall",
-                                "skill update LLM finished without tool call, cleaning up work item"
-                            );
-                            commands
-                                .entity(work_item_entity)
-                                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
-                            commands.entity(work_item_entity).despawn();
-                            commands.entity(entity).despawn();
-                            continue;
-                        }
-                        Err(_) => {
-                            warn!(
-                                event = "SkillUpdateWorkItemLlmFailed",
-                                work_item_id = %work_item.id,
-                                task_id = %work_item.task_id,
-                                error = "LLM execution returned Err",
-                                error_type = "LlmExecutionFailed",
-                                "skill update LLM failed, cleaning up work item"
-                            );
-                            commands
-                                .entity(work_item_entity)
-                                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
-                            commands.entity(work_item_entity).despawn();
-                            commands.entity(entity).despawn();
-                            continue;
-                        }
-                    }
-                }
-                _ => {}
+            } else {
+                // 无主响应：响应声明属于 WorkItem x，但 x 已不存在（despawn / 异步错配）。
+                // 显式丢弃响应，不 fall through 到 task 级 mark_done。
+                warn!(
+                    event = "LlmResponseOrphaned",
+                    task_id = %result.task_id,
+                    work_item_id = %work_item_id,
+                    "LLM response references non-existent work item, dropping"
+                );
+                commands.entity(entity).despawn();
+                continue;
             }
         }
 
@@ -979,10 +1025,15 @@ pub fn llm_response_system(
                     ..
                 }) => {
                     // Despawn any ToolCallingState for this task (loop completed with text)
-                    if let Some(info) = state_info.iter().find(|i| i.task_id == task.id) {
+                    // 按 (task_id, work_item_id) 严格匹配：仅清理当前调用循环的 State，
+                    // 不影响同 Task 下其他 WorkItem 的 State。
+                    if let Some(info) =
+                        find_calling_state(&state_info, task.id, result.work_item_id)
+                    {
                         debug!(
                             event = "ToolCallingStateCleaned",
                             task_id = %task.id,
+                            work_item_id = ?result.work_item_id,
                             "tool calling completed with text response, cleaning up state"
                         );
                         commands.entity(info.entity).despawn();
@@ -1080,8 +1131,10 @@ pub fn llm_response_system(
                     reasoning_content,
                     ..
                 }) => {
-                    // Check for existing ToolCallingState (follow-up iteration)
-                    let existing = state_info.iter().find(|i| i.task_id == task.id);
+                    // Check for existing ToolCallingState (follow-up iteration).
+                    // 按 (task_id, work_item_id) 严格匹配：避免误复用同 Task 下
+                    // 其他 WorkItem 残留的 State（如 collector 残留被 skill-updater 误用）。
+                    let existing = find_calling_state(&state_info, task.id, result.work_item_id);
 
                     if let Some(info) = existing {
                         let new_iteration = info.iteration + 1;
@@ -1299,8 +1352,11 @@ pub fn llm_response_system(
                     }
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
-                    // Clean up ToolCallingState before retry
-                    if let Some(info) = state_info.iter().find(|i| i.task_id == task.id) {
+                    // Clean up ToolCallingState before retry.
+                    // 按 (task_id, work_item_id) 严格匹配。
+                    if let Some(info) =
+                        find_calling_state(&state_info, task.id, result.work_item_id)
+                    {
                         commands.entity(info.entity).despawn();
                     }
                     let stm_entries = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
@@ -1328,8 +1384,11 @@ pub fn llm_response_system(
                     task.schedule_retry(error, clock.0);
                 }
                 Err(error) => {
-                    // Clean up ToolCallingState before marking task failed
-                    if let Some(info) = state_info.iter().find(|i| i.task_id == task.id) {
+                    // Clean up ToolCallingState before marking task failed.
+                    // 按 (task_id, work_item_id) 严格匹配。
+                    if let Some(info) =
+                        find_calling_state(&state_info, task.id, result.work_item_id)
+                    {
                         commands.entity(info.entity).despawn();
                     }
                     let stm_entries = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
@@ -1620,5 +1679,102 @@ mod tests {
         let result = extract_result_summary(text).unwrap();
         assert!(result.contains("69.7亿只"));
         assert!(result.contains("2×3^20"));
+    }
+
+    /// 构造一个最小 CallingStateInfo 用于查找测试。
+    fn make_state_info(
+        task_id: crate::domain::TaskId,
+        work_item_id: Option<uuid::Uuid>,
+    ) -> CallingStateInfo {
+        CallingStateInfo {
+            entity: Entity::PLACEHOLDER,
+            task_id,
+            iteration: 1,
+            max_iterations: 10,
+            conversation: vec![],
+            tools: vec![],
+            request_kind: AgentRequestKind::LlmCompletion,
+            work_item_id,
+        }
+    }
+
+    /// 同 Task 下不同 WorkItem 的 ToolCallingState 不应互相复用。
+    /// 这是本次 bug 修复的核心：skill-updater 不应误用 collector 残留的 State。
+    #[test]
+    fn find_calling_state_strict_matches_work_item_id() {
+        let task_id = uuid::Uuid::new_v4();
+        let collector_wi = uuid::Uuid::new_v4();
+        let skill_updater_wi = uuid::Uuid::new_v4();
+
+        // 模拟 collector 残留 State（work_item_id = collector_wi）
+        // 与 skill-updater 当前响应（work_item_id = skill_updater_wi）
+        let state_info = vec![
+            make_state_info(task_id, Some(collector_wi)),
+            make_state_info(task_id, Some(skill_updater_wi)),
+        ];
+
+        // 查找 skill-updater 的 State：必须严格匹配 work_item_id
+        let found = find_calling_state(&state_info, task_id, Some(skill_updater_wi));
+        assert!(
+            found.is_some(),
+            "should find state for matching work_item_id"
+        );
+        assert_eq!(
+            found.unwrap().work_item_id,
+            Some(skill_updater_wi),
+            "must not reuse state from a different work item"
+        );
+
+        // 查找 collector 的 State：仍能找到
+        let found_collector = find_calling_state(&state_info, task_id, Some(collector_wi));
+        assert!(found_collector.is_some());
+        assert_eq!(found_collector.unwrap().work_item_id, Some(collector_wi));
+
+        // 查找不存在的 work_item_id：返回 None
+        let other_wi = uuid::Uuid::new_v4();
+        let found_other = find_calling_state(&state_info, task_id, Some(other_wi));
+        assert!(
+            found_other.is_none(),
+            "should not return state for non-matching work_item_id"
+        );
+    }
+
+    /// Task 级调用（work_item_id = None）应能找到 Task 级 State（work_item_id = None），
+    /// 但不应误匹配 WorkItem 级 State。
+    #[test]
+    fn find_calling_state_task_level_excludes_work_item_states() {
+        let task_id = uuid::Uuid::new_v4();
+        let work_item_id = uuid::Uuid::new_v4();
+
+        // 混合：一个 WorkItem 级 State + 一个 Task 级 State
+        let state_info = vec![
+            make_state_info(task_id, Some(work_item_id)),
+            make_state_info(task_id, None),
+        ];
+
+        // Task 级查找：返回 Task 级 State，不返回 WorkItem 级
+        let found = find_calling_state(&state_info, task_id, None);
+        assert!(found.is_some(), "should find task-level state");
+        assert_eq!(
+            found.unwrap().work_item_id,
+            None,
+            "must not return work-item state when looking for task-level state"
+        );
+    }
+
+    /// 只存在 WorkItem 级 State 时，Task 级查找不应误匹配。
+    /// 这防止"Task 级调用复用 WorkItem 残留 State"的反向 bug。
+    #[test]
+    fn find_calling_state_task_level_returns_none_if_only_work_item_states_exist() {
+        let task_id = uuid::Uuid::new_v4();
+        let work_item_id = uuid::Uuid::new_v4();
+
+        let state_info = vec![make_state_info(task_id, Some(work_item_id))];
+
+        let found = find_calling_state(&state_info, task_id, None);
+        assert!(
+            found.is_none(),
+            "must not return work-item state for task-level lookup"
+        );
     }
 }

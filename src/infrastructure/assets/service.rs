@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use crate::domain::TaskId;
+use crate::infrastructure::skills::diff::validate_skill_structure;
 
 /// 经验资产草稿：尚未持久化的文本资产。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,14 @@ impl AgentAssetService {
         agent_name: &str,
         draft: &SkillPackageDraft,
     ) -> Result<String> {
+        // v8 D19：落盘前结构校验，instructions 至少包含 1 个 `## ` 标题
+        validate_skill_structure(&draft.instructions).with_context(|| {
+            format!(
+                "skill instructions failed structure validation (skill_id={})",
+                draft.skill_id
+            )
+        })?;
+
         let skill_name = draft
             .name
             .to_lowercase()
@@ -91,9 +100,11 @@ impl AgentAssetService {
         fs::create_dir_all(&skill_dir)
             .with_context(|| format!("failed to create skill dir {}", skill_dir.display()))?;
 
-        // Generate SKILL.md
+        // v8 D19：frontmatter 显式写入 3 字段（name + description + self_updatable），
+        // 与 update 端白名单 [name, description, self_updatable] 对齐。
+        // 不写 version，由 parse_skill_md 缺省值兜底为 1。
         let skill_md = format!(
-            "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+            "---\nname: {}\ndescription: {}\nself_updatable: true\n---\n\n{}\n",
             skill_name, draft.description, draft.instructions,
         );
         let skill_md_path = skill_dir.join("SKILL.md");
@@ -165,7 +176,7 @@ mod tests {
             title: "Shell Smoke Test".to_string(),
             name: "shell-smoke-test".to_string(),
             description: "验证 shell 工具链是否正常工作".to_string(),
-            instructions: "1. 运行脚本\n2. 检查输出".to_string(),
+            instructions: "## Usage\n\n1. 运行脚本\n2. 检查输出".to_string(),
             file_refs: vec![],
             source_task_id: Some(uuid::Uuid::new_v4()),
             source_candidate_id: Some(uuid::Uuid::new_v4()),
@@ -180,5 +191,31 @@ mod tests {
         let skill_md = std::fs::read_to_string(base.join("SKILL.md")).unwrap();
         assert!(skill_md.contains(&draft.name));
         assert!(skill_md.contains("description"));
+        // v8 D19：frontmatter 显式写 3 字段
+        assert!(skill_md.contains("self_updatable: true"));
+    }
+
+    #[test]
+    fn persist_skill_package_rejects_instructions_without_section_heading() {
+        // v8 D19：落盘前结构校验，instructions 无 `## ` 标题应失败
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = AgentAssetService::new(dir.path().join("agents"));
+        let draft = SkillPackageDraft {
+            skill_id: "invalid-skill".to_string(),
+            title: "Invalid Skill".to_string(),
+            name: "invalid-skill".to_string(),
+            description: "缺少章节结构的 skill".to_string(),
+            instructions: "1. 步骤一\n2. 步骤二".to_string(),
+            file_refs: vec![],
+            source_task_id: None,
+            source_candidate_id: None,
+        };
+        let result = service.persist_skill_package("test-agent", &draft);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("structure validation"),
+            "expected structure validation error, got: {err_msg}"
+        );
     }
 }

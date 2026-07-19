@@ -2,9 +2,10 @@
 
 ## 状态
 
-Proposed（v7 — 已根据六轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
+Proposed（v8 — 已根据七轮评审报告修正：v1 `logs/2026-07-18-adr-004-skill-first-class-review.md`、
 v2 `logs/2026-07-18-adr-004-skill-first-class-review-v2.md`、v3 用户反馈 F15、v4 实施偏差修正 D13/D14、
-v6 实施 review 修正 D15、v7 Phase 4 skill update 实施修正 D16/D17/D18）
+v6 实施 review 修正 D15、v7 Phase 4 skill update 实施修正 D16/D17/D18、
+v8 两端对齐改造 D19：generation 端结构校验 + update 端三级标题级 operation + replace_body 兜底）
 
 ## 生效范围
 
@@ -73,6 +74,12 @@ self_updatable: <bool，默认 true，缺省视为 true>
 
 - [parse_skill_md](../../src/infrastructure/skills/loader.rs#L97-L123) 解析时按行前缀匹配新增字段，缺省值在解析层兜底
 - `version` 和 `self_updatable` 均为可选字段，向后兼容
+
+__generation 端写入字段对齐__（D19）：`persist_skill_package` 落盘时显式写入
+`name + description + self_updatable: true` 三个字段（不写 `version`，由解析层缺省值为 1 兜底）。
+原 v7 实现只写 `name + description`，依赖解析层缺省值兜底 `self_updatable=true`，
+本次显式写入以提升透明度并与 update 端 frontmatter 白名单 `[name, description, self_updatable]`
+对齐。`replace_frontmatter` 操作为 upsert 语义：字段存在则替换，不存在则追加。
 
 #### 1.3 Skill Package 目录结构
 
@@ -447,39 +454,138 @@ LLM 仅提交 `operations` + `rationale`；`skill_id` / `base_version` / `new_ve
     {"action": "replace_section", "section": "## Usage", "content": "..."},
     {"action": "add_section", "after": "## Usage", "section": "## Edge Cases", "content": "..."},
     {"action": "remove_section", "section": "## Legacy"},
-    {"action": "replace_frontmatter", "field": "description", "value": "..."}
+    {"action": "replace_subsection", "section": "## Usage", "subsection": "### Advanced", "content": "..."},
+    {"action": "add_subsection", "section": "## Usage", "after": "### Basic",
+     "subsection": "### Edge Cases", "content": "..."},
+    {"action": "remove_subsection", "section": "## Usage", "subsection": "### Legacy"},
+    {"action": "replace_frontmatter", "field": "description", "value": "..."},
+    {"action": "replace_body", "content": "..."}
   ],
   "rationale": "为什么这么改"
 }
 ```
 
+__operation 颗粒度__（D19）：v7 仅支持 4 种 operation（3 种二级标题级 + 1 种 frontmatter 字段级），
+对含 `###` 子章节的 SKILL.md 颗粒度过大——LLM 修改子章节需重写整章，污染其他子章节风险高。
+v8 新增 3 种三级标题级 operation（`replace_subsection` / `add_subsection` / `remove_subsection`）
+和 1 种兜底 operation（`replace_body`），共 8 种。`replace_body` 在 prompt 中标注"慎用，
+仅当原 body 无 `##` 标题或需整体重构时使用"，软约束 LLM 优先用细粒度 operation。
+
+__候选 payload 传递__（D19）：`candidate_payload_text` 保留 v7 扁平化文本格式（自然语言形式
+LLM 易读），但在 prompt 中显式说明候选类型（Skill / Knowledge），帮助 updater 选择策略
+（Skill 类候选倾向 `add_section` / `replace_subsection`，Knowledge 类候选倾向 `replace_section` 整章）。
+
 __prompt 内容__（D18）：skill-updater 的 prompt 现在包含完整 SKILL.md 内容（frontmatter + 所有 section
 标题），让 LLM 看到真实结构而非幻觉 section 名。早期版本只把 `SkillEntry.instructions` 字段塞进 prompt，
 但 `instructions` 只是 `SkillEntry` 的一个 String 字段，并不等同于磁盘上的 SKILL.md 真实结构。
 
-#### 3.6 结构化 diff 操作的 markdown 解析策略（评审 D4）
+#### 3.6 结构化 diff 操作的 markdown 解析策略（评审 D4，D19 扩展）
 
-__章节定义__：markdown 章节由 `##`（二级标题）开始，到下一个 `##` 或文件末尾结束。`###` 及更深层级属于父章节内容的一部分。
+__章节定义__：markdown 章节由 `##`（二级标题）开始，到下一个 `##` 或文件末尾结束。
+子章节由 `###`（三级标题）开始，到下一个 `###` 或 `##` 或 body 末尾结束。
+`####` 及更深层级属于父子章节内容的一部分，不作为 operation 锚点。
 
-__操作语义__：
+__操作语义__（v8 共 8 种 operation）：
 
-- `replace_section(section, content)`：替换从 `## {section}` 到下一个 `##` 之间的所有内容（含子章节）
-- `add_section(after, section, content)`：在 `## {after}` 章节完整内容之后（即下一个 `##` 之前）插入新章节
-- `remove_section(section)`：删除从 `## {section}` 到下一个 `##` 之间的所有内容
-- `replace_frontmatter(field, value)`：修改 frontmatter 中指定字段的值
+二级标题级（v7 已有）：
+
+- `replace_section(section, content)`：替换从 `## {section}` 到下一个 `##` 之间的所有内容（含子章节，保留 `## {section}` 标题行）
+- `add_section(after, section, content)`：在 `## {after}` 章节完整内容之后（即下一个 `##` 之前）插入新 `## {section}` 章节
+- `remove_section(section)`：删除从 `## {section}` 到下一个 `##` 之间的所有内容（含标题行）
+- `replace_frontmatter(field, value)`：修改 frontmatter 中指定字段的值，upsert 语义（字段存在则替换，不存在则追加）
+
+三级标题级（v8 新增，D19）：
+
+- `replace_subsection(section, subsection, content)`：在 `## {section}` 范围内定位 `### {subsection}`，
+  替换其内容（保留 `### {subsection}` 标题行）。`section` 必须指定以消除跨 section 同名 subsection 歧义
+- `add_subsection(section, after, subsection, content)`：在 `## {section}` 范围内 `### {after}` 之后
+  插入新 `### {subsection}` 子章节
+- `remove_subsection(section, subsection)`：删除 `## {section}` 下的 `### {subsection}` 子章节（含标题行）
+
+兜底（v8 新增，D19）：
+
+- `replace_body(content)`：整体替换 body，frontmatter 不变。prompt 软约束标注"慎用"
+
+__find_subsection_range 语义__：
+
+```rust
+fn find_subsection_range(body: &str, section: &str, subsection: &str) -> Option<(usize, usize)>;
+```
+
+1. 先调用 `find_section_range(body, section)` 定位父 section 范围 `[section_start, section_end)`
+2. 在 `[section_start+1, section_end)` 范围内查找 `trim() == subsection.trim()` 的行
+3. subsection 结束行 = 下一个 `###` 或 `##` 或 `section_end`
+4. 未找到返回 `None`，caller 转为 `ApplyError::SubsectionNotFound(section, subsection)`
 
 __已知局限__（不阻塞实施，但需在测试中覆盖）：
 
-1. __标题重名__：同层级同名章节，匹配第一个。apply 函数记录 warning 日志
+1. __标题重名__：同层级同名章节/子章节，匹配第一个。`find_section_range` 与 `find_subsection_range`
+   均需在匹配到第一个时记录 `tracing::warn!` 日志，包含 section/subsection 名与 body 行数
+   （v8 D19 修复 ADR-004 v7 已知局限 1，原描述"apply 函数记录 warning 日志"未落地的偏差）
 2. __frontmatter 字段白名单__：仅允许修改 `name`、`description`、`self_updatable` 三个字段
    （`version` 由框架自动递增，不允许 LLM 直接改）
-3. __解析策略__：基于行级正则匹配 `^##` 和 `^[a-z_]+:`，不引入完整 markdown 解析器
+3. __解析策略__：基于行级前缀匹配 `##` / `###` / `^[a-z_]+:`，不引入完整 markdown 解析器
    （依赖原则：优先纯 Rust，避免新依赖）
-4. __dry-run 同步校验__（D18）：orchestrator 在 `SubmitSkillUpdate` 分支提前做 dry-run apply，
-   section 不存在或 frontmatter 字段不在白名单时立即以 `ToolError::InvalidInput` 同步返回给 LLM
+4. __标题规范化__（v8 D19 修复 ADR-004 v7 实现偏差 D）：`find_section_range` / `find_subsection_range`
+   在比较标题行时使用 `l.trim() == header.trim()`，而非 v7 实现的 `l.trim_start() == header`，
+   避免尾部空格导致 `"## Usage "` 匹配失败
+5. __dry-run 同步校验__（D18 + D19 扩展）：orchestrator 在 `SubmitSkillUpdate` 分支提前做 dry-run apply，
+   section/subsection 不存在或 frontmatter 字段不在白名单时立即以 `ToolError::InvalidInput` 同步返回给 LLM
    （而非异步抛到 `skill_update_completion_system`）。dry-run 通过后再 insert 完成消息。
+   v8 D19 在 dry-run 后追加 `validate_skill_structure` post-apply 校验（详见 §3.7）
 
-#### 3.7 循环防护（评审 D7 修正）
+#### 3.7 generation 端结构校验与 post-apply 校验（D19 新增）
+
+__问题背景__：v7 generation 端（`persist_skill_package`）直接落盘 LLM 提交的 `instructions`，
+无任何结构校验；update 端的章节级 diff operation 假设 SKILL.md body 至少包含 1 个 `##` 标题。
+两端粒度不对称导致 LLM 生成的 SKILL.md 可能无章节结构，update 端的 section operation 失去稳定锚点。
+
+__`validate_skill_structure` 函数__（新增于 `src/infrastructure/skills/diff.rs`）：
+
+```rust
+pub fn validate_skill_structure(instructions: &str) -> Result<(), SkillStructureError>;
+
+#[derive(Debug, Error)]
+pub enum SkillStructureError {
+    #[error("instructions must contain at least one `##` heading")]
+    NoSectionHeading,
+    #[error("first `##` heading must have non-empty content")]
+    EmptyFirstSection,
+}
+```
+
+__generation 端 dry-run 校验__（`persist_skill_package` 落盘前）：
+
+1. 调用 `validate_skill_structure(&draft.instructions)`
+2. 失败则返回 `SkillStructureError`，由 `writeback_to_skill_package` 传播
+3. 候选状态置为 `WritebackFailed`（复用现有 `ExperienceCandidateStatus::WritebackFailed` 变体），记录 warn 日志
+4. LLM 不会自动重试（generation 端无重试机制，失败后由用户决定是否手动重新触发）
+
+__update 端 post-apply 校验__（orchestrator dry-run 之后追加）：
+
+1. `apply_skill_operations(&content, &operations)` 成功后，对 apply 后的 body 调用
+   `validate_skill_structure(&new_body)`
+2. 失败则整体回滚（D13 语义），以 `ToolError::InvalidInput` 同步返回给 LLM
+3. 防止 LLM 用 `replace_body` 或 `remove_section` 删除所有章节标题
+
+__generation 端 prompt 约束__（D19）：
+
+修改 `collection.rs` 的 prompt 模板，加入 SKILL.md 格式约束：
+
+```text
+- skill 的 instructions 字段必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题
+- 推荐使用 `## Overview` / `## Usage` / `## Examples` / `## Edge Cases` / `## Limitations` 等 section
+- 复杂 skill 可在二级标题下使用 `### Subsection` 三级标题组织内容
+- 不要使用 `####` 或更深层级，update 端不支持作为 operation 锚点
+```
+
+同时修改 `submit_experience_candidate` 工具描述，明确 `instructions` 字段格式要求。
+
+__不强制 `## Overview`__（D19 决策修正）：原 grilling 阶段曾考虑强制 `## Overview` 存在，
+经讨论认为该 section 对简单 skill 冗余（与 frontmatter `description` 重复），
+改为推荐但非强制。dry-run 只校验"至少 1 个 `##` 标题 + 首个 section 非空"。
+
+#### 3.8 循环防护（评审 D7 修正）
 
 __修正__：`experience_kind_filter` 检查点从 `task_terminated_experience_trigger_system`（[collection.rs:12](../../src/systems/experience/collection.rs#L12)）
 移到 `experience_collection_completion_system`（[collection.rs:165-215](../../src/systems/experience/collection.rs#L165-L215)），
@@ -518,7 +624,7 @@ pub enum ExperienceCandidateStatus {
 }
 ```
 
-#### 3.8 `self_updatable` 检查
+#### 3.9 `self_updatable` 检查
 
 在 [governance.rs:64-103](../../src/systems/experience/governance.rs#L64-L103) 的治理决策中，针对 skill 类候选增加检查。
 
@@ -650,7 +756,9 @@ __修订（v7，D18）__：失败路径明确分为两条：
 修订后的失败处理语义：
 
 - 章节不存在：返回 `ApplyError::SectionNotFound`，整体回滚，候选状态不变
+- 子章节不存在：返回 `ApplyError::SubsectionNotFound(section, subsection)`（v8 D19 新增），整体回滚，候选状态不变
 - frontmatter 字段不在白名单：返回 `ApplyError::FieldNotWhitelisted`，整体回滚，候选状态不变
+- post-apply 结构校验失败：apply 后 body 无 `##` 标题或首个 section 空，返回 `ApplyError::StructureInvalid`（v8 D19 新增），整体回滚，候选状态不变
 - 文件 IO 错误：整体回滚，候选状态不变
 - 读文件失败（如 SKILL.md 不存在）：返回 `ToolError::InternalState`（框架状态错误，区分于 LLM 输入错误）
 - 任何错误均通过 `skill_update_completion_system` 记录 `SkillUpdateApplyFailed` warn 日志
@@ -696,6 +804,16 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 - 当前 task 注入的 skill 是什么（name + description + instructions）
 - 如果经验用于改进当前 skill，请使用 `kind=skill`
 - 如果经验是事实性知识，请使用 `kind=knowledge`
+
+__generation 端格式约束__（D19 扩展）：prompt 中追加 SKILL.md 格式约束：
+
+- `instructions` 字段必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题
+- 推荐使用 `## Overview` / `## Usage` / `## Examples` / `## Edge Cases` / `## Limitations` 等 section
+- 复杂 skill 可在 `##` 下使用 `### Subsection` 三级标题组织内容
+- 不要使用 `####` 或更深层级（update 端不支持作为 operation 锚点）
+- 落盘前框架会做 `validate_skill_structure` 校验，不符合则候选置 `WritebackFailed`
+
+同时修改 `submit_experience_candidate` 工具的 description 字段，明确 `instructions` 格式要求。
 
 ### 7. skill 删除/退役机制（评审 D9 — 显式推迟）
 
@@ -744,6 +862,13 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 - `ToolError::InternalState` 变体（区分框架状态错误与 LLM 输入错误，D16/D18）
 - `ToolExecutionRequestMessage.work_item_entity: Option<Entity>` 字段（D17 修正：用于在
   orchestrator 处理 `submit_skill_update` 时 O(1) 查询 context）
+- `SkillUpdateOperation::ReplaceSubsection` / `AddSubsection` / `RemoveSubsection` / `ReplaceBody`
+  变体（v8 D19 新增：三级标题级 operation + body 兜底）
+- `ApplyError::SubsectionNotFound(section, subsection)` 变体（v8 D19 新增）
+- `ApplyError::StructureInvalid` 变体（v8 D19 新增：post-apply 结构校验失败）
+- `SkillStructureError` 枚举（v8 D19 新增：`NoSectionHeading` / `EmptyFirstSection`）
+- `validate_skill_structure` 函数（v8 D19 新增）
+- `find_subsection_range` 函数（v8 D19 新增）
 
 ### 修改
 
@@ -758,6 +883,15 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
   Option<&TaskExperiencePolicy>)>`（评审 F14 + D10）
 - `experience_governance_system`：新增 `skill_registry: Res<SkillRegistry>` 和
   `tasks: Query<(&Task, Option<&TaskInjectedSkill>)>` 参数（评审 F13）
+- `persist_skill_package`（v8 D19）：落盘 SKILL.md 时显式写入
+  `name + description + self_updatable: true` 三个 frontmatter 字段
+- `collection.rs` prompt 模板（v8 D19）：追加 SKILL.md 格式约束
+- `submit_experience_candidate` 工具 description（v8 D19）：明确 `instructions` 格式要求
+- `apply_skill_operations`（v8 D19）：支持 4 种新 operation variant，post-apply 追加
+  `validate_skill_structure` 校验
+- `find_section_range`（v8 D19）：标题行比较改用 `l.trim() == header.trim()`，匹配第一个时记录 warn 日志
+- orchestrator `SubmitSkillUpdate` 分支（v8 D19）：dry-run apply 后追加 post-apply 结构校验，
+  失败以 `ToolError::InvalidInput` 同步返回
 
 ## system 改动清单
 
@@ -793,13 +927,21 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
    - `replace_section`：章节存在 / 不存在两种情况
    - `add_section`：`after` 章节存在 / 不存在
    - `remove_section`：章节存在 / 不存在
-   - `replace_frontmatter`：字段在白名单 / 不在白名单
-5. `apply_skill_operations` 章节匹配：同层级同名章节匹配第一个，记录 warning
-6. `cleanup_skill_history`：保留 3 代，超过的删除
-7. `experience_kind_filter` 过滤：`KnowledgeOnly` 下 skill 候选被标记 `Discarded`
-8. `self_updatable=false` 的 skill 候选被降级为 knowledge
-9. `parse_brain_skill_selection` 容错：标准 JSON、`skill_name: "None"`、`skill_name: ""`、额外字段、非标准 JSON
-10. `ExperienceKindFilter` 默认值为 `All`
+   - `replace_frontmatter`：字段在白名单 / 不在白名单 / 字段不存在（upsert 追加）
+   - `replace_subsection`：父 section 存在 / 不存在，子 section 存在 / 不存在（v8 D19）
+   - `add_subsection`：父 section 存在 / 不存在，`after` 子 section 存在 / 不存在（v8 D19）
+   - `remove_subsection`：父 section 存在 / 不存在，子 section 存在 / 不存在（v8 D19）
+   - `replace_body`：替换后 frontmatter 不变（v8 D19）
+5. `apply_skill_operations` 章节匹配：同层级同名章节匹配第一个，记录 warning（v8 D19 修复 ADR-004 v7 已知局限 1 落地）
+6. `apply_skill_operations` 标题规范化：`"## Usage "` 尾部空格能正确匹配（v8 D19 修复 ADR-004 v7 实现偏差 D）
+7. `validate_skill_structure`：无 `##` 标题 / 首个 section 空 / 合规三种情况（v8 D19）
+8. `apply_skill_operations` post-apply 校验：`replace_body` 删除所有 `##` 标题时返回 `StructureInvalid`（v8 D19）
+9. `cleanup_skill_history`：保留 3 代，超过的删除
+10. `experience_kind_filter` 过滤：`KnowledgeOnly` 下 skill 候选被标记 `Discarded`
+11. `self_updatable=false` 的 skill 候选被标记 `Discarded`（v6 D15 修正）
+12. `parse_brain_skill_selection` 容错：标准 JSON、`skill_name: "None"`、`skill_name: ""`、额外字段、非标准 JSON
+13. `ExperienceKindFilter` 默认值为 `All`
+14. `persist_skill_package` 落盘前结构校验：合规 / 无 `##` 标题两种情况（v8 D19）
 
 ### 集成测试
 
@@ -808,13 +950,19 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 3. __持久Agent + 注入skill + skill 经验__：完整路径——collection 拦截 → skill-updater workitem →
    submit_skill_update → SKILL.md 更新 → 候选置 `Persisted` → profile-designer 评估
 4. __持久Agent + 注入skill + knowledge 经验__：knowledge 写入持久Agent LTM，不进父 inbox
-5. __持久Agent + 未注入skill + skill 经验__：走原 writeback_to_skill_package 路径
+5. __持久Agent + 未注入skill + skill 经验__：走原 writeback_to_skill_package 路径，
+   persist_skill_package 落盘前校验通过 / 失败两种情况（v8 D19）
 6. __临时Agent + 经验__：走原 queue_for_parent 路径
-7. __skill-updater 自指循环防护__：skill-updater 产生 skill 候选，`self_updatable=false` 降级为 knowledge
+7. __skill-updater 自指循环防护__：skill-updater 产生 skill 候选，`self_updatable=false` 标记 `Discarded`
 8. __skill-updater kind filter 防护__：skill-updater 的 task 标 `KnowledgeOnly`，skill 候选被标记 `Discarded`
 9. __skill 版本递增__：连续两次 skill 更新，version 正确递增，history 保留 3 代
 10. __skill 回退保护__：apply 失败，SKILL.md 不变，history 不写入，候选状态不变
 11. __持久Agent + 注入skill 路径不进父 inbox__：验证父 Agent 的 `ExperienceInbox` 中无对应候选
+12. __subsection operation 端到端__：含 `###` 子章节的 SKILL.md 通过 `replace_subsection` /
+    `add_subsection` / `remove_subsection` 更新，结果符合预期（v8 D19）
+13. __replace_body 兜底__：无 `##` 标题的 SKILL.md 通过 `replace_body` 重写为含章节结构（v8 D19）
+14. __post-apply 结构校验回滚__：`replace_body` 删除所有 `##` 标题，dry-run 同步返回
+    `ToolError::InvalidInput`，SKILL.md 不变（v8 D19）
 
 ## 开放问题（留给实施阶段细化）
 
@@ -823,6 +971,14 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
 3. brain LLM 选 skill 的 prompt 模板：需要单独设计，不在本 ADR 范围内
 4. skill-updater 自身 skill 的初始内容：需要在 `agents.toml` 中预配置
 5. skill 删除/退役机制：显式推迟，作为已知约束（§7）
+6. __file_refs 的 updater 支持__（v8 D19 显式推迟）：当前 generation 端支持 `file_refs`
+   （落盘到 `scripts/` / `references/` / `assets/` 子目录），update 端无对应 operation。
+   若需更新 file_refs 引用的文件，由人工编辑或重新生成 skill。未来若有实际需求，
+   单独 ADR 推进 `add_file` / `remove_file` / `replace_file` operation
+7. __plugin skill frontmatter 缺失__（v8 D19 调研发现）：`plugins/harness-demo/skills/demo-skill.md`
+   无 frontmatter，`parse_skill_md` 会返回 None，无法被加载。作为独立任务修复，不在 v8 改造范围
+8. __skill-updater Agent kind 声明__（v8 D19 调研发现）：`agents.toml` 中 `skill-updater` 未显式声明
+   `kind = "Persistent"`，需确认解析逻辑的缺省值。作为独立任务修复，不在 v8 改造范围
 
 ## 评审修正记录
 
@@ -890,18 +1046,74 @@ skill-updater 写完 SKILL.md 后，candidate 状态也置 `Persisted`，profile
   `ToolError::InvalidInput` 同步反馈给 LLM；prompt 现在包含完整 SKILL.md 内容
   （frontmatter + section 标题），让 LLM 看到真实结构
 
+### 第七轮（两端对齐改造 — 2026-07-19，v8）
+
+| 评审编号 | 修正概要 |
+|---|---|
+| D19 | §1.2 / §3.5 / §3.6 / §3.7（新）/ §4.1 / §6 修正：两端对齐改造（详见下文） |
+
+详细内容（D19 子决策共 11 项，通过 grilling skill 与用户逐项确认）：
+
+1. __对齐方向__：C 双向对齐（generation + update 端都改）
+2. __颗粒度细化__：2.2 三级标题级 operation（`replace_subsection` / `add_subsection` /
+   `remove_subsection`）+ `replace_body` 兜底
+3. __generation 端约束强度__：3.3 硬约束（prompt + 工具描述 + 落盘前 dry-run 校验）
+4. __强制 section__：取消原 grilling 中提议的"强制 `## Overview`"，dry-run 只校验
+   "至少 1 个 `##` 标题 + 首个 section 非空"
+5. __frontmatter 字段__：5.4 generation 端写 3 字段（`name + description + self_updatable`），
+   不扩展 update 端白名单
+6. __file_refs updater 支持__：6.4 暂不实现，标记 future work
+7. __candidate payload 传递__：7.1 保留扁平化文本，补充候选类型显式说明
+8. __dry-run 校验规则__：8.2 简化版（generation 端校验"至少 1 个 `##`"，update 端校验
+   "apply 后至少 1 个 `##`"）
+9. __replace_body 约束__：10.2 prompt 软约束警示，不强制兜底场景
+10. __附带修复__：11.2 仅修 A/D（diff.rs 相关：warning 日志 + trim 规范化），
+    B/C（plugin skill frontmatter / skill-updater kind 声明）作为独立任务
+11. __实施路径__：12.3 先 ADR 后实施 + 单一 ADR 升级（本次 v8 升级即为阶段 1 产物）
+
+__与 v7 的关键差异__：
+
+- v7 update 端仅 4 种 operation（粗粒度），v8 扩展到 8 种（含 3 种 subsection + 1 种 body 兜底）
+- v7 generation 端无结构校验，v8 新增 `validate_skill_structure` + `persist_skill_package` 落盘前校验
+- v7 generation 端 frontmatter 只写 2 字段，v8 改为 3 字段
+- v7 `find_section_range` 用 `trim_start()` 比较且无 warning 日志，v8 改用 `trim()` 比较 + warn 日志
+- v7 ADR-004 已知局限 1（warning 日志）未落地，v8 显式修复并补充 `find_subsection_range` 同样规则
+
 ## 关联文件
 
 - [src/domain/task.rs](../../src/domain/task.rs) — Task 字段拆为独立 Component
 - [src/domain/work_item.rs](../../src/domain/work_item.rs) — `WorkItemType::SkillUpdate` 变体
-- [src/domain/contribution.rs](../../src/domain/contribution.rs) — `ExperienceKindFilter`、`ExperienceCandidateStatus::Discarded`
+- [src/domain/contribution.rs](../../src/domain/contribution.rs) —
+  `ExperienceKindFilter`、`ExperienceCandidateStatus::Discarded`、
+  `SkillUpdateOperation`（v8 含 8 种 variant）
 - [src/infrastructure/skills/loader.rs](../../src/infrastructure/skills/loader.rs) —
   SkillRegistry + SkillEntry + frontmatter 新字段解析
-- [src/systems/dispatch/brain_dispatch.rs](../../src/systems/dispatch/brain_dispatch.rs) — brain 选 skill
+- [src/infrastructure/skills/diff.rs](../../src/infrastructure/skills/diff.rs) —
+  `apply_skill_operations`、`find_section_range`、
+  `find_subsection_range`（v8 新增）、
+  `validate_skill_structure`（v8 新增）、`FRONTMATTER_WHITELIST`、
+  `ApplyError`（v8 新增 `SubsectionNotFound` / `StructureInvalid`）、
+  `SkillStructureError`（v8 新增）
+- [src/infrastructure/assets/service.rs](../../src/infrastructure/assets/service.rs) —
+  `persist_skill_package`（v8 D19 改为 3 字段 frontmatter +
+  落盘前 `validate_skill_structure` 校验）
+- [src/systems/dispatch/brain_dispatch.rs](../../src/systems/dispatch/brain_dispatch.rs) —
+  brain 选 skill
 - [src/systems/dispatch/agent_selection.rs](../../src/systems/dispatch/agent_selection.rs) —
   `select_agent_for_sub_task` 签名扩展
-- [src/systems/experience/collection.rs](../../src/systems/experience/collection.rs) — 持久Agent吸收分支 + kind_filter 检查
-- [src/systems/experience/governance.rs](../../src/systems/experience/governance.rs) — self_updatable 检查
-- [src/systems/experience/skill_update.rs](../../src/systems/experience/skill_update.rs) — 新文件，skill-updater workitem 系统
-- [src/systems/tools/builtin/submit_skill_update.rs](../../src/systems/tools/builtin/submit_skill_update.rs) — 新工具
-- [src/infrastructure/skills/diff.rs](../../src/infrastructure/skills/diff.rs) — 新文件，apply_skill_operations
+- [src/systems/experience/collection.rs](../../src/systems/experience/collection.rs) —
+  持久Agent吸收分支 + kind_filter 检查 + prompt
+  （v8 D19 追加 SKILL.md 格式约束）
+- [src/systems/experience/governance.rs](../../src/systems/experience/governance.rs) —
+  self_updatable 检查
+- [src/systems/experience/skill_update.rs](../../src/systems/experience/skill_update.rs) —
+  skill-updater workitem 系统 + `candidate_payload_text`
+  （v8 D19 补充候选类型显式说明）
+- [src/systems/tools/builtin/submit_skill_update.rs](../../src/systems/tools/builtin/submit_skill_update.rs) —
+  新工具
+- [submit_experience_candidate.rs](../../src/systems/tools/builtin/submit_experience_candidate.rs) —
+  generation 端 LLM 入口（v8 D19 工具 description
+  追加格式要求）
+- [src/systems/tools/orchestrator.rs](../../src/systems/tools/orchestrator.rs) —
+  `ToolAction::SubmitSkillUpdate` 处理 + dry-run 校验
+  （v8 D19 追加 post-apply 结构校验）

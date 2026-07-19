@@ -6,6 +6,7 @@
 //! - 用户审批通过后写回 agents.toml
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crossbeam_channel::unbounded;
 use tempfile::TempDir;
@@ -361,4 +362,156 @@ default_permission = "Allow"
         context_count, 0,
         "ProfileGenerationContext Component 应已被清理"
     );
+}
+
+/// 计数版 Mock executor：记录 LLM 调用次数，用于验证 follow-up 循环。
+struct CountingProfileDesignerExecutor {
+    call_count: Arc<AtomicU32>,
+}
+
+impl AgentExecutor for CountingProfileDesignerExecutor {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+        self.call_count.fetch_add(1, Ordering::SeqCst);
+        let has_messages = request.conversation.as_ref().is_some_and(|c| !c.is_empty());
+        let response = if has_messages {
+            // follow-up：返回 Text（触发 bug 路径，被误判为 no_tool_call）
+            AgentExecutionOutput {
+                content: OutputContent::Text("profile submitted".to_string()),
+                reasoning_content: None,
+            }
+        } else {
+            // 首次：返回 submit_profile_update ToolCalls
+            AgentExecutionOutput {
+                content: OutputContent::ToolCalls(vec![LlmToolCall {
+                    id: "call_profile".to_string(),
+                    name: "submit_profile_update".to_string(),
+                    arguments: r#"{"name":"physics-specialist","tags":["physics","calculation"],"description":"Physics specialist agent"}"#.to_string(),
+                }]),
+                reasoning_content: None,
+            }
+        };
+        Box::pin(async move { Ok(response) })
+    }
+}
+
+/// 验证 submit_profile_update 成功后不会触发 follow-up LLM 循环。
+///
+/// 复现日志 harness_2026-07-19_14-51-23.jsonl 的死循环 bug：
+/// - 首次 LLM 返回 submit_profile_update ToolCalls（成功）
+/// - orchestrator 同时 spawn ProfileGenerationCompletedMessage 和 ToolExecutionResultMessage
+/// - tool_calling_orchestrator_system 消费 ToolExecutionResultMessage 触发 follow-up LLM 请求
+/// - follow-up LLM 返回 Text（合理行为）
+/// - llm_response_system 误判为 no_tool_call → handle_profile_generation_invalid → spawn 重试
+/// - 无限循环（exception_count 因 submit 重置而永远到不了上限）
+///
+/// 修复后预期：
+/// - LLM 只被调用 1 次（首次 ToolCalls），不触发 follow-up
+/// - 无孤儿 ToolCallingState
+/// - 无重试请求残留
+#[test]
+fn profile_generation_does_not_loop_after_successful_submit() {
+    let config_dir = TempDir::new().unwrap();
+    let agents_toml = config_dir.path().join("agents.toml");
+    write_agents_toml(&agents_toml);
+
+    let call_count = Arc::new(AtomicU32::new(0));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CountingProfileDesignerExecutor {
+        call_count: call_count.clone(),
+    });
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(
+        test_config(agents_toml.to_str().unwrap().to_string()),
+        Arc::new(Runtime::new().unwrap()),
+        executor_registry,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty().0,
+    );
+    // 第一帧：加载 agents.toml 中的 Agent
+    app.update();
+
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+
+    // Spawn 占位 Task（Waiting(Agent) 防止 task_dispatch_system 重复派发）
+    let mut task = Task::from_user_input_ready("profile generation", 3, default_channel());
+    task.id = task_id;
+    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    app.world_mut().spawn((task, ShortTermMemory::default()));
+
+    // 预置候选到 ExperienceStore
+    let candidate_id = uuid::Uuid::new_v4();
+    let candidate = harness::ExperienceCandidate {
+        candidate_id,
+        producer_task_id: task_id,
+        producer_agent_id: agent_id,
+        title: "physics fact".to_string(),
+        kind_hint: harness::ExperienceKindHint::Knowledge,
+        payload: harness::ExperienceCandidatePayload::Knowledge {
+            content: "E=mc^2".to_string(),
+        },
+        dependency_refs: vec![],
+        status: harness::ExperienceCandidateStatus::ProfileGenerationPending,
+        governing_agent_id: Some(agent_id),
+        derived_from_candidate_ids: vec![],
+    };
+    app.world_mut()
+        .resource_mut::<ExperienceStore>()
+        .stage_root_candidate(candidate);
+
+    // Spawn ProfileGenerationRequestMessage 触发 profile generation WorkItem
+    app.world_mut().spawn(ProfileGenerationRequestMessage {
+        task_id,
+        agent_id,
+        candidate_ids: vec![candidate_id],
+        existing_profile: None,
+        kind: ProfileGenerationKind::Incubation,
+        feedback: None,
+        exception_count: 0,
+    });
+
+    // 多轮 update 让 bug 充分暴露（不进行审批，让多余循环自然发生）
+    let mut found_approval = false;
+    for _ in 0..30 {
+        app.update();
+        if find_profile_approval_request_id(&mut app).is_some() {
+            found_approval = true;
+        }
+    }
+    assert!(found_approval, "应至少生成一次审批请求");
+
+    // 验证 1：LLM 只被调用 1 次（首次 ToolCalls）。
+    // 修复前：每次循环 2 次 LLM 调用（首次 ToolCalls + follow-up Text），30 帧 ≥ 4 次。
+    // 修复后：仅 1 次 LLM 调用，submit 成功后 ToolCallingState 被 despawn，不触发 follow-up。
+    let calls = call_count.load(Ordering::SeqCst);
+    assert_eq!(
+        calls, 1,
+        "成功提交后不应触发 follow-up LLM 调用，LLM 调用次数应为 1，实际为 {}",
+        calls
+    );
+
+    // 验证 2：没有孤儿 ToolCallingState。
+    // 修复前：handle_profile_generation_invalid despawn WorkItem 但不清理 ToolCallingState，
+    //         每次循环产生 1 个孤儿 State，30 帧 ≥ 3 个。
+    // 修复后：submit 成功后 ToolCallingState 被 despawn，无孤儿。
+    let orphan_state_count = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::ToolCallingState>();
+        query.iter(world).count()
+    };
+    assert_eq!(
+        orphan_state_count, 0,
+        "成功提交后不应有孤儿 ToolCallingState"
+    );
+
+    // 验证 3：没有重试请求残留。
+    // 修复前：handle_profile_generation_invalid spawn 重试请求，循环过程中会有残留。
+    // 修复后：不触发 handle_profile_generation_invalid，无重试请求。
+    let pending_retry_count = {
+        let world = app.world_mut();
+        let mut query = world.query::<&ProfileGenerationRequestMessage>();
+        query.iter(world).count()
+    };
+    assert_eq!(pending_retry_count, 0, "成功提交后不应有重试请求残留");
 }

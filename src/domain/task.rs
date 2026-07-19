@@ -107,6 +107,18 @@ pub struct Task {
 #[derive(Component, Debug, Clone, Default)]
 pub struct NewlyCreatedTask;
 
+/// 上次观察到 Task 的状态，用于状态转换检测。
+///
+/// 由 `init_previous_task_status_system`（companion）在 Task 首次进入 ECS 时
+/// 自动插入初值 `TaskStatus::Pending`，由 `task_termination_system` 在每次
+/// `Changed<Task>` 触发后同步为当前 `Task.status`。
+///
+/// 用途：让 `task_termination_system` 区分"非终态→终态"的真正转换与终态内
+/// 字段更新（如 `result_summary`、`updated_at` 刷新），避免重复 spawn
+/// `TaskTerminatedMessage`。这是 `mark_done` 幂等化的纵深防御层。
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
+pub struct PreviousTaskStatus(pub TaskStatus);
+
 /// 标记刚生成、尚未派发 `on_tool_called` 前置 hook 的 `ToolExecutionRequestMessage`。
 ///
 /// 由 `ToolExecutionRequestMessage` 的所有 spawn 点附带，由 companion 系统
@@ -291,7 +303,20 @@ impl Task {
     }
 
     /// 在成功完成后写回结果并清理重试状态。
+    ///
+    /// 幂等：若 Task 已是 `Done` 状态，再次调用为 no-op，不覆盖 `result_summary`、
+    /// 不更新 `updated_at`、不触发 `Changed<Task>`。这避免下游系统（如
+    /// `task_termination_system`）因重复 mark_done 而误触发状态转换副作用。
     pub fn mark_done(&mut self, result: impl Into<String>, now: DateTime<Utc>) {
+        if matches!(self.status, TaskStatus::Done) {
+            debug!(
+                event = "TaskAlreadyDone",
+                task_id = %self.id,
+                reason = "mark_done_noop",
+                "mark_done called on already-done task, no-op"
+            );
+            return;
+        }
         let old_status = self.status.clone();
         let result_str = result.into();
         self.result_summary = result_str.clone();
@@ -465,5 +490,49 @@ mod tests {
         assert_eq!(policy.output_channel, Some(channel.clone()));
         assert_eq!(policy.approval_channel, Some(channel));
         assert_eq!(policy.approval_context.as_deref(), Some("scheduled task"));
+    }
+
+    #[test]
+    fn mark_done_is_idempotent_when_already_done() {
+        let mut task = Task::from_user_input(
+            "test",
+            3,
+            ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        let t0 = chrono::Utc::now();
+        task.mark_done("first result", t0);
+
+        // 记录首次 mark_done 后的字段快照
+        let snapshot_status = task.status.clone();
+        let snapshot_result = task.result_summary.clone();
+        let snapshot_updated_at = task.updated_at;
+        let snapshot_last_error = task.last_error.clone();
+        let snapshot_next_retry_at = task.next_retry_at;
+
+        // 对已 Done 的 Task 再次调用 mark_done：应是 no-op
+        let t1 = t0 + chrono::Duration::seconds(60);
+        task.mark_done("second result", t1);
+
+        assert_eq!(task.status, snapshot_status, "status must not change");
+        assert_eq!(
+            task.result_summary, snapshot_result,
+            "result_summary must not be overwritten on already-done task"
+        );
+        assert_eq!(
+            task.updated_at, snapshot_updated_at,
+            "updated_at must not change on idempotent mark_done"
+        );
+        assert_eq!(
+            task.last_error, snapshot_last_error,
+            "last_error must not change on idempotent mark_done"
+        );
+        assert_eq!(
+            task.next_retry_at, snapshot_next_retry_at,
+            "next_retry_at must not change on idempotent mark_done"
+        );
     }
 }

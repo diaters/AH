@@ -182,12 +182,35 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `skill_update_completion_system` 通过同 entity Component 联合查询直接拿 context
   （`SkillUpdateContext` + `SkillUpdateCompletedMessage`），不再用 `work_item_id` Uuid 反查
 - `skill_update_completion_system` 执行职责：
-  - apply diff 到 SKILL.md（任一 section 未找到即整体失败）
+  - apply diff 到 SKILL.md（任一 section/subsection 未找到即整体失败）
   - 备份旧版本到 `history/v{base}.md`，写入新版本 frontmatter `version: base + 1`
   - 通过 `SkillLoader` 重建并替换 `SkillRegistry` Resource
   - 候选推进到 `Persisted`
 - 失败时保留 SKILL.md 原内容不变，候选保持 `GovernanceResolved` 状态；LLM 返回 text/Err 时
   正确清理 `WorkItem` + `SkillUpdateContext` 并标记 `OnWorkItemFailed`
+
+##### v8 D19：update 端 / generation 端颗粒度对齐
+
+- `SkillUpdateOperation` 扩展到 8 种 variant（ADR-004 v8）：
+  - 二级标题级：`replace_section` / `add_section` / `remove_section` / `replace_frontmatter`
+  - 三级标题级：`replace_subsection` / `add_subsection` / `remove_subsection`（在指定 `## section`
+    范围内定位 `### subsection`）
+  - 兜底：`replace_body`（整体替换 body，frontmatter 不变）
+- `apply_skill_operations` 在 apply 完成后调用 `validate_skill_structure` 做 post-apply 校验：
+  - 必须含至少 1 个 `##` 标题
+  - 第一个 `##` section 不能为空
+  - 校验失败回滚为 `ApplyError::StructureInvalid`，整体 apply 失败（D13 整体回滚语义）
+- `find_section_range` 修复 `trim_start() ==` → `trim() ==`，标题前后空白均容忍；同名章节歧义
+  时记 `warn!` 日志并取第一个匹配
+- `persist_skill_package` 落盘前调用 `validate_skill_structure` 拒绝结构不合规的 instructions，
+  frontmatter 显式写 3 字段（`name` + `description` + `self_updatable: true`）
+- generation 端 prompt（`experience_collection_completion_system` / `submit_experience_candidate`
+  工具描述）追加 SKILL.md 格式约束：至少 1 个 `##` 标题、推荐 section 名、可用 `### Subsection`、
+  不要 `####`、`validate_skill_structure` 校验 + `WritebackFailed` 后果
+- skill-updater prompt 列出全部 8 种 operation，标注优先级（subsection 级 > section 级 > replace_body），
+  `replace_body` 加软约束警示（仅当其他 operation 无法表达时才使用）
+- `candidate_payload_text` 输出显式 `[候选类型：Knowledge/Skill]` 前缀，与 prompt 中
+  `candidate_kind_label` 一致，避免 LLM 在长候选中丢失类型语义
 
 ### 待完善
 

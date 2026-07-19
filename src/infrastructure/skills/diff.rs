@@ -1,11 +1,51 @@
 use std::path::Path;
 
 use thiserror::Error;
+use tracing::warn;
 
 use crate::domain::SkillUpdateOperation;
 
 /// 允许 LLM 修改的 frontmatter 字段白名单
 pub const FRONTMATTER_WHITELIST: &[&str] = &["name", "description", "self_updatable"];
+
+/// v8 D19：SKILL.md body 结构校验错误
+#[derive(Debug, Error)]
+pub enum SkillStructureError {
+    #[error("instructions must contain at least one `##` heading")]
+    NoSectionHeading,
+    #[error("first `##` heading must have non-empty content")]
+    EmptyFirstSection,
+}
+
+/// v8 D19：校验 SKILL.md body 结构
+///
+/// 规则：
+/// 1. 至少包含 1 个 `## ` 二级标题
+/// 2. 首个 `## ` 标题下必须有非空内容（到下一个 `##` 或 body 末尾之间至少 1 行非空）
+pub fn validate_skill_structure(instructions: &str) -> Result<(), SkillStructureError> {
+    let lines: Vec<&str> = instructions.lines().collect();
+    let first_section_idx = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("## "))
+        .ok_or(SkillStructureError::NoSectionHeading)?;
+    // 首个 section 内容范围 = [first_section_idx + 1, 下一个 ## 或末尾)
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(first_section_idx + 1)
+        .find(|(_, l)| l.trim_start().starts_with("## "))
+        .map(|(i, _)| i)
+        .unwrap_or(lines.len());
+    let has_non_empty = lines
+        .iter()
+        .skip(first_section_idx + 1)
+        .take(end.saturating_sub(first_section_idx + 1))
+        .any(|l| !l.trim().is_empty());
+    if !has_non_empty {
+        return Err(SkillStructureError::EmptyFirstSection);
+    }
+    Ok(())
+}
 
 /// 解析 SKILL.md，返回 frontmatter 部分和 body 部分
 fn split_frontmatter(content: &str) -> (String, String) {
@@ -34,10 +74,27 @@ fn split_frontmatter(content: &str) -> (String, String) {
 }
 
 /// 找到 `## {section}` 章节的起始行号和结束行号（不含下一个 ## 标题）
+///
+/// v8 D19 修复 ADR-004 v7 已知局限 1 + 实现偏差 D：
+/// - 标题行比较改用 `l.trim() == header.trim()`，避免尾部空格导致匹配失败
+/// - 同层级同名章节匹配第一个时记录 warn 日志（v7 已知局限 1 落地）
 fn find_section_range(body: &str, section: &str) -> Option<(usize, usize)> {
     let lines: Vec<&str> = body.lines().collect();
     let header = section.trim();
-    let start = lines.iter().position(|l| l.trim_start() == header)?;
+    let start = lines.iter().position(|l| l.trim() == header)?;
+    // 检查是否存在同层级同名章节（已知局限 1：匹配第一个并记录 warn 日志）
+    if lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .any(|(_, l)| l.trim() == header)
+    {
+        warn!(
+            section = header,
+            body_lines = lines.len(),
+            "duplicate section heading, using first match"
+        );
+    }
     let end = lines
         .iter()
         .enumerate()
@@ -45,6 +102,45 @@ fn find_section_range(body: &str, section: &str) -> Option<(usize, usize)> {
         .find(|(_, l)| l.trim_start().starts_with("## "))
         .map(|(i, _)| i)
         .unwrap_or(lines.len());
+    Some((start, end))
+}
+
+/// 在 `## {section}` 范围内找到 `### {subsection}` 的起始行号和结束行号
+///
+/// v8 D19 新增。subsection 结束行 = 下一个 `###` 或 `##` 或父 section_end。
+fn find_subsection_range(body: &str, section: &str, subsection: &str) -> Option<(usize, usize)> {
+    let lines: Vec<&str> = body.lines().collect();
+    let (section_start, section_end) = find_section_range(body, section)?;
+    let subsection_header = subsection.trim();
+    let start = lines
+        .iter()
+        .enumerate()
+        .skip(section_start + 1)
+        .take(section_end.saturating_sub(section_start + 1))
+        .find(|(_, l)| l.trim() == subsection_header)
+        .map(|(i, _)| i)?;
+    // 同层级同名子章节匹配第一个并记录 warn 日志（与 find_section_range 一致）
+    if lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .take(section_end.saturating_sub(start + 1))
+        .any(|(_, l)| l.trim() == subsection_header)
+    {
+        warn!(
+            section = section.trim(),
+            subsection = subsection_header,
+            body_lines = lines.len(),
+            "duplicate subsection heading, using first match"
+        );
+    }
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, l)| l.trim_start().starts_with("### ") || l.trim_start().starts_with("## "))
+        .map(|(i, _)| i)
+        .unwrap_or(section_end);
     Some((start, end))
 }
 
@@ -98,7 +194,56 @@ pub fn apply_skill_operations(
                     frontmatter_lines.push(format!("{}: {}", field, value));
                 }
             }
+            SkillUpdateOperation::ReplaceSubsection {
+                section,
+                subsection,
+                content,
+            } => {
+                let body_str = body_lines.join("\n");
+                let range =
+                    find_subsection_range(&body_str, section, subsection).ok_or_else(|| {
+                        ApplyError::SubsectionNotFound(section.clone(), subsection.clone())
+                    })?;
+                // 保留 `### {subsection}` 标题行，替换后续内容
+                body_lines.splice(range.0 + 1..range.1, content.lines().map(|s| s.to_string()));
+            }
+            SkillUpdateOperation::AddSubsection {
+                section,
+                after,
+                subsection,
+                content,
+            } => {
+                let body_str = body_lines.join("\n");
+                let range = find_subsection_range(&body_str, section, after).ok_or_else(|| {
+                    ApplyError::SubsectionNotFound(section.clone(), after.clone())
+                })?;
+                let mut new_lines: Vec<String> = vec![subsection.clone()];
+                new_lines.extend(content.lines().map(|s| s.to_string()));
+                new_lines.push(String::new()); // 空行分隔
+                body_lines.splice(range.1..range.1, new_lines);
+            }
+            SkillUpdateOperation::RemoveSubsection {
+                section,
+                subsection,
+            } => {
+                let body_str = body_lines.join("\n");
+                let range =
+                    find_subsection_range(&body_str, section, subsection).ok_or_else(|| {
+                        ApplyError::SubsectionNotFound(section.clone(), subsection.clone())
+                    })?;
+                body_lines.drain(range.0..range.1);
+            }
+            SkillUpdateOperation::ReplaceBody { content } => {
+                body_lines = content.lines().map(|s| s.to_string()).collect();
+            }
         }
+    }
+
+    // v8 D19：post-apply 结构校验，防止 LLM 用 replace_body 或 remove_section
+    // 删除所有章节标题，整体回滚（D13 语义）
+    let new_body: String = body_lines.join("\n");
+    if let Err(e) = validate_skill_structure(&new_body) {
+        return Err(ApplyError::StructureInvalid(e.to_string()));
     }
 
     let mut result = String::new();
@@ -119,8 +264,13 @@ pub fn apply_skill_operations(
 pub enum ApplyError {
     #[error("section not found: {0}")]
     SectionNotFound(String),
+    #[error("subsection not found: {0} / {1}")]
+    SubsectionNotFound(String, String),
     #[error("frontmatter field not whitelisted: {0}")]
     FieldNotWhitelisted(String),
+    /// v8 D19：post-apply 结构校验失败（apply 后 body 无 `##` 标题或首个 section 空）
+    #[error("post-apply structure invalid: {0}")]
+    StructureInvalid(String),
 }
 
 /// 保留最新 keep 代历史，删除超出部分
@@ -160,6 +310,11 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = "---\nname: test\ndescription: A skill\nversion: 1\n---\n\n## Usage\n\nDo it.\n\n## Examples\n\nExample 1.\n";
+    const SAMPLE_WITH_SUBSECTIONS: &str = "---\nname: test\ndescription: A skill\n---\n\n## Usage\n\n### Basic\n\nDo step 1.\n\n### Advanced\n\nDo step 2.\n\n## Examples\n\nExample 1.\n";
+    /// 跨 section 同名 subsection 样本：`## Usage` 与 `## Examples` 都含 `### Common`。
+    /// 用于回归测试 v8 D19 `find_subsection_range` 的父 section 范围硬限制：
+    /// 不同父 section 下的同名 subsection 必须互不干扰。
+    const SAMPLE_CROSS_SECTION_SAME_SUBSECTION: &str = "---\nname: test\ndescription: A skill\n---\n\n## Usage\n\n### Common\n\nUsage common content.\n\n### Specific\n\nUsage specific content.\n\n## Examples\n\n### Common\n\nExamples common content.\n";
 
     #[test]
     fn replace_section_existing() {
@@ -231,6 +386,329 @@ mod tests {
             apply_skill_operations(SAMPLE, &ops),
             Err(ApplyError::FieldNotWhitelisted(_))
         ));
+    }
+
+    #[test]
+    fn replace_frontmatter_upsert_appends_missing_field() {
+        // v8 D19：upsert 语义 — 字段不存在则追加
+        let ops = vec![SkillUpdateOperation::ReplaceFrontmatter {
+            field: "self_updatable".to_string(),
+            value: "false".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops).unwrap();
+        assert!(result.contains("self_updatable: false"));
+    }
+
+    #[test]
+    fn replace_subsection_existing() {
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Advanced".to_string(),
+            content: "Do step 2 with caution.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
+        assert!(result.contains("Do step 2 with caution."));
+        assert!(!result.contains("Do step 2."));
+        // 其他子章节不变
+        assert!(result.contains("Do step 1."));
+    }
+
+    #[test]
+    fn replace_subsection_section_not_found() {
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Missing".to_string(),
+            subsection: "### Advanced".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
+            Err(ApplyError::SubsectionNotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn replace_subsection_subsection_not_found() {
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Missing".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
+            Err(ApplyError::SubsectionNotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn add_subsection_after_existing() {
+        let ops = vec![SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Basic".to_string(),
+            subsection: "### Edge Cases".to_string(),
+            content: "Edge case content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
+        assert!(result.contains("### Edge Cases"));
+        assert!(result.contains("Edge case content."));
+        let basic_idx = result.find("### Basic").unwrap();
+        let edge_idx = result.find("### Edge Cases").unwrap();
+        let advanced_idx = result.find("### Advanced").unwrap();
+        assert!(basic_idx < edge_idx);
+        assert!(edge_idx < advanced_idx);
+    }
+
+    #[test]
+    fn add_subsection_after_not_found() {
+        let ops = vec![SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Missing".to_string(),
+            subsection: "### New".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
+            Err(ApplyError::SubsectionNotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn remove_subsection_existing() {
+        let ops = vec![SkillUpdateOperation::RemoveSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Advanced".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
+        assert!(!result.contains("### Advanced"));
+        assert!(!result.contains("Do step 2."));
+        // 其他子章节不变
+        assert!(result.contains("### Basic"));
+        assert!(result.contains("Do step 1."));
+    }
+
+    // ============ v8 D19 回归：跨 section 同名 subsection 必须互不干扰 ============
+    //
+    // `find_subsection_range` 通过父 section 范围硬限制隔离同名 subsection。
+    // 这些测试确保未来重构不会破坏该不变量。
+
+    #[test]
+    fn replace_subsection_only_affects_target_section_when_names_collide() {
+        // 替换 `## Usage` 下的 `### Common`，不应影响 `## Examples` 下的 `### Common`
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Common".to_string(),
+            content: "New usage common content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 目标 subsection 已更新
+        assert!(
+            result.contains("New usage common content."),
+            "target subsection should be updated; got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Usage common content."),
+            "old target subsection content should be gone; got:\n{}",
+            result
+        );
+        // 非目标 section 下的同名 subsection 保持不变
+        assert!(
+            result.contains("Examples common content."),
+            "non-target same-name subsection must remain untouched; got:\n{}",
+            result
+        );
+        // `### Specific` 不受影响
+        assert!(
+            result.contains("Usage specific content."),
+            "sibling subsection should be untouched; got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn add_subsection_does_not_cross_section_boundary_when_names_collide() {
+        // 在 `## Usage` 的 `### Common` 之后插入 `### New`，
+        // 不应插入到 `## Examples` 范围内或其后
+        let ops = vec![SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Common".to_string(),
+            subsection: "### New".to_string(),
+            content: "New subsection content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 新 subsection 已添加
+        assert!(
+            result.contains("### New"),
+            "new subsection should be added; got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("New subsection content."),
+            "new subsection content should be present; got:\n{}",
+            result
+        );
+        // 关键不变量：`### New` 必须位于 `## Usage` 范围内（在 `### Specific` 之前，
+        // `## Examples` 之前），不应跨越到 `## Examples` 范围
+        let usage_idx = result.find("## Usage").unwrap();
+        let new_idx = result.find("### New").unwrap();
+        let specific_idx = result.find("### Specific").unwrap();
+        let examples_idx = result.find("## Examples").unwrap();
+        assert!(
+            usage_idx < new_idx && new_idx < specific_idx && new_idx < examples_idx,
+            "### New must be inside ## Usage range; got positions: usage={}, new={}, specific={}, examples={}",
+            usage_idx,
+            new_idx,
+            specific_idx,
+            examples_idx
+        );
+    }
+
+    #[test]
+    fn remove_subsection_only_removes_from_target_section_when_names_collide() {
+        // 删除 `## Usage` 下的 `### Common`，不应删除 `## Examples` 下的 `### Common`
+        let ops = vec![SkillUpdateOperation::RemoveSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Common".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 目标 subsection 已删除（连同其内容）
+        assert!(
+            !result.contains("Usage common content."),
+            "target subsection content should be removed; got:\n{}",
+            result
+        );
+        // 非目标 section 下的同名 subsection 必须保留
+        assert!(
+            result.contains("Examples common content."),
+            "non-target same-name subsection must remain; got:\n{}",
+            result
+        );
+        // `## Examples` 下的 `### Common` 标题仍在
+        // 通过统计 `### Common` 出现次数验证：原 2 次，删除后应剩 1 次
+        let common_count = result.matches("### Common").count();
+        assert_eq!(
+            common_count, 1,
+            "only one ### Common (in ## Examples) should remain; got:\n{}",
+            result
+        );
+        // `### Specific` 不受影响
+        assert!(
+            result.contains("Usage specific content."),
+            "sibling subsection should be untouched; got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn replace_subsection_in_second_section_does_not_touch_first_when_names_collide() {
+        // 对称场景：替换 `## Examples` 下的 `### Common`，不应影响 `## Usage` 下的 `### Common`
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Examples".to_string(),
+            subsection: "### Common".to_string(),
+            content: "New examples common content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 目标 subsection 已更新
+        assert!(
+            result.contains("New examples common content."),
+            "target subsection should be updated; got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Examples common content."),
+            "old target subsection content should be gone; got:\n{}",
+            result
+        );
+        // 非目标 section 下的同名 subsection 保持不变
+        assert!(
+            result.contains("Usage common content."),
+            "non-target same-name subsection must remain untouched; got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn replace_body_replaces_body_keeps_frontmatter() {
+        let ops = vec![SkillUpdateOperation::ReplaceBody {
+            content: "## New Section\n\nNew body content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops).unwrap();
+        // frontmatter 保留
+        assert!(result.contains("name: test"));
+        assert!(result.contains("description: A skill"));
+        // body 被整体替换
+        assert!(result.contains("## New Section"));
+        assert!(result.contains("New body content."));
+        // 原 body 内容消失
+        assert!(!result.contains("Do it."));
+        assert!(!result.contains("## Usage"));
+    }
+
+    #[test]
+    fn find_section_range_trailing_whitespace_matches() {
+        // v8 D19 修复 ADR-004 v7 实现偏差 D：trim_start → trim，尾部空格也能匹配
+        let body = "## Usage \n\nDo it.\n";
+        let range = find_section_range(body, "## Usage").unwrap();
+        assert_eq!(range.0, 0);
+    }
+
+    #[test]
+    fn validate_skill_structure_compliant() {
+        let body = "## Usage\n\nDo it.\n\n## Examples\n\nExample.\n";
+        assert!(validate_skill_structure(body).is_ok());
+    }
+
+    #[test]
+    fn validate_skill_structure_no_section_heading() {
+        let body = "Just plain text without any heading.";
+        assert!(matches!(
+            validate_skill_structure(body),
+            Err(SkillStructureError::NoSectionHeading)
+        ));
+    }
+
+    #[test]
+    fn validate_skill_structure_empty_first_section() {
+        // 首个 ## 标题下到下一个 ## 之间无非空内容
+        let body = "## First\n\n## Second\n\nContent.\n";
+        assert!(matches!(
+            validate_skill_structure(body),
+            Err(SkillStructureError::EmptyFirstSection)
+        ));
+    }
+
+    #[test]
+    fn apply_replace_body_with_compliant_structure_passes() {
+        // v8 D19：replace_body 后 body 仍有 ## 标题，应通过 post-apply 校验
+        let ops = vec![SkillUpdateOperation::ReplaceBody {
+            content: "## New Section\n\nNew content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn apply_replace_body_with_no_section_heading_rolls_back() {
+        // v8 D19：replace_body 后 body 无 ## 标题，post-apply 校验应返回 StructureInvalid
+        let ops = vec![SkillUpdateOperation::ReplaceBody {
+            content: "Just plain text without heading.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops);
+        assert!(matches!(result, Err(ApplyError::StructureInvalid(_))));
+    }
+
+    #[test]
+    fn apply_remove_all_sections_rolls_back() {
+        // v8 D19：删除所有 ## 章节后 body 无 ## 标题，应回滚
+        let ops = vec![
+            SkillUpdateOperation::RemoveSection {
+                section: "## Usage".to_string(),
+            },
+            SkillUpdateOperation::RemoveSection {
+                section: "## Examples".to_string(),
+            },
+        ];
+        let result = apply_skill_operations(SAMPLE, &ops);
+        assert!(matches!(result, Err(ApplyError::StructureInvalid(_))));
     }
 }
 

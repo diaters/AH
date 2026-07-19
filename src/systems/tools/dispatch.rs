@@ -38,7 +38,7 @@ pub fn tool_dispatch_system(
     agents: Query<&mut Agent>,
     mut short_term_memories: Query<&mut ShortTermMemory>,
     chat_sessions: Query<&ChatSession>,
-    calling_states: Query<&crate::domain::ToolCallingState>,
+    calling_states: Query<(Entity, &crate::domain::ToolCallingState)>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
     // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
     // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
@@ -214,6 +214,7 @@ pub fn tool_dispatch_system(
                         &clock_and_loader.0,
                         &context_queries,
                         &clock_and_loader.1,
+                        &calling_states,
                     );
                 }
 

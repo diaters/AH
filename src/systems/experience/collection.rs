@@ -5,7 +5,7 @@ use crate::domain::{
     Agent, AgentKind, ConversationMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryRole,
     ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
     ExperienceConsolidationRequestMessage, ExperienceGovernanceRequestMessage, ExperienceKindHint,
-    ExperienceStore, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
+    ExperienceStore, LlmToolCall, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
     TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemType,
 };
 
@@ -74,12 +74,12 @@ pub(crate) fn experience_collection_workitem_system(
 
         let prompt = if task.result_summary.is_empty() {
             format!(
-                "用户目标：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge",
+                "用户目标：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge\n\nSKILL.md 格式要求（kind=skill 时）：\n- instructions 字段必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题\n- 推荐使用 `## Overview` / `## Usage` / `## Examples` / `## Edge Cases` / `## Limitations` 等 section\n- 复杂 skill 可在二级标题下使用 `### Subsection` 三级标题组织内容\n- 不要使用 `####` 或更深层级（update 端不支持作为 operation 锚点）\n- 落盘前框架会做 validate_skill_structure 校验，不符合则候选置 WritebackFailed",
                 task.content
             )
         } else {
             format!(
-                "用户目标：{}\n\n任务结果摘要：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge",
+                "用户目标：{}\n\n任务结果摘要：{}\n\n请调用 submit_experience_candidate 提交可复用经验候选。\n\n注意：\n- 如果提炼的内容包含具体命令、指令或操作步骤，请使用 kind=skill\n- 如果只是纯事实性知识，请使用 kind=knowledge\n\nSKILL.md 格式要求（kind=skill 时）：\n- instructions 字段必须是 markdown 格式，至少包含 1 个 `## Section` 二级标题\n- 推荐使用 `## Overview` / `## Usage` / `## Examples` / `## Edge Cases` / `## Limitations` 等 section\n- 复杂 skill 可在二级标题下使用 `### Subsection` 三级标题组织内容\n- 不要使用 `####` 或更深层级（update 端不支持作为 operation 锚点）\n- 落盘前框架会做 validate_skill_structure 校验，不符合则候选置 WritebackFailed",
                 task.content, task.result_summary
             )
         };
@@ -147,21 +147,53 @@ fn build_experience_collection_conversation(
             .iter()
             .filter(|e| !matches!(e.role, EntryRole::Archive))
         {
-            let msg = match entry.role {
-                EntryRole::User => ConversationMessage::User {
-                    content: entry.content.clone(),
-                },
-                EntryRole::Assistant => ConversationMessage::Assistant {
-                    content: Some(entry.content.clone()),
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                },
-                EntryRole::Summary => ConversationMessage::System {
-                    content: entry.content.clone(),
-                },
+            match entry.role {
+                EntryRole::User => {
+                    messages.push(ConversationMessage::User {
+                        content: entry.content.clone(),
+                    });
+                }
+                EntryRole::Assistant => {
+                    // 保留 tool_calls 信息，让 collector 能看到操作步骤
+                    let tool_calls: Vec<LlmToolCall> = entry
+                        .metadata
+                        .tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, tc)| LlmToolCall {
+                            id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
+                            name: tc.tool_name.clone(),
+                            arguments: tc.input.clone(),
+                        })
+                        .collect();
+
+                    messages.push(ConversationMessage::Assistant {
+                        content: Some(entry.content.clone()),
+                        tool_calls,
+                        reasoning_content: None,
+                    });
+
+                    // 追加工具结果（截断至 500 字符避免上下文膨胀）
+                    for (i, tc) in entry.metadata.tool_calls.iter().enumerate() {
+                        let truncated_output = if tc.output.chars().count() > 500 {
+                            let truncated: String = tc.output.chars().take(500).collect();
+                            format!("{}...[truncated]", truncated)
+                        } else {
+                            tc.output.clone()
+                        };
+                        messages.push(ConversationMessage::Tool {
+                            tool_call_id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
+                            content: truncated_output,
+                        });
+                    }
+                }
+                EntryRole::Summary => {
+                    messages.push(ConversationMessage::System {
+                        content: entry.content.clone(),
+                    });
+                }
                 EntryRole::Archive => continue,
-            };
-            messages.push(msg);
+            }
         }
     }
 

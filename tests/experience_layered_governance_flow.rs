@@ -84,12 +84,13 @@ fn persistent_agent_skill_candidate_generates_skill_package_after_approval() {
     };
 
     // 模拟用户批准后的落盘
+    // v8 D19：instructions 必须至少包含 1 个 `## ` 二级标题
     let draft = harness::SkillPackageDraft {
         skill_id: format!("{}", candidate.candidate_id),
         title: candidate.title.clone(),
         name: "smoke test".to_string(),
         description: "run smoke test".to_string(),
-        instructions: "after shell changes".to_string(),
+        instructions: "## Usage\n\nafter shell changes".to_string(),
         file_refs: vec![],
         source_task_id: Some(candidate.producer_task_id),
         source_candidate_id: Some(candidate.candidate_id),

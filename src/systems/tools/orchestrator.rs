@@ -369,6 +369,11 @@ pub fn handle_tool_action<B: SessionBackend>(
         &WorkItem,
     )>,
     skill_loader: &SkillLoader,
+    // ToolCallingState 查询：用于在 ProfileGeneration 收尾路径
+    // （SubmitProfileUpdate / SkipProfileUpdate）despawn 关联 State，
+    // 阻止 tool_calling_orchestrator_system 触发 follow-up LLM 请求。
+    // 按 (task_id, work_item_id) 严格匹配，与 find_calling_state 语义一致。
+    calling_states: &Query<(Entity, &ToolCallingState)>,
 ) {
     match action {
         Ok(ToolAction::Direct(value)) => {
@@ -986,6 +991,25 @@ pub fn handle_tool_action<B: SessionBackend>(
                 ToolReturnedHookPending,
             ));
 
+            // ProfileGeneration 收尾：despawn 关联的 ToolCallingState，
+            // 阻止 tool_calling_orchestrator_system 触发 follow-up LLM 请求。
+            // profile 已提交进入审批，LLM 对话语义上结束，State 应随之消亡。
+            // 按 (task_id, work_item_id) 严格匹配，与 find_calling_state 语义一致。
+            for (cs_entity, cs) in calling_states.iter() {
+                if cs.task_id == request.request.task_id
+                    && cs.work_item_id == request.request.work_item_id
+                {
+                    commands.entity(cs_entity).despawn();
+                    debug!(
+                        event = "ToolCallingStateDespawned",
+                        task_id = %request.request.task_id,
+                        work_item_id = ?request.request.work_item_id,
+                        reason = "profile_generation_submit_completed",
+                        "despawned ToolCallingState to prevent follow-up LLM loop"
+                    );
+                }
+            }
+
             debug!(
                 event = "ProfileUpdateSubmitted",
                 task_id = %request.request.task_id,
@@ -1046,6 +1070,23 @@ pub fn handle_tool_action<B: SessionBackend>(
                 },
                 ToolReturnedHookPending,
             ));
+
+            // ProfileGeneration 收尾（与 SubmitProfileUpdate 分支对称）：
+            // despawn 关联的 ToolCallingState，阻止 follow-up LLM 请求。
+            for (cs_entity, cs) in calling_states.iter() {
+                if cs.task_id == request.request.task_id
+                    && cs.work_item_id == request.request.work_item_id
+                {
+                    commands.entity(cs_entity).despawn();
+                    debug!(
+                        event = "ToolCallingStateDespawned",
+                        task_id = %request.request.task_id,
+                        work_item_id = ?request.request.work_item_id,
+                        reason = "profile_generation_skip_completed",
+                        "despawned ToolCallingState to prevent follow-up LLM loop"
+                    );
+                }
+            }
 
             debug!(
                 event = "ProfileUpdateSkipped",
@@ -1216,7 +1257,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                     request_entity,
                     request,
                     ToolError::InvalidInput(format!(
-                        "operations dry-run failed: {}. 请确保 section 名与原 SKILL.md 中实际存在的 section 一致。",
+                        "operations dry-run failed: {}. 注意：replace_section / replace_subsection 的 content 字段不得包含标题行本身（系统会自动保留原标题），只需提供标题下方的正文内容。若为 SectionNotFound，请确保 section 名与原 SKILL.md 中实际存在的标题完全一致。",
                         apply_err
                     )),
                 );
@@ -1390,14 +1431,14 @@ fn spawn_experience_candidate_result(
 /// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
 pub fn restore_task_after_tool(
     tasks: &mut Query<(Entity, &mut Task)>,
-    calling_states: &Query<&ToolCallingState>,
+    calling_states: &Query<(Entity, &ToolCallingState)>,
     task_id: TaskId,
 ) {
     if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
         if !matches!(task.status, TaskStatus::Waiting(_)) {
             return;
         }
-        let has_calling_state = calling_states.iter().any(|cs| cs.task_id == task.id);
+        let has_calling_state = calling_states.iter().any(|(_, cs)| cs.task_id == task.id);
         task.status = if has_calling_state {
             TaskStatus::Waiting(WaitingReason::ToolExecution)
         } else {

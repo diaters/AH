@@ -126,7 +126,10 @@ impl SkillLoader {
                         if let Ok(content) = std::fs::read_to_string(&skill_path)
                             && let Some(loaded) = parse_skill_md(&content)
                         {
-                            let skill_id = SkillId::new(agent_name.clone(), loaded.name.clone());
+                            // 使用目录名作为 skill_name（而非 frontmatter name），
+                            // 确保 skill_md_path() 能正确重建文件路径。
+                            let dir_name = skill_entry.file_name().to_string_lossy().to_string();
+                            let skill_id = SkillId::new(agent_name.clone(), dir_name);
                             let entry = SkillEntry {
                                 skill_id,
                                 name: loaded.name,
