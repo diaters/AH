@@ -205,15 +205,27 @@ pub(crate) fn skill_update_workitem_system(
             continue;
         };
 
-        // 4. 构造 prompt（含完整 SKILL.md + 候选原文 + 版本号）
+        // 4. 构造 prompt（含完整 SKILL.md + 候选原文 + 版本号 + 候选类型）
+        //    v8 D19：operation 列表扩展到 8 种（含 3 级标题级 + replace_body 兜底），
+        //    replace_body 加软约束警示（仅当其他 operation 无法表达时才使用）。
+        //    候选类型显式说明（Skill / Knowledge），帮助 LLM 理解候选语义。
+        let candidate_kind_label = match candidate.kind_hint {
+            ExperienceKindHint::Skill => "Skill（用于更新现有 skill 的指令/结构）",
+            ExperienceKindHint::Knowledge => "Knowledge（用于补充 skill 的背景知识）",
+        };
         let prompt = format!(
-            "## 任务\n\n根据以下经验候选，为现有 skill 提交结构化 diff 更新。\n\n\
+            "## 任务\n\n根据以下经验候选（类型：{}），为现有 skill 提交结构化 diff 更新。\n\n\
              ## 原 SKILL.md 完整内容（version {}）\n\n```markdown\n{}\n```\n\n\
              ## 经验候选\n\n### {}\n\n{}\n\n\
              ## 要求\n\n\
              1. 调用 submit_skill_update 工具提交更新，只需提供 operations 和 rationale 两个字段，skill_id / base_version / new_version 由系统自动注入\n\
-             2. operations 必须是有效的 diff 操作（replace_section / add_section / remove_section / replace_frontmatter）\n\
-             3. operations 中的 section 名必须与原 SKILL.md 中实际存在的 section 一致（系统会做 dry-run 校验，section 不存在会立即拒绝）",
+             2. operations 必须是有效的 diff 操作，可选 8 种：\n\
+                - 二级标题级：replace_section / add_section / remove_section / replace_frontmatter\n\
+                - 三级标题级：replace_subsection / add_subsection / remove_subsection\n\
+                - 兜底：replace_body（整体替换 body，frontmatter 不变）\n\
+             3. operations 中的 section / subsection 名必须与原 SKILL.md 中实际存在的标题一致（系统会做 dry-run 校验，section 不存在会立即拒绝）\n\
+             4. 优先使用颗粒度更细的 operation（subsection 级 > section 级 > replace_body）；replace_body 仅当其他 operation 都无法表达修改意图时才使用，滥用会被评审拒绝",
+            candidate_kind_label,
             skill_entry.version,
             skill_md_content,
             candidate.title,
@@ -450,9 +462,14 @@ pub(crate) fn skill_update_completion_system(
 }
 
 /// 从 ExperienceCandidate 取候选文本用于 prompt 构造。
+///
+/// v8 D19：显式标注候选类型（Knowledge / Skill），与 prompt 中的 candidate_kind_label
+/// 保持一致，避免 LLM 在长候选中丢失类型语义。
 fn candidate_payload_text(candidate: &ExperienceCandidate) -> String {
     match &candidate.payload {
-        ExperienceCandidatePayload::Knowledge { content } => content.clone(),
+        ExperienceCandidatePayload::Knowledge { content } => {
+            format!("[候选类型：Knowledge]\n\n{}", content)
+        }
         ExperienceCandidatePayload::Skill {
             name,
             description,
@@ -460,7 +477,7 @@ fn candidate_payload_text(candidate: &ExperienceCandidate) -> String {
             ..
         } => {
             format!(
-                "技能名：{}\n描述：{}\n指令：{}",
+                "[候选类型：Skill]\n\n技能名：{}\n描述：{}\n指令：{}",
                 name, description, instructions
             )
         }
