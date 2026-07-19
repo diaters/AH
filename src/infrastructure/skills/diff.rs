@@ -311,6 +311,10 @@ mod tests {
 
     const SAMPLE: &str = "---\nname: test\ndescription: A skill\nversion: 1\n---\n\n## Usage\n\nDo it.\n\n## Examples\n\nExample 1.\n";
     const SAMPLE_WITH_SUBSECTIONS: &str = "---\nname: test\ndescription: A skill\n---\n\n## Usage\n\n### Basic\n\nDo step 1.\n\n### Advanced\n\nDo step 2.\n\n## Examples\n\nExample 1.\n";
+    /// 跨 section 同名 subsection 样本：`## Usage` 与 `## Examples` 都含 `### Common`。
+    /// 用于回归测试 v8 D19 `find_subsection_range` 的父 section 范围硬限制：
+    /// 不同父 section 下的同名 subsection 必须互不干扰。
+    const SAMPLE_CROSS_SECTION_SAME_SUBSECTION: &str = "---\nname: test\ndescription: A skill\n---\n\n## Usage\n\n### Common\n\nUsage common content.\n\n### Specific\n\nUsage specific content.\n\n## Examples\n\n### Common\n\nExamples common content.\n";
 
     #[test]
     fn replace_section_existing() {
@@ -479,6 +483,147 @@ mod tests {
         // 其他子章节不变
         assert!(result.contains("### Basic"));
         assert!(result.contains("Do step 1."));
+    }
+
+    // ============ v8 D19 回归：跨 section 同名 subsection 必须互不干扰 ============
+    //
+    // `find_subsection_range` 通过父 section 范围硬限制隔离同名 subsection。
+    // 这些测试确保未来重构不会破坏该不变量。
+
+    #[test]
+    fn replace_subsection_only_affects_target_section_when_names_collide() {
+        // 替换 `## Usage` 下的 `### Common`，不应影响 `## Examples` 下的 `### Common`
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Common".to_string(),
+            content: "New usage common content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 目标 subsection 已更新
+        assert!(
+            result.contains("New usage common content."),
+            "target subsection should be updated; got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Usage common content."),
+            "old target subsection content should be gone; got:\n{}",
+            result
+        );
+        // 非目标 section 下的同名 subsection 保持不变
+        assert!(
+            result.contains("Examples common content."),
+            "non-target same-name subsection must remain untouched; got:\n{}",
+            result
+        );
+        // `### Specific` 不受影响
+        assert!(
+            result.contains("Usage specific content."),
+            "sibling subsection should be untouched; got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn add_subsection_does_not_cross_section_boundary_when_names_collide() {
+        // 在 `## Usage` 的 `### Common` 之后插入 `### New`，
+        // 不应插入到 `## Examples` 范围内或其后
+        let ops = vec![SkillUpdateOperation::AddSubsection {
+            section: "## Usage".to_string(),
+            after: "### Common".to_string(),
+            subsection: "### New".to_string(),
+            content: "New subsection content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 新 subsection 已添加
+        assert!(
+            result.contains("### New"),
+            "new subsection should be added; got:\n{}",
+            result
+        );
+        assert!(
+            result.contains("New subsection content."),
+            "new subsection content should be present; got:\n{}",
+            result
+        );
+        // 关键不变量：`### New` 必须位于 `## Usage` 范围内（在 `### Specific` 之前，
+        // `## Examples` 之前），不应跨越到 `## Examples` 范围
+        let usage_idx = result.find("## Usage").unwrap();
+        let new_idx = result.find("### New").unwrap();
+        let specific_idx = result.find("### Specific").unwrap();
+        let examples_idx = result.find("## Examples").unwrap();
+        assert!(
+            usage_idx < new_idx && new_idx < specific_idx && new_idx < examples_idx,
+            "### New must be inside ## Usage range; got positions: usage={}, new={}, specific={}, examples={}",
+            usage_idx,
+            new_idx,
+            specific_idx,
+            examples_idx
+        );
+    }
+
+    #[test]
+    fn remove_subsection_only_removes_from_target_section_when_names_collide() {
+        // 删除 `## Usage` 下的 `### Common`，不应删除 `## Examples` 下的 `### Common`
+        let ops = vec![SkillUpdateOperation::RemoveSubsection {
+            section: "## Usage".to_string(),
+            subsection: "### Common".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 目标 subsection 已删除（连同其内容）
+        assert!(
+            !result.contains("Usage common content."),
+            "target subsection content should be removed; got:\n{}",
+            result
+        );
+        // 非目标 section 下的同名 subsection 必须保留
+        assert!(
+            result.contains("Examples common content."),
+            "non-target same-name subsection must remain; got:\n{}",
+            result
+        );
+        // `## Examples` 下的 `### Common` 标题仍在
+        // 通过统计 `### Common` 出现次数验证：原 2 次，删除后应剩 1 次
+        let common_count = result.matches("### Common").count();
+        assert_eq!(
+            common_count, 1,
+            "only one ### Common (in ## Examples) should remain; got:\n{}",
+            result
+        );
+        // `### Specific` 不受影响
+        assert!(
+            result.contains("Usage specific content."),
+            "sibling subsection should be untouched; got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn replace_subsection_in_second_section_does_not_touch_first_when_names_collide() {
+        // 对称场景：替换 `## Examples` 下的 `### Common`，不应影响 `## Usage` 下的 `### Common`
+        let ops = vec![SkillUpdateOperation::ReplaceSubsection {
+            section: "## Examples".to_string(),
+            subsection: "### Common".to_string(),
+            content: "New examples common content.".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
+        // 目标 subsection 已更新
+        assert!(
+            result.contains("New examples common content."),
+            "target subsection should be updated; got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("Examples common content."),
+            "old target subsection content should be gone; got:\n{}",
+            result
+        );
+        // 非目标 section 下的同名 subsection 保持不变
+        assert!(
+            result.contains("Usage common content."),
+            "non-target same-name subsection must remain untouched; got:\n{}",
+            result
+        );
     }
 
     #[test]
