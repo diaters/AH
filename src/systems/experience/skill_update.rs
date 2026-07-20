@@ -361,6 +361,13 @@ pub(crate) fn skill_update_completion_system(
             continue;
         };
 
+        // 4.5 将 new_version 写入 frontmatter（系统管理，不依赖 LLM 操作）
+        // 确保版本号持久化到文件，避免重启后 parse_skill_md 默认回退到 1
+        let new_content = crate::infrastructure::skills::diff::set_frontmatter_version(
+            &new_content,
+            msg.new_version,
+        );
+
         // 5. 备份原版本到 history 目录（失败不阻断后续写入）
         if let Err(e) = std::fs::create_dir_all(&history_dir) {
             warn!(
@@ -1066,6 +1073,12 @@ mod completion_system_tests {
         let new_content = fs::read_to_string(&skill_path).unwrap();
         assert!(new_content.contains("New usage content."));
         assert!(!new_content.contains("Do the thing."));
+        // 1.5 version 字段已写入 frontmatter
+        assert!(
+            new_content.contains("version: 2"),
+            "SKILL.md frontmatter should contain 'version: 2', got:\n{}",
+            new_content
+        );
 
         // 2. history v1.md 备份存在
         let history_dir = skill_path.parent().unwrap().join("history");
