@@ -1,35 +1,48 @@
-//! 异步工具桥的领域类型（最小骨架）。
+//! 异步工具桥的领域类型。
 //!
-//! 本模块当前包含：
-//! - 通道类型（Phase 0 测试 harness 所需）：
-//!   - `ToolWorkerPayload`：worker 回传给 ECS 的载荷枚举
-//!   - `ToolAsyncResult`：worker 回传的完整结果
-//!   - `ToolResultSender` / `ToolResultReceiver`：作为 Resource 注入 World 的通道端
-//! - Task 1 引入的 trait 异步三件套所需支撑类型：
-//!   - `ToolEffect`：worker 声明式写效果（dispatch 后由 commit 系统落账）
-//!   - `OwnedToolContext`：异步执行入口的 owned 上下文（最小骨架，仅含全局配置）
+//! 本模块承担异步工具桥的全部「领域契约」定义：
+//! - 通道消息：`ToolWorkerPayload` / `ToolAsyncResult` / `ToolResultSender` / `ToolResultReceiver`
+//! - 挂起实体与在飞标记：`ToolRequestPending` / `InFlightToolCall`
+//! - 声明式写效果：`ToolEffect` / `ToolEffectPending`
+//! - Owned 上下文与调度双账本快照：`OwnedToolContext` / `SchedulerStateSnapshot`
+//!   / `DynamicScheduledTaskSnapshot` / `ScheduledTaskRegistrySnapshot`
+//!   / `ScheduledTaskInfoSnapshot`
 //!
-//! Phase 1（Task 2）会在此骨架上扩展：
-//! - 给 `ToolWorkerPayload` 增加 `Effect(ToolEffect)` 变体
-//! - 补充 `ToolEffectPending`、`ToolRequestPending`、`InFlightToolCall`
-//!   与快照类型，并把 `OwnedToolContext` 补全（scheduler_state / registry 等）
+//! ## 结果落地单点原则
 //!
-//! 在此之前，本模块仅承担“让 harness 能编译 + Task 1 trait 能落地”的职责，
-//! 不引入任何业务逻辑。
+//! `ToolExecutionResultMessage` 只能由 ingest 系统产生；sweeper 只发通道 + claim
+//! （摘除 `InFlightToolCall`），不落地不 despawn。错误侧直接用 `ToolError`
+//! （与 `ToolExecutionResultMessage.tool_output` 同型），ingest 落地零转换。
+//!
+//! ## 效果与值同通道
+//!
+//! worker 把最终值（`Completed`）或声明式效果（`Effect`）塞进同一个
+//! `ToolAsyncResult.payload`，ingest 按 payload 枚举分流：值直接产
+//! `ToolExecutionResultMessage`，效果 spawn 一个 `ToolEffectPending` 实体
+//! 交给 `commit_tool_effects_system` 应用。
 
-use bevy_ecs::prelude::Resource;
+use std::sync::Arc;
+
+use bevy_ecs::prelude::{Component, Resource};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tokio::sync::mpsc;
 
-use crate::domain::ToolError;
+use crate::domain::{AgentExecutionRequest, ChannelId, ToolError};
+use crate::triggers::scheduled_task::ScheduleSpec;
+
+// ============ 通道消息 ============
 
 /// worker 回传给 ECS 的载荷。
 ///
-/// 当前只支持 `Completed`（工具执行完毕，附带成功值或错误）。
-/// Task 2 会补 `Effect(ToolEffect)` 变体用于副作用回传。
+/// 两个变体共用同一个通道：值（含错误）走 `Completed`，声明式写效果走 `Effect`。
+/// ingest 按 payload 枚举分流。
 #[derive(Debug, Clone)]
 pub enum ToolWorkerPayload {
+    /// 工具执行完毕，可直接喂给 LLM 的结果（错误侧是 `ToolError`，
+    /// 与 `ToolExecutionResultMessage.tool_output` 同型，ingest 零转换）。
     Completed(Result<serde_json::Value, ToolError>),
-    // Task 2 会补 Effect(ToolEffect) 变体
+    /// 写路径效果，交 `commit_tool_effects_system` 应用后再产最终结果。
+    Effect(ToolEffect),
 }
 
 /// worker 回传给 ECS 的异步结果。
@@ -37,6 +50,7 @@ pub enum ToolWorkerPayload {
 /// 一条 `ToolAsyncResult` 对应一次工具调用的终态（或终态前的一次副作用）。
 #[derive(Debug, Clone)]
 pub struct ToolAsyncResult {
+    /// LLM Tool Call ID（barrier 关联键）。
     pub tool_call_id: String,
     pub payload: ToolWorkerPayload,
 }
@@ -52,6 +66,14 @@ impl ToolAsyncResult {
             payload: ToolWorkerPayload::Completed(result),
         }
     }
+
+    /// 构造一条 `Effect` 结果（声明式写效果，由 commit 系统落账）。
+    pub fn effect(tool_call_id: impl Into<String>, effect: ToolEffect) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            payload: ToolWorkerPayload::Effect(effect),
+        }
+    }
 }
 
 /// worker → ECS 通道的发送端，作为 Resource 注入 World。
@@ -64,48 +86,132 @@ pub struct ToolResultSender(pub mpsc::UnboundedSender<ToolAsyncResult>);
 #[derive(Resource)]
 pub struct ToolResultReceiver(pub mpsc::UnboundedReceiver<ToolAsyncResult>);
 
-/// worker 声明式写效果：交由 commit_tool_effects_system 落账。
+// ============ 挂起实体与在飞标记 ============
+
+/// 挂起的工具请求。dispatch 创建、ingest despawn。
+///
+/// `original_request` 用 `Arc` 共享：ingest 重建 `ToolExecutionResultMessage`
+/// 时零克隆读取完整字段（task_id / agent_id / request_kind / ...）。
+#[derive(Component, Clone)]
+pub struct ToolRequestPending {
+    /// LLM Tool Call ID（与 `ToolAsyncResult.tool_call_id` 关联）。
+    pub tool_call_id: String,
+    /// 工具名（重建结果消息时用于日志与权限审计）。
+    pub tool_name: String,
+    /// 原始请求（重建 `ToolExecutionResultMessage` 的完整字段来源）。
+    pub original_request: Arc<AgentExecutionRequest>,
+}
+
+/// 在飞标记。sweeper 扫描对象。
+///
+/// 被claim（超时处理中）时摘除本组件，实体保留到 ingest 落地结果后才 despawn
+/// ——保证「结果落地」与「despawn」是同一动作，不会出现结果丢失或重复落地。
+#[derive(Component, Debug, Clone)]
+pub struct InFlightToolCall {
+    /// 调用发起时间（来自 `Clock`，全局唯一时间源）。
+    pub started_at: DateTime<Utc>,
+    /// 调用超时阈值（worker `max_duration` 推导得出）。
+    pub timeout: ChronoDuration,
+}
+
+// ============ 声明式写效果 ============
+
+/// worker 声明式写效果：交由 `commit_tool_effects_system` 落账。
 ///
 /// 写路径工具（如 schedule_task 的取消语义）由 worker 声明意图，
 /// 主 ECS 线程在 ingest 阶段统一应用，避免 worker 直接 mutate World。
 ///
-/// 当前仅 `DeleteScheduledTask` 一个变体；后续若有新写效果，扩展本枚举。
+/// 新增写效果 = 加一个变体 + commit 加一支 arm。
 #[derive(Debug, Clone)]
 pub enum ToolEffect {
-    /// 删除一个调度任务（如周期任务的「停掉」语义）
+    /// 删除指定 kind 的动态定时任务（如周期任务的「停掉」语义）。
     DeleteScheduledTask {
-        /// 任务类型字符串，形如 `scheduled:<uuid>`
+        /// 任务类型字符串，形如 `scheduled:<uuid>`。
         kind: String,
     },
+    // 后续：ScheduleTask / SendChannelMessage 等收编变体
 }
 
-/// 异步工具执行的 owned 上下文（最小骨架）。
+/// 效果待应用实体。ingest 收到 `Effect` payload 时 spawn，
+/// `commit_tool_effects_system` 消费后 despawn。
+#[derive(Component, Debug, Clone)]
+pub struct ToolEffectPending {
+    /// 关联的 Tool Call ID（用于 commit 后产最终结果消息）。
+    pub tool_call_id: String,
+    /// 待应用的效果。
+    pub effect: ToolEffect,
+}
+
+// ============ Owned 上下文与快照 ============
+
+/// worker 的只读上下文。
 ///
-/// 与 `ToolContext<'a>`（borrowed，sync 路径用）相对，
-/// `OwnedToolContext` 在 worker 内的 `'static` 上下文中可用——
-/// 异步 dispatch 把所需状态从 ECS 抓一份快照过来，丢给 worker，
-/// worker 不持有任何 borrowed ECS 引用。
+/// 与 `ToolContext<'a>`（borrowed，sync 路径用）相对，`OwnedToolContext`
+/// 在 worker 内的 `'static` 上下文中可用——异步 dispatch 把所需状态从
+/// ECS 抓一份快照过来丢给 worker，worker 不持有任何 borrowed ECS 引用。
 ///
-/// Task 1 仅落最小骨架：只有 `tool_inflight_timeout_secs` 一个字段，
-/// 因为 trait 的 `max_duration` 钩子签名收的是裸 `u64`，
-/// 不需要 scheduler / registry 句柄。
-///
-/// Task 2 会补 `scheduler_state` / `registry` / 快照类型等字段。
+/// 不含 `original_request`（由挂起实体 `ToolRequestPending` 携带）。
 #[derive(Debug, Clone, Default)]
 pub struct OwnedToolContext {
+    /// 调度状态快照（需要读定时任务的工具由 dispatch 填充）。
+    pub scheduler_state: Option<Arc<SchedulerStateSnapshot>>,
+    /// 任务注册表快照（需要读任务列表的工具由 dispatch 填充）。
+    pub registry: Option<Arc<ScheduledTaskRegistrySnapshot>>,
     /// 全局失联超时（秒）—— sweeper 推导 max_duration 的全局缺省。
     pub tool_inflight_timeout_secs: u64,
-    // Task 2 会补 scheduler_state / registry 等字段
 }
 
 impl OwnedToolContext {
     /// 测试构造器：无快照，仅全局配置。
     ///
-    /// 仅用于 Task 1 trait 行为测试；Task 2 引入完整快照后，
-    /// 真实 dispatch 会用带快照的构造器。
+    /// 真实 dispatch 会用带快照的构造器填充 scheduler_state / registry。
     pub fn empty_for_test(tool_inflight_timeout_secs: u64) -> Self {
         Self {
+            scheduler_state: None,
+            registry: None,
             tool_inflight_timeout_secs,
         }
     }
+}
+
+/// 调度状态快照（动态任务账本）。
+///
+/// 由 dispatch 从 `SchedulerState` 抓取，worker 只读。
+#[derive(Debug, Clone, Default)]
+pub struct SchedulerStateSnapshot {
+    /// 当前所有动态调度任务的快照。
+    pub dynamic_tasks: Vec<DynamicScheduledTaskSnapshot>,
+}
+
+/// 动态调度任务快照（对应运行时 `DynamicScheduledTask`）。
+#[derive(Debug, Clone)]
+pub struct DynamicScheduledTaskSnapshot {
+    /// 任务 ID。
+    pub id: uuid::Uuid,
+    /// 任务类型字符串。
+    pub kind: String,
+    /// 调度规格（一次性或 cron 周期）。
+    pub schedule: ScheduleSpec,
+    /// 创建时间。
+    pub created_at: DateTime<Utc>,
+}
+
+/// 任务注册表快照（静态任务账本）。
+///
+/// 由 dispatch 从 `SpaceToolRegistry` 抓取，worker 只读。
+#[derive(Debug, Clone, Default)]
+pub struct ScheduledTaskRegistrySnapshot {
+    /// 任务名 → 任务信息。
+    pub tasks: std::collections::HashMap<String, ScheduledTaskInfoSnapshot>,
+}
+
+/// 静态调度任务信息快照。
+#[derive(Debug, Clone)]
+pub struct ScheduledTaskInfoSnapshot {
+    /// 任务内容描述。
+    pub content: String,
+    /// 输出通道（可空）。
+    pub output_channel: Option<ChannelId>,
+    /// 是否为一次性任务。
+    pub is_once: bool,
 }

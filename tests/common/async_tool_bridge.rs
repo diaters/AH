@@ -49,6 +49,10 @@ pub fn now(world: &World) -> DateTime<Utc> {
 }
 
 /// 推进假时钟（sweeper 超时测试用）。
+///
+/// 当前 Task 2 类型测试未使用本函数，但后续 sweeper / ingest 测试会用到，
+/// 故保留并 allow 在未使用 target 内的 dead_code。
+#[allow(dead_code)]
 pub fn advance_clock(world: &mut World, secs: i64) {
     let mut clock = world.resource_mut::<Clock>();
     clock.0 += chrono::Duration::seconds(secs);
@@ -59,6 +63,10 @@ pub fn advance_clock(world: &mut World, secs: i64) {
 /// 每 1ms `try_recv` 一次，超过 `timeout_ms` 仍未拿到则返回 `None`。
 /// 用 `try_recv` + `sleep` 而非 `block_on`，避免在测试线程里
 /// 嵌套进入 tokio runtime。
+///
+/// 当前 Task 2 类型测试未使用本函数，但后续 dispatch / ingest 测试会用到，
+/// 故保留并 allow 在未使用 target 内的 dead_code。
+#[allow(dead_code)]
 pub fn wait_for_tool_result(world: &mut World, timeout_ms: u64) -> Option<ToolAsyncResult> {
     let start = std::time::Instant::now();
     loop {

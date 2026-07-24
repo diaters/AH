@@ -151,8 +151,9 @@ pub use tool_runtime::ToolCallingState;
 
 // tool_async
 pub use tool_async::{
-    OwnedToolContext, ToolAsyncResult, ToolEffect, ToolResultReceiver, ToolResultSender,
-    ToolWorkerPayload,
+    DynamicScheduledTaskSnapshot, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
+    ScheduledTaskRegistrySnapshot, SchedulerStateSnapshot, ToolAsyncResult, ToolEffect,
+    ToolEffectPending, ToolRequestPending, ToolResultReceiver, ToolResultSender, ToolWorkerPayload,
 };
 
 // work_item
