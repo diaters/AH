@@ -6,7 +6,7 @@ mod approval;
 mod approval_hook;
 mod async_dispatch;
 pub mod backend;
-mod builtin;
+pub mod builtin;
 mod channel_send_dispatch;
 mod confirmation;
 mod dispatch;
@@ -37,9 +37,9 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ScheduleTaskTool,
-    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
+    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ListScheduledTasksTool,
+    ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool,
+    ShellStopTool, SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
     SubmitSkillUpdateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
@@ -389,6 +389,22 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ScheduleTaskTool));
+
+    // list_scheduled_tasks tool —— pilot 首个异步工具（list 双账本只读）
+    registry.register(ToolDefinition {
+        name: "list_scheduled_tasks".to_string(),
+        description: "列出当前空间内的动态定时任务（由 schedule_task 工具创建）。返回每个任务的 kind、content、output_channel、is_once、created_at、next_fire_time 等字段；next_fire_time 对 Once 任务显示原始触发时间，对 Cron 任务显示下次触发点。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("list_scheduled_tasks".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ListScheduledTasksTool));
 
     // Profile update tools (仅 profile-designer 可用)
     registry.register(ToolDefinition {
