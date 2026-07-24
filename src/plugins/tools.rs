@@ -8,9 +8,9 @@ use crate::{
     domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
     systems::{
         HarnessSet, NativeProcessBackend, async_tool_dispatch_system, channel_send_dispatch_system,
-        check_waiting_tasks_system, on_subtask_completed_check_waiting, on_tool_called_hook_system,
-        on_tool_returned_hook_system, register_builtin_tools, schedule_task_commit_system,
-        tool_dispatch_system, tool_result_system,
+        check_waiting_tasks_system, ingest_tool_results_system, on_subtask_completed_check_waiting,
+        on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
+        schedule_task_commit_system, tool_dispatch_system, tool_result_system,
     },
 };
 
@@ -47,6 +47,13 @@ impl Plugin for ToolRuntimePlugin {
                     .before(tool_dispatch_system),
                 // Tool 分发
                 tool_dispatch_system.in_set(HarnessSet::Dispatch),
+                // 异步工具结果落地单点：try_recv 排空通道，按 payload 分流（Completed 落地结果 /
+                // despawn 挂起实体；Effect 分流 spawn ToolEffectPending）。放在 Transform 集合，
+                // 与 LLM ingest 同 set；排在 on_tool_returned_hook_system 之前（保证 hook 流水线
+                // 能在新结果当帧派发）。
+                ingest_tool_results_system
+                    .in_set(HarnessSet::Transform)
+                    .before(on_tool_returned_hook_system),
                 // on_tool_returned 观察 hook companion 系统：在 tool_result_system 之前派发 hook，
                 // 若插件调用 tool_set_result 则替换 tool_output，原始输出保留在审计字段。
                 on_tool_returned_hook_system
