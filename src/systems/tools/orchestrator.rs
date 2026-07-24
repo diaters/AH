@@ -21,11 +21,12 @@ use crate::domain::{
     ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::infrastructure::skills::{SkillLoader, apply_skill_operations};
+use crate::triggers::scheduled_task::compute_next_trigger;
 use crate::triggers::{
     DynamicScheduledTask, ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage,
-    ScheduledTaskInfo, ScheduledTaskRegistry, update_scheduler_state,
+    ScheduledTaskInfo, update_scheduler_state,
 };
-use chrono::{DateTime, Local, Utc};
+use chrono::Utc;
 
 /// 清除任务上正在等待的工具确认 ID。
 pub fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
@@ -1519,37 +1520,20 @@ pub fn spawn_shell_result(
     commands.entity(request_entity).despawn();
 }
 
-/// 计算 `ScheduleSpec` 的下一次触发时间（UTC）。
-///
-/// - `Once(at)` 直接返回 `Some(at)`
-/// - `Cron(schedule)` 通过 `Local` 时区计算下一次触发，再转换为 UTC；
-///   若 cron 无下一次触发（理论上不会发生，因为 cron 表达式永远匹配未来某个时刻），
-///   则返回 `None`
-fn compute_next_trigger(schedule: &ScheduleSpec) -> Option<DateTime<Utc>> {
-    match schedule {
-        ScheduleSpec::Once(at) => Some(*at),
-        ScheduleSpec::Cron(schedule) => schedule
-            .upcoming(Local)
-            .next()
-            .map(|t| t.with_timezone(&Utc)),
-    }
-}
-
 /// 提交 `ScheduleTaskRequestMessage` 到 `SchedulerState` 与 `ScheduledTaskRegistry`。
 ///
 /// 独占系统：使用 `&mut World` 直接调用 `update_scheduler_state`，确保
 /// `SchedulerState` 与 `SchedulerStateWatcher` 原子同步。
 ///
 /// 处理步骤（每条待提交消息）：
-/// 1. 通过 `update_scheduler_state` 向 `SchedulerState.dynamic_tasks` 追加
-///    `DynamicScheduledTask`，同时通过 watch 通道通知 timer scheduler。
-/// 2. 向 `ScheduledTaskRegistry` 插入 `ScheduledTaskInfo`，`is_once` 由
-///    `matches!(msg.schedule, ScheduleSpec::Once(_))` 推导。
-/// 3. despawn 消息实体。
+/// 1. 通过 `update_scheduler_state` 双资源入口同时向 `SchedulerState.dynamic_tasks`
+///    追加 `DynamicScheduledTask`，并向 `ScheduledTaskRegistry` 插入
+///    `ScheduledTaskInfo`；watch 在两资源都改完后只发一次。
+/// 2. despawn 消息实体。
 ///
-/// 资源缺失时不会 panic：
-/// - `SchedulerStateWatcher` 由 `update_scheduler_state` 内部用 `get_resource` 处理
-/// - `ScheduledTaskRegistry` 用 `get_resource_mut` 防御性查询，缺失时跳过插入
+/// 资源缺失时不会 panic：`SchedulerState`、`ScheduledTaskRegistry` 与
+/// `SchedulerStateWatcher` 均由 `update_scheduler_state` 内部用
+/// `unwrap_or_default` / `get_resource` 兜底处理。
 pub fn schedule_task_commit_system(world: &mut World) {
     // 先收集所有待提交请求，避免在持有 world 不可变借用时调用 update_scheduler_state
     let mut to_commit: Vec<(Entity, ScheduleTaskRequestMessage)> = Vec::new();
@@ -1566,18 +1550,14 @@ pub fn schedule_task_commit_system(world: &mut World) {
     for (entity, msg) in to_commit {
         let is_once = matches!(msg.schedule, ScheduleSpec::Once(_));
 
-        // 1. 提交到 SchedulerState.dynamic_tasks（并通知 timer scheduler）
-        update_scheduler_state(world, |state| {
+        // 双账本单一修改入口：state + registry 同一闭包内落账，watch 一次广播
+        update_scheduler_state(world, |state, registry| {
             state.dynamic_tasks_mut().push(DynamicScheduledTask {
                 id: msg.id,
                 kind: msg.kind.clone(),
                 schedule: msg.schedule.clone(),
                 created_at: Utc::now(),
             });
-        });
-
-        // 2. 提交到 ScheduledTaskRegistry（防御性查询，缺失时跳过）
-        if let Some(mut registry) = world.get_resource_mut::<ScheduledTaskRegistry>() {
             registry.insert(
                 msg.kind.clone(),
                 ScheduledTaskInfo {
@@ -1586,9 +1566,9 @@ pub fn schedule_task_commit_system(world: &mut World) {
                     is_once,
                 },
             );
-        }
+        });
 
-        // 3. despawn 消息实体
+        // despawn 消息实体
         world.entity_mut(entity).despawn();
     }
 }
@@ -1597,8 +1577,7 @@ pub fn schedule_task_commit_system(world: &mut World) {
 mod tests {
     use super::*;
     use crate::domain::AgentRequestKind;
-    use crate::triggers::SchedulerState;
-    use chrono::Timelike;
+    use crate::triggers::{ScheduledTaskRegistry, SchedulerState};
     use std::str::FromStr;
 
     /// 测试系统：从世界中的父 Task 读取 origin_channel，调用 spawn_create_tasks_messages。
@@ -1950,26 +1929,5 @@ mod tests {
             registry.get("scheduled:untouched").is_none(),
             "non-pending message must not be inserted into registry"
         );
-    }
-
-    /// `compute_next_trigger` 对 `Once(at)` 直接返回 `Some(at)`。
-    #[test]
-    fn compute_next_trigger_for_once_returns_some_at() {
-        let at = Utc::now() + chrono::Duration::days(7);
-        let schedule = ScheduleSpec::Once(at);
-        let next = compute_next_trigger(&schedule);
-        assert_eq!(next, Some(at));
-    }
-
-    /// `compute_next_trigger` 对 `Cron(schedule)` 返回下一次本地时区触发时间（转 UTC）。
-    /// 工作日 9:00 cron 至少存在一个未来触发点。
-    #[test]
-    fn compute_next_trigger_for_cron_returns_next_upcoming() {
-        let cron_schedule = cron::Schedule::from_str("0 0 9 * * * *").unwrap();
-        let schedule = ScheduleSpec::Cron(Box::new(cron_schedule));
-        let next = compute_next_trigger(&schedule).expect("cron must have a next trigger");
-        // 转回 Local 验证小时为 9
-        let local_next = next.with_timezone(&Local);
-        assert_eq!(local_next.hour(), 9, "next trigger should be at local 9:00");
     }
 }
