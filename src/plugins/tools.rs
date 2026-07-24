@@ -10,7 +10,8 @@ use crate::{
         HarnessSet, NativeProcessBackend, async_tool_dispatch_system, channel_send_dispatch_system,
         check_waiting_tasks_system, ingest_tool_results_system, on_subtask_completed_check_waiting,
         on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
-        schedule_task_commit_system, tool_dispatch_system, tool_result_system,
+        schedule_task_commit_system, sweep_inflight_tool_calls, tool_dispatch_system,
+        tool_result_system,
     },
 };
 
@@ -81,6 +82,10 @@ impl Plugin for ToolRuntimePlugin {
                 schedule_task_commit_system
                     .in_set(HarnessSet::Maintenance)
                     .after(tool_dispatch_system),
+                // 异步工具失联兜底 sweeper：扫在飞标记超时则发 error 入通道 + claim
+                // （摘除 InFlightToolCall，不 despawn 挂起实体）。放 Maintenance set，
+                // 落地仍由 ingest 单点完成。
+                sweep_inflight_tool_calls.in_set(HarnessSet::Maintenance),
             ),
         );
     }
