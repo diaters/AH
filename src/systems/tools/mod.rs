@@ -4,11 +4,13 @@
 
 mod approval;
 mod approval_hook;
+mod async_dispatch;
 pub mod backend;
 mod builtin;
 mod channel_send_dispatch;
 mod confirmation;
 mod dispatch;
+mod ingest_tool_results;
 mod orchestrator;
 mod result;
 mod tool_called_hook;
@@ -17,6 +19,7 @@ mod waiting;
 
 pub use approval::{approval_dispatch_system, approval_result_system};
 pub use approval_hook::{on_approval_requested_hook_system, on_approval_resolved_hook_system};
+pub use async_dispatch::async_tool_dispatch_system;
 pub use backend::NativeProcessBackend;
 pub use channel_send_dispatch::channel_send_dispatch_system;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};

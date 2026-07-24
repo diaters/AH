@@ -44,6 +44,10 @@ pub fn setup_bridge_world() -> World {
 }
 
 /// 测试内唯一的“现在”。
+///
+/// 部分测试 binary（如 `async_dispatch_test`）不直接读 Clock，
+/// 但 sweeper / ingest 后续测试会用到，故保留并 allow 在未使用 target 内的 dead_code。
+#[allow(dead_code)]
 pub fn now(world: &World) -> DateTime<Utc> {
     world.resource::<Clock>().0
 }

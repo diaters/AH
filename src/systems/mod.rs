@@ -56,6 +56,10 @@ pub(crate) use tools::{
     schedule_task_commit_system, tool_confirmation_request_system, tool_confirmation_result_system,
     tool_dispatch_system, tool_result_system,
 };
+// `async_tool_dispatch_system` 供集成测试经 `harness::systems::async_tool_dispatch_system`
+// 调用 `world.run_system_once(...)`，故单独 `pub use`（其余 tools 内部系统保持
+// `pub(crate)` 仅 crate 内可见）。
+pub use tools::async_tool_dispatch_system;
 pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{
     brain_decision_system, chat_round_block_system, chat_round_completion_system,

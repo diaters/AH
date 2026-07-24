@@ -7,8 +7,8 @@ use crate::prelude::*;
 use crate::{
     domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
     systems::{
-        HarnessSet, NativeProcessBackend, channel_send_dispatch_system, check_waiting_tasks_system,
-        on_subtask_completed_check_waiting, on_tool_called_hook_system,
+        HarnessSet, NativeProcessBackend, async_tool_dispatch_system, channel_send_dispatch_system,
+        check_waiting_tasks_system, on_subtask_completed_check_waiting, on_tool_called_hook_system,
         on_tool_returned_hook_system, register_builtin_tools, schedule_task_commit_system,
         tool_dispatch_system, tool_result_system,
     },
@@ -38,6 +38,11 @@ impl Plugin for ToolRuntimePlugin {
                 // on_tool_called 前置 hook companion 系统：在 tool_dispatch_system 之前派发 hook，
                 // 若插件调用 tool_deny 则替换为 PermissionDenied 错误结果并销毁请求。
                 on_tool_called_hook_system
+                    .in_set(HarnessSet::Dispatch)
+                    .before(tool_dispatch_system),
+                // 异步工具 dispatch：认领 kind==Async 的请求实体并原地改造为挂起实体，
+                // 排在 tool_dispatch_system 之前——Sync 请求原样留给旧路径，双轨零干扰。
+                async_tool_dispatch_system
                     .in_set(HarnessSet::Dispatch)
                     .before(tool_dispatch_system),
                 // Tool 分发

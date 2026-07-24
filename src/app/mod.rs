@@ -229,6 +229,17 @@ pub struct ModelChainStateUpdateReceiver(
 #[derive(Resource)]
 pub struct HarnessSettings(pub HarnessConfig);
 
+impl HarnessSettings {
+    /// 测试构造器：基于 `HarnessConfig::default()`（`tool_inflight_timeout_secs=300`，
+    /// 其余字段按现有测试惯例填默认值）。
+    ///
+    /// 与 `OwnedToolContext::empty_for_test` 同风格：保持 `pub fn`（不挂 `#[cfg(test)]`），
+    /// 让集成测试可经 `harness::app::HarnessSettings::default_test()` 直接构造。
+    pub fn default_test() -> Self {
+        Self(HarnessConfig::default())
+    }
+}
+
 #[derive(Resource)]
 pub struct Clock(pub DateTime<Utc>);
 
@@ -274,6 +285,10 @@ pub fn build_harness_app(
 ) -> App {
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let (state_tx, state_rx) = mpsc::unbounded_channel();
+    // 异步工具桥通道：dispatch 持 sender 投 worker，ingest 持 receiver 落地。
+    // 双轨期 sync 工具不经此通道，但资源必须在 app 启动时装配，否则
+    // `async_tool_dispatch_system` 注册后访问 `Res<ToolResultSender>` 会 panic。
+    let (tool_result_tx, tool_result_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
 
     // 创建一个默认的 executor 用于 ExecutorHandle（向后兼容）
@@ -293,6 +308,8 @@ pub fn build_harness_app(
     app.insert_resource(ExecutionResultReceiver(result_rx));
     app.insert_resource(ModelChainStateUpdateSender(state_tx));
     app.insert_resource(ModelChainStateUpdateReceiver(state_rx));
+    app.insert_resource(crate::domain::ToolResultSender(tool_result_tx));
+    app.insert_resource(crate::domain::ToolResultReceiver(tool_result_rx));
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(ShutdownState::default());
