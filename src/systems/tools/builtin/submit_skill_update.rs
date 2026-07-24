@@ -69,6 +69,7 @@ mod tests {
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
+            tool_inflight_timeout_secs: 300,
             current_task_id: uuid::Uuid::new_v4(),
             current_agent_id: uuid::Uuid::new_v4(),
             current_origin_channel: None,

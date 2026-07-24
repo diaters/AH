@@ -130,7 +130,8 @@ pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
     ExperienceConsolidationRequestMessage, KnowledgeSource, KnowledgeValidationStatus,
     PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
-    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    ToolAction, ToolActionKind, ToolContext, ToolDefinition, ToolExecutorKind, ToolFuture,
+    ToolPermission, ToolSchema, ToolWorkerOutput,
 };
 
 // summarization
@@ -149,7 +150,10 @@ pub use task_experience::{ExperienceKindFilter, TaskExperiencePolicy, TaskInject
 pub use tool_runtime::ToolCallingState;
 
 // tool_async
-pub use tool_async::{ToolAsyncResult, ToolResultReceiver, ToolResultSender, ToolWorkerPayload};
+pub use tool_async::{
+    OwnedToolContext, ToolAsyncResult, ToolEffect, ToolResultReceiver, ToolResultSender,
+    ToolWorkerPayload,
+};
 
 // work_item
 pub use work_item::{

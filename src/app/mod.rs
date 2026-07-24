@@ -41,6 +41,13 @@ pub struct HarnessConfig {
     pub shell_default_exec_timeout_secs: u64,
     /// shell.stop(wait_for_exit=true) 默认超时时间（秒）
     pub shell_default_stop_timeout_secs: u64,
+    /// 异步工具桥的失联超时（秒）—— sweeper 推导 max_duration 的全局缺省。
+    ///
+    /// 默认 300，与 `default_wait_tasks_timeout_secs` 同量级：
+    /// 既覆盖典型 LLM 工具链路（含模型回包 ~ 60s），也兜住 wait_tasks 这种
+    /// 长任务场景。具体工具可在 `BuiltinTool::max_duration` override 中
+    /// 基于业务超时 + margin 推导。
+    pub tool_inflight_timeout_secs: u64,
     /// 每个 session stream 的最大缓存字节数
     pub shell_max_buffer_bytes_per_stream: usize,
     /// TUI 主循环在活跃状态下的轮询间隔（毫秒）
@@ -108,6 +115,10 @@ impl HarnessConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10),
+            tool_inflight_timeout_secs: std::env::var("HARNESS_TOOL_INFLIGHT_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
             shell_max_buffer_bytes_per_stream: std::env::var(
                 "HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM",
             )
@@ -162,6 +173,7 @@ impl Default for HarnessConfig {
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 300,
             shell_default_stop_timeout_secs: 10,
+            tool_inflight_timeout_secs: 300,
             shell_max_buffer_bytes_per_stream: 64 * 1024,
             active_poll_ms: 16,
             idle_poll_ms: 150,
