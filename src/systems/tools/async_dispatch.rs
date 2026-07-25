@@ -65,6 +65,7 @@ pub fn async_tool_dispatch_system(
     backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
     scheduler_state: Option<Res<SchedulerState>>,
     scheduled_registry: Option<Res<ScheduledTaskRegistry>>,
+    experience_store: Option<Res<crate::domain::ExperienceStore>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
     for (entity, request) in &requests {
@@ -139,6 +140,20 @@ pub fn async_tool_dispatch_system(
         let backend_arc: Option<Arc<dyn SessionBackend>> = backend
             .as_deref()
             .map(|b| Arc::new(b.clone()) as Arc<dyn SessionBackend>);
+        // 经验候选快照：从 ExperienceStore 按 task_id 抓一份 cloned 列表，
+        // 包成 Arc<Vec<...>> 给 worker。dispatch 在此完成 task_id 过滤——
+        // worker 直接遍历，不再二次过滤。
+        let task_id = request.request.task_id;
+        let experience_candidates: Option<Arc<Vec<crate::domain::ExperienceCandidate>>> =
+            experience_store.as_deref().map(|store| {
+                Arc::new(
+                    store
+                        .list_for_task(task_id)
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            });
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state
                 .as_deref()
@@ -151,6 +166,8 @@ pub fn async_tool_dispatch_system(
             tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
             shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
             backend: backend_arc,
+            experience_candidates,
+            current_task_id: Some(task_id),
             cancel: cancel.clone(),
         };
 

@@ -377,35 +377,21 @@ pub fn handle_tool_action<B: SessionBackend>(
     calling_states: &Query<(Entity, &ToolCallingState)>,
 ) {
     match action {
-        Ok(ToolAction::Direct(value)) => {
-            let execution_result = AgentExecutionResult {
-                task_id: request.request.task_id,
-                agent_id: request.request.agent_id,
-                request_kind: request.request.request_kind.clone(),
-                result: Ok(AgentExecutionOutput {
-                    content: OutputContent::Text("tool executed".to_string()),
-                    reasoning_content: None,
-                }),
-                prompt: String::new(),
-                system_prompt: None,
-                tools: vec![],
-                reasoning_content: None,
-                work_item_id: None,
-            };
-
-            commands.spawn((
-                ToolExecutionResultMessage {
-                    result: execution_result,
-                    tool_name: request.tool_name.clone(),
-                    tool_output: Ok(value),
-                    tool_call_id: request.tool_call_id.clone(),
-                    processed: false,
-                    original_tool_output: None,
-                },
-                ToolReturnedHookPending,
-            ));
-
-            commands.entity(request_entity).despawn();
+        Ok(ToolAction::Direct(_value)) => {
+            // list_experience_candidates 已上桥到 async worker（kind==Async），
+            // 不再走 sync 路径产生 `ToolAction::Direct`。保留 arm 防止未来误用——
+            // 若 Sync 工具误返回 `Direct`，立即报错而非静默构造结果消息绕过
+            // 异步桥的 hook / 通道单点落地。
+            spawn_tool_error(
+                commands,
+                request_entity,
+                request,
+                ToolError::InternalState(
+                    "Direct action is retired (list_experience_candidates is async-only); \
+                     BuiltinTool must not return Direct on sync path"
+                        .to_string(),
+                ),
+            );
         }
         Ok(ToolAction::CreateBatch(definitions)) => {
             let parent_origin_channel = tasks

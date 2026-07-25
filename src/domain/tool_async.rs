@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::contracts::SessionBackend;
-use crate::domain::{AgentExecutionRequest, ChannelId, ToolError};
+use crate::domain::{AgentExecutionRequest, ChannelId, ExperienceCandidate, TaskId, ToolError};
 use crate::triggers::scheduled_task::ScheduleSpec;
 
 // ============ 通道消息 ============
@@ -180,6 +180,13 @@ pub struct OwnedToolContext {
     /// 从 `Res<NativeProcessBackend>` clone 一份填入；不需要 backend 的
     /// 工具保持 `None`。
     pub backend: Option<Arc<dyn SessionBackend>>,
+    /// 经验候选快照。`list_experience_candidates` 等需要读经验收件箱的工具
+    /// 由 dispatch 从 `Res<ExperienceStore>` 按 `task_id` 抓一份 cloned
+    /// 列表包成 `Arc<Vec<...>>` 填入；不需要的工具保持 `None`。
+    pub experience_candidates: Option<Arc<Vec<ExperienceCandidate>>>,
+    /// 当前任务 ID。dispatch 从 `request.request.task_id` 取，供 worker
+    /// 在日志或快照关联场景使用；不需要的工具保持 `None`。
+    pub current_task_id: Option<TaskId>,
     /// 取消令牌。dispatch 创建并 clone 一份挂到 `InFlightToolCall.cancel`，
     /// 另一份放进本字段供 worker 在 `run_async` 内 `select!` 监听。
     pub cancel: CancellationToken,
@@ -193,6 +200,8 @@ impl Default for OwnedToolContext {
             tool_inflight_timeout_secs: 0,
             shell_default_exec_timeout_secs: 0,
             backend: None,
+            experience_candidates: None,
+            current_task_id: None,
             cancel: CancellationToken::new(),
         }
     }
@@ -209,6 +218,8 @@ impl OwnedToolContext {
             tool_inflight_timeout_secs,
             shell_default_exec_timeout_secs: tool_inflight_timeout_secs,
             backend: None,
+            experience_candidates: None,
+            current_task_id: None,
             cancel: CancellationToken::new(),
         }
     }
