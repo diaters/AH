@@ -10,10 +10,10 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
         ExperienceStore, GrantMode, PendingExperienceHooks, ProfileGenerationContext,
-        SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task, ToolCallingState,
-        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
-        ToolReturnedHookPending, WorkItem,
+        SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task, TaskStatus, ToolActionKind,
+        ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolPermission, ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
@@ -222,6 +222,50 @@ pub fn tool_confirmation_result_system(
                     continue;
                 };
 
+                // Async 工具：清除 pending_confirmation_id 后交给 async_tool_dispatch_system
+                // 下一帧认领（execute() 对 async 工具返回 InternalState 错误，不能走 sync 路径）。
+                // 任务保持 Waiting(ToolExecution)——async dispatch 会原地改造请求实体并 spawn
+                // worker，worker 完成后 ingest 落地结果并 restore 任务。
+                //
+                // **状态恢复**：`tool_dispatch_system` 在 `ToolRequiresUserConfirmation` 时
+                // 把 task.status 设为 `Waiting(User)`（dispatch.rs:317）。Async 工具确认后
+                // 必须在此处恢复为 `Waiting(ToolExecution)`——否则下一帧 Transform 集中的
+                // `tool_calling_turn_reset_system` 会看到 `Waiting(User) &&
+                // pending_confirmation_id.is_none()`，错误 despawn `ToolCallingState`，
+                // 导致 worker 完成后 LLM 调用循环无法续跑（竞态 bug，日志已证实）。
+                //
+                // **allow_once 路径**：设置 `confirmed_once = true` 让 async_tool_dispatch_system
+                // 跳过权限检查直接认领——否则 Confirm 权限的 Async 工具会陷入
+                // 「确认 → 清除 pending_id → sync 路径再派发审批」的循环。
+                // `allow_always` 路径已通过 `overrides.insert(Allow)` 更新永久权限，
+                // async_tool_dispatch_system 会直接认领，无需 `confirmed_once`。
+                if executor.kind() == ToolActionKind::Async {
+                    debug!(
+                        event = "ToolConfirmationApprovedAsync",
+                        tool_name = %tool_request.tool_name,
+                        task_id = %tool_request.request.task_id,
+                        mode = ?option.mode,
+                        "async tool confirmed; clearing pending_confirmation_id for async dispatch"
+                    );
+                    let mut updated_request = tool_request.clone();
+                    updated_request.pending_confirmation_id = None;
+                    if option.mode == crate::domain::GrantMode::Once {
+                        updated_request.confirmed_once = true;
+                    }
+                    commands.entity(request_entity).insert(updated_request);
+                    clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
+                    // 恢复 task.status 为 Waiting(ToolExecution)，语义正确 + 防 reset 竞态
+                    if let Some((_, mut task)) = tasks
+                        .iter_mut()
+                        .find(|(_, t)| t.id == tool_request.request.task_id)
+                        && task.status == TaskStatus::Waiting(WaitingReason::User)
+                    {
+                        task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                    }
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+
                 let ctx = ToolContext {
                     knowledge: &knowledge,
                     experience_store: &experience_store,
@@ -230,6 +274,7 @@ pub fn tool_confirmation_result_system(
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
                     shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
                     shell_default_stop_timeout_secs: settings.0.shell_default_stop_timeout_secs,
+                    tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,
                     current_origin_channel: tasks
@@ -401,6 +446,7 @@ mod tests {
             tool_call_id: None,
             pending_confirmation_options: Some(ConfirmationOption::default_options()),
             work_item_entity: None,
+            confirmed_once: false,
         }
     }
 
@@ -461,6 +507,77 @@ mod tests {
         assert!(
             task.pending_confirmation_id.is_none(),
             "pending_confirmation_id should be cleared after approval"
+        );
+    }
+
+    /// 用于 async 路径测试的 dummy executor：`kind() == Async`，`execute` 返回
+    /// `InternalState` 防御错误（与已上桥工具模式一致），`run_async` 返回固定值。
+    struct AsyncDummyTool;
+
+    impl crate::domain::BuiltinTool for AsyncDummyTool {
+        fn name(&self) -> &str {
+            "shell_exec"
+        }
+        fn kind(&self) -> crate::domain::ToolActionKind {
+            crate::domain::ToolActionKind::Async
+        }
+        fn execute(
+            &self,
+            _input: &serde_json::Value,
+            _ctx: &crate::domain::ToolContext,
+        ) -> Result<crate::domain::ToolAction, crate::domain::ToolError> {
+            Err(crate::domain::ToolError::InternalState(
+                "async-only tool".to_string(),
+            ))
+        }
+    }
+
+    /// 复现并守护 async 工具确认后 task.status 恢复为 `Waiting(ToolExecution)` 的修复。
+    ///
+    /// `tool_dispatch_system` 在 `ToolRequiresUserConfirmation` 时把 task.status 设为
+    /// `Waiting(User)`（dispatch.rs:317）。Async 工具确认后必须在 confirmation 路径
+    /// 恢复为 `Waiting(ToolExecution)`——否则下一帧 `tool_calling_turn_reset_system`
+    /// 会看到 `Waiting(User) && pending_confirmation_id.is_none()`，错误 despawn
+    /// `ToolCallingState`，导致 worker 完成后 LLM 调用循环无法续跑（竞态 bug）。
+    #[test]
+    fn async_confirmation_restores_task_to_waiting_tool_execution() {
+        let mut world = test_world();
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+
+        // 注册 async dummy executor
+        world
+            .resource_mut::<crate::domain::BuiltinToolExecutors>()
+            .register(Box::new(AsyncDummyTool));
+
+        // task 模拟 dispatch.rs:317 后的状态：Waiting(User) + pending_confirmation_id = Some
+        let mut task = dummy_task(task_id);
+        task.status = TaskStatus::Waiting(WaitingReason::User);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "allow_always".to_string(),
+            feedback: None,
+        });
+
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert_eq!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::ToolExecution),
+            "async tool confirmation must restore task to Waiting(ToolExecution) \
+             to prevent tool_calling_turn_reset_system from despawning ToolCallingState"
+        );
+        assert!(
+            task.pending_confirmation_id.is_none(),
+            "pending_confirmation_id should be cleared after async approval"
         );
     }
 }

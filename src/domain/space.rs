@@ -9,8 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, ChannelId, ExperienceStore, MemoryImportance, SessionHandleId, SessionInputRequest,
-    SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId, ToolError,
+    AgentId, ChannelId, ExperienceStore, MemoryImportance, OwnedToolContext, SessionHandleId,
+    SessionInputRequest, SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId,
+    ToolEffect, ToolError,
 };
 
 /// 共享知识审核状态。
@@ -230,21 +231,6 @@ pub enum ToolAction {
         /// 已有对话的 handle（即子任务 task_id），不传表示开始新对话
         handle: Option<TaskId>,
     },
-    /// 创建一次性或周期性动态任务（由 `schedule_task` 工具产生）。
-    ///
-    /// orchestrator 将其转换为 `ScheduleTaskRequestMessage` 提交给调度系统。
-    ScheduleTask {
-        /// 任务 ID（由工具生成）
-        id: uuid::Uuid,
-        /// 任务类型字符串，形如 `scheduled:<uuid>`
-        kind: String,
-        /// 任务内容/提示词
-        content: String,
-        /// 调度规格（once 或 cron）
-        schedule: crate::triggers::ScheduleSpec,
-        /// 输出通道（显式指定或从当前任务继承）
-        output_channel: Option<ChannelId>,
-    },
     /// 提交 profile 更新（孵化场景生成新 profile，更新场景提议新 tags/description）
     ///
     /// 由 profile-designer Agent 调用，实际 profile 提取与 proposal 创建
@@ -380,6 +366,12 @@ pub struct ToolContext<'a> {
     pub shell_default_exec_timeout_secs: u64,
     /// shell.stop(wait_for_exit=true) 默认超时时间（秒）
     pub shell_default_stop_timeout_secs: u64,
+    /// 异步工具桥失联超时（秒）—— sweeper 推导 max_duration 的全局缺省。
+    ///
+    /// 双轨期 sync 路径暂不用，但保持 ctx 与 `HarnessConfig` 对齐：
+    /// 所有调用点统一从 `settings.0` 取值，避免出现「sync 路径不知道全局超时」的
+    /// 二义状态。Task 2 引入异步 dispatch 后由 worker 路径真正使用。
+    pub tool_inflight_timeout_secs: u64,
     /// 当前 task ID
     pub current_task_id: TaskId,
     /// 当前 agent ID
@@ -388,11 +380,89 @@ pub struct ToolContext<'a> {
     pub current_origin_channel: Option<ChannelId>,
 }
 
+/// 工具执行模式：双轨期 dispatch 分流依据。
+///
+/// - `Sync`：原有同步路径，dispatch 现场直执 `execute()`
+/// - `Async`：经异步桥（挂起 → worker → 通道 → ingest）
+///
+/// 缺省 `Sync`：现有所有 BuiltinTool 实现零改动即可编译。
+/// 异步工具显式 override `kind()` 返回 `Async`，由 dispatch system 路由到 `run_async`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolActionKind {
+    /// 同步执行（原有路径）
+    #[default]
+    Sync,
+    /// 异步执行（经异步桥）
+    Async,
+}
+
+/// worker 的执行产出：要么是给 LLM 的最终值，要么是声明式写效果（交 commit 系统落账）。
+///
+/// `run_async` 的成功路径返回本枚举；失败路径返回 `ToolError`。
+#[derive(Debug, Clone)]
+pub enum ToolWorkerOutput {
+    /// 直接结果（纯读/纯计算工具）
+    Value(serde_json::Value),
+    /// 声明式效果（写路径工具，由 commit_tool_effects_system 应用）
+    Effect(ToolEffect),
+}
+
+/// 异步工具执行的 Future 形态。
+///
+/// `Box<dyn Future + Send>` 让 dispatch system 可在 trait object 上泛型路由：
+/// 不需要为每个异步工具单声 async fn trait。
+pub type ToolFuture = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<ToolWorkerOutput, ToolError>> + Send>,
+>;
+
 /// 内置 Tool trait
 pub trait BuiltinTool: Send + Sync + 'static {
     /// 工具名称
     fn name(&self) -> &str;
-    /// 执行工具并返回动作
+
+    /// 执行模式，缺省 `Sync`（现有工具零改动）。
+    ///
+    /// dispatch system 在 `ToolActionKind::Async` 时走 `run_async`，
+    /// 否则走 `execute` 同步路径。本钩子是双轨期 dispatch 分流的唯一依据。
+    fn kind(&self) -> ToolActionKind {
+        ToolActionKind::Sync
+    }
+
+    /// sweeper 超时推导钩子。缺省返回全局配置；shell_exec 等 override 为业务超时 + margin。
+    ///
+    /// 调用现场是 dispatch 挂起时（主 ECS 线程），不在 worker 内。
+    /// 签名直收 `tool_inflight_timeout_secs`（全局缺省秒数）而非 `&ToolContext`：
+    /// 异步 dispatch system 不持有 borrowed ctx 所需的全部资源，
+    /// 把全局缺省显式传值可让 worker 路径独立推导超时。
+    /// 语义不变（缺省走全局配置），只是参数从「ctx 里取」改为「显式传值」。
+    fn max_duration(
+        &self,
+        _input: &serde_json::Value,
+        tool_inflight_timeout_secs: u64,
+    ) -> std::time::Duration {
+        std::time::Duration::from_secs(tool_inflight_timeout_secs)
+    }
+
+    /// 异步执行入口。仅 `kind() == Async` 的工具需要 override；
+    /// 缺省实现返回 `InternalState` 错误——Sync 工具误入 worker 路径时快速失败，不静默。
+    ///
+    /// 这是 trait 方法而非独立 trait，让 dispatch system 在 `Box<dyn BuiltinTool>`
+    /// 上泛型路由（D9）：不需要为异步工具单独维护一份执行器表。
+    fn run_async(&self, _input: serde_json::Value, _ctx: OwnedToolContext) -> ToolFuture {
+        Box::pin(async {
+            Err(ToolError::InternalState(
+                "tool does not implement run_async (not migrated)".to_string(),
+            ))
+        })
+    }
+
+    /// 执行工具并返回动作（双轨期：仅供未迁移 sync 工具使用）。
+    ///
+    /// `kind() == Async` 的工具走 `run_async`，dispatch 不会调用本方法。
+    /// 已上桥工具（`schedule_task` / `list_scheduled_tasks` /
+    /// `delete_scheduled_task` / `shell_exec` / `list_experience_candidates` /
+    /// rhai_plugin 包裹器 `RhaiPluginAsyncWrapper`）的 `execute` 应返回
+    /// `ToolError::InternalState` 防御错误。新工具应实现 `run_async` 而非本方法。
     fn execute(
         &self,
         input: &serde_json::Value,

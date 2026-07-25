@@ -1330,6 +1330,7 @@ pub fn llm_response_system(
                                 tool_call_id: Some(call.id.clone()),
                                 pending_confirmation_options: None,
                                 work_item_entity,
+                                confirmed_once: false,
                             },
                         ));
                     }

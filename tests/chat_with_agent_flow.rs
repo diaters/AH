@@ -50,6 +50,7 @@ fn test_config() -> HarnessConfig {
         shell_max_tail_lines: 500,
         shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
+        tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,
@@ -174,6 +175,7 @@ fn chat_with_agent_creates_chat_subtask() {
         tool_call_id: Some("call_chat_1".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 先运行一帧初始化
@@ -334,6 +336,7 @@ fn chat_with_agent_multi_round_via_handle() {
         tool_call_id: Some("call_round_1".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     for _ in 0..10 {
@@ -373,6 +376,7 @@ fn chat_with_agent_multi_round_via_handle() {
         tool_call_id: Some("call_round_2".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     for _ in 0..10 {

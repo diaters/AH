@@ -329,6 +329,7 @@ fn spawn_experience_confirmation(
             tool_call_id: None,
             pending_confirmation_options: Some(ConfirmationOption::default_options()),
             work_item_entity: None,
+            confirmed_once: false,
         },
     ));
 }

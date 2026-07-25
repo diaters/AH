@@ -245,6 +245,7 @@ pub fn approval_result_system(
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
                     shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
                     shell_default_stop_timeout_secs: settings.0.shell_default_stop_timeout_secs,
+                    tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,
                     current_origin_channel: tasks
@@ -375,6 +376,7 @@ mod tests {
             tool_call_id: None,
             pending_confirmation_options: None,
             work_item_entity: None,
+            confirmed_once: false,
         }
     }
 

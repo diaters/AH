@@ -37,6 +37,7 @@ fn test_config() -> HarnessConfig {
         shell_max_tail_lines: 500,
         shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
+        tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,

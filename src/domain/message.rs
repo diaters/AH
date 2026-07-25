@@ -288,6 +288,13 @@ pub struct ToolExecutionRequestMessage {
     /// 等"工具产物"直接 insert 到 WorkItem entity 上，避免用 work_item_id 反查）。
     /// 仅在同步侧使用，不跨异步边界（AgentExecutionRequest 跨异步边界，不应携带 Entity）。
     pub work_item_entity: Option<Entity>,
+    /// 用户已确认过本次执行（allow_once 路径）。
+    ///
+    /// 由 `tool_confirmation_result_system` 在 Async 工具确认后设置，
+    /// `async_tool_dispatch_system` 检查此字段跳过权限检查直接认领——
+    /// 否则 Confirm 权限的 Async 工具会陷入「确认 → 清除 pending_id →
+    /// sync 路径再派发审批」的循环。Sync 工具不使用此字段（确认时直接执行）。
+    pub confirmed_once: bool,
 }
 
 /// Tool 执行结果消息

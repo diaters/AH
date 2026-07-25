@@ -7,8 +7,8 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Component, Resource, World};
-use chrono::{DateTime, Utc};
+use bevy_ecs::prelude::{Resource, World};
+use chrono::{DateTime, Local, Utc};
 use cron::Schedule;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -93,22 +93,49 @@ pub enum ScheduledItem {
     },
 }
 
-/// 统一修改入口：先 remove_resource，修改，watch send，再 insert_resource。
+/// 统一修改入口：先 remove 两个资源，闭包修改，watch send，再 insert 两个资源。
 ///
-/// 使用 `world.get_resource::<SchedulerStateWatcher>()` 而非 `world.resource()`
-/// 以避免 watcher 缺失时 panic。
-pub fn update_scheduler_state(world: &mut World, f: impl FnOnce(&mut SchedulerState)) {
+/// D10 不变量：`SchedulerState` 与 `ScheduledTaskRegistry` 一切写路径都经此入口，
+/// watch 只在两个资源都改完后发一次。资源缺失用 `unwrap_or_default()` 兜底
+/// （与既有行为一致），watcher 缺失用 `get_resource` 避免 panic。
+pub fn update_scheduler_state(
+    world: &mut World,
+    f: impl FnOnce(&mut SchedulerState, &mut ScheduledTaskRegistry),
+) {
     let mut state = world
         .remove_resource::<SchedulerState>()
         .unwrap_or_default();
-    f(&mut state);
+    let mut registry = world
+        .remove_resource::<ScheduledTaskRegistry>()
+        .unwrap_or_default();
+    f(&mut state, &mut registry);
+    // watch 只在两个资源都改完后发一次
     if let Some(watcher) = world
         .get_resource::<SchedulerStateWatcher>()
         .and_then(|w| w.0.as_ref())
     {
         let _ = watcher.send(state.clone());
     }
+    world.insert_resource(registry);
     world.insert_resource(state);
+}
+
+/// 计算 `ScheduleSpec` 的下一次触发时间（UTC）。
+///
+/// - `Once(at)` 直接返回 `Some(at)`
+/// - `Cron(schedule)` 通过 `Local` 时区计算下一次触发，再转换为 UTC；
+///   若 cron 无下一次触发（理论上不会发生，因为 cron 表达式永远匹配未来某个时刻），
+///   则返回 `None`
+///
+/// 仅依赖 `ScheduleSpec`，故与类型同住；list 工具与 commit 系统共用。
+pub(crate) fn compute_next_trigger(schedule: &ScheduleSpec) -> Option<DateTime<Utc>> {
+    match schedule {
+        ScheduleSpec::Once(at) => Some(*at),
+        ScheduleSpec::Cron(schedule) => schedule
+            .upcoming(Local)
+            .next()
+            .map(|t| t.with_timezone(&Utc)),
+    }
 }
 
 /// schedule_task 工具创建的动态任务元信息。
@@ -151,29 +178,18 @@ impl ScheduledTaskRegistry {
     pub fn remove(&mut self, kind: &str) -> Option<ScheduledTaskInfo> {
         self.tasks.remove(kind)
     }
-}
 
-/// `schedule_task` 工具请求创建动态任务时投递的组件。
-///
-/// 由工具实现 spawn，调度消费系统读取后转换为 `SchedulerState` 中的
-/// `DynamicScheduledTask` 并写入 `ScheduledTaskRegistry`。
-#[derive(Debug, Clone, Component)]
-pub struct ScheduleTaskRequestMessage {
-    pub id: Uuid,
-    pub kind: String,
-    pub content: String,
-    pub schedule: ScheduleSpec,
-    pub output_channel: Option<ChannelId>,
+    /// 只读迭代器。dispatch 构快照用；写路径仍只走 `update_scheduler_state`。
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ScheduledTaskInfo)> {
+        self.tasks.iter()
+    }
 }
-
-/// 标记已写入 `SchedulerState.dynamic_tasks` 但尚未提交 `ScheduledTaskRegistry`
-/// 的请求。提交完成后由调度系统移除。
-#[derive(Debug, Clone, Component)]
-pub struct ScheduleTaskCommitPending;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
+    use std::str::FromStr;
 
     fn sample_dynamic_task(kind: &str) -> DynamicScheduledTask {
         DynamicScheduledTask {
@@ -191,7 +207,7 @@ mod tests {
         let (tx, mut rx) = watch::channel(SchedulerState::default());
         world.insert_resource(SchedulerStateWatcher(Some(tx)));
 
-        update_scheduler_state(&mut world, |state| {
+        update_scheduler_state(&mut world, |state, _registry| {
             state.dynamic_tasks_mut().push(sample_dynamic_task("t1"));
         });
 
@@ -206,7 +222,7 @@ mod tests {
         world.insert_resource(SchedulerState::default());
         // 故意不插入 SchedulerStateWatcher
 
-        update_scheduler_state(&mut world, |state| {
+        update_scheduler_state(&mut world, |state, _registry| {
             state.dynamic_tasks_mut().push(sample_dynamic_task("t2"));
         });
 
@@ -220,7 +236,7 @@ mod tests {
         world.insert_resource(SchedulerStateWatcher(Some(tx)));
         // 故意不插入 SchedulerState，应使用 default
 
-        update_scheduler_state(&mut world, |state| {
+        update_scheduler_state(&mut world, |state, _registry| {
             state.dynamic_tasks_mut().push(sample_dynamic_task("t3"));
         });
 
@@ -234,11 +250,11 @@ mod tests {
         let (tx, _rx) = watch::channel(SchedulerState::default());
         world.insert_resource(SchedulerStateWatcher(Some(tx)));
 
-        update_scheduler_state(&mut world, |state| {
+        update_scheduler_state(&mut world, |state, _registry| {
             state.dynamic_tasks_mut().push(sample_dynamic_task("a"));
         });
         // 第二次调用只设置 static_routes，dynamic_tasks 必须保留
-        update_scheduler_state(&mut world, |state| {
+        update_scheduler_state(&mut world, |state, _registry| {
             state.set_static_routes(SchedulerRoutes {
                 timer: TimerConfig::default(),
                 webhook: WebhookConfig::default(),
@@ -347,28 +363,24 @@ mod tests {
         assert!(registry.get("anything").is_none());
     }
 
+    /// `compute_next_trigger` 对 `Once(at)` 直接返回 `Some(at)`。
     #[test]
-    fn schedule_task_request_message_carries_all_fields() {
-        let id = Uuid::new_v4();
-        let channel = sample_channel();
-        let msg = ScheduleTaskRequestMessage {
-            id,
-            kind: "report".to_string(),
-            content: "send report".to_string(),
-            schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::minutes(10)),
-            output_channel: Some(channel.clone()),
-        };
-        assert_eq!(msg.id, id);
-        assert_eq!(msg.kind, "report");
-        assert_eq!(msg.content, "send report");
-        assert!(matches!(msg.schedule, ScheduleSpec::Once(_)));
-        assert_eq!(msg.output_channel, Some(channel));
+    fn compute_next_trigger_for_once_returns_some_at() {
+        let at = Utc::now() + chrono::Duration::days(7);
+        let schedule = ScheduleSpec::Once(at);
+        let next = compute_next_trigger(&schedule);
+        assert_eq!(next, Some(at));
     }
 
+    /// `compute_next_trigger` 对 `Cron(schedule)` 返回下一次本地时区触发时间（转 UTC）。
+    /// 工作日 9:00 cron 至少存在一个未来触发点。
     #[test]
-    fn schedule_task_commit_pending_is_unit_component() {
-        let _marker = ScheduleTaskCommitPending;
-        // 仅验证可构造、可 Debug
-        let _ = format!("{:?}", _marker);
+    fn compute_next_trigger_for_cron_returns_next_upcoming() {
+        let cron_schedule = cron::Schedule::from_str("0 0 9 * * * *").unwrap();
+        let schedule = ScheduleSpec::Cron(Box::new(cron_schedule));
+        let next = compute_next_trigger(&schedule).expect("cron must have a next trigger");
+        // 转回 Local 验证小时为 9
+        let local_next = next.with_timezone(&Local);
+        assert_eq!(local_next.hour(), 9, "next trigger should be at local 9:00");
     }
 }

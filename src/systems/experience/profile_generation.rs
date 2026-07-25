@@ -620,6 +620,7 @@ fn spawn_profile_approval(
             tool_call_id: None,
             pending_confirmation_options: Some(options),
             work_item_entity: None,
+            confirmed_once: false,
         },
     ));
 }

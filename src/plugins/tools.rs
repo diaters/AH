@@ -7,9 +7,10 @@ use crate::prelude::*;
 use crate::{
     domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
     systems::{
-        HarnessSet, NativeProcessBackend, channel_send_dispatch_system, check_waiting_tasks_system,
-        on_subtask_completed_check_waiting, on_tool_called_hook_system,
-        on_tool_returned_hook_system, register_builtin_tools, schedule_task_commit_system,
+        HarnessSet, NativeProcessBackend, async_tool_dispatch_system, cancel_monitor_system,
+        channel_send_dispatch_system, check_waiting_tasks_system, commit_tool_effects_system,
+        ingest_tool_results_system, on_subtask_completed_check_waiting, on_tool_called_hook_system,
+        on_tool_returned_hook_system, register_builtin_tools, sweep_inflight_tool_calls,
         tool_dispatch_system, tool_result_system,
     },
 };
@@ -35,13 +36,31 @@ impl Plugin for ToolRuntimePlugin {
         app.add_systems(
             Update,
             (
-                // on_tool_called 前置 hook companion 系统：在 tool_dispatch_system 之前派发 hook，
-                // 若插件调用 tool_deny 则替换为 PermissionDenied 错误结果并销毁请求。
+                // on_tool_called 前置 hook companion 系统：在 tool_dispatch_system 与
+                // async_tool_dispatch_system 之前派发 hook，若插件调用 tool_deny 则替换为
+                // PermissionDenied 错误结果并销毁请求。
+                //
+                // **必须在 async_tool_dispatch_system 之前运行**——后者会用 Commands
+                // 改造请求实体，若本系统先 despawn 了被拒绝的实体，async_tool_dispatch_system
+                // 排队的 commands 在 apply 时会因 entity 已 despawn 而 panic。
                 on_tool_called_hook_system
+                    .in_set(HarnessSet::Dispatch)
+                    .before(async_tool_dispatch_system)
+                    .before(tool_dispatch_system),
+                // 异步工具 dispatch：认领 kind==Async 的请求实体并原地改造为挂起实体，
+                // 排在 tool_dispatch_system 之前——Sync 请求原样留给旧路径，双轨零干扰。
+                async_tool_dispatch_system
                     .in_set(HarnessSet::Dispatch)
                     .before(tool_dispatch_system),
                 // Tool 分发
                 tool_dispatch_system.in_set(HarnessSet::Dispatch),
+                // 异步工具结果落地单点：try_recv 排空通道，按 payload 分流（Completed 落地结果 /
+                // despawn 挂起实体；Effect 分流 spawn ToolEffectPending）。放在 Transform 集合，
+                // 与 LLM ingest 同 set；排在 on_tool_returned_hook_system 之前（保证 hook 流水线
+                // 能在新结果当帧派发）。
+                ingest_tool_results_system
+                    .in_set(HarnessSet::Transform)
+                    .before(on_tool_returned_hook_system),
                 // on_tool_returned 观察 hook companion 系统：在 tool_result_system 之前派发 hook，
                 // 若插件调用 tool_set_result 则替换 tool_output，原始输出保留在审计字段。
                 on_tool_returned_hook_system
@@ -62,13 +81,20 @@ impl Plugin for ToolRuntimePlugin {
                 channel_send_dispatch_system
                     .in_set(HarnessSet::Maintenance)
                     .after(tool_dispatch_system),
-                // schedule_task 提交系统：消费 ScheduleTaskRequestMessage
-                // 并发提交到 SchedulerState 与 ScheduledTaskRegistry。
-                // 放在 Maintenance 集合，在 tool_dispatch_system 之后运行，
-                // 保证 orchestrator spawn 的 message 能在本帧被消费。
-                schedule_task_commit_system
-                    .in_set(HarnessSet::Maintenance)
-                    .after(tool_dispatch_system),
+                // 异步工具失联兜底 sweeper：扫在飞标记超时则发 error 入通道 + claim
+                // （摘除 InFlightToolCall，不 despawn 挂起实体）。放 Maintenance set，
+                // 落地仍由 ingest 单点完成。
+                sweep_inflight_tool_calls.in_set(HarnessSet::Maintenance),
+                // 异步工具取消监听：父任务终态 → token.cancel() + claim
+                // （摘除 InFlightToolCall，worker select! 收信 kill 子进程）。
+                // 放 Maintenance set，与 sweeper 同 set——两者操作实体集合不重叠
+                // （sweeper 扫超时、cancel_monitor 扫父任务终态，claim 后互不重扫）。
+                cancel_monitor_system.in_set(HarnessSet::Maintenance),
+                // 通用效果提交：消费 ToolEffectPending，经 update_scheduler_state
+                // 双资源入口落账，把最终结果（含 existed 等 apply 时刻才知道的真相）
+                // 送回通道——下一帧 ingest 落地。exclusive system 形态。放 Maintenance
+                // set，与 sweeper 同 set 顺序无强约束（两者操作实体集合不重叠）。
+                commit_tool_effects_system.in_set(HarnessSet::Maintenance),
             ),
         );
     }

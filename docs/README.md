@@ -7,6 +7,7 @@
 | 文档 | 定位 |
 |------|------|
 | [current-state.md](current-state.md) | 当前能力、架构结论与已知限制的唯一真相源 |
+| [async-tool-bridge.md](async-tool-bridge.md) | 异步工具桥架构、不变量、新工具开发指南与失联兜底语义 |
 | [TODO.md](TODO.md) | 当前待办事项与近期关注方向 |
 | [configuration.md](configuration.md) | 配置项说明（含插件系统配置） |
 | [plugin-development.md](plugin-development.md) | 插件开发指南 |
@@ -19,6 +20,8 @@
 docs/
 ├── README.md              ← 本文件：统一索引
 ├── current-state.md       ← 当前状态唯一真相源
+├── async-tool-bridge.md   ← 异步工具桥架构文档
+├── async-tool-bridge-pilot-report.md ← 异步工具桥 pilot 验收报告
 ├── TODO.md                ← 待办事项
 ├── configuration.md       ← 配置说明（含插件系统）
 ├── plugin-development.md  ← 插件开发指南
@@ -60,8 +63,9 @@ Harness 支持通过 Rhai 脚本插件扩展行为。详见 [plugin-development.
 2. [adr/](adr/) — 关键架构决策及其理由
 3. [design/](design/) — 当前有效的设计细节
 4. [superpowers/](superpowers/) — 正在进行的工作
-5. [wiki/system-pipeline.md](wiki/system-pipeline.md) — 系统管线流程与 System 注解
-6. [wiki/llm-context-assembly.md](wiki/llm-context-assembly.md) — LLM 上下文组装机制与例子
+5. [async-tool-bridge.md](async-tool-bridge.md) — 异步工具桥架构（涉及工具开发时必读）
+6. [wiki/system-pipeline.md](wiki/system-pipeline.md) — 系统管线流程与 System 注解
+7. [wiki/llm-context-assembly.md](wiki/llm-context-assembly.md) — LLM 上下文组装机制与例子
 
 ## 文档状态标注
 

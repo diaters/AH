@@ -4,11 +4,15 @@
 
 mod approval;
 mod approval_hook;
+mod async_dispatch;
 pub mod backend;
-mod builtin;
+pub mod builtin;
+mod cancel_monitor;
 mod channel_send_dispatch;
 mod confirmation;
 mod dispatch;
+mod effect_commit;
+mod ingest_tool_results;
 mod orchestrator;
 mod result;
 mod tool_called_hook;
@@ -17,11 +21,14 @@ mod waiting;
 
 pub use approval::{approval_dispatch_system, approval_result_system};
 pub use approval_hook::{on_approval_requested_hook_system, on_approval_resolved_hook_system};
+pub use async_dispatch::async_tool_dispatch_system;
 pub use backend::NativeProcessBackend;
+pub use cancel_monitor::cancel_monitor_system;
 pub use channel_send_dispatch::channel_send_dispatch_system;
 pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
 pub use dispatch::tool_dispatch_system;
-pub use orchestrator::schedule_task_commit_system;
+pub use effect_commit::commit_tool_effects_system;
+pub use ingest_tool_results::ingest_tool_results_system;
 pub use result::tool_result_system;
 pub use tool_called_hook::on_tool_called_hook_system;
 pub use tool_returned_hook::on_tool_returned_hook_system;
@@ -33,10 +40,10 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ScheduleTaskTool,
-    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
-    SubmitSkillUpdateTool, WaitTasksTool,
+    ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool, ListExperienceCandidatesTool,
+    ListScheduledTasksTool, ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool,
+    ShellReadTool, ShellStartTool, ShellStopTool, SkipProfileUpdateTool,
+    SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillUpdateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -386,6 +393,44 @@ pub fn register_builtin_tools(
     });
     executors.register(Box::new(ScheduleTaskTool));
 
+    // list_scheduled_tasks tool —— pilot 首个异步工具（list 双账本只读）
+    registry.register(ToolDefinition {
+        name: "list_scheduled_tasks".to_string(),
+        description: "列出当前空间内的动态定时任务（由 schedule_task 工具创建）。返回每个任务的 kind、content、output_channel、is_once、created_at、next_fire_time 等字段；next_fire_time 对 Once 任务显示原始触发时间，对 Cron 任务显示下次触发点。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("list_scheduled_tasks".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ListScheduledTasksTool));
+
+    // delete_scheduled_task tool —— 写路径首个客户（声明式效果 → commit 落账）
+    registry.register(ToolDefinition {
+        name: "delete_scheduled_task".to_string(),
+        description: "删除指定 kind 的动态定时任务（由 schedule_task 工具创建）。返回 {deleted: kind, existed: bool}——existed 表示删除时任务是否还存在（幂等可观测：删不存在的 kind 不会报错，仅 existed=false）。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "要删除的动态定时任务的 kind 字符串（即 list_scheduled_tasks 返回结果中的 kind 字段）"
+                    }
+                },
+                "required": ["kind"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("delete_scheduled_task".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(DeleteScheduledTaskTool));
+
     // Profile update tools (仅 profile-designer 可用)
     registry.register(ToolDefinition {
         name: "submit_profile_update".to_string(),
@@ -485,7 +530,7 @@ pub fn register_plugin_tools(
     executors: &mut BuiltinToolExecutors,
     plugin_registry: &crate::user_plugins::registry::PluginRegistry,
 ) {
-    use crate::user_plugins::tool_executor::RhaiToolExecutor;
+    use crate::user_plugins::tool_executor::{RhaiPluginAsyncWrapper, RhaiToolExecutor};
     use tracing::warn;
 
     for plugin in plugin_registry.plugins() {
@@ -549,10 +594,29 @@ pub fn register_plugin_tools(
                 required_tag: None,
             });
 
-            executors.register(Box::new(RhaiToolExecutor::new(
+            // loader 阶段已预编译 AST 并存入 tool_asts；此处取回用于执行器。
+            // 若 AST 缺失（理论上不应发生——loader 在 schema 无效时已 continue），
+            // 跳过该工具并 warn，保持与 schema 失败一致的降级语义。
+            let ast = match plugin.tool_asts.get(&tool_def.id) {
+                Some(ast) => ast.clone(),
+                None => {
+                    warn!(
+                        event = "PluginToolAstMissing",
+                        plugin_id = %plugin.manifest.id,
+                        tool_id = %tool_def.id,
+                        "skipping plugin tool: pre-compiled AST not found"
+                    );
+                    continue;
+                }
+            };
+
+            let executor = RhaiToolExecutor::new(
                 &plugin.manifest.id,
                 &tool_def.id,
-            )));
+                ast,
+                tool_def.timeout_secs,
+            );
+            executors.register(Box::new(RhaiPluginAsyncWrapper::new(executor)));
 
             tracing::info!(
                 event = "PluginToolRegistered",

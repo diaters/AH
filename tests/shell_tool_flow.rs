@@ -1,16 +1,90 @@
 //! shell 工具集成测试
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use crossbeam_channel::unbounded;
+use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, ExecutorFuture,
     FrontendKind, HarnessConfig, SessionBackend, ShortTermMemory, Task,
-    ToolExecutionRequestMessage, build_harness_app, llm::ExecutorRegistry,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, build_harness_app,
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
+
+// ============ 异步工具结果捕获基础设施 ============
+//
+// shell_exec 改 Async 后，结果由 ingest_tool_results_system spawn 并由
+// tool_result_system 在同一帧内 despawn。测试无法在帧后直接 query 结果，
+// 必须用 Added<ToolExecutionResultMessage> 过滤器在两者之间捕获。
+//
+// 模式与 sequential_tool_confirmation.rs 一致：capture system 排在
+// ingest_tool_results_system 之后，用 Added 只抓新 spawn 的结果。
+
+#[derive(Resource, Clone, Default)]
+struct TestToolResults(Arc<Mutex<Vec<ToolExecutionResultMessage>>>);
+
+fn capture_tool_results_system(
+    results: Query<&ToolExecutionResultMessage, Added<ToolExecutionResultMessage>>,
+    captured: ResMut<TestToolResults>,
+) {
+    for result in &results {
+        captured.0.lock().unwrap().push(result.clone());
+    }
+}
+
+fn setup_result_capture(app: &mut App) {
+    app.insert_resource(TestToolResults::default());
+    app.add_systems(
+        Update,
+        capture_tool_results_system.after(harness::systems::ingest_tool_results_system),
+    );
+}
+
+/// 跑 N 次 update，每次之间 yield 20ms 让 async worker（shell_exec 上桥后
+/// 经 spawn_blocking 跑子进程）有机会把结果送回通道。
+fn update_with_yield(app: &mut App, n: usize) {
+    for _ in 0..n {
+        app.update();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn collect_tool_results(app: &App) -> Vec<ToolExecutionResultMessage> {
+    app.world()
+        .resource::<TestToolResults>()
+        .0
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+/// 轮询 update + sleep 直到捕获到至少一个工具结果，或达到 `timeout_ms`。
+///
+/// shell_exec 上桥后是异步执行：dispatch spawn worker → worker 跑子进程 +
+/// `tokio::time::timeout` → 通道回传 → ingest 下一帧落地 →
+/// `capture_tool_results_system` 捕获。CI 慢环境下固定次数 yield 可能不够
+/// （worker spawn + 子进程启动 + 超时检测 + 回传的累积延迟），
+/// 改为轮询确保结果落地后才收集，避免空 `results` 触发越界/unwrap panic。
+fn wait_for_tool_results(app: &mut App, timeout_ms: u64) -> Vec<ToolExecutionResultMessage> {
+    let start = Instant::now();
+    loop {
+        app.update();
+        let results = collect_tool_results(app);
+        if !results.is_empty() {
+            return results;
+        }
+        if start.elapsed().as_millis() >= timeout_ms as u128 {
+            return results; // 空 Vec，让测试断言失败给出清晰错误
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -50,6 +124,7 @@ fn test_config() -> HarnessConfig {
         shell_max_tail_lines: 500,
         shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
+        tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         active_poll_ms: 16,
         idle_poll_ms: 150,
@@ -174,6 +249,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
         tool_call_id: Some("call_start_read_case".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -208,6 +284,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
         tool_call_id: Some("call_read_case".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     app.update();
@@ -269,6 +346,7 @@ fn shell_list_returns_only_active_sessions() {
         tool_call_id: Some("call_start_list_case".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -292,6 +370,7 @@ fn shell_list_returns_only_active_sessions() {
         tool_call_id: Some("call_list_case".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     app.update();
@@ -322,6 +401,7 @@ fn shell_exec_returns_result_message() {
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+    setup_result_capture(&mut app);
 
     app.update();
 
@@ -360,15 +440,13 @@ fn shell_exec_returns_result_message() {
         tool_call_id: Some("call_shell_exec".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
-    // Check result after first update (tool_result_system despawns results after processing)
-    app.update();
-    let results = {
-        let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect::<Vec<_>>()
-    };
+    // shell_exec 改 Async 后 dispatch 不再阻塞主线程，但 ingest 需要 worker
+    // 跑完才能落地结果——测试必须在 update 之间 sleep 让 worker 推进。
+    update_with_yield(&mut app, 30);
+    let results = collect_tool_results(&app);
 
     assert!(
         !results.is_empty(),
@@ -400,6 +478,7 @@ fn shell_exec_passes_env_to_child_process() {
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+    setup_result_capture(&mut app);
 
     app.update();
 
@@ -438,15 +517,11 @@ fn shell_exec_passes_env_to_child_process() {
         tool_call_id: Some("call_shell_exec_env".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
-    app.update();
-
-    let results = {
-        let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect::<Vec<_>>()
-    };
+    update_with_yield(&mut app, 30);
+    let results = collect_tool_results(&app);
 
     let output_json = results[0]
         .tool_output
@@ -506,6 +581,7 @@ fn shell_start_returns_running_handle() {
         tool_call_id: Some("call_shell_start".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // Check result after first update
@@ -578,6 +654,7 @@ fn shell_start_passes_env_to_child_process() {
         tool_call_id: Some("call_shell_start_env".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -626,6 +703,7 @@ fn shell_start_passes_env_to_child_process() {
         tool_call_id: Some("call_shell_read_env".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -660,6 +738,7 @@ fn shell_exec_with_exit_code_error() {
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+    setup_result_capture(&mut app);
 
     app.update();
 
@@ -697,15 +776,11 @@ fn shell_exec_with_exit_code_error() {
         tool_call_id: Some("call_shell_exec_error".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
-    // Check result after first update
-    app.update();
-    let results = {
-        let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect::<Vec<_>>()
-    };
+    update_with_yield(&mut app, 30);
+    let results = collect_tool_results(&app);
 
     assert!(
         !results.is_empty(),
@@ -771,6 +846,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         tool_call_id: Some("call_shell_start_for_stop".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     app.update();
@@ -810,6 +886,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         tool_call_id: Some("call_shell_stop".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     app.update();
@@ -910,6 +987,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         tool_call_id: Some("call_shell_start_missing_stdin".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -949,6 +1027,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         tool_call_id: Some("call_shell_input_missing_stdin".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1053,6 +1132,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         tool_call_id: Some("call_shape_exec".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1064,6 +1144,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         tool_call_id: Some("call_shape_start".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1096,6 +1177,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+    setup_result_capture(&mut app);
 
     app.update();
 
@@ -1134,15 +1216,10 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         tool_call_id: Some("call_shell_exec_timeout".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
-    app.update();
-
-    let results = {
-        let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect::<Vec<_>>()
-    };
+    let results = wait_for_tool_results(&mut app, 5000);
 
     let output_json = results[0].tool_output.clone().unwrap();
     assert_eq!(output_json["status"], "stopped");
@@ -1200,6 +1277,7 @@ fn shell_read_returns_output_text() {
         tool_call_id: Some("call_shell_start_for_read".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1244,6 +1322,7 @@ fn shell_read_returns_output_text() {
         tool_call_id: Some("call_shell_read_text".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1272,6 +1351,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+    setup_result_capture(&mut app);
 
     app.update();
 
@@ -1311,15 +1391,12 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         tool_call_id: Some("call_shell_exec_timeout_with_tail".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
-    app.update();
-
-    let results = {
-        let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-        query.iter(world).cloned().collect::<Vec<_>>()
-    };
+    // timeout_secs=1，worker 需 ~1s 才能超时返回；60 次 yield × 20ms = 1.2s 足够覆盖。
+    update_with_yield(&mut app, 60);
+    let results = collect_tool_results(&app);
 
     assert!(
         !results.is_empty(),
@@ -1358,6 +1435,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+    setup_result_capture(&mut app);
 
     app.update();
     let agent_id = spawn_shell_agent(app.world_mut());
@@ -1390,13 +1468,11 @@ fn shell_exec_uses_default_timeout_when_omitted() {
         tool_call_id: Some("call_exec_timeout_default".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
-    app.update();
-
-    let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
-    let results = query.iter(world).cloned().collect::<Vec<_>>();
+    // 默认超时 1s；轮询最多 5s 确保 CI 慢环境下也能等到 worker 超时回传。
+    let results = wait_for_tool_results(&mut app, 5000);
     let output = results.last().unwrap().tool_output.clone().unwrap();
 
     assert_eq!(output["timed_out"], true);
@@ -1521,6 +1597,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
         tool_call_id: Some("call_start_task_a".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1554,6 +1631,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
         tool_call_id: Some("call_list_task_b".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1626,6 +1704,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
             tool_call_id: Some(tool_call_id.to_string()),
             pending_confirmation_options: None,
             work_item_entity: None,
+            confirmed_once: false,
         });
         app.update();
     }
@@ -1756,6 +1835,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
         tool_call_id: Some("call_start_read_reject".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1805,6 +1885,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
         tool_call_id: Some("call_read_cross_task".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1880,6 +1961,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
         tool_call_id: Some("call_start_input_reject".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -1929,6 +2011,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
         tool_call_id: Some("call_input_cross_task".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -2003,6 +2086,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
         tool_call_id: Some("call_start_stop_reject".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -2052,6 +2136,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
         tool_call_id: Some("call_stop_cross_task".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -2126,6 +2211,7 @@ fn task_termination_stops_owned_shell_sessions() {
         tool_call_id: Some("call_start_termination".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 
@@ -2206,6 +2292,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
         tool_call_id: Some("call_start_failed_task".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
     app.update();
 

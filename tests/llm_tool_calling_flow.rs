@@ -2,7 +2,7 @@
 //!
 //! 验证 LLM → ToolCalls → ToolExecution → FollowUp → Text 完整循环。
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
@@ -19,6 +19,18 @@ fn default_channel() -> ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
+    }
+}
+
+/// 跑 N 次 update，每次之间 yield 20ms 让 async worker（shell_exec 上桥后
+/// 经 spawn_blocking 跑子进程）有机会把结果送回通道。
+///
+/// shell_exec 改 Async 后，dispatch 不再阻塞主线程，但 ingest 需要 worker
+/// 跑完才能落地结果——测试必须在 update 之间 sleep 让 worker 推进。
+fn update_with_yield(app: &mut bevy_app::App, n: usize) {
+    for _ in 0..n {
+        app.update();
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 use tokio::runtime::Runtime;
@@ -230,9 +242,7 @@ fn llm_tool_calling_complete_loop() {
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
 
-    for _ in 0..10 {
-        app.update();
-    }
+    update_with_yield(&mut app, 10);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
@@ -298,9 +308,7 @@ fn tool_calling_exceeds_max_iterations() {
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
 
-    for _ in 0..30 {
-        app.update();
-    }
+    update_with_yield(&mut app, 30);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
@@ -363,9 +371,7 @@ fn tool_calling_records_to_short_term_memory() {
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
 
-    for _ in 0..15 {
-        app.update();
-    }
+    update_with_yield(&mut app, 15);
 
     let stm = app.world().get::<ShortTermMemory>(task_entity).unwrap();
     let tool_call_entries: Vec<_> = stm
@@ -431,9 +437,7 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
 
-    for _ in 0..50 {
-        app.update();
-    }
+    update_with_yield(&mut app, 50);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
@@ -490,9 +494,7 @@ fn tool_calling_hard_limit_forces_failure() {
     app.world_mut()
         .spawn(harness::AgentExecutionRequestMessage { request });
 
-    for _ in 0..50 {
-        app.update();
-    }
+    update_with_yield(&mut app, 50);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(

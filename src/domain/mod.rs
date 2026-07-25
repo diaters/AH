@@ -21,6 +21,7 @@ mod space;
 mod summarization;
 mod task;
 mod task_experience;
+mod tool_async;
 mod tool_runtime;
 mod work_item;
 mod workflow;
@@ -129,7 +130,8 @@ pub use space::{
     AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
     ExperienceConsolidationRequestMessage, KnowledgeSource, KnowledgeValidationStatus,
     PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
-    ToolAction, ToolContext, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    ToolAction, ToolActionKind, ToolContext, ToolDefinition, ToolExecutorKind, ToolFuture,
+    ToolPermission, ToolSchema, ToolWorkerOutput,
 };
 
 // summarization
@@ -146,6 +148,13 @@ pub use task_experience::{ExperienceKindFilter, TaskExperiencePolicy, TaskInject
 
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
+
+// tool_async
+pub use tool_async::{
+    DynamicScheduledTaskSnapshot, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
+    ScheduledTaskRegistrySnapshot, SchedulerStateSnapshot, ToolAsyncResult, ToolEffect,
+    ToolEffectPending, ToolRequestPending, ToolResultReceiver, ToolResultSender, ToolWorkerPayload,
+};
 
 // work_item
 pub use work_item::{

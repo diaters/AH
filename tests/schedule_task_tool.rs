@@ -1,109 +1,20 @@
 //! schedule_task 工具端到端集成测试
 //!
-//! 覆盖两条链路：
-//! 1. `schedule_task_commit_system` 把 `ScheduleTaskRequestMessage` 提交到
-//!    `SchedulerState.dynamic_tasks` 与 `ScheduledTaskRegistry`，并保持
-//!    `SchedulerStateWatcher` 通知语义。
-//! 2. `trigger_task_routing_system` 在收到 `Timer { kind: "scheduled:..." }`
-//!    触发后，从 `ScheduledTaskRegistry` 取出动态任务信息生成 `CreateTaskMessage`，
-//!    并对一次性任务做清理。
+//! Task 14 上桥后，`schedule_task_commit_system` 与 `ScheduleTaskRequestMessage` /
+//! `ScheduleTaskCommitPending` 已退役，写路径统一经
+//! `ToolEffect::ScheduleTask` + `commit_tool_effects_system` 落账
+//! （覆盖见 `tests/schedule_task_commit_test.rs`）。本文件仅保留
+//! `trigger_task_routing_system` 在收到 `Timer { kind: "scheduled:..." }` 触发后
+//! 从 `ScheduledTaskRegistry` 取出动态任务信息生成 `CreateTaskMessage`、
+//! 并对一次性任务做清理的回归测试。
 
-use chrono::{Duration, Utc};
 use harness::prelude::*;
-use uuid::Uuid;
 
 use harness::domain::{ChannelId, CreateTaskMessage, FrontendKind, SignalSource, TaskTrigger};
-use harness::systems::tools::schedule_task_commit_system;
 use harness::systems::transform::trigger_task_routing_system;
 use harness::triggers::{
-    ScheduleSpec, ScheduleTaskCommitPending, ScheduleTaskRequestMessage, ScheduledTaskInfo,
-    ScheduledTaskRegistry, SchedulerState, SchedulerStateWatcher,
+    ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState, SchedulerStateWatcher,
 };
-
-/// `schedule_task_commit_system` 处理一条 Once 请求后：
-/// - `ScheduledTaskRegistry` 含对应 `kind`
-/// - `SchedulerState.dynamic_tasks` 长度为 1
-#[test]
-fn schedule_task_commit_adds_task_to_registry() {
-    let mut world = World::new();
-    world.insert_resource(SchedulerStateWatcher::default());
-    world.insert_resource(SchedulerState::default());
-    world.insert_resource(ScheduledTaskRegistry::default());
-
-    let id = Uuid::new_v4();
-    let kind = format!("scheduled:{}", id);
-    world.spawn((
-        ScheduleTaskRequestMessage {
-            id,
-            kind: kind.clone(),
-            content: "greet".to_string(),
-            schedule: ScheduleSpec::Once(Utc::now() + Duration::minutes(5)),
-            output_channel: Some(ChannelId {
-                frontend: FrontendKind::Telegram,
-                user_id: "chat".to_string(),
-                thread_id: None,
-            }),
-        },
-        ScheduleTaskCommitPending,
-    ));
-
-    let mut schedule = Schedule::default();
-    schedule.add_systems(schedule_task_commit_system);
-    schedule.run(&mut world);
-
-    assert!(
-        world
-            .resource::<ScheduledTaskRegistry>()
-            .get(&kind)
-            .is_some(),
-        "registry should contain the committed kind"
-    );
-    assert_eq!(
-        world.resource::<SchedulerState>().dynamic_tasks().len(),
-        1,
-        "SchedulerState.dynamic_tasks should have one entry"
-    );
-}
-
-/// `schedule_task_commit_system` 通过 `update_scheduler_state` 通知
-/// `SchedulerStateWatcher`，使 timer scheduler 能感知新动态任务。
-#[test]
-fn schedule_task_commit_notifies_watcher() {
-    use tokio::sync::watch;
-
-    let mut world = World::new();
-    world.insert_resource(SchedulerState::default());
-    world.insert_resource(ScheduledTaskRegistry::default());
-    let (tx, mut rx) = watch::channel(SchedulerState::default());
-    world.insert_resource(SchedulerStateWatcher(Some(tx)));
-
-    let id = Uuid::new_v4();
-    let kind = format!("scheduled:{}", id);
-    world.spawn((
-        ScheduleTaskRequestMessage {
-            id,
-            kind,
-            content: "watcher test".to_string(),
-            schedule: ScheduleSpec::Once(Utc::now() + Duration::minutes(5)),
-            output_channel: None,
-        },
-        ScheduleTaskCommitPending,
-    ));
-
-    let mut schedule = Schedule::default();
-    schedule.add_systems(schedule_task_commit_system);
-    schedule.run(&mut world);
-
-    assert!(
-        rx.has_changed().unwrap(),
-        "watcher must be notified after commit"
-    );
-    assert_eq!(
-        rx.borrow_and_update().dynamic_tasks().len(),
-        1,
-        "watcher must observe the new dynamic task"
-    );
-}
 
 /// `trigger_task_routing_system` 在收到 `Timer { kind: "scheduled:..." }` 触发后，
 /// 从 `ScheduledTaskRegistry` 取出动态任务信息生成 `CreateTaskMessage`，
@@ -117,7 +28,7 @@ fn scheduled_task_trigger_routes_to_create_task_message() {
     app.insert_resource(ScheduledTaskRegistry::default());
     app.add_systems(Update, trigger_task_routing_system);
 
-    let id = Uuid::new_v4();
+    let id = uuid::Uuid::new_v4();
     let kind = format!("scheduled:{}", id);
     let channel = ChannelId {
         frontend: FrontendKind::QQ,
