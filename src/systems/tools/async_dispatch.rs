@@ -115,8 +115,15 @@ pub fn async_tool_dispatch_system(
         let tool_name = request.tool_name.clone();
         let input = request.tool_input.clone();
 
-        // 挂起现场：算 sweeper 超时（钩子在此刻调用，不在 worker 内）
-        let timeout_std = executor.max_duration(&input, settings.0.tool_inflight_timeout_secs);
+        // 挂起现场：算 sweeper 超时（钩子在此刻调用，不在 worker 内）。
+        // 传 max(shell_default_exec, inflight) 而非纯 inflight：ShellExecTool 等
+        // 工具的业务超时 fallback 用 shell_default_exec_timeout_secs，sweeper 必须
+        // 晚于业务超时（D5），故取两者较大值确保 margin 恒正。
+        let effective_inflight = settings
+            .0
+            .shell_default_exec_timeout_secs
+            .max(settings.0.tool_inflight_timeout_secs);
+        let timeout_std = executor.max_duration(&input, effective_inflight);
         let timeout = chrono::Duration::from_std(timeout_std).unwrap_or_else(|_| {
             chrono::Duration::seconds(settings.0.tool_inflight_timeout_secs as i64)
         });

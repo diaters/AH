@@ -176,8 +176,14 @@ fn long_command_does_not_block_frame() {
         frames_elapsed
     );
 
-    // 5. 清理：让 worker 完成或被 cancel。简短等待 + drop world 即可。
-    //    不在此断言 worker 结果内容（cancel 路径在另一个测试）。
+    // 5. 清理：显式 cancel worker，避免 spawn_blocking 线程泄漏（sleep 3 会跑满 3s）。
+    //    cancel 后 worker 在 ≤10ms 内 kill 子进程退出。
+    {
+        let mut q = world.query::<&harness::domain::InFlightToolCall>();
+        if let Some(inflight) = q.iter(&world).next() {
+            inflight.cancel.cancel();
+        }
+    }
     std::thread::sleep(Duration::from_millis(50));
 }
 
