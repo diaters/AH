@@ -27,7 +27,7 @@ uuid = { version = "1.23.1", features = ["serde", "v4"] }
 ratatui = "0.29"
 crossterm = "0.28"
 termimad = "0.31"
-rhai = { version = "1.19", default-features = false, features = ["sync"] }
+rhai = { version = "1.19", default-features = false, features = ["sync", "serde"] }
 jsonschema = { version = "0.20", default-features = false, features = ["resolve-file"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

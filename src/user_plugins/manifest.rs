@@ -39,6 +39,11 @@ pub struct ToolContribution {
     pub handler: PathBuf,
     pub description: String,
     pub default_permission: Option<crate::domain::ToolPermission>,
+    /// 插件可选：覆盖全局 inflight 超时（秒）。
+    ///
+    /// 缺省 `None` 时由 `RhaiPluginAsyncWrapper` 走全局 `tool_inflight_timeout_secs`（D14）。
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +121,14 @@ impl PluginManifest {
                     "tool paths must be relative: {}/{}",
                     tool.schema.display(),
                     tool.handler.display()
+                ));
+            }
+            if let Some(secs) = tool.timeout_secs
+                && secs == 0
+            {
+                return Err(format!(
+                    "tool.timeout_secs must be > 0 when set: {}",
+                    tool.id
                 ));
             }
         }

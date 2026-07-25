@@ -531,7 +531,7 @@ pub fn register_plugin_tools(
     executors: &mut BuiltinToolExecutors,
     plugin_registry: &crate::user_plugins::registry::PluginRegistry,
 ) {
-    use crate::user_plugins::tool_executor::RhaiToolExecutor;
+    use crate::user_plugins::tool_executor::{RhaiPluginAsyncWrapper, RhaiToolExecutor};
     use tracing::warn;
 
     for plugin in plugin_registry.plugins() {
@@ -595,10 +595,29 @@ pub fn register_plugin_tools(
                 required_tag: None,
             });
 
-            executors.register(Box::new(RhaiToolExecutor::new(
+            // loader 阶段已预编译 AST 并存入 tool_asts；此处取回用于执行器。
+            // 若 AST 缺失（理论上不应发生——loader 在 schema 无效时已 continue），
+            // 跳过该工具并 warn，保持与 schema 失败一致的降级语义。
+            let ast = match plugin.tool_asts.get(&tool_def.id) {
+                Some(ast) => ast.clone(),
+                None => {
+                    warn!(
+                        event = "PluginToolAstMissing",
+                        plugin_id = %plugin.manifest.id,
+                        tool_id = %tool_def.id,
+                        "skipping plugin tool: pre-compiled AST not found"
+                    );
+                    continue;
+                }
+            };
+
+            let executor = RhaiToolExecutor::new(
                 &plugin.manifest.id,
                 &tool_def.id,
-            )));
+                ast,
+                tool_def.timeout_secs,
+            );
+            executors.register(Box::new(RhaiPluginAsyncWrapper::new(executor)));
 
             tracing::info!(
                 event = "PluginToolRegistered",
