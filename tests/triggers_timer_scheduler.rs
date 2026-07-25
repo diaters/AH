@@ -97,6 +97,32 @@ fn assert_contains(events: &CapturingLayer, name: &str) {
     );
 }
 
+/// 轮询 `CapturingLayer` 直到出现目标事件或超时。
+///
+/// 替代 `sleep(50ms) + assert_contains` 模式，根治 `current_thread` runtime 下
+/// spawned task 调度饥饿导致的 flaky：事件捕获是同步的（tracing subscriber 在
+/// 事件 emit 的同一线程内 push），poll 间隔 5ms 让 runtime 有机会调度
+/// spawned task 进入 emit 那一行；最多等 2s（CI 慢机器冗余）。
+async fn wait_for_event(events: &CapturingLayer, name: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        {
+            let got = events.events.lock().unwrap();
+            if got.iter().any(|n| n == name) {
+                return;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let got = events.events.lock().unwrap().clone();
+            panic!(
+                "expected event `{}` in captured events within 2s, got: {:?}",
+                name, got
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 #[tokio::test]
 async fn scheduler_starts_with_empty_config_and_handles_reload() {
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
@@ -112,9 +138,8 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
         let _ = run_timer_scheduler(input_tx, config_rx).await;
     });
 
-    // 给 scheduler 启动时间
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_contains(&capturing, "TimerSchedulerStarted");
+    // 等 scheduler 启动事件（poll 模式，避免固定 sleep 在 CI 上的 flaky）
+    wait_for_event(&capturing, "TimerSchedulerStarted").await;
 
     // 发送有效配置（一条路由），应触发 TimerSchedulerReloaded
     config_tx
@@ -175,8 +200,8 @@ async fn scheduler_starts_with_empty_state_when_no_static_routes() {
         let _ = run_timer_scheduler(input_tx, config_rx).await;
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_contains(&capturing, "TimerSchedulerStarted");
+    // 等 scheduler 启动事件（poll 模式，避免固定 sleep 在 CI 上的 flaky）
+    wait_for_event(&capturing, "TimerSchedulerStarted").await;
     assert!(
         !handle.is_finished(),
         "scheduler must keep running with empty state"
