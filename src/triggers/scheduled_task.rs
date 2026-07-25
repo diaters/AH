@@ -93,9 +93,11 @@ pub enum ScheduledItem {
     },
 }
 
-/// 统一修改入口：先 remove 两个资源，闭包修改，watch send，再 insert 两个资源。
+/// 统一修改入口（exclusive system 用）：先 remove 两个资源，闭包修改，watch send，
+/// 再 insert 两个资源。
 ///
-/// D10 不变量：`SchedulerState` 与 `ScheduledTaskRegistry` 一切写路径都经此入口，
+/// D10 不变量：`SchedulerState` 与 `ScheduledTaskRegistry` 一切写路径都经此入口或
+/// [`update_scheduler_state_with_watcher`]，二者共享 [`apply_and_notify`] 实现，
 /// watch 只在两个资源都改完后发一次。资源缺失用 `unwrap_or_default()` 兜底
 /// （与既有行为一致），watcher 缺失用 `get_resource` 避免 panic。
 pub fn update_scheduler_state(
@@ -108,16 +110,43 @@ pub fn update_scheduler_state(
     let mut registry = world
         .remove_resource::<ScheduledTaskRegistry>()
         .unwrap_or_default();
-    f(&mut state, &mut registry);
-    // watch 只在两个资源都改完后发一次
-    if let Some(watcher) = world
+    let watcher = world
         .get_resource::<SchedulerStateWatcher>()
         .and_then(|w| w.0.as_ref())
-    {
-        let _ = watcher.send(state.clone());
-    }
+        .cloned();
+    apply_and_notify(&mut state, &mut registry, watcher.as_ref(), f);
     world.insert_resource(registry);
     world.insert_resource(state);
+}
+
+/// 统一修改入口（`ResMut` system 用）：直接借用 `SchedulerState` /
+/// `ScheduledTaskRegistry` / `SchedulerStateWatcher` 调用，不经过 `&mut World`。
+///
+/// 用于无法持有 `&mut World` 的 system（如 `trigger_task_routing_system` 持有
+/// `ResMut` 借用），保证它也走 [`apply_and_notify`] 共享逻辑，不变量 4 字面成立。
+pub fn update_scheduler_state_with_watcher(
+    state: &mut SchedulerState,
+    registry: &mut ScheduledTaskRegistry,
+    watcher: &SchedulerStateWatcher,
+    f: impl FnOnce(&mut SchedulerState, &mut ScheduledTaskRegistry),
+) {
+    apply_and_notify(state, registry, watcher.0.as_ref(), f);
+}
+
+/// 共享内部逻辑：执行闭包修改两条账本，watch 在闭包返回后 send 一次。
+///
+/// 两个 `update_scheduler_state*` 公开入口都经此函数，确保「双账本单一修改入口 +
+/// watch 单次广播」的契约有唯一实现点。
+fn apply_and_notify(
+    state: &mut SchedulerState,
+    registry: &mut ScheduledTaskRegistry,
+    watcher: Option<&watch::Sender<SchedulerState>>,
+    f: impl FnOnce(&mut SchedulerState, &mut ScheduledTaskRegistry),
+) {
+    f(state, registry);
+    if let Some(tx) = watcher {
+        let _ = tx.send(state.clone());
+    }
 }
 
 /// 计算 `ScheduleSpec` 的下一次触发时间（UTC）。
