@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::{Component, Resource, World};
+use bevy_ecs::prelude::{Resource, World};
 use chrono::{DateTime, Local, Utc};
 use cron::Schedule;
 use tokio::sync::watch;
@@ -185,24 +185,6 @@ impl ScheduledTaskRegistry {
     }
 }
 
-/// `schedule_task` 工具请求创建动态任务时投递的组件。
-///
-/// 由工具实现 spawn，调度消费系统读取后转换为 `SchedulerState` 中的
-/// `DynamicScheduledTask` 并写入 `ScheduledTaskRegistry`。
-#[derive(Debug, Clone, Component)]
-pub struct ScheduleTaskRequestMessage {
-    pub id: Uuid,
-    pub kind: String,
-    pub content: String,
-    pub schedule: ScheduleSpec,
-    pub output_channel: Option<ChannelId>,
-}
-
-/// 标记已写入 `SchedulerState.dynamic_tasks` 但尚未提交 `ScheduledTaskRegistry`
-/// 的请求。提交完成后由调度系统移除。
-#[derive(Debug, Clone, Component)]
-pub struct ScheduleTaskCommitPending;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,31 +361,6 @@ mod tests {
     fn registry_is_default_constructable_as_resource() {
         let registry = ScheduledTaskRegistry::default();
         assert!(registry.get("anything").is_none());
-    }
-
-    #[test]
-    fn schedule_task_request_message_carries_all_fields() {
-        let id = Uuid::new_v4();
-        let channel = sample_channel();
-        let msg = ScheduleTaskRequestMessage {
-            id,
-            kind: "report".to_string(),
-            content: "send report".to_string(),
-            schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::minutes(10)),
-            output_channel: Some(channel.clone()),
-        };
-        assert_eq!(msg.id, id);
-        assert_eq!(msg.kind, "report");
-        assert_eq!(msg.content, "send report");
-        assert!(matches!(msg.schedule, ScheduleSpec::Once(_)));
-        assert_eq!(msg.output_channel, Some(channel));
-    }
-
-    #[test]
-    fn schedule_task_commit_pending_is_unit_component() {
-        let _marker = ScheduleTaskCommitPending;
-        // 仅验证可构造、可 Debug
-        let _ = format!("{:?}", _marker);
     }
 
     /// `compute_next_trigger` 对 `Once(at)` 直接返回 `Some(at)`。

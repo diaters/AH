@@ -31,6 +31,7 @@ list_scheduled_tasks / 通道与挂起实体类型 / 共享测试 harness），�
 
 | 用例 | 覆盖 spec Step | 验证要点 |
 |------|----------------|----------|
+<!-- markdownlint-disable MD013 -->
 | `e2e_full_chain_dispatch_to_restore` | Step 1 happy path | dispatch 挂起 → worker 跑 → ingest 落地 → `tool_result_system` 标 processed → `tool_calling_orchestrator_system` 收齐清 pending + despawn 结果 + spawn follow-up |
 | `e2e_worker_panic_yields_exactly_one_error_result` | Step 2 失联路径一 | `catch_unwind` 把 worker panic 转成 `ExecutionFailed`，ingest 落地恰好一条 error |
 | `e2e_sweeper_timeout_yields_error_and_barrier_continues` | Step 3 失联路径二 | `std::future::pending` 永不返回，sweeper 超时 claim + 入通道，ingest 落地 Timeout；二次 sweep 无第二条结果（claim 防重） |
@@ -38,6 +39,7 @@ list_scheduled_tasks / 通道与挂起实体类型 / 共享测试 harness），�
 | `e2e_sweeper_error_first_worker_late_success_dropped` | Step 5 exactly-once race | sweeper 先 claim + 入通道，worker 50ms 后的 Ok 经 ingest 时挂起实体已没 → drop + warn，世界结果计数仍为 1 |
 | `e2e_barrier_waits_for_all_results_before_restore` | Step 6 barrier 部分结果 | pending = [c1, c2]，c1 落地后跑 orchestrator 不 spawn follow-up、pending 仍含 c2；c2 落地后再跑 orchestrator → pending 清空 + spawn 1 条 follow-up + despawn 两条结果 |
 | `e2e_backpressure_experiment_1000_buffered_results` | Step 7 背压实验（`#[ignore]`） | 1000 条 buffered 结果的 RSS 占用实测，详见第 3 章 |
+<!-- markdownlint-enable MD013 -->
 
 ### 2.1 设计纪律自审
 
@@ -80,7 +82,7 @@ list 工具的结果体量同量级。记录前后进程 RSS 差值。
 | `RSS_AFTER`  | 9.11 ~ 9.14 MB（多次实测小幅波动） |
 | `DELTA`      | 0.98 ~ 1.02 MB |
 
-环境：macOS，`ps -o rss= -p $$` 读取。绝对值受进程基线影响，**差值才有意义**。
+环境：macOS，`ps -o rss= -p $$` 读取。绝对值受进程基线影响，__差值才有意义__。
 
 ### 3.3 单条消息开销估算
 
@@ -90,21 +92,21 @@ payload（含 64 字节字符串 + index 字段）合计约 1 KB/条。spec 第�
 
 ### 3.4 结论：不换有界通道
 
-**结论：pilot 阶段保持现状（无界 `mpsc::unbounded_channel`），不切换为有界通道。**
+__结论：pilot 阶段保持现状（无界 `mpsc::unbounded_channel`），不切换为有界通道。__
 
 理由：
 
-1. **量级可控**：1000 条 buffered 结果的 RSS 增量 < 1 MB，相对进程基线
+1. __量级可控__：1000 条 buffered 结果的 RSS 增量 < 1 MB，相对进程基线
    （数十 MB 量级，含 tokio runtime + ECS world + LLM 客户端）不到 5%。
    生产场景单 task 工具调用量远低于 1000 并发在飞，常态占用可忽略。
-2. **背压源不在通道本身**：真正的失联兜底由 sweeper 超时 claim 保证
+2. __背压源不在通道本身__：真正的失联兜底由 sweeper 超时 claim 保证
    （default 300s），与通道容量无关。worker panic 由 dispatch 的
    `catch_unwind` 快速失败路径兜底。无界通道不引入新的失联风险。
-3. **有界通道的副作用更复杂**：有界通道会让 worker `send` 阻塞或返回
+3. __有界通道的副作用更复杂__：有界通道会让 worker `send` 阻塞或返回
    `Full`，需要额外处理「send 失败如何上报」与「阻塞 worker 池」两类问题，
    与「worker 零 ECS 接触 + send 失败 let _ = 静默」的现有不变量冲突。
    付出复杂度成本但收益边际。
-4. **exactly-once 不依赖通道容量**：结果落地仅在 ingest 单点，由「挂起实体
+4. __exactly-once 不依赖通道容量__：结果落地仅在 ingest 单点，由「挂起实体
    是否还在」唯一裁决。无论通道是否有界，重复 / 迟到结果都会被 ingest
    `drop + warn`。有界通道不能为 exactly-once 提供额外保证。
 
@@ -125,12 +127,12 @@ payload（含 64 字节字符串 + index 字段）合计约 1 KB/条。spec 第�
 
 下列问题在 pilot 阶段不解决，留待 Phase 3+ 收尾时定：
 
-1. **静态路由（triggers.toml）的 list/delete 工具**：另起一组命名，不混进
+1. __静态路由（triggers.toml）的 list/delete 工具__：另起一组命名，不混进
    本 pilot 的 `list_scheduled_tasks` 命名空间（spec 第十八章）。
-2. **`tool_inflight_timeout_secs` 的 per-tool 覆盖**：当前由
+2. __`tool_inflight_timeout_secs` 的 per-tool 覆盖__：当前由
    `BuiltinTool::max_duration` 钩子提供，pilot 仅 `ListScheduledTasksTool`
    一个乘客，缺省 300s。多工具上线后可能需要按工具类型分组配置。
-3. **背压阈值监控落地**：第 3.5 节的两个监控指标需要接入实际 metrics
+3. __背压阈值监控落地__：第 3.5 节的两个监控指标需要接入实际 metrics
    pipeline（当前仅在 `tracing` 日志中可观测）。
 
 ---

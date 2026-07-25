@@ -73,6 +73,32 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always` 授权的权限会立即复用，后续同工具请求直接执行
 - 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务
 
+#### 异步工具桥
+
+- 异步工具桥已落地：`kind() == Async` 的工具请求经「dispatch 挂起 → tokio worker 异步执行
+  → 通道回传 → ingest 落地」闭环，「不堵 ECS」从约定升级为构造。详见
+  [async-tool-bridge.md](async-tool-bridge.md)
+- 双轨期：`ToolActionKind` 缺省 `Sync`，异步工具 override 为 `Async`；dispatch 按 `kind()`
+  分流，Sync 工具继续走旧路径，禁止新增 Sync 工具
+- 六条架构不变量：统一异步、快照进效果出、compute/apply 切分、双账本单一修改入口、
+  结果落地单点 + exactly-once、双超时分层
+- 三条失联路径（worker panic / 业务超时 / 通道断开）经 sweeper claim 殊途同归到 ingest
+  单点落地，exactly-once 由「挂起实体是否还在」唯一裁决
+- 父任务终态触发 worker 取消：`cancel_monitor_system` 调 `CancellationToken.cancel()`，
+  worker `select!` 监听后 kill 子进程并回送 cancelled error
+- 通用效果提交：写工具返回声明式 `ToolEffect`，由 `commit_tool_effects_system`（exclusive
+  system）经 `update_scheduler_state` 双资源入口原子落账，结果回送通道由 ingest 下一帧落地
+- 动态定时任务管理三件套已上桥：
+  - `list_scheduled_tasks`（纯读，pilot 工具）
+  - `delete_scheduled_task`（写路径，idempotent 语义）
+  - `schedule_task`（写路径，经 `ToolEffect::ScheduleTask` 落账）
+- `shell_exec` 已迁移至异步桥，CancellationToken 取消路径打通
+- Rhai 插件经 `spawn_blocking` 包裹上桥，插件 API 不变
+- `OwnedToolContext.current_origin_channel` 由 dispatch 从 `Task.origin_channel` 注入，
+  让 `schedule_task` 等需要继承通道的异步工具在 worker 内拿到真值
+- 背压实验结论：保持无界 `mpsc::unbounded_channel`，不切换有界通道（详见
+  [async-tool-bridge-pilot-report.md](async-tool-bridge-pilot-report.md)）
+
 #### IM 通道
 
 - 统一 `Channel` 抽象与 `ChannelManager`（含 listen 重启退避与 shutdown）
@@ -224,6 +250,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 - Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
   `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
+- 异步工具桥双轨期待完善：`ToolContext<'a>` 借用上下文尚未完全退役，剩余 Sync 工具
+  仍走 `execute` 路径；`channel_send` 维持现状（本已跨帧合规），登记为后续候选收编项；
+  静态路由（`triggers.toml`）的 list/delete 工具另起一组命名
 
 ### 已收敛或已废弃
 
@@ -231,6 +260,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Planning WorkItem` 已删除，不再作为未来预留项保留
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
+- `schedule_task` 专用 commit 链路已退役：`schedule_task_commit_system`、
+  `ScheduleTaskRequestMessage`、`ScheduleTaskCommitPending`、`ToolAction::ScheduleTask`
+  变体均已删除，写路径统一经 `ToolEffect::ScheduleTask` + `commit_tool_effects_system`
+  落账
 - `ExperienceCollectionTracker` 与 task-scoped agent 保活逻辑已移除，经验收集改为独立 WorkItem
 - `spawn_agent` Tool 已废弃并从 LLM 可调工具集中移除；子 Agent 创建统一收敛到
   `create_tasks` + Brain 调度内部生成的 `AgentSpawnRequestMessage`

@@ -231,21 +231,6 @@ pub enum ToolAction {
         /// 已有对话的 handle（即子任务 task_id），不传表示开始新对话
         handle: Option<TaskId>,
     },
-    /// 创建一次性或周期性动态任务（由 `schedule_task` 工具产生）。
-    ///
-    /// orchestrator 将其转换为 `ScheduleTaskRequestMessage` 提交给调度系统。
-    ScheduleTask {
-        /// 任务 ID（由工具生成）
-        id: uuid::Uuid,
-        /// 任务类型字符串，形如 `scheduled:<uuid>`
-        kind: String,
-        /// 任务内容/提示词
-        content: String,
-        /// 调度规格（once 或 cron）
-        schedule: crate::triggers::ScheduleSpec,
-        /// 输出通道（显式指定或从当前任务继承）
-        output_channel: Option<ChannelId>,
-    },
     /// 提交 profile 更新（孵化场景生成新 profile，更新场景提议新 tags/description）
     ///
     /// 由 profile-designer Agent 调用，实际 profile 提取与 proposal 创建

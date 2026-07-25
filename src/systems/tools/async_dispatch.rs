@@ -30,7 +30,7 @@ use crate::{
     contracts::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
-        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, ToolActionKind, ToolAsyncResult,
+        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
         ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
         ToolWorkerOutput, ToolWorkerPayload,
     },
@@ -61,6 +61,7 @@ pub fn async_tool_dispatch_system(
     executors: Res<BuiltinToolExecutors>,
     registry: Option<Res<SpaceToolRegistry>>,
     agents: Query<&Agent>,
+    tasks: Query<&Task>,
     sender: Res<ToolResultSender>,
     backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
     scheduler_state: Option<Res<SchedulerState>>,
@@ -154,6 +155,13 @@ pub fn async_tool_dispatch_system(
                         .collect::<Vec<_>>(),
                 )
             });
+        // 从 Task.origin_channel 注入 current_origin_channel（Task 14 Step E）：
+        // schedule_task 等需要继承通道的异步工具靠此字段在 worker 内拿到真值。
+        // Task 不存在时（测试世界或异常状态）降级为 None，与既有容忍语义一致。
+        let current_origin_channel = tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .and_then(|t| t.origin_channel.clone());
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state
                 .as_deref()
@@ -168,7 +176,7 @@ pub fn async_tool_dispatch_system(
             backend: backend_arc,
             experience_candidates,
             current_task_id: Some(task_id),
-            current_origin_channel: None, // Task 14 Step E 注入真实 origin_channel
+            current_origin_channel,
             cancel: cancel.clone(),
         };
 
