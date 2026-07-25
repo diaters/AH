@@ -72,26 +72,32 @@
 
 ### 异步工具桥后续收尾
 
-- [ ] 修复 `trigger_task.rs` 中 `cleanup_scheduled_task_if_once` 绕过
+- [x] 修复 `trigger_task.rs` 中 `cleanup_scheduled_task_if_once` 绕过
   `update_scheduler_state` 直接 mutate 双账本的历史问题：
-  once 任务触发后的清理应走 `update_scheduler_state` 闭包，
-  让 `SchedulerStateWatcher` 收到通知（最终审查发现的次要问题 #1，
-  本分支未引入，但违反不变量 4「双账本单一修改入口」字面语义）
-- [ ] 将 `docs/superpowers/plans/异步工具桥实施手册 v1（独立版）.md`
-  归档到 `docs/archive/superpowers/`（按 `AGENTS.md` 文档生命周期规范，
-  计划执行完毕后应在 7 天内归档）
+  once 任务触发后的清理改为走 `update_scheduler_state_with_watcher` 共享入口，
+  让 `SchedulerStateWatcher` 收到通知（不变量 4「双账本单一修改入口」字面语义成立）
+- [x] 将 `docs/superpowers/plans/异步工具桥实施手册 v1（独立版）.md`
+  归档到 `docs/archive/superpowers/plans/2026-07-25-async-tool-bridge.md`
+  （按 `AGENTS.md` 文档生命周期规范，计划执行完毕后应在 7 天内归档）
 - [ ] 排查 `tests/triggers_timer_scheduler.rs::
   scheduler_starts_with_empty_state_when_no_static_routes` 在并行执行下
-  偶发的 flaky 失败（`TimerSchedulerStarted` 事件时序竞争）
-- [ ] 剩余 Sync 工具逐个登记并迁移上桥：`shell/{input,read,list,stop,start}`、
-  `submit_*`、`create_tasks`、`skip_*`；`wait_tasks` / `chat_with_agent` /
-  `channel_send` / `Confirm` 已确认跨帧合规，作为「后续候选收编项」评估
-- [ ] Rhai 插件加固：为 Rhai 引擎增加 `set_max_ops` 限制操作数；
+  偶发的 flaky 失败（根因为 `current_thread` runtime 下 spawned task 调度饥饿，
+  固定 `sleep(50ms)` 等 `TimerSchedulerStarted` 不可靠；待改为 poll 模式）
+- [~] 剩余 Sync 工具迁移上桥：经评估，`shell/{input,read,list,stop,start}`、
+  `submit_*`、`create_tasks`、`skip_*` 的 `execute` 本质是参数解析 + 返回
+  `ToolAction` 枚举，零 I/O 零跨帧，上桥为负优化。重新分类为「声明式 Sync 工具」，
+  不上桥；详见 `docs/async-tool-bridge.md` 与 `docs/current-state.md` 分类说明。
+  `wait_tasks` / `chat_with_agent` / `channel_send` / `Confirm` 已确认跨帧合规，
+  作为「后续候选收编项」评估
+- [ ] Rhai 插件加固：为 Rhai 引擎增加 `set_max_operations(1_000_000)` 兜底死循环；
   `RhaiPluginAsyncWrapper::run_async` 内补 `tokio::select!` 监听
-  `ctx.cancel.cancelled()`，避免父任务取消后 spawn_blocking 线程继续空跑
-- [ ] 性能优化与回归补齐：`async_tool_dispatch_system` 参数（当前 14 个）
-  收敛到 Resource bundle（如 `AsyncDispatchSnapshots`），缓解 Bevy SystemParam
-  上限压力；`commit_tool_effects_system` 补大批量（100+ 效果排队）回归测试
+  `ctx.cancel.cancelled()`，并通过 `Engine::on_progress`（每 1000 ops 查一次）
+  协作中止脚本，避免父任务取消后 spawn_blocking 线程继续空跑
+- [ ] `commit_tool_effects_system` 补大批量（100+ 效果排队）回归测试：
+  101 个 `ToolEffectPending`（50 hit + 51 miss），断言全部 despawn + 双账本清空
+  与无 `LedgerDriftOnDelete` 误报
+- [~] `async_tool_dispatch_system` 参数（当前 14 个）收敛到 Resource bundle：
+  暂缓，当前 14/16 参数无 Bevy SystemParam 上限压力，待真实触发再收敛
 
 ### IM 通道后续阶段
 

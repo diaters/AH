@@ -7,7 +7,7 @@
 | 状态 | 当前有效 |
 | 创建日期 | 2026-07-25 |
 | 适用阶段 | 异步工具桥 Phase 2 收尾 |
-| 相关文档 | `docs/superpowers/plans/异步工具桥实施手册 v1（独立版）.md`、`docs/current-state.md` <!-- markdownlint-disable-line MD013 --> |
+| 相关文档 | `docs/archive/superpowers/plans/2026-07-25-async-tool-bridge.md`（已归档）、`docs/current-state.md` <!-- markdownlint-disable-line MD013 --> |
 
 ---
 

@@ -20,6 +20,7 @@ pub use config::{
 pub use scheduled_task::{
     DynamicScheduledTask, ScheduleSpec, ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry,
     SchedulerRoutes, SchedulerState, SchedulerStateWatcher, update_scheduler_state,
+    update_scheduler_state_with_watcher,
 };
 pub use timer_scheduler::run_timer_scheduler;
 pub use webhook_server::run_webhook_server;

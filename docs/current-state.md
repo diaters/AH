@@ -250,9 +250,13 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 - Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
   `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
-- 异步工具桥双轨期待完善：`ToolContext<'a>` 借用上下文尚未完全退役，剩余 Sync 工具
-  仍走 `execute` 路径；`channel_send` 维持现状（本已跨帧合规），登记为后续候选收编项；
-  静态路由（`triggers.toml`）的 list/delete 工具另起一组命名
+- 异步工具桥双轨期待完善：`ToolContext<'a>` 借用上下文尚未完全退役；剩余 Sync 工具
+  按「声明式 / 阻塞式 / 跨帧合规」三类分流（详见
+  [async-tool-bridge.md](async-tool-bridge.md#sync-工具分类)），声明式 Sync 工具
+  （shell/{start,read,input,list,stop}、submit_*、skip_*、create_tasks）不上桥，
+  阻塞式已退役（shell_exec），跨帧合规工具（wait_tasks / chat_with_agent /
+  channel_send / Confirm）登记为后续候选收编项；静态路由（`triggers.toml`）的
+  list/delete 工具另起一组命名
 
 ### 已收敛或已废弃
 

@@ -1,5 +1,16 @@
 # 异步工具桥（Async Tool Bridge）实施手册
 
+> **状态：已归档**
+>
+> 本文档描述的异步工具桥改造已实施完毕并合入 main（PR #65，feat/async-tool-bridge 分支）。
+> 后续收尾任务（不变量修复、flaky 测试、Rhai 加固、批量回归测试等）记录在
+> `docs/TODO.md` 的「异步工具桥后续收尾」章节。
+>
+> 当前异步工具桥的实际能力、不变量与设计依据以 `docs/async-tool-bridge.md` 与
+> `docs/current-state.md` 为准，本文档仅作历史实施记录保留。
+
+---
+
 > 本文档是异步工具桥改造的**唯一实施依据**：背景、架构、决策、代码锚点、实施步骤、验收标准全部内联，不依赖任何其他文档。执行者按 Phase 0 → Phase 7 顺序逐 Task 推进即可；每个 Step 用 checkbox（`- [ ]`）跟踪进度。
 
 ---

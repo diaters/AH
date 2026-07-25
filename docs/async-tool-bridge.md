@@ -3,7 +3,7 @@
 > __状态：当前有效__
 >
 > 本文档描述 AI Harness 异步工具桥的架构、不变量、新工具开发指南与失联兜底语义。
-> 实施依据见 `docs/superpowers/plans/异步工具桥实施手册 v1（独立版）.md`；
+> 实施依据见 `docs/archive/superpowers/plans/2026-07-25-async-tool-bridge.md`（已归档）；
 > pilot 验收数据见 `docs/async-tool-bridge-pilot-report.md`。
 
 ## 1. 定位与背景
@@ -296,14 +296,32 @@ dispatch 创建 `CancellationToken`，挂两份：
 
 ### 待完善
 
-- `ToolContext<'a>` 借用上下文尚未完全退役——双轨期 Sync 工具仍走 `execute` 路径，
-  后续随剩余 Sync 工具迁移逐步收敛
+- `ToolContext<'a>` 借用上下文尚未完全退役——「声明式 Sync 工具」仍走 `execute` 路径
+  返回 `ToolAction` 枚举，由 `tool_dispatch_system` 后续 system 执行
+  （详见下方「Sync 工具分类」）
 - `channel_send` 工具维持现状（本已跨帧合规），登记为「后续候选收编项」
 - 静态路由（`triggers.toml`）的 list/delete 工具另起一组命名，不混进动态任务命名空间
 - `tool_inflight_timeout_secs` 的 per-tool 覆盖：当前由 `max_duration` 钩子提供，
   多工具上线后可能需要按工具类型分组配置
 - 背压阈值监控落地：sweeper claim 频次 / 单 task pending 数两个指标需接入实际 metrics
   pipeline
+
+### Sync 工具分类
+
+剩余 Sync 工具按「是否真正阻塞 ECS 主线程」分为两类：
+
+- __声明式 Sync 工具（不上桥）__：`execute` 本质是参数解析 + 返回 `ToolAction`
+  枚举变体，零 I/O、零 await、零跨帧。真正执行（启 shell、读 session、提交 profile、
+  创建 task）在 `tool_dispatch_system` 后续 system 完成。这类工具上桥等于「把参数解析
+  丢到 worker 线程再回传 enum」，纯负优化。包含：
+  - `shell/{start,read,input,list,stop}`
+  - `submit_{profile_update,skill_update,experience_candidate}`
+  - `skip_profile_update`
+  - `create_tasks`
+- __阻塞式 Sync 工具（必须上桥，已退役）__：`execute` 内含真实阻塞 I/O（shell 子进程、
+  长时 LLM 调用等）。`shell_exec` 是典型，已迁移至异步桥。
+- __跨帧合规 Sync 工具（候选收编项）__：`wait_tasks` / `chat_with_agent` /
+  `channel_send` / `Confirm`——这些工具本已跨帧，登记为「后续候选收编项」评估。
 
 ### 已废弃
 
@@ -314,6 +332,6 @@ dispatch 创建 `CancellationToken`，挂两份：
 
 ## 8. 参考
 
-- 实施手册：`docs/superpowers/plans/异步工具桥实施手册 v1（独立版）.md`
+- 实施手册：`docs/archive/superpowers/plans/2026-07-25-async-tool-bridge.md`（已归档）
 - Pilot 验收报告：`docs/async-tool-bridge-pilot-report.md`
 - 当前状态：`docs/current-state.md`
