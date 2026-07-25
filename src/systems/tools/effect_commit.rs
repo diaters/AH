@@ -59,5 +59,9 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
             });
             Ok(serde_json::json!({ "deleted": kind, "existed": existed }))
         }
+        ToolEffect::ScheduleTask { .. } => {
+            // Task 14 Step B 实现双账本提交 + next_trigger 回送
+            todo!("ScheduleTask commit arm - Task 14 Step B")
+        }
     }
 }

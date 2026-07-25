@@ -138,7 +138,24 @@ pub enum ToolEffect {
         /// 任务类型字符串，形如 `scheduled:<uuid>`。
         kind: String,
     },
-    // 后续：ScheduleTask / SendChannelMessage 等收编变体
+    /// 创建一次性或周期性动态任务（schedule_task 工具上桥后走此效果）。
+    ///
+    /// worker 声明意图，`commit_tool_effects_system` 经 `update_scheduler_state`
+    /// 双资源入口落账（`SchedulerState.dynamic_tasks` 追加 + `ScheduledTaskRegistry`
+    /// 插入），watch 一次广播。`next_trigger` 等「apply 时刻才知道的真相」也由
+    /// commit 计算，与 `DeleteScheduledTask::existed` 同源同律。
+    ScheduleTask {
+        /// 任务 ID（由 worker 生成）
+        id: uuid::Uuid,
+        /// 任务类型字符串，形如 `scheduled:<uuid>`
+        kind: String,
+        /// 任务内容/提示词
+        content: String,
+        /// 调度规格（once 或 cron）
+        schedule: ScheduleSpec,
+        /// 输出通道（显式指定或从当前任务继承）
+        output_channel: Option<ChannelId>,
+    },
 }
 
 /// 效果待应用实体。ingest 收到 `Effect` payload 时 spawn，
@@ -187,6 +204,10 @@ pub struct OwnedToolContext {
     /// 当前任务 ID。dispatch 从 `request.request.task_id` 取，供 worker
     /// 在日志或快照关联场景使用；不需要的工具保持 `None`。
     pub current_task_id: Option<TaskId>,
+    /// 当前任务的 `origin_channel`，schedule_task 等需要继承输出通道的工具
+    /// 由 dispatch 从 `Task.origin_channel` 读取并注入。未显式指定 `output_channel`
+    /// 时用作 fallback；不需要继承通道的工具保持 `None`。
+    pub current_origin_channel: Option<ChannelId>,
     /// 取消令牌。dispatch 创建并 clone 一份挂到 `InFlightToolCall.cancel`，
     /// 另一份放进本字段供 worker 在 `run_async` 内 `select!` 监听。
     pub cancel: CancellationToken,
@@ -202,6 +223,7 @@ impl Default for OwnedToolContext {
             backend: None,
             experience_candidates: None,
             current_task_id: None,
+            current_origin_channel: None,
             cancel: CancellationToken::new(),
         }
     }
@@ -220,6 +242,7 @@ impl OwnedToolContext {
             backend: None,
             experience_candidates: None,
             current_task_id: None,
+            current_origin_channel: None,
             cancel: CancellationToken::new(),
         }
     }

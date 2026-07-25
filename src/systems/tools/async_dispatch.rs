@@ -168,6 +168,7 @@ pub fn async_tool_dispatch_system(
             backend: backend_arc,
             experience_candidates,
             current_task_id: Some(task_id),
+            current_origin_channel: None, // Task 14 Step E 注入真实 origin_channel
             cancel: cancel.clone(),
         };
 
