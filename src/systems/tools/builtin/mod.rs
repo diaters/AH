@@ -16,6 +16,7 @@ pub use chat_with_agent::ChatWithAgentTool;
 pub use create_tasks::CreateTasksTool;
 pub use list_experience_candidates::ListExperienceCandidatesTool;
 pub use schedule_task::ScheduleTaskTool;
+pub use scheduled::DeleteScheduledTaskTool;
 pub use scheduled::ListScheduledTasksTool;
 pub use shell::{
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,

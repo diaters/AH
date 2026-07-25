@@ -39,10 +39,10 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    ChatWithAgentTool, CreateTasksTool, ListExperienceCandidatesTool, ListScheduledTasksTool,
-    ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool,
-    ShellStopTool, SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
-    SubmitSkillUpdateTool, WaitTasksTool,
+    ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool, ListExperienceCandidatesTool,
+    ListScheduledTasksTool, ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool,
+    ShellReadTool, ShellStartTool, ShellStopTool, SkipProfileUpdateTool,
+    SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillUpdateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -407,6 +407,28 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ListScheduledTasksTool));
+
+    // delete_scheduled_task tool —— 写路径首个客户（声明式效果 → commit 落账）
+    registry.register(ToolDefinition {
+        name: "delete_scheduled_task".to_string(),
+        description: "删除指定 kind 的动态定时任务（由 schedule_task 工具创建）。返回 {deleted: kind, existed: bool}——existed 表示删除时任务是否还存在（幂等可观测：删不存在的 kind 不会报错，仅 existed=false）。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "要删除的动态定时任务的 kind 字符串（即 list_scheduled_tasks 返回结果中的 kind 字段）"
+                    }
+                },
+                "required": ["kind"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("delete_scheduled_task".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(DeleteScheduledTaskTool));
 
     // Profile update tools (仅 profile-designer 可用)
     registry.register(ToolDefinition {

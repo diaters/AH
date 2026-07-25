@@ -723,3 +723,168 @@ fn current_rss_mb() -> f64 {
 }
 
 // EchoAsyncTool 已抽到 tests/common/async_tool_bridge.rs，经 glob 导入复用。
+
+// ============ Step 8: delete_scheduled_task 全链路 ============
+
+/// 装一个 delete_scheduled_task 工具 + 双账本各一条 "victim" 任务。
+fn world_with_delete_tool() -> World {
+    let mut world = setup_bridge_world();
+
+    let mut executors = BuiltinToolExecutors::default();
+    executors.register(Box::new(
+        harness::systems::tools::builtin::scheduled::DeleteScheduledTaskTool,
+    ));
+    world.insert_resource(executors);
+    world.insert_resource(harness::app::HarnessSettings::default_test());
+
+    // 双账本各一条 "victim" 任务——dynamic_tasks 与 registry 一致
+    let mut state = SchedulerState::default();
+    state.dynamic_tasks_mut().push(DynamicScheduledTask {
+        id: Uuid::new_v4(),
+        kind: "victim".into(),
+        schedule: ScheduleSpec::Once(now(&world)),
+        created_at: now(&world),
+    });
+    world.insert_resource(state);
+
+    let mut registry = ScheduledTaskRegistry::default();
+    registry.insert(
+        "victim",
+        ScheduledTaskInfo {
+            content: "to be deleted".into(),
+            output_channel: None,
+            is_once: true,
+        },
+    );
+    world.insert_resource(registry);
+
+    world
+}
+
+/// 跑 dispatch → ingest（spawn ToolEffectPending，挂起实体保留）→ commit（双账本删除，
+/// 回送 existed=true）→ ingest（落地最终结果 + despawn 挂起实体）。
+fn run_delete_full_chain(world: &mut World, tool_call_id: &str) -> Entity {
+    let (_task_entity, task_id) = spawn_waiting_task(world, "delete victim");
+    let agent_id = Uuid::new_v4();
+    spawn_calling_state(world, task_id, agent_id, &[tool_call_id]);
+
+    // 构造 delete_scheduled_task 请求，tool_input = {"kind": "victim"}
+    let mut req = make_request("delete_scheduled_task", tool_call_id, task_id, agent_id);
+    req.tool_input = serde_json::json!({"kind": "victim"});
+    let pending_entity = world.spawn(req).id();
+
+    // 1. dispatch：原地改造为挂起实体 + worker 起跑（worker 返回 Effect payload）
+    world
+        .run_system_once(harness::systems::async_tool_dispatch_system)
+        .unwrap();
+
+    // 2. 轮询 ingest 直到 ToolEffectPending 出现（worker 异步，结果未必立即可见）
+    let effect_entity = poll_effect_pending_for_call_id(world, tool_call_id, 2000)
+        .expect("ToolEffectPending should spawn within 2000ms");
+    // 挂起实体必须还在（commit 还没跑）
+    assert!(
+        world.get::<ToolRequestPending>(pending_entity).is_some(),
+        "pending entity must survive until commit lands final result"
+    );
+
+    // 3. commit：双账本删除，回送 existed=true 到通道
+    world
+        .run_system_once(harness::systems::commit_tool_effects_system)
+        .unwrap();
+    // ToolEffectPending 已 despawn
+    assert!(
+        world
+            .get::<harness::domain::ToolEffectPending>(effect_entity)
+            .is_none(),
+        "ToolEffectPending should be despawned after commit"
+    );
+
+    // 4. ingest：落地最终结果 + despawn 挂起实体
+    world
+        .run_system_once(harness::systems::ingest_tool_results_system)
+        .unwrap();
+    assert!(
+        world.get::<ToolRequestPending>(pending_entity).is_none(),
+        "pending entity should be despawned after final result landed"
+    );
+
+    // 返回结果实体供调用者断言
+    let mut q = world.query::<(Entity, &ToolExecutionResultMessage)>();
+    q.iter(world)
+        .find(|(_, m)| m.tool_call_id.as_deref() == Some(tool_call_id))
+        .map(|(e, _)| e)
+        .expect("result entity landed")
+}
+
+/// 轮询 ingest 直到指定 `tool_call_id` 的 `ToolEffectPending` 实体出现，或超时返回 None。
+fn poll_effect_pending_for_call_id(
+    world: &mut World,
+    call_id: &str,
+    timeout_ms: u64,
+) -> Option<Entity> {
+    let start = std::time::Instant::now();
+    loop {
+        world
+            .run_system_once(harness::systems::ingest_tool_results_system)
+            .unwrap();
+        let mut q = world.query::<(Entity, &harness::domain::ToolEffectPending)>();
+        for (e, p) in q.iter(world) {
+            if p.tool_call_id == call_id {
+                return Some(e);
+            }
+        }
+        if start.elapsed().as_millis() >= timeout_ms as u128 {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn e2e_delete_full_chain() {
+    let mut world = world_with_delete_tool();
+
+    let result_entity = run_delete_full_chain(&mut world, "del-1");
+
+    // 断言最终结果：existed=true，deleted=victim
+    let msg = world
+        .get::<ToolExecutionResultMessage>(result_entity)
+        .expect("result message");
+    let output = msg.tool_output.as_ref().expect("ok output");
+    assert_eq!(output["deleted"], "victim");
+    assert_eq!(output["existed"], true);
+
+    // 双账本都空了
+    assert!(
+        world
+            .resource::<SchedulerState>()
+            .dynamic_tasks()
+            .is_empty(),
+        "SchedulerState should be empty after delete"
+    );
+    assert!(
+        world
+            .resource::<ScheduledTaskRegistry>()
+            .get("victim")
+            .is_none(),
+        "Registry should not contain victim after delete"
+    );
+
+    // 挂起实体与效果实体都不剩
+    let mut qp = world.query::<&ToolRequestPending>();
+    assert_eq!(qp.iter(&world).count(), 0);
+    let mut qe = world.query::<&harness::domain::ToolEffectPending>();
+    assert_eq!(qe.iter(&world).count(), 0);
+
+    // 幂等可观测：再删一次 "victim" → existed=false
+    let result_entity2 = run_delete_full_chain(&mut world, "del-2");
+    let msg2 = world
+        .get::<ToolExecutionResultMessage>(result_entity2)
+        .expect("second result message");
+    let output2 = msg2.tool_output.as_ref().expect("ok output");
+    assert_eq!(output2["deleted"], "victim");
+    assert_eq!(
+        output2["existed"], false,
+        "deleting absent kind should report existed=false (idempotent observable)"
+    );
+}
