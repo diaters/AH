@@ -456,7 +456,13 @@ pub trait BuiltinTool: Send + Sync + 'static {
         })
     }
 
-    /// 执行工具并返回动作
+    /// 执行工具并返回动作（双轨期：仅供未迁移 sync 工具使用）。
+    ///
+    /// `kind() == Async` 的工具走 `run_async`，dispatch 不会调用本方法。
+    /// 已上桥工具（`schedule_task` / `list_scheduled_tasks` /
+    /// `delete_scheduled_task` / `shell_exec` / `list_experience_candidates` /
+    /// rhai_plugin 包裹器 `RhaiPluginAsyncWrapper`）的 `execute` 应返回
+    /// `ToolError::InternalState` 防御错误。新工具应实现 `run_async` 而非本方法。
     fn execute(
         &self,
         input: &serde_json::Value,
