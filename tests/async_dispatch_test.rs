@@ -15,22 +15,6 @@ use harness::domain::{
     ToolExecutionRequestMessage, ToolFuture, ToolRequestPending, ToolWorkerOutput,
 };
 
-struct EchoAsyncTool;
-impl BuiltinTool for EchoAsyncTool {
-    fn name(&self) -> &str {
-        "echo_async"
-    }
-    fn kind(&self) -> ToolActionKind {
-        ToolActionKind::Async
-    }
-    fn execute(&self, _: &serde_json::Value, _: &ToolContext) -> Result<ToolAction, ToolError> {
-        unreachable!("async tool must not run on sync path")
-    }
-    fn run_async(&self, input: serde_json::Value, _ctx: OwnedToolContext) -> ToolFuture {
-        Box::pin(async move { Ok(ToolWorkerOutput::Value(input)) })
-    }
-}
-
 fn make_request(tool_name: &str, tool_call_id: &str) -> ToolExecutionRequestMessage {
     ToolExecutionRequestMessage {
         request: AgentExecutionRequest {

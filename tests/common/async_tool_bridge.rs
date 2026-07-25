@@ -23,7 +23,10 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use harness::app::{AsyncRuntime, Clock};
-use harness::domain::{ToolAsyncResult, ToolResultReceiver, ToolResultSender};
+use harness::domain::{
+    BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolAsyncResult, ToolContext,
+    ToolError, ToolFuture, ToolResultReceiver, ToolResultSender, ToolWorkerOutput,
+};
 
 /// 建测试 World：真实 multi-thread Runtime + 假时钟（起点为真实 now）+ 工具结果通道。
 pub fn setup_bridge_world() -> World {
@@ -84,5 +87,28 @@ pub fn wait_for_tool_result(world: &mut World, timeout_ms: u64) -> Option<ToolAs
             return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Echo 工具：把输入原样回传（多个 async 测试 binary 共用）。
+///
+/// `#[allow(dead_code)]` 与 `now` / `advance_clock` / `wait_for_tool_result` 同模式——
+/// 仅 dispatch / e2e 两个 binary 实际使用，其余 binary 通过 `use common::async_tool_bridge::*;`
+/// glob 引入但不构造，避免触发 dead_code warning。
+#[allow(dead_code)]
+pub struct EchoAsyncTool;
+
+impl BuiltinTool for EchoAsyncTool {
+    fn name(&self) -> &str {
+        "echo_async"
+    }
+    fn kind(&self) -> ToolActionKind {
+        ToolActionKind::Async
+    }
+    fn execute(&self, _: &serde_json::Value, _: &ToolContext) -> Result<ToolAction, ToolError> {
+        unreachable!("async tool must not run on sync path")
+    }
+    fn run_async(&self, input: serde_json::Value, _ctx: OwnedToolContext) -> ToolFuture {
+        Box::pin(async move { Ok(ToolWorkerOutput::Value(input)) })
     }
 }
