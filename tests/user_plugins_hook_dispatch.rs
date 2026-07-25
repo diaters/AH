@@ -188,6 +188,7 @@ tool_deny("test deny reason");
                     tool_call_id: Some("deny-test-call-id".to_string()),
                     pending_confirmation_options: None,
                     work_item_entity: None,
+                    confirmed_once: false,
                 },
                 ToolCalledHookPending,
             ))

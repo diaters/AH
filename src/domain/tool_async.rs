@@ -26,7 +26,9 @@ use std::sync::Arc;
 use bevy_ecs::prelude::{Component, Resource};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
+use crate::contracts::SessionBackend;
 use crate::domain::{AgentExecutionRequest, ChannelId, ToolError};
 use crate::triggers::scheduled_task::ScheduleSpec;
 
@@ -106,12 +108,19 @@ pub struct ToolRequestPending {
 ///
 /// 被claim（超时处理中）时摘除本组件，实体保留到 ingest 落地结果后才 despawn
 /// ——保证「结果落地」与「despawn」是同一动作，不会出现结果丢失或重复落地。
+///
+/// `cancel` 字段让 `cancel_monitor_system` 在父任务终态时通过同实体的
+/// `ToolRequestPending.original_request.task_id` 找到本实体并触发取消——
+/// worker 内 `tokio::select!` 监听 `cancel.cancelled()` 后 kill 子进程。
 #[derive(Component, Debug, Clone)]
 pub struct InFlightToolCall {
     /// 调用发起时间（来自 `Clock`，全局唯一时间源）。
     pub started_at: DateTime<Utc>,
     /// 调用超时阈值（worker `max_duration` 推导得出）。
     pub timeout: ChronoDuration,
+    /// 取消令牌。dispatch 创建并 clone 一份给 worker（经 `OwnedToolContext`）；
+    /// `cancel_monitor_system` 在父任务终态时调用 `cancel.cancel()`。
+    pub cancel: CancellationToken,
 }
 
 // ============ 声明式写效果 ============
@@ -151,7 +160,12 @@ pub struct ToolEffectPending {
 /// ECS 抓一份快照过来丢给 worker，worker 不持有任何 borrowed ECS 引用。
 ///
 /// 不含 `original_request`（由挂起实体 `ToolRequestPending` 携带）。
-#[derive(Debug, Clone, Default)]
+///
+/// `backend` + `cancel` 字段是 shell_exec 上桥引入：worker 通过 `backend`
+/// 拿到 `Arc<dyn SessionBackend>` 句柄调用 `exec_with_cancel`，通过 `cancel`
+/// 监听父任务取消信号。`Option<Arc<...>>` 让不需要 backend 的工具（如
+/// list_scheduled_tasks）零改动。
+#[derive(Debug, Clone)]
 pub struct OwnedToolContext {
     /// 调度状态快照（需要读定时任务的工具由 dispatch 填充）。
     pub scheduler_state: Option<Arc<SchedulerStateSnapshot>>,
@@ -159,6 +173,29 @@ pub struct OwnedToolContext {
     pub registry: Option<Arc<ScheduledTaskRegistrySnapshot>>,
     /// 全局失联超时（秒）—— sweeper 推导 max_duration 的全局缺省。
     pub tool_inflight_timeout_secs: u64,
+    /// `shell_exec` 默认业务超时（秒）——入参 `timeout_secs` 缺省时的 fallback。
+    /// 与 `HarnessConfig::shell_default_exec_timeout_secs` 同值，由 dispatch 注入。
+    pub shell_default_exec_timeout_secs: u64,
+    /// Session backend 句柄。shell_exec 等 native 进程工具由 dispatch
+    /// 从 `Res<NativeProcessBackend>` clone 一份填入；不需要 backend 的
+    /// 工具保持 `None`。
+    pub backend: Option<Arc<dyn SessionBackend>>,
+    /// 取消令牌。dispatch 创建并 clone 一份挂到 `InFlightToolCall.cancel`，
+    /// 另一份放进本字段供 worker 在 `run_async` 内 `select!` 监听。
+    pub cancel: CancellationToken,
+}
+
+impl Default for OwnedToolContext {
+    fn default() -> Self {
+        Self {
+            scheduler_state: None,
+            registry: None,
+            tool_inflight_timeout_secs: 0,
+            shell_default_exec_timeout_secs: 0,
+            backend: None,
+            cancel: CancellationToken::new(),
+        }
+    }
 }
 
 impl OwnedToolContext {
@@ -170,6 +207,9 @@ impl OwnedToolContext {
             scheduler_state: None,
             registry: None,
             tool_inflight_timeout_secs,
+            shell_default_exec_timeout_secs: tool_inflight_timeout_secs,
+            backend: None,
+            cancel: CancellationToken::new(),
         }
     }
 }

@@ -19,6 +19,7 @@ thiserror = "2.0.18"
 tiktoken-rs = "0.5"
 toml = "0.8"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "sync", "time", "process", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"

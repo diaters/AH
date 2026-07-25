@@ -11,20 +11,28 @@
 //! - **worker 模板照抄 LLM 桥**（`execution.rs:70-105`）：`runtime.0.spawn` + 通道回传。
 //! - **挂起现场一次性算齐**：`max_duration` 钩子调用、std→chrono Duration 转换、
 //!   快照克隆，全部发生在 dispatch（此刻还有 Res 只读访问）。
+//! - **CancellationToken 接线**：dispatch 建 token，挂一份到 `InFlightToolCall.cancel`
+//!   （cancel_monitor_system 用），另一份到 `OwnedToolContext.cancel`（worker 在
+//!   `run_async` 内 `select!` 监听用）。`OwnedToolContext.backend` 注入
+//!   `Arc<dyn SessionBackend>` 让 shell_exec worker 拿到 backend 句柄。
 //! - **权限/确认**：本 system 只做「工具存在 + executor 存在 + kind==Async」检查；
 //!   带 `pending_confirmation_id` 的请求直接跳过（Confirm 路径先行）。权限校验仍由
 //!   调用链上游与 Sync 路径既有逻辑各管各的。
 
+use std::sync::Arc;
+
 use crate::prelude::*;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
     app::{AsyncRuntime, Clock, HarnessSettings},
+    contracts::SessionBackend,
     domain::{
-        BuiltinToolExecutors, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
-        ScheduledTaskRegistrySnapshot, ToolActionKind, ToolAsyncResult,
-        ToolExecutionRequestMessage, ToolRequestPending, ToolResultSender, ToolWorkerOutput,
-        ToolWorkerPayload,
+        Agent, BuiltinToolExecutors, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
+        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, ToolActionKind, ToolAsyncResult,
+        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
+        ToolWorkerOutput, ToolWorkerPayload,
     },
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
 };
@@ -33,6 +41,17 @@ use super::ingest_tool_results::build_scheduler_snapshot;
 
 /// 异步工具 dispatch system。排在 `tool_dispatch_system` 之前运行：
 /// 只认领 `kind()==Async` 的请求，Sync 请求原样留给旧路径。
+///
+/// **权限分流**：需要 `Confirm` 的请求跳过——留给 `tool_dispatch_system` 设置
+/// `pending_confirmation_id` 并派发审批。用户确认后 `tool_confirmation_result_system`
+/// 清除 `pending_confirmation_id`，下一帧本系统再认领。`Allow` / `Deny` 的 Async
+/// 请求由本系统直接认领（`Deny` 会被 `tool_dispatch_system` 报错，但 `Deny` 在
+/// 实践中极少出现且 `async_tool_dispatch_system` 在前会先认领——`Deny` 语义靠
+/// `tool_dispatch_system` 兜底，本系统不重复实现 `Deny` 报错路径）。
+///
+/// **权限检查条件性**：`registry` / `agents` 为 `Option`/`Query`——测试世界可能
+/// 不装 `SpaceToolRegistry` 或不 spawn `Agent`，此时跳过权限检查直接认领
+/// （测试工具通常用 `Allow` 权限，生产世界始终装齐两资源）。
 #[allow(clippy::too_many_arguments)]
 pub fn async_tool_dispatch_system(
     mut commands: Commands,
@@ -40,9 +59,12 @@ pub fn async_tool_dispatch_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     executors: Res<BuiltinToolExecutors>,
+    registry: Option<Res<SpaceToolRegistry>>,
+    agents: Query<&Agent>,
     sender: Res<ToolResultSender>,
+    backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
     scheduler_state: Option<Res<SchedulerState>>,
-    registry: Option<Res<ScheduledTaskRegistry>>,
+    scheduled_registry: Option<Res<ScheduledTaskRegistry>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
     for (entity, request) in &requests {
@@ -58,6 +80,34 @@ pub fn async_tool_dispatch_system(
             continue; // Sync 工具走旧路径
         }
 
+        // 权限分流：需要 Confirm 的请求留给 sync 路径（tool_dispatch_system）
+        // 设置 pending_confirmation_id 并派发审批。用户确认后
+        // tool_confirmation_result_system 清除 pending_confirmation_id，
+        // 下一帧本系统再认领。
+        //
+        // **allow_once 路径**：`tool_confirmation_result_system` 在 Async 分支
+        // 设置 `confirmed_once = true`，本系统据此跳过权限检查直接认领——
+        // 否则 Confirm 权限的 Async 工具会陷入循环。
+        // `allow_always` 路径已通过 `overrides.insert(Allow)` 更新永久权限，
+        // 本系统会直接认领，无需 `confirmed_once`。
+        //
+        // 仅在 registry + agent 都可见时检查——生产世界两者始终装齐；
+        // 测试世界可能缺一，此时跳过检查直接认领（测试工具通常 Allow）。
+        if !request.confirmed_once
+            && let (Some(registry), Some(agent)) = (
+                registry.as_deref(),
+                agents.iter().find(|a| a.id == request.request.agent_id),
+            )
+        {
+            if registry.get(&request.tool_name).is_none() {
+                continue; // 工具定义不在 registry → 留给 sync 路径
+            }
+            let permission = agent.tool_permissions.get_permission(&request.tool_name);
+            if matches!(permission, ToolPermission::Confirm) {
+                continue; // 需要确认 → 留给 sync 路径设置 confirmation
+            }
+        }
+
         let tool_call_id = request
             .tool_call_id
             .clone()
@@ -71,21 +121,34 @@ pub fn async_tool_dispatch_system(
             chrono::Duration::seconds(settings.0.tool_inflight_timeout_secs as i64)
         });
 
-        // 挂起现场：克隆 owned 快照（worker 零 ECS 接触）
+        // CancellationToken：dispatch 创建，挂一份到 InFlightToolCall（cancel_monitor 用），
+        // 另一份到 OwnedToolContext.cancel（worker 在 run_async 内 select! 监听用）。
+        let cancel = CancellationToken::new();
+
+        // 挂起现场：克隆 owned 快照（worker 零 ECS 接触）。
+        // backend 句柄：从 Res<NativeProcessBackend> clone 一份（内部全是
+        // Arc<Mutex<...>>，clone 廉价），擦除为 Arc<dyn SessionBackend> 让 worker
+        // 不耦合具体 backend 类型。
+        let backend_arc: Option<Arc<dyn SessionBackend>> = backend
+            .as_deref()
+            .map(|b| Arc::new(b.clone()) as Arc<dyn SessionBackend>);
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state
                 .as_deref()
                 .map(build_scheduler_snapshot)
-                .map(std::sync::Arc::new),
-            registry: registry
+                .map(Arc::new),
+            registry: scheduled_registry
                 .as_deref()
                 .map(build_registry_snapshot)
-                .map(std::sync::Arc::new),
+                .map(Arc::new),
             tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
+            shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
+            backend: backend_arc,
+            cancel: cancel.clone(),
         };
 
         // 请求实体原地改造：摘请求消息 → 挂 Pending + InFlight
-        let original_request = std::sync::Arc::new(request.request.clone());
+        let original_request = Arc::new(request.request.clone());
         commands
             .entity(entity)
             .remove::<ToolExecutionRequestMessage>();
@@ -98,6 +161,7 @@ pub fn async_tool_dispatch_system(
             InFlightToolCall {
                 started_at: clock.0,
                 timeout,
+                cancel: cancel.clone(),
             },
         ));
 

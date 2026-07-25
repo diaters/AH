@@ -14,11 +14,11 @@ use crate::domain::{
     ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind, DispatchStrategy,
     EntryRole, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
     ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingDispatch,
-    PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellExecResult,
-    ShellSessionResult, ShortTermMemory, SkillUpdateContext, SubTaskBatchCreatedMessage,
-    SubTaskBatchState, SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction,
-    ToolCallingState, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    ToolReturnedHookPending, WaitingForTasksInfo, WaitingReason, WorkItem,
+    PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellSessionResult,
+    ShortTermMemory, SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::infrastructure::skills::{SkillLoader, apply_skill_operations};
 use crate::triggers::scheduled_task::compute_next_trigger;
@@ -457,26 +457,20 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             }
         }
-        Ok(ToolAction::ExecSession(session_request)) => {
-            match backend.exec_blocking(session_request) {
-                Ok(handle) => {
-                    spawn_shell_result(
-                        commands,
-                        request_entity,
-                        request,
-                        "shell_exec",
-                        serde_json::json!(ShellExecResult::from_handle(&handle)),
-                    );
-                }
-                Err(error) => {
-                    spawn_tool_error(
-                        commands,
-                        request_entity,
-                        request,
-                        ToolError::ExecutionFailed(error),
-                    );
-                }
-            }
+        Ok(ToolAction::ExecSession(_session_request)) => {
+            // shell_exec 已上桥到 async worker（kind==Async），不再走 sync 路径
+            // 产生 `ToolAction::ExecSession`。保留 arm 防止未来误用——若 Sync
+            // 工具误返回 `ExecSession`，立即报错而非静默调阻塞 backend 拉长帧。
+            spawn_tool_error(
+                commands,
+                request_entity,
+                request,
+                ToolError::InternalState(
+                    "ExecSession action is retired (shell_exec is async-only); \
+                     BuiltinTool must not return ExecSession on sync path"
+                        .to_string(),
+                ),
+            );
         }
         Ok(ToolAction::StartSession(session_request)) => {
             match backend.start_session(session_request) {

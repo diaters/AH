@@ -38,6 +38,7 @@ fn ctx_with_two_ledgers() -> OwnedToolContext {
         scheduler_state: Some(Arc::new(state)),
         registry: Some(Arc::new(registry)),
         tool_inflight_timeout_secs: 300,
+        ..Default::default()
     }
 }
 
@@ -72,6 +73,7 @@ fn list_empty_ledgers_returns_empty_array() {
                 scheduler_state: Some(Arc::new(SchedulerStateSnapshot::default())),
                 registry: Some(Arc::new(ScheduledTaskRegistrySnapshot::default())),
                 tool_inflight_timeout_secs: 300,
+                ..Default::default()
             },
         ))
         .unwrap();
@@ -124,6 +126,7 @@ fn list_once_task_shows_original_next_fire_time_even_if_past() {
         scheduler_state: Some(Arc::new(state)),
         registry: Some(Arc::new(registry)),
         tool_inflight_timeout_secs: 300,
+        ..Default::default()
     };
 
     let output = rt

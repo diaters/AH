@@ -41,6 +41,7 @@ fn spawn_inflight(
                 // 关键：从世界时钟取基准，禁止 Utc::now()
                 started_at: now(world) - chrono::Duration::seconds(age_secs),
                 timeout: chrono::Duration::seconds(timeout_secs),
+                cancel: tokio_util::sync::CancellationToken::new(),
             },
         ))
         .id()

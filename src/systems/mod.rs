@@ -62,6 +62,7 @@ pub(crate) use tools::{
 // `pub(crate)` 仅 crate 内可见）。
 pub use sweeper::sweep_inflight_tool_calls;
 pub use tools::async_tool_dispatch_system;
+pub use tools::cancel_monitor_system;
 pub use tools::commit_tool_effects_system;
 pub use tools::ingest_tool_results_system;
 pub use transform::TaskTerminalDispatched;

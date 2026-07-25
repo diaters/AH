@@ -171,6 +171,7 @@ fn allowed_tool_executes_directly() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行几帧让系统处理
@@ -275,6 +276,7 @@ fn denied_tool_does_not_execute() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行几帧让系统处理
@@ -358,6 +360,7 @@ fn confirm_tool_requires_user_confirmation() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行几帧让系统处理
@@ -453,11 +456,15 @@ fn tool_call_is_recorded_to_short_term_memory() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行几帧让系统处理
-    for _ in 0..10 {
+    // shell_exec 改 Async 后，dispatch 不阻塞主线程，但 ingest 需要 worker
+    // 跑完才能落地结果——测试必须在 update 之间 sleep 让 worker 推进。
+    for _ in 0..30 {
         app.update();
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
     // 验证：ShortTermMemory 应该有 ToolCall 记录
@@ -566,6 +573,7 @@ fn user_denies_tool_confirmation() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行让确认请求生成
@@ -671,6 +679,7 @@ fn user_allows_tool_once() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行让确认请求生成
@@ -857,6 +866,7 @@ fn child_agent_confirm_routes_to_parent() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行系统
@@ -1004,6 +1014,7 @@ fn confirmation_denied_rejects_tool() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行让审批流程处理（父 Agent 审批 → auto-approve）
@@ -1119,6 +1130,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行系统
@@ -1203,6 +1215,7 @@ fn user_allows_tool_always() {
         tool_call_id: None,
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行让确认请求生成

@@ -6,6 +6,7 @@
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use harness::prelude::*;
@@ -189,7 +190,7 @@ struct TestExecutorHandle(Arc<CannedExecutor>);
 struct TestToolResults(Arc<Mutex<Vec<ToolExecutionResultMessage>>>);
 
 fn capture_tool_results_system(
-    results: Query<&ToolExecutionResultMessage>,
+    results: Query<&ToolExecutionResultMessage, Added<ToolExecutionResultMessage>>,
     captured: ResMut<TestToolResults>,
 ) {
     for result in &results {
@@ -244,7 +245,16 @@ fn build_test_app() -> App {
     app.insert_resource(TestFrontendEvents(events));
     app.insert_resource(TestExecutorHandle(executor));
     app.insert_resource(TestToolResults::default());
-    app.add_systems(Update, capture_tool_results_system);
+    // capture_tool_results_system 必须在 ingest_tool_results_system 之后运行
+    // （用 Added<ToolExecutionResultMessage> 只捕获新 spawn 的结果），且在
+    // tool_result_system 之前运行（tool_result_system 处理完会 despawn 结果）。
+    // ingest → on_tool_returned_hook → tool_result 是既定顺序，capture 排在
+    // ingest 之后，会在 on_tool_returned_hook 之前或之后运行——两者都在
+    // tool_result 之前，所以 Added 能在 despawn 之前抓到结果。
+    app.add_systems(
+        Update,
+        capture_tool_results_system.after(harness::systems::ingest_tool_results_system),
+    );
 
     app
 }
@@ -259,6 +269,18 @@ fn set_canned_responses(app: &mut App, responses: Vec<AgentExecutionOutput>) {
 fn run_ticks(app: &mut App, n: usize) {
     for _ in 0..n {
         app.update();
+    }
+}
+
+/// 跑 N 次 update，每次之间 yield 20ms 让 async worker（shell_exec 上桥后
+/// 经 spawn_blocking 跑子进程）有机会把结果送回通道。
+///
+/// shell_exec 改 Async 后，dispatch 不再阻塞主线程，但 ingest 需要 worker
+/// 跑完才能落地结果——测试必须在 update 之间 sleep 让 worker 推进。
+fn update_with_yield(app: &mut App, n: usize) {
+    for _ in 0..n {
+        app.update();
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -428,7 +450,10 @@ fn qq_text_confirmation_resolves_tool() {
     assert!(!approval.options.is_empty(), "审批选项不应为空");
 
     inject_qq_text(&mut app, "2");
-    run_ticks(&mut app, 20);
+    // shell_exec 上桥后异步执行：用户确认 → async_tool_dispatch_system 认领 →
+    // spawn_blocking 跑子进程 → 通道回传 → ingest 落地。每次 update 之间 yield
+    // 20ms 让 worker 推进，否则 ingest 拿不到结果。
+    update_with_yield(&mut app, 30);
 
     let results = collect_tool_results(&mut app);
     assert!(!results.is_empty(), "工具应被执行");

@@ -10,10 +10,10 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
         ExperienceStore, GrantMode, PendingExperienceHooks, ProfileGenerationContext,
-        SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task, ToolCallingState,
-        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
-        ToolReturnedHookPending, WorkItem,
+        SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task, ToolActionKind,
+        ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolPermission, ToolReturnedHookPending, WorkItem,
     },
     infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
@@ -222,6 +222,35 @@ pub fn tool_confirmation_result_system(
                     continue;
                 };
 
+                // Async 工具：清除 pending_confirmation_id 后交给 async_tool_dispatch_system
+                // 下一帧认领（execute() 对 async 工具返回 InternalState 错误，不能走 sync 路径）。
+                // 任务保持 Waiting(ToolExecution)——async dispatch 会原地改造请求实体并 spawn
+                // worker，worker 完成后 ingest 落地结果并 restore 任务。
+                //
+                // **allow_once 路径**：设置 `confirmed_once = true` 让 async_tool_dispatch_system
+                // 跳过权限检查直接认领——否则 Confirm 权限的 Async 工具会陷入
+                // 「确认 → 清除 pending_id → sync 路径再派发审批」的循环。
+                // `allow_always` 路径已通过 `overrides.insert(Allow)` 更新永久权限，
+                // async_tool_dispatch_system 会直接认领，无需 `confirmed_once`。
+                if executor.kind() == ToolActionKind::Async {
+                    debug!(
+                        event = "ToolConfirmationApprovedAsync",
+                        tool_name = %tool_request.tool_name,
+                        task_id = %tool_request.request.task_id,
+                        mode = ?option.mode,
+                        "async tool confirmed; clearing pending_confirmation_id for async dispatch"
+                    );
+                    let mut updated_request = tool_request.clone();
+                    updated_request.pending_confirmation_id = None;
+                    if option.mode == crate::domain::GrantMode::Once {
+                        updated_request.confirmed_once = true;
+                    }
+                    commands.entity(request_entity).insert(updated_request);
+                    clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+
                 let ctx = ToolContext {
                     knowledge: &knowledge,
                     experience_store: &experience_store,
@@ -402,6 +431,7 @@ mod tests {
             tool_call_id: None,
             pending_confirmation_options: Some(ConfirmationOption::default_options()),
             work_item_entity: None,
+            confirmed_once: false,
         }
     }
 

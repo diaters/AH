@@ -30,6 +30,7 @@ fn spawn_pending(world: &mut bevy_ecs::prelude::World, call_id: &str) -> bevy_ec
             InFlightToolCall {
                 started_at: now(world),
                 timeout: chrono::Duration::seconds(300),
+                cancel: tokio_util::sync::CancellationToken::new(),
             },
         ))
         .id()

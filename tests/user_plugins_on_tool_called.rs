@@ -89,6 +89,7 @@ fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::Task
             tool_call_id: Some("test-call-id".to_string()),
             pending_confirmation_options: None,
             work_item_entity: None,
+            confirmed_once: false,
         },
         ToolCalledHookPending,
     ));
@@ -216,6 +217,7 @@ tool_deny("blocked by test");
                     tool_call_id: Some("deny-call-id".to_string()),
                     pending_confirmation_options: None,
                     work_item_entity: None,
+                    confirmed_once: false,
                 },
                 ToolCalledHookPending,
             ))

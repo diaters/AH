@@ -66,6 +66,7 @@ fn pending_entity_spawn_and_query() {
             InFlightToolCall {
                 started_at: now(&world),
                 timeout: ChronoDuration::seconds(300),
+                cancel: tokio_util::sync::CancellationToken::new(),
             },
         ))
         .id();

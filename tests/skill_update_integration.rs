@@ -994,6 +994,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
         work_item_entity: Some(work_item_entity),
+        confirmed_once: false,
     });
 
     // 运行多帧让 dispatch → handle_tool_action → dry-run → tool_calling_orchestrator 完成
@@ -1162,6 +1163,7 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
         work_item_entity: Some(work_item_entity),
+        confirmed_once: false,
     });
 
     // 运行多帧：dispatch → dry-run 通过 → spawn SkillUpdateCompletedMessage → completion_system apply
@@ -1319,6 +1321,7 @@ fn submit_skill_update_rejects_when_work_item_entity_is_none() {
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     });
 
     // 运行多帧让 dispatch → handle_tool_action → error! + spawn_tool_error → tool_calling_orchestrator 完成
@@ -1786,6 +1789,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
         work_item_entity: Some(work_item_entity),
+        confirmed_once: false,
     });
 
     for _ in 0..5 {
@@ -1949,6 +1953,7 @@ fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
         tool_call_id: Some("call_test".to_string()),
         pending_confirmation_options: None,
         work_item_entity: Some(work_item_entity),
+        confirmed_once: false,
     });
 
     for _ in 0..5 {

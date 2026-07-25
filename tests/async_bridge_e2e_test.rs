@@ -72,6 +72,7 @@ fn make_request(
         tool_call_id: Some(tool_call_id.into()),
         pending_confirmation_options: None,
         work_item_entity: None,
+        confirmed_once: false,
     }
 }
 

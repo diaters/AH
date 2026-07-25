@@ -67,12 +67,19 @@ impl SessionRuntimeState {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct NativeProcessBackend {
     pub sessions: Arc<Mutex<HashMap<SessionHandleId, SessionHandle>>>,
     pub processes: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<Child>>>>>,
     pub stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
+}
+
+impl std::fmt::Debug for NativeProcessBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeProcessBackend")
+            .finish_non_exhaustive()
+    }
 }
 
 impl SessionBackend for NativeProcessBackend {
@@ -146,6 +153,143 @@ impl SessionBackend for NativeProcessBackend {
                     .insert(handle_id, handle.clone());
 
                 return Ok(handle);
+            }
+
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(reader) = stdout_reader.take() {
+                    let _ = reader.join();
+                }
+                if let Some(reader) = stderr_reader.take() {
+                    let _ = reader.join();
+                }
+                let buffer_snapshot = buffer
+                    .lock()
+                    .map_err(|_| "output buffer poisoned".to_string())?
+                    .clone();
+                let output = snapshot_from_buffer(&buffer_snapshot, request.tail_lines);
+                let handle = SessionHandle {
+                    handle_id,
+                    backend: SessionBackendKind::Native,
+                    status: SessionStatus::Stopped,
+                    command: request.command,
+                    session_name: request.session_name,
+                    cwd: request.cwd,
+                    exit_code: None,
+                    timed_out: true,
+                    interaction_required: false,
+                    started_at,
+                    finished_at: Some(Utc::now()),
+                    owner_task_id: request.owner_task_id,
+                    owner_agent_id: request.owner_agent_id,
+                    output,
+                };
+
+                self.sessions
+                    .lock()
+                    .map_err(|_| "session map poisoned".to_string())?
+                    .insert(handle_id, handle.clone());
+
+                return Ok(handle);
+            }
+
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// 取消感知版本：复用 `exec_blocking` 的子进程启动 + reader 线程逻辑，
+    /// 把 `try_wait + sleep(10ms)` 循环改为 `try_wait + sleep(10ms) + cancel.is_cancelled()`。
+    ///
+    /// cancel 触发时：kill 子进程 + wait + 返回 `Err("cancelled")`。
+    /// 这是同步方法（返回 `Result`，不是 `Future`），worker 侧用 `spawn_blocking` 包裹。
+    fn exec_with_cancel(
+        &self,
+        request: SessionStartRequest,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<SessionHandle, String> {
+        let handle_id = Uuid::new_v4();
+        let mut command = StdCommand::new("sh");
+        command.arg("-c").arg(&request.command);
+        if let Some(cwd) = request.cwd.as_ref() {
+            command.current_dir(cwd);
+        }
+        command.envs(&request.env);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let started_at = Utc::now();
+        let deadline = request
+            .timeout_secs
+            .map(|timeout_secs| Instant::now() + Duration::from_secs(timeout_secs));
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let buffer = Arc::new(Mutex::new(SessionOutputBuffer::empty()));
+        let mut stdout_reader =
+            spawn_blocking_output_reader(stdout, Arc::clone(&buffer), "", MAX_OUTPUT_BYTES);
+        let mut stderr_reader = spawn_blocking_output_reader(
+            stderr,
+            Arc::clone(&buffer),
+            "[stderr] ",
+            MAX_OUTPUT_BYTES,
+        );
+
+        loop {
+            if let Some(exit_status) = child.try_wait().map_err(|error| error.to_string())? {
+                if let Some(reader) = stdout_reader.take() {
+                    let _ = reader.join();
+                }
+                if let Some(reader) = stderr_reader.take() {
+                    let _ = reader.join();
+                }
+                let buffer_snapshot = buffer
+                    .lock()
+                    .map_err(|_| "output buffer poisoned".to_string())?
+                    .clone();
+
+                let output = snapshot_from_buffer(&buffer_snapshot, request.tail_lines);
+
+                let handle = SessionHandle {
+                    handle_id,
+                    backend: SessionBackendKind::Native,
+                    status: if exit_status.success() {
+                        SessionStatus::Completed
+                    } else {
+                        SessionStatus::ExitedWithError
+                    },
+                    command: request.command,
+                    session_name: request.session_name,
+                    cwd: request.cwd,
+                    exit_code: exit_status.code(),
+                    timed_out: false,
+                    interaction_required: false,
+                    started_at,
+                    finished_at: Some(Utc::now()),
+                    owner_task_id: request.owner_task_id,
+                    owner_agent_id: request.owner_agent_id,
+                    output,
+                };
+
+                self.sessions
+                    .lock()
+                    .map_err(|_| "session map poisoned".to_string())?
+                    .insert(handle_id, handle.clone());
+
+                return Ok(handle);
+            }
+
+            // 取消信号检查：父任务终态触发 cancel_monitor → 本处 kill 子进程并返回 Err
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(reader) = stdout_reader.take() {
+                    let _ = reader.join();
+                }
+                if let Some(reader) = stderr_reader.take() {
+                    let _ = reader.join();
+                }
+                return Err("cancelled".to_string());
             }
 
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
