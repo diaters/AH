@@ -8,10 +8,10 @@ use crate::{
     domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
     systems::{
         HarnessSet, NativeProcessBackend, async_tool_dispatch_system, channel_send_dispatch_system,
-        check_waiting_tasks_system, ingest_tool_results_system, on_subtask_completed_check_waiting,
-        on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
-        schedule_task_commit_system, sweep_inflight_tool_calls, tool_dispatch_system,
-        tool_result_system,
+        check_waiting_tasks_system, commit_tool_effects_system, ingest_tool_results_system,
+        on_subtask_completed_check_waiting, on_tool_called_hook_system,
+        on_tool_returned_hook_system, register_builtin_tools, schedule_task_commit_system,
+        sweep_inflight_tool_calls, tool_dispatch_system, tool_result_system,
     },
 };
 
@@ -86,6 +86,11 @@ impl Plugin for ToolRuntimePlugin {
                 // （摘除 InFlightToolCall，不 despawn 挂起实体）。放 Maintenance set，
                 // 落地仍由 ingest 单点完成。
                 sweep_inflight_tool_calls.in_set(HarnessSet::Maintenance),
+                // 通用效果提交：消费 ToolEffectPending，经 update_scheduler_state
+                // 双资源入口落账，把最终结果（含 existed 等 apply 时刻才知道的真相）
+                // 送回通道——下一帧 ingest 落地。exclusive system 形态。放 Maintenance
+                // set，与 sweeper 同 set 顺序无强约束（两者操作实体集合不重叠）。
+                commit_tool_effects_system.in_set(HarnessSet::Maintenance),
             ),
         );
     }
