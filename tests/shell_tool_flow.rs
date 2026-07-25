@@ -2,7 +2,7 @@
 
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossbeam_channel::unbounded;
@@ -62,6 +62,28 @@ fn collect_tool_results(app: &App) -> Vec<ToolExecutionResultMessage> {
         .lock()
         .unwrap()
         .clone()
+}
+
+/// 轮询 update + sleep 直到捕获到至少一个工具结果，或达到 `timeout_ms`。
+///
+/// shell_exec 上桥后是异步执行：dispatch spawn worker → worker 跑子进程 +
+/// `tokio::time::timeout` → 通道回传 → ingest 下一帧落地 →
+/// `capture_tool_results_system` 捕获。CI 慢环境下固定次数 yield 可能不够
+/// （worker spawn + 子进程启动 + 超时检测 + 回传的累积延迟），
+/// 改为轮询确保结果落地后才收集，避免空 `results` 触发越界/unwrap panic。
+fn wait_for_tool_results(app: &mut App, timeout_ms: u64) -> Vec<ToolExecutionResultMessage> {
+    let start = Instant::now();
+    loop {
+        app.update();
+        let results = collect_tool_results(app);
+        if !results.is_empty() {
+            return results;
+        }
+        if start.elapsed().as_millis() >= timeout_ms as u128 {
+            return results; // 空 Vec，让测试断言失败给出清晰错误
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn default_channel() -> ChannelId {
@@ -1197,8 +1219,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         confirmed_once: false,
     });
 
-    update_with_yield(&mut app, 30);
-    let results = collect_tool_results(&app);
+    let results = wait_for_tool_results(&mut app, 5000);
 
     let output_json = results[0].tool_output.clone().unwrap();
     assert_eq!(output_json["status"], "stopped");
@@ -1450,9 +1471,8 @@ fn shell_exec_uses_default_timeout_when_omitted() {
         confirmed_once: false,
     });
 
-    // 默认超时 1s，worker 需 ~1s 才能超时返回；60 次 yield × 20ms = 1.2s 足够覆盖。
-    update_with_yield(&mut app, 60);
-    let results = collect_tool_results(&app);
+    // 默认超时 1s；轮询最多 5s 确保 CI 慢环境下也能等到 worker 超时回传。
+    let results = wait_for_tool_results(&mut app, 5000);
     let output = results.last().unwrap().tool_output.clone().unwrap();
 
     assert_eq!(output["timed_out"], true);
