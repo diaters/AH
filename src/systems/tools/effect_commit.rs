@@ -9,10 +9,12 @@
 //! `world.run_system_once(...)` 同样适用。
 
 use bevy_ecs::prelude::*;
+use chrono::Utc;
 use tracing::warn;
 
 use crate::domain::{ToolAsyncResult, ToolEffect, ToolEffectPending, ToolError, ToolResultSender};
-use crate::triggers::scheduled_task::update_scheduler_state;
+use crate::triggers::scheduled_task::{compute_next_trigger, update_scheduler_state};
+use crate::triggers::{DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo};
 
 /// exclusive system：直接拿 `&mut World` 调 `update_scheduler_state`。
 ///
@@ -36,7 +38,7 @@ pub fn commit_tool_effects_system(world: &mut World) {
 /// 应用单个声明式效果，返回最终喂给 LLM 的结果值。
 ///
 /// 写效果经 `update_scheduler_state` 双资源入口原子落账；
-/// `existed` 等「apply 时刻才知道的真相」在这里计算并回送。
+/// `existed` / `next_trigger` 等「apply 时刻才知道的真相」在这里计算并回送。
 fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Value, ToolError> {
     match effect {
         ToolEffect::DeleteScheduledTask { kind } => {
@@ -59,9 +61,49 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
             });
             Ok(serde_json::json!({ "deleted": kind, "existed": existed }))
         }
-        ToolEffect::ScheduleTask { .. } => {
-            // Task 14 Step B 实现双账本提交 + next_trigger 回送
-            todo!("ScheduleTask commit arm - Task 14 Step B")
+        ToolEffect::ScheduleTask {
+            id,
+            kind,
+            content,
+            schedule,
+            output_channel,
+        } => {
+            let is_once = matches!(schedule, ScheduleSpec::Once(_));
+            let kind_owned = kind.clone();
+            let content_owned = content.clone();
+            let output_channel_owned = output_channel.clone();
+            let id_owned = *id;
+            let schedule_clone = schedule.clone();
+
+            // 双账本单一修改入口：state + registry 同一闭包内落账，watch 一次广播。
+            // created_at 用 apply 时刻的 Utc::now()，与原 schedule_task_commit_system
+            // 行为一致——「apply 时刻才知道的真相」原则。
+            update_scheduler_state(world, |state, registry| {
+                state.dynamic_tasks_mut().push(DynamicScheduledTask {
+                    id: id_owned,
+                    kind: kind_owned.clone(),
+                    schedule: schedule_clone.clone(),
+                    created_at: Utc::now(),
+                });
+                registry.insert(
+                    kind_owned,
+                    ScheduledTaskInfo {
+                        content: content_owned,
+                        output_channel: output_channel_owned,
+                        is_once,
+                    },
+                );
+            });
+
+            // next_trigger 在 apply 时刻计算（Once 直接返回；Cron 算下一次本地时区触发）
+            let next_trigger = compute_next_trigger(schedule).map(|t| t.to_rfc3339());
+
+            Ok(serde_json::json!({
+                "status": "scheduled",
+                "schedule_id": id.to_string(),
+                "kind": kind,
+                "next_trigger": next_trigger,
+            }))
         }
     }
 }

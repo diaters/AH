@@ -11,8 +11,8 @@ use cron::Schedule;
 use uuid::Uuid;
 
 use crate::domain::{
-    BuiltinTool, ChannelId, FrontendKind, OwnedToolContext, ToolAction, ToolActionKind, ToolContext,
-    ToolEffect, ToolError, ToolFuture, ToolWorkerOutput,
+    BuiltinTool, ChannelId, FrontendKind, OwnedToolContext, ToolAction, ToolActionKind,
+    ToolContext, ToolEffect, ToolError, ToolFuture, ToolWorkerOutput,
 };
 use crate::triggers::ScheduleSpec;
 
@@ -148,11 +148,13 @@ fn build_output_channel(
         }))
     } else {
         // 从当前任务继承 origin_channel
-        inherited.ok_or_else(|| {
-            ToolError::InvalidInput(
-                "no output_channel provided and current task has no origin_channel".to_string(),
-            )
-        }).map(Some)
+        inherited
+            .ok_or_else(|| {
+                ToolError::InvalidInput(
+                    "no output_channel provided and current task has no origin_channel".to_string(),
+                )
+            })
+            .map(Some)
     }
 }
 

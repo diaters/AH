@@ -277,7 +277,9 @@ fn run_async_kind_field_starts_with_scheduled_prefix() {
         .block_on(tool.run_async(input, ctx_with_channel(None)))
         .unwrap();
     match output {
-        ToolWorkerOutput::Effect(harness::domain::ToolEffect::ScheduleTask { id, kind, .. }) => {
+        ToolWorkerOutput::Effect(harness::domain::ToolEffect::ScheduleTask {
+            id, kind, ..
+        }) => {
             assert!(kind.starts_with("scheduled:"));
             let suffix = kind.strip_prefix("scheduled:").unwrap();
             let parsed = uuid::Uuid::parse_str(suffix).expect("kind suffix should be a UUID");
