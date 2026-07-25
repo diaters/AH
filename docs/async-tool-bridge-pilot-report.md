@@ -147,3 +147,21 @@ __结论：pilot 阶段保持现状（无界 `mpsc::unbounded_channel`），不�
 
 `cargo test --all` 全绿、shell_exec 回归、双账本不变量、`docs/async-tool-bridge.md`
 正式文档属于 Phase 3+ 范畴，不在本 pilot 验收范围。
+
+---
+
+### Phase 3+ 收尾后退出判据最终核对
+
+<!-- markdownlint-disable MD013 -->
+
+Phase 3+（Task 9-14）已完成，pilot 退出判据最终核对如下：
+
+- ✅ `cargo test --all` 全绿（含既有全部测试与新增异步桥测试套件）
+- ✅ shell_exec 两条回归通过（`long_command_does_not_block_frame` / `parent_task_cancel_kills_worker_and_returns_cancelled_error`）
+- ✅ 双账本不变量：所有新增写路径经 `update_scheduler_state` 双资源入口（`commit_tool_effects_system` 两个 arm）
+- ✅ exactly-once：结果落地仅在 `ingest_tool_results_system`；sweeper / cancel_monitor / effect_commit 三处均只发通道 + claim
+- ✅ `docs/async-tool-bridge.md` 正式文档已交付（含时序图、六条不变量、新工具开发指南、失联兜底语义）
+
+历史遗留：`trigger_task.rs:140-143` 的 `cleanup_scheduled_task_if_once` 绕过 `update_scheduler_state` 直接 mutate 双账本，本分支未引入，作为独立任务跟进。
+
+<!-- markdownlint-enable MD013 -->
