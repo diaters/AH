@@ -89,10 +89,11 @@
   不上桥；详见 `docs/async-tool-bridge.md` 与 `docs/current-state.md` 分类说明。
   `wait_tasks` / `chat_with_agent` / `channel_send` / `Confirm` 已确认跨帧合规，
   作为「后续候选收编项」评估
-- [ ] Rhai 插件加固：为 Rhai 引擎增加 `set_max_operations(1_000_000)` 兜底死循环；
+- [x] Rhai 插件加固：为 Rhai 引擎增加 `set_max_operations(1_000_000)` 兜底死循环；
   `RhaiPluginAsyncWrapper::run_async` 内补 `tokio::select!` 监听
   `ctx.cancel.cancelled()`，并通过 `Engine::on_progress`（每 1000 ops 查一次）
   协作中止脚本，避免父任务取消后 spawn_blocking 线程继续空跑
+  （PR #68，commit e834153）
 - [ ] `commit_tool_effects_system` 补大批量（100+ 效果排队）回归测试：
   101 个 `ToolEffectPending`（50 hit + 51 miss），断言全部 despawn + 双账本清空
   与无 `LedgerDriftOnDelete` 误报

@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rhai::{AST, Engine};
+use rhai::{AST, Dynamic, Engine};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::user_plugins::hook_point::HookPoint;
@@ -260,6 +261,31 @@ pub fn is_within(root: &Path, abs: &Path) -> bool {
 pub fn new_sandboxed_engine() -> Engine {
     let mut engine = Engine::new();
     engine.set_max_call_levels(32);
+    engine
+}
+
+/// 创建带取消能力的沙箱 Rhai Engine。
+///
+/// 在 `new_sandboxed_engine` 基础上追加两道防线：
+/// - `set_max_operations(1_000_000)`：操作数兜底，防止死循环
+/// - `on_progress`：每 1000 次操作检查一次 `CancellationToken`，被取消时
+///   返回 `Some(Dynamic::UNIT)` 中止脚本（Rhai 把 `on_progress` 返回的
+///   `Some(_)` 视为终止信号，`UNIT` 即 `()` 等价于无返回值）
+///
+/// 用于插件工具执行（`run_rhai_tool_script`）；hook 派发仍用
+/// `new_sandboxed_engine`（hook 已有 1s 超时 + 独立线程隔离，且
+/// `on_progress` 的闭包不满足 `Send + Sync`，与 hook 多线程 spawn 不兼容）。
+pub fn new_sandboxed_engine_with_cancel(cancel: CancellationToken) -> Engine {
+    let mut engine = Engine::new();
+    engine.set_max_call_levels(32);
+    engine.set_max_operations(1_000_000);
+    engine.on_progress(move |count| {
+        if count % 1000 == 0 && cancel.is_cancelled() {
+            Some(Dynamic::UNIT)
+        } else {
+            None
+        }
+    });
     engine
 }
 
