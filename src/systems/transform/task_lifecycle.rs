@@ -11,7 +11,7 @@ use crate::{
     domain::{
         FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
         SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
-        TaskTerminatedMessage, ToolCallingState, WaitingReason,
+        TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
     },
     systems::NativeProcessBackend,
 };
@@ -255,16 +255,38 @@ pub fn finish_task_system(
 /// 核心重置已由 LLM 产出文本时的 ToolCallingState despawn 完成。
 /// 本 system 处理边界场景：任务已进入 Waiting(User) 但 ToolCallingState
 /// 仍残留（如外部信号直接修改了任务状态）。
+///
+/// **竞态保护**：若该 task 仍有 `ToolExecutionRequestMessage` 存在（即异步工具
+/// 确认后等待 `async_tool_dispatch_system` 认领的中间态），不 despawn——
+/// 否则 worker 完成后 `restore_task_after_tool` 会因找不到 `ToolCallingState`
+/// 把 task 转为 `Ready` 而非 `Waiting(ToolExecution)`，LLM 调用循环无法续跑，
+/// 任务永久卡死。
+///
+/// 时序背景：`tool_confirmation_result_system`（Dispatch 集）清除
+/// `pending_confirmation_id` 后，下一帧本系统（Transform 集，先于 Dispatch 集）
+/// 会看到 `Waiting(User) && pending_confirmation_id.is_none()`——若无下方保护，
+/// 会错误 despawn `ToolCallingState`，然后 `async_tool_dispatch_system`（Dispatch 集）
+/// 才 spawn worker。
 pub fn tool_calling_turn_reset_system(
     mut commands: Commands,
     tasks: Query<&Task>,
     calling_states: Query<(Entity, &ToolCallingState)>,
+    tool_requests: Query<&ToolExecutionRequestMessage>,
 ) {
     for (state_entity, state) in &calling_states {
         if let Some(task) = tasks.iter().find(|t| t.id == state.task_id)
             && task.status == TaskStatus::Waiting(WaitingReason::User)
             && task.pending_confirmation_id.is_none()
         {
+            // 竞态保护：若仍有属于该 task 的工具请求待认领（async 工具确认后中间态），
+            // 不要 despawn ToolCallingState。
+            let has_pending_tool_request = tool_requests
+                .iter()
+                .any(|r| r.request.task_id == state.task_id);
+            if has_pending_tool_request {
+                continue;
+            }
+
             debug!(
                 event = "ToolCallingStateTurnReset",
                 task_id = %state.task_id,
@@ -452,6 +474,97 @@ mod tests {
             count_terminated_messages(&mut app),
             1,
             "only the non-terminal → terminal transition should spawn"
+        );
+    }
+
+    /// 复现异步工具确认后的竞态：任务在 `Waiting(User)` + `pending_confirmation_id`
+    /// 已被清除（由 `tool_confirmation_result_system` 在 Dispatch 集中清除），
+    /// 但 `ToolExecutionRequestMessage` 仍存在（等待下一帧 `async_tool_dispatch_system`
+    /// 认领）。此时 `tool_calling_turn_reset_system`（Transform 集，先于 Dispatch 集）
+    /// 不应错误 despawn `ToolCallingState`——否则 worker 完成后 LLM 调用循环无法续跑。
+    ///
+    /// 时序（日志已证实）：
+    ///   帧 A Dispatch: confirmation 清 pending_confirmation_id（task.status 仍 Waiting(User)）
+    ///   帧 B Transform: reset 触发 → 错误 despawn ToolCallingState ← BUG
+    ///   帧 B Dispatch:  async_dispatch spawn worker（ToolCallingState 已没了）
+    ///   帧 C:           worker 完成 → restore_task_after_tool 发现无 ToolCallingState → task → Ready
+    ///   永久卡死
+    #[test]
+    fn tool_calling_turn_reset_preserves_state_when_async_tool_request_pending() {
+        use crate::domain::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+
+        let mut world = World::new();
+
+        // 构造 Task：模拟 async 工具确认后的中间态
+        // - status = Waiting(User)（dispatch.rs:317 在 ToolRequiresUserConfirmation 时设置）
+        // - pending_confirmation_id = None（confirmation.rs:249 在 async 分支清除）
+        let mut task = Task::from_user_input(
+            "test".to_string(),
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        let task_id = task.id;
+        task.status = TaskStatus::Waiting(WaitingReason::User);
+        task.pending_confirmation_id = None;
+        world.spawn(task);
+
+        // 构造 ToolCallingState：工具调用循环的载体，不应被 reset 错误 despawn
+        let calling_state_entity = world
+            .spawn(ToolCallingState {
+                task_id,
+                agent_id: uuid::Uuid::nil(),
+                pending_tool_call_ids: vec!["functions.shell_exec:0".to_string()],
+                iteration: 1,
+                max_iterations: 20,
+                conversation: vec![],
+                tools: vec![],
+                request_kind: AgentRequestKind::LlmCompletion,
+                work_item_id: None,
+            })
+            .id();
+
+        // 构造 ToolExecutionRequestMessage：async 工具确认后的中间态
+        // - pending_confirmation_id = None（已被 confirmation 清除）
+        // - task_id 匹配（等待 async_tool_dispatch_system 认领）
+        world.spawn(ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id: uuid::Uuid::nil(),
+                request_kind: AgentRequestKind::LlmCompletion,
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+            },
+            tool_name: "shell_exec".to_string(),
+            tool_input: serde_json::Value::Null,
+            pending_confirmation_id: None,
+            tool_call_id: Some("functions.shell_exec:0".to_string()),
+            pending_confirmation_options: None,
+            work_item_entity: None,
+            confirmed_once: false,
+        });
+
+        // 跑 reset 系统
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_calling_turn_reset_system);
+        schedule.run(&mut world);
+
+        // 断言：ToolCallingState 应保留（async 工具请求仍 pending，不应清理）
+        let state_exists = world
+            .get::<ToolCallingState>(calling_state_entity)
+            .is_some();
+        assert!(
+            state_exists,
+            "ToolCallingState must be preserved when an async ToolExecutionRequestMessage \
+             is still pending (Waiting(User) + pending_confirmation_id cleared by confirmation). \
+             Otherwise the LLM tool-calling loop cannot resume after worker completes."
         );
     }
 }
