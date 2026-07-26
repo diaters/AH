@@ -296,7 +296,13 @@ SystemSet：在 `HarnessSet::Dispatch` 之前。
 
 作用域限制：仅 TopLevelTask 适用 delegate 复用。SubTask 因为依赖 DAG 准备与 spawn spec，始终走 BrainLlm，不在此优化范围内。
 
-__历史说明__：2026-06-07 的 `docs/archive/superpowers/specs/2026-06-07-continue-existing-delegate-design.md` 已经明确"continue 默认复用 delegate"。该意图在 2026-07-18 派发架构统一提交（`477c1bb`）中被静默反转——统一实现删除了 `task_dispatch.rs` 中的 delegate 复用快路径，并强制续轮清空 delegate 改挂 `BrainLlm`，且统一设计文档当时未记录该反转，违反 AGENTS.md 文档同步要求。本次变更恢复 2026-06-07 的设计意图，并把续轮派发语义正式写入本设计文档。
+__历史说明__：2026-06-07 的
+`docs/archive/superpowers/specs/2026-06-07-continue-existing-delegate-design.md`
+已经明确"continue 默认复用 delegate"。该意图在 2026-07-18 派发架构统一提交
+（`477c1bb`）中被静默反转——统一实现删除了 `task_dispatch.rs` 中的 delegate 复用
+快路径，并强制续轮清空 delegate 改挂 `BrainLlm`，且统一设计文档当时未记录该反转，
+违反 AGENTS.md 文档同步要求。本次变更恢复 2026-06-07 的设计意图，并把续轮派发
+语义正式写入本设计文档。
 
 ### 2.6 WorkItem 派发统一
 
@@ -924,7 +930,8 @@ __阶段 4 实施偏差记录（2026-07-19）__：
    - SubTask 通过 preparation system + BrainLlm 策略派发
    - Brain LLM 失败时 Task 标 Failed
    - DirectDelegate 策略下 spawn_spec 携带和复用
-   - 续轮（continue）：TopLevelTask 复用上一轮 delegate 走 DirectDelegate；无 delegate / stale / SubTask 回退 BrainLlm（对应 `routing::tests::continue_*` 单测，见「决策 11.1」）
+   - 续轮（continue）：TopLevelTask 复用上一轮 delegate 走 DirectDelegate；
+     无 delegate / stale / SubTask 回退 BrainLlm（对应 `routing::tests::continue_*` 单测，见「决策 11.1」）
 4. __WorkItem 派发迁移阶段__：
    - SkillUpdate WorkItem 通过创建器 + dispatch_system 派发
    - ProfileGeneration WorkItem 同上
