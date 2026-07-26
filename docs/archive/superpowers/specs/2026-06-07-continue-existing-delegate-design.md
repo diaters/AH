@@ -1,5 +1,7 @@
 > **状态：已归档** — 对应功能已合并到 main，归档于 2026-07-05
 
+> **关系说明（2026-07-26 追记）**：本归档 spec 提出的"continue 默认复用 delegate"意图，在 2026-07-18 派发架构统一提交 `477c1bb` 中被静默反转（强制续轮清空 delegate 改挂 BrainLlm），统一设计文档当时未记录该反转。该意图已于 2026-07-26 恢复，并正式写入 `docs/design/2026-07-18-dispatch-architecture-unification-design.md` 的「决策 11.1：续轮（continue）派发语义」。本归档文档只增不改，仅作历史意图留存。
+
 # ContinueExisting 默认复用 Delegate 与 Brain 输出解析健壮性修复设计
 
 ## 背景

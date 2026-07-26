@@ -94,9 +94,10 @@
   `ctx.cancel.cancelled()`，并通过 `Engine::on_progress`（每 1000 ops 查一次）
   协作中止脚本，避免父任务取消后 spawn_blocking 线程继续空跑
   （PR #68，commit e834153）
-- [ ] `commit_tool_effects_system` 补大批量（100+ 效果排队）回归测试：
+- [x] `commit_tool_effects_system` 补大批量（100+ 效果排队）回归测试：
   101 个 `ToolEffectPending`（50 hit + 51 miss），断言全部 despawn + 双账本清空
   与无 `LedgerDriftOnDelete` 误报
+  （PR #69，commit fb569ce）
 - [~] `async_tool_dispatch_system` 参数（当前 14 个）收敛到 Resource bundle：
   暂缓，当前 14/16 参数无 Bevy SystemParam 上限压力，待真实触发再收敛
 
