@@ -4,8 +4,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::ecs::{EntityIndex, spawn_task};
 use crate::prelude::*;
-use crate::ecs::{spawn_task, EntityIndex};
 use crossbeam_channel::unbounded;
 use tracing::{debug, info};
 

@@ -20,7 +20,7 @@
 Harness 已用 Bevy ECS 把 `Task` / `WorkItem` / `Agent` 建模为 Component，但实体之间的"领域关系"
 仍以裸 UUID 表达，且代码库内无任何 `TaskId → Entity` 索引、对 Task / Agent 层级无任何 Bevy 原生关系
 （`ChildOf` 零命中）。系统只能对全量 `Query<&Task>` 做 `tasks.iter().find(|t| t.id == …)` 线性扫描，
-全库共 **16 处**（生产约 13 处，TUI 本地快照 3 处应排除出验收）。
+全库共 __16 处__（生产约 13 处，TUI 本地快照 3 处应排除出验收）。
 
 ### 1.2 已识别的 ECS 理念违背（仅限本设计范围）
 
@@ -31,13 +31,13 @@ Harness 已用 Bevy ECS 把 `Task` / `WorkItem` / `Agent` 建模为 Component，
 | 实体级状态进全局 Resource | [contribution.rs:192-194](../../src/domain/contribution.rs#L192-L194)（`PendingExperienceHooks` 自承，非 `ExperienceStore` 主体） | 经验治理 Resource 化衍生补丁；本设计仅消除其"UUID 无法关联回实体"的根因 |
 | 悬空 UUID | 上述所有 UUID 字段 | 指向实体 despawn 后 UUID 残留 |
 
-> **范围边界（评审修正）**：`SessionHandle`（[native.rs:72](../../src/systems/tools/backend/native.rs#L72) 持有，
+> __范围边界（评审修正）__：`SessionHandle`（[native.rs:72](../../src/systems/tools/backend/native.rs#L72) 持有，
 > shell 进程句柄）与 `ExperienceInbox`（`ExperienceStore.inboxes: HashMap<TaskId, _>`，[contribution.rs:221](../../src/domain/contribution.rs#L221)，
-> 已按 TaskId O(1) 索引）**不是 ECS 实体、也不属本设计改造对象**。原设计误将其纳入 `ChildOf` 属过度设计。
+> 已按 TaskId O(1) 索引）__不是 ECS 实体、也不属本设计改造对象__。原设计误将其纳入 `ChildOf` 属过度设计。
 
 ### 1.3 目标
 
-- 引入中心 `EntityIndex`（`TaskId` / `AgentId` → `Entity` **两表**），消灭约 13 处生产线性扫描
+- 引入中心 `EntityIndex`（`TaskId` / `AgentId` → `Entity` __两表__），消灭约 13 处生产线性扫描
 - 层级关系（仅 `parent_task → child`）改用 Bevy `ChildOf`，使组合查询替代手搓过滤
 - 非归属引用保留 UUID、运行期经 index O(1) 解析
 - 消除悬空 UUID，索引维护点集中到 spawn / despawn 封装
@@ -49,7 +49,7 @@ Harness 已用 Bevy ECS 把 `Task` / `WorkItem` / `Agent` 建模为 Component，
 - 不引入 Bevy `Related` 多对多关系（当前无该需求）
 - 不在此设计中顺带治理 `Task` 的 God-object 字段拆分（独立任务，见后续规划）
 - 不在本设计删除 `ExperienceStore`（仅消除其"被迫承载实体级状态"的根因，具体回归在后续候选 3 设计）
-- **不**把 `SessionHandle` / `ExperienceInbox` 纳入 ECS 关系建模（基础设施 / 既有 O(1) 字典，维持现状）
+- __不__把 `SessionHandle` / `ExperienceInbox` 纳入 ECS 关系建模（基础设施 / 既有 O(1) 字典，维持现状）
 
 ---
 
@@ -87,8 +87,8 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
 }
 ```
 
-`spawn_agent` / `despawn_agent` 同理，写入 / 移除 `agents` 表。**不需要 `spawn_session` /
-`despawn_session`**（Session 不进 ECS）。
+`spawn_agent` / `despawn_agent` 同理，写入 / 移除 `agents` 表。__不需要 `spawn_session` /
+`despawn_session`__（Session 不进 ECS）。
 
 ### 2.3 关系划分
 
@@ -103,8 +103,8 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
 
 ### 2.4 边界兜底
 
-- **`RemovedComponents` 兜底监听**（双保险之二）：即便有路径漏掉中心 despawn 封装，
-  组件移除时自动摘除映射。**注意该监听在组件移除的下一帧触发**（评审 2.3），与同帧 despawn 封装形成
+- __`RemovedComponents` 兜底监听__（双保险之二）：即便有路径漏掉中心 despawn 封装，
+  组件移除时自动摘除映射。__注意该监听在组件移除的下一帧触发__（评审 2.3），与同帧 despawn 封装形成
   "即时 + 延迟"双保险：
 
   ```rust
@@ -118,13 +118,13 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
   }
   ```
 
-- **级联语义（评审 2.2 修正）**：Bevy `ChildOf` 父 despawn 默认级联杀子。本设计**不**接受该默认——
+- __级联语义（评审 2.2 修正）__：Bevy `ChildOf` 父 despawn 默认级联杀子。本设计__不__接受该默认——
   `parent_task → child` 用非递归 `commands.entity(parent).despawn()`（不调用 `DespawnRecursive`），
   子任务作为独立 Entity 靠 `ChildOf` 关系被查询端独立存活。`task → session` 不在 ECS，无级联问题。
-  *悬空 `ChildOf` 验证（评审 v2 §4.1 / 阶段 3 spike）*：非递归 despawn 父后，父的 `RelationshipTarget`
+  _悬空 `ChildOf` 验证（评审 v2 §4.1 / 阶段 3 spike）_：非递归 despawn 父后，父的 `RelationshipTarget`
   随父消失，子 entity 上的 `ChildOf(parent)` 可能残留悬空引用。阶段 3 实施前需 spike 确认 Bevy 0.18 是否自动清理；
   若需显式解绑，`despawn_task` 封装内先遍历子任务 `remove::<ChildOf>()` 再 despawn 父。当前判断该悬空为良性，但须 spike 确认。
-- **持久化重建**：加载期经 `spawn_*` 封装重建 index（封装已含写 index，自然覆盖）。该机制成熟、非阻塞。
+- __持久化重建__：加载期经 `spawn_*` 封装重建 index（封装已含写 index，自然覆盖）。该机制成熟、非阻塞。
 
 ---
 
@@ -157,8 +157,12 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
 
 按模块顺序改造（约 13 处生产代码，TUI 3 处排除）：
 
-1. `routing` → 2. `command` → 3. `experience/collection` →
-4. `tools/dispatch` + `tools/orchestrator` → 5. `waiting` → 6. `chat_round` + `task_lifecycle`
+1. `routing`
+2. `command`
+3. `experience/collection`
+4. `tools/dispatch` + `tools/orchestrator`
+5. `waiting`
+6. `chat_round` + `task_lifecycle`
 
 每处 `tasks.iter().find(|t| t.id == …)` 改为：
 
@@ -176,7 +180,7 @@ fn collect_children(children: Query<&Task, With<ChildOf<ParentEntity>>>) { /* �
 - 引入 `ChildOf` 替换 `parent_task_id` 的 UUID 字段并删除该字段
 - `waiting` 维持 `target_task_ids: Vec<TaskId>`（[task.rs:145](../../src/domain/task.rs#L145)，本就是，无 `Vec<Entity>` 改动）
 - `batch_id` 保留为 `Uuid` 分组键，不在本阶段改动
-- **前置 spike**：阶段 3 实施前先验证 Bevy 0.18 非递归 `despawn` 父后子 entity 上 `ChildOf` 悬空行为（见 §2.4），确认是否需要显式解绑再写 `despawn_task` 封装
+- __前置 spike__：阶段 3 实施前先验证 Bevy 0.18 非递归 `despawn` 父后子 entity 上 `ChildOf` 悬空行为（见 §2.4），确认是否需要显式解绑再写 `despawn_task` 封装
 
 ---
 
@@ -186,7 +190,7 @@ fn collect_children(children: Query<&Task, With<ChildOf<ParentEntity>>>) { /* �
 |---|---|
 | 扫描消除 | 全代码库中生产代码的 `tasks.iter().find(\|t\| t.id == …)` 线性查找降至 0（TUI 3 处本地快照查找除外；仅 `EntityIndex` 内部保留 `HashMap` 访问） |
 | 索引一致性 | 所有按 UUID 寻址的入口（IM 消息 / provider 结果 / 工具回调）经 `EntityIndex` 解析；运行期 index 命中率 100%，无 `None` 路径被静默忽略 |
-| 级联语义 | `parent_task → child` 父 despawn **不**级联子任务（非递归 despawn，子任务独立存活）；Session 不在 ECS，无级联要求 |
+| 级联语义 | `parent_task → child` 父 despawn __不__级联子任务（非递归 despawn，子任务独立存活）；Session 不在 ECS，无级联要求 |
 | 兜底生效 | 即使绕过中心 despawn 封装直接 `commands.entity(e).despawn()`，`RemovedComponents` 监听仍能摘除陈旧映射（单测覆盖；注意延迟一帧） |
 | 关系查询 | `wait_tasks` 等层级判定改为 `ChildOf` 组合查询，无全量遍历 |
 | 补丁清理前提 | `PendingExperienceHooks` 补丁 Resource 在后续经验治理回归设计中可安全删除（本设计消除其根因） |
@@ -202,7 +206,7 @@ fn collect_children(children: Query<&Task, With<ChildOf<ParentEntity>>>) { /* �
 3. `RemovedComponents` 兜底：直接 despawn 实体后，监听（下一帧）自动摘除映射
 4. `spawn_*` 封装：外部调用签名不变，index 同步更新
 5. `ChildOf` 查询：`collect_children` 仅返回目标父的子节点，无全量扫描
-6. 级联差异化：despawn 父任务 → 子任务**保留**（非递归 despawn 生效）
+6. 级联差异化：despawn 父任务 → 子任务__保留__（非递归 despawn 生效）
 7. 非归属引用解析：`delegate` / `creator` 经 `index.agents.get` 正确解析为 Entity
 8. `Vec<TaskId>` 等待：despawn 目标后 `wait_tasks` 经 index 解析不悬空
 

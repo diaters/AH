@@ -1,7 +1,7 @@
 use std::fs;
 
+use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
-use crate::ecs::{spawn_agent, EntityIndex};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -230,22 +230,26 @@ fn spawn_persistent_agent_from_entry(
         .map(AgentToolPermissions::from)
         .unwrap_or_default();
 
-    let entity = spawn_agent(commands, index, Agent {
-        id,
-        profile: AgentProfile {
-            name: entry.name.clone(),
-            model: profile_model,
+    let entity = spawn_agent(
+        commands,
+        index,
+        Agent {
+            id,
+            profile: AgentProfile {
+                name: entry.name.clone(),
+                model: profile_model,
+            },
+            capabilities: AgentCapabilities {
+                tags: entry.tags.clone(),
+                description: entry.description.clone(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions,
+            system_prompt: entry.system_prompt.clone(),
         },
-        capabilities: AgentCapabilities {
-            tags: entry.tags.clone(),
-            description: entry.description.clone(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions,
-        system_prompt: entry.system_prompt.clone(),
-    });
+    );
 
     // 附加 ModelChainState Component
     if let Some(state) = model_chain_state {
@@ -377,23 +381,27 @@ fn handle_spawn_request(
             .collect(),
     };
 
-    spawn_agent(commands, index, Agent {
-        id,
-        profile: AgentProfile {
-            name: request.name.clone(),
-            model,
+    spawn_agent(
+        commands,
+        index,
+        Agent {
+            id,
+            profile: AgentProfile {
+                name: request.name.clone(),
+                model,
+            },
+            capabilities: AgentCapabilities {
+                // TaskScoped Agent 不参与路由
+                tags: vec![],
+                description: request.description.clone(),
+            },
+            kind: AgentKind::TaskScoped,
+            parent_id: Some(request.parent_agent_id),
+            bound_task_id: Some(request.task_id),
+            tool_permissions,
+            system_prompt: None,
         },
-        capabilities: AgentCapabilities {
-            // TaskScoped Agent 不参与路由
-            tags: vec![],
-            description: request.description.clone(),
-        },
-        kind: AgentKind::TaskScoped,
-        parent_id: Some(request.parent_agent_id),
-        bound_task_id: Some(request.task_id),
-        tool_permissions,
-        system_prompt: None,
-    });
+    );
 
     // 更新 Task 的 delegate 为实际执行的 task-scoped agent
     if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id) {
