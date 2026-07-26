@@ -12,7 +12,8 @@
 | [configuration.md](configuration.md) | 配置项说明（含插件系统配置） |
 | [plugin-development.md](plugin-development.md) | 插件开发指南 |
 | [logs.md](logs.md) | 结构化日志规范 |
-| [ADR-004](adr/ADR-004-skill-first-class-and-experience-governance-reform.md) | Skill 一等公民与经验治理改造（最新） |
+| [ADR-004](adr/ADR-004-skill-first-class-and-experience-governance-reform.md) | Skill 一等公民与经验治理改造 |
+| [ADR-005](adr/ADR-005-ecs-relation-modeling.md) | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf，最新） |
 
 ## 文档地图
 
