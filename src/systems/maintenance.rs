@@ -1,5 +1,6 @@
 use std::fs;
 
+use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
@@ -20,12 +21,14 @@ use crate::{
 pub(crate) fn load_agents_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
+    mut index: ResMut<EntityIndex>,
     agents: Query<(Entity, &Agent)>,
     registry: Res<crate::llm::ExecutorRegistry>,
     plugin_registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
 ) {
     load_persistent_agents(
         &mut commands,
+        &mut index,
         &settings,
         &agents,
         &registry,
@@ -39,6 +42,7 @@ pub(crate) fn agent_factory_system(
     mut commands: Commands,
     clock: Res<Clock>,
     registry: Res<SpaceToolRegistry>,
+    mut index: ResMut<EntityIndex>,
     agents: Query<(Entity, &Agent)>,
     mut tasks: Query<&mut Task>,
     spawn_requests: Query<(Entity, &AgentSpawnRequestMessage)>,
@@ -47,6 +51,7 @@ pub(crate) fn agent_factory_system(
     for (entity, request) in &spawn_requests {
         handle_spawn_request(
             &mut commands,
+            &mut index,
             &agents,
             &mut tasks,
             &clock,
@@ -64,6 +69,7 @@ pub(crate) fn agent_factory_system(
 
 fn load_persistent_agents(
     commands: &mut Commands,
+    index: &mut EntityIndex,
     settings: &HarnessSettings,
     agents: &Query<(Entity, &Agent)>,
     registry: &crate::llm::ExecutorRegistry,
@@ -148,7 +154,7 @@ fn load_persistent_agents(
 
     // 从配置文件加载
     for entry in &config.agent {
-        spawn_persistent_agent_from_entry(commands, entry, registry);
+        spawn_persistent_agent_from_entry(commands, index, entry, registry);
     }
 
     // 合并插件贡献的 Agent
@@ -158,7 +164,7 @@ fn load_persistent_agents(
             agent_name = %entry.name,
             "spawning plugin-contributed persistent agent"
         );
-        spawn_persistent_agent_from_entry(commands, entry, registry);
+        spawn_persistent_agent_from_entry(commands, index, entry, registry);
     }
 
     if !plugin_agent_entries.is_empty() {
@@ -173,6 +179,7 @@ fn load_persistent_agents(
 /// 从配置条目生成持久化 Agent
 fn spawn_persistent_agent_from_entry(
     commands: &mut Commands,
+    index: &mut EntityIndex,
     entry: &crate::domain::AgentEntry,
     registry: &crate::llm::ExecutorRegistry,
 ) {
@@ -223,26 +230,30 @@ fn spawn_persistent_agent_from_entry(
         .map(AgentToolPermissions::from)
         .unwrap_or_default();
 
-    let mut entity_commands = commands.spawn(Agent {
-        id,
-        profile: AgentProfile {
-            name: entry.name.clone(),
-            model: profile_model,
+    let entity = spawn_agent(
+        commands,
+        index,
+        Agent {
+            id,
+            profile: AgentProfile {
+                name: entry.name.clone(),
+                model: profile_model,
+            },
+            capabilities: AgentCapabilities {
+                tags: entry.tags.clone(),
+                description: entry.description.clone(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions,
+            system_prompt: entry.system_prompt.clone(),
         },
-        capabilities: AgentCapabilities {
-            tags: entry.tags.clone(),
-            description: entry.description.clone(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions,
-        system_prompt: entry.system_prompt.clone(),
-    });
+    );
 
     // 附加 ModelChainState Component
     if let Some(state) = model_chain_state {
-        entity_commands.insert(state);
+        commands.entity(entity).insert(state);
     }
 }
 
@@ -288,6 +299,7 @@ fn collect_plugin_agent_entries(
 
 fn handle_spawn_request(
     commands: &mut Commands,
+    index: &mut EntityIndex,
     agents: &Query<(Entity, &Agent)>,
     tasks: &mut Query<&mut Task>,
     clock: &Clock,
@@ -369,23 +381,27 @@ fn handle_spawn_request(
             .collect(),
     };
 
-    commands.spawn(Agent {
-        id,
-        profile: AgentProfile {
-            name: request.name.clone(),
-            model,
+    spawn_agent(
+        commands,
+        index,
+        Agent {
+            id,
+            profile: AgentProfile {
+                name: request.name.clone(),
+                model,
+            },
+            capabilities: AgentCapabilities {
+                // TaskScoped Agent 不参与路由
+                tags: vec![],
+                description: request.description.clone(),
+            },
+            kind: AgentKind::TaskScoped,
+            parent_id: Some(request.parent_agent_id),
+            bound_task_id: Some(request.task_id),
+            tool_permissions,
+            system_prompt: None,
         },
-        capabilities: AgentCapabilities {
-            // TaskScoped Agent 不参与路由
-            tags: vec![],
-            description: request.description.clone(),
-        },
-        kind: AgentKind::TaskScoped,
-        parent_id: Some(request.parent_agent_id),
-        bound_task_id: Some(request.task_id),
-        tool_permissions,
-        system_prompt: None,
-    });
+    );
 
     // 更新 Task 的 delegate 为实际执行的 task-scoped agent
     if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id) {

@@ -16,6 +16,7 @@
 | `2026-05-17-multi-turn-memory-design.md` | 历史背景 | 多轮对话与记忆管理设计 | 当前记忆链路已结合 summarization 与 WorkItem 演进 |
 | `2026-07-13-agent-profile-llm-generation-design.md` | 当前有效 | Agent 元信息 LLM 生成与动态更新 | 孵化时 LLM 生成 profile，经验积累后评估更新 |
 | `2026-07-18-dispatch-architecture-unification-design.md` | 当前有效 | 派发架构统一 | 单一 `PendingDispatch` 入口，治理 9 个腐化点 |
+| `2026-07-26-ecs-relation-modeling-design.md` | 当前有效 | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 消灭 55+ 线性扫描 |
 
 ## 推荐阅读顺序
 
