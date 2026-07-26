@@ -137,14 +137,21 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
 - 在 `src/app/mod.rs` 的 `build_runtime` 中注册 `init_resource::<EntityIndex>()` 与两个 system（置于 `HarnessSet::Maintenance`）；不改任何现有调用
 - 含 2 个单元测试（见 §5）：`entity_index_resolves_and_cleanup_removes_stale_mapping`、`cleanup_keeps_unrelated_mapping`，均通过；`cargo clippy --lib --all-features` 零警告
 
-### 阶段 1 — 内聚写入
+### 阶段 1 — 内聚写入 ✅ 已落地（2026-07-26）
 
-- 新增 `spawn_task` / `spawn_agent` / `despawn_*` 中心封装
-- 实际收口点很少：`Task` 统一走 `user_message_to_task_system` 的 `commands.spawn((task, stm, …))`
-  （[task_creation.rs:88](../../src/systems/transform/task_creation.rs#L88)）；`Agent` 仅 2 处
-  （[maintenance.rs:226](../../src/systems/maintenance.rs#L226) / [372](../../src/systems/maintenance.rs#L372)）。
-  在封装内写 index，外部调用签名不变，不需逐个改几十处；不需要 `spawn_session`。
-- 目标：`EntityIndex` 在运行期始终保持与实体一致
+- 新增 `spawn_task` / `spawn_agent` 中心封装（封装内写 index，双保险之一）与 `despawn_task` /
+  `despawn_agent`（即时清 index，双保险之二），位于 `src/ecs/entity_index.rs`
+- 实际收口点：`Task` 走 `user_message_to_task_system` → `spawn_task` 封装
+  （[task_creation.rs](../../src/systems/transform/task_creation.rs) 接入 `ResMut<EntityIndex>`）；
+  `Agent` 仅 2 处：`load_agents_system` → `load_persistent_agents` →
+  `spawn_persistent_agent_from_entry` → `spawn_agent`（[maintenance.rs:226](../../src/systems/maintenance.rs#L226)）；
+  `agent_factory_system` → `handle_spawn_request` → `spawn_agent`
+  （[maintenance.rs:372](../../src/systems/maintenance.rs#L372)）。
+  `index` 参数沿 system → helper 向下传递（`&mut EntityIndex`，system 入口为 `ResMut<EntityIndex>`）；
+  内部 helper 无测试直接调用，签名改动安全。
+- 目标达成：`EntityIndex` 在运行期始终保持与实体一致；`despawn_*` 封装作为双保险之二，待真实
+  Task/Agent despawn 路径出现时收口（见阶段 3 任务终止）。
+- `cargo clippy --lib --all-features` 零警告；`cargo test --lib` 668 passed，无回归。
 
 ### 阶段 2 — 逐个替换查找（分批、独立 PR）
 

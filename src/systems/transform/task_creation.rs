@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::prelude::*;
+use crate::ecs::{spawn_task, EntityIndex};
 use crossbeam_channel::unbounded;
 use tracing::{debug, info};
 
@@ -40,6 +41,7 @@ use crate::{
 pub fn user_message_to_task_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
+    mut index: ResMut<EntityIndex>,
     messages: Query<(Entity, &CreateTaskMessage)>,
 ) {
     for (entity, message) in &messages {
@@ -85,7 +87,9 @@ pub fn user_message_to_task_system(
             "new task spawned from user message"
         );
 
-        commands.spawn((
+        spawn_task(
+            &mut commands,
+            &mut index,
             task,
             stm,
             NewlyCreatedTask,
@@ -98,7 +102,7 @@ pub fn user_message_to_task_system(
                     agent_spawn_spec: None,
                 },
             },
-        ));
+        );
         commands.entity(entity).despawn();
     }
 }

@@ -6,7 +6,9 @@
 //! **运行期不改变任何既有调用**。两表的写入由阶段 1 的 `spawn_*` / `despawn_*` 中心封装负责
 //! （封装内同步维护映射）；本文件的监听作为双保险之一，在组件移除的下一帧自动摘除陈旧映射。
 
-use crate::domain::{Agent, AgentId, Task, TaskId};
+use crate::domain::{
+    Agent, AgentId, NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task, TaskId,
+};
 use crate::prelude::*;
 use std::collections::HashMap;
 
@@ -34,9 +36,50 @@ impl EntityIndex {
     }
 }
 
+/// 中心 Task 创建封装：spawn 实体并同步写入 `EntityIndex.tasks`（阶段 1 收口点，双保险之一）。
+///
+/// 仅经此封装创建 Task 实体，可保证索引与 ECS 一致。`Task` 实体的销毁见 [`despawn_task`]。
+pub fn spawn_task(
+    commands: &mut Commands,
+    index: &mut EntityIndex,
+    task: Task,
+    stm: ShortTermMemory,
+    marker: NewlyCreatedTask,
+    pending: PendingDispatch,
+) -> Entity {
+    let id = task.id;
+    let entity = commands.spawn((task, stm, marker, pending)).id();
+    index.tasks.insert(id, entity);
+    entity
+}
+
+/// 中心 Agent 创建封装：spawn 实体并同步写入 `EntityIndex.agents`（双保险之一）。
+pub fn spawn_agent(commands: &mut Commands, index: &mut EntityIndex, agent: Agent) -> Entity {
+    let id = agent.id;
+    let entity = commands.spawn(agent).id();
+    index.agents.insert(id, entity);
+    entity
+}
+
+/// 中心 Task 销毁封装（双保险之二）：立即从索引摘除并 despawn 实体。
+///
+/// 不依赖下一帧的 `RemovedComponents` 兜底，适合任务终止等需即时一致性的路径。
+pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId) {
+    if let Some(entity) = index.tasks.remove(&id) {
+        commands.entity(entity).despawn();
+    }
+}
+
+/// 中心 Agent 销毁封装（双保险之二）。
+pub fn despawn_agent(commands: &mut Commands, index: &mut EntityIndex, id: AgentId) {
+    if let Some(entity) = index.agents.remove(&id) {
+        commands.entity(entity).despawn();
+    }
+}
+
 /// 兜底清理（双保险之一）：`Task` 组件被移除后，下一帧自动摘除索引映射。
 ///
-/// 即使有路径绕过阶段 1 的中心 `despawn_task` 封装直接 `commands.entity(e).despawn()`，
+/// 即使有路径绕过中心 `despawn_task` 封装直接 `commands.entity(e).despawn()`，
 /// 此监听也能在组件移除的下一帧恢复索引一致性。
 pub fn cleanup_index_on_task_remove(
     mut index: ResMut<EntityIndex>,
@@ -73,7 +116,8 @@ mod tests {
         app
     }
 
-    fn spawn_task(world: &mut World) -> (TaskId, Entity) {
+    /// 测试夹具：构造并 spawn 一个 Task 实体（不写 index，由调用方模拟阶段 1 封装）。
+    fn make_task_entity(world: &mut World) -> (TaskId, Entity) {
         let task = Task::from_user_input(
             "test",
             0,
@@ -92,7 +136,7 @@ mod tests {
     fn entity_index_resolves_and_cleanup_removes_stale_mapping() {
         let mut app = test_app();
 
-        let (id, entity) = spawn_task(app.world_mut());
+        let (id, entity) = make_task_entity(app.world_mut());
 
         // 写入映射（模拟阶段 1 的 spawn 封装）
         app.world_mut()
@@ -119,8 +163,8 @@ mod tests {
     fn cleanup_keeps_unrelated_mapping() {
         let mut app = test_app();
 
-        let (id_a, entity_a) = spawn_task(app.world_mut());
-        let (id_b, entity_b) = spawn_task(app.world_mut());
+        let (id_a, entity_a) = make_task_entity(app.world_mut());
+        let (id_b, entity_b) = make_task_entity(app.world_mut());
         let mut idx = app.world_mut().resource_mut::<EntityIndex>();
         idx.tasks.insert(id_a, entity_a);
         idx.tasks.insert(id_b, entity_b);
