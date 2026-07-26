@@ -4,10 +4,10 @@ use tracing::debug;
 use crate::{
     app::Clock,
     domain::{
-        ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
-        EntryMetadata, EntryRole, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
-        TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, UserCommand,
-        UserInputMessage, WaitingReason,
+        Agent, AgentKind, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
+        DispatchStrategy, EntryMetadata, EntryRole, PendingDispatch, ShortTermMemory,
+        SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage,
+        UserCommand, UserInputMessage, WaitingReason,
     },
 };
 
@@ -129,6 +129,7 @@ pub(crate) fn continue_task_system(
     mut commands: Commands,
     clock: Res<Clock>,
     continue_messages: Query<(Entity, &ContinueTaskMessage)>,
+    agents: Query<&Agent>,
     mut tasks: Query<(Entity, &mut Task, Option<&mut ShortTermMemory>)>,
 ) {
     for (entity, msg) in &continue_messages {
@@ -182,19 +183,45 @@ pub(crate) fn continue_task_system(
                 );
             }
 
-            // 清除 delegate 并附加 PendingDispatch(BrainLlm)，使统一 dispatch_system 接续派发
-            // （TopLevelTask 多轮对话续轮：与 user_message_to_task_system 新任务路径一致）
-            // delegate 在第一轮由 BrainLlm 派发设置为 brain_agent_id；保留它会让
-            // dispatch_system BrainLlm 分支误判"已有 delegate"而跳过。续轮应重新走 Brain 决策。
+            // 续轮派发语义（恢复 2026-06-07 设计意图，修正 477c1bb 的静默反转）：
+            // TopLevelTask（parent_task_id == None）续轮默认复用上一轮 delegate，
+            // 走 DirectDelegate，避免每轮重跑 Brain（省一次 LLM 决策）。
+            // 无 delegate / delegate 指向的 agent 已不存在（stale） / SubTask：
+            // 回退到 BrainLlm，与原行为一致。
+            // 无论哪条路径都先清空 delegate：dispatch_system 的 BrainLlm 分支对
+            // "已有 delegate" 的任务会跳过，置 None 可避免误判；DirectDelegate 分支
+            // 会按 preferred_agent_name 重新 mark_waiting_for_agent 重设 delegate。
             task.delegate = None;
-            commands.entity(task_entity).insert(PendingDispatch {
-                kind: DispatchKind::Task,
-                hint: DispatchHint {
+            let reuse_hint = if task.parent_task_id.is_none() {
+                match prev_delegate.and_then(|id| {
+                    agents
+                        .iter()
+                        .find(|a| a.id == id && a.kind == AgentKind::Persistent)
+                }) {
+                    Some(agent) => DispatchHint {
+                        strategy: DispatchStrategy::DirectDelegate,
+                        preferred_agent_name: Some(agent.profile.name.clone()),
+                        required_skill_id: None,
+                        agent_spawn_spec: None,
+                    },
+                    None => DispatchHint {
+                        strategy: DispatchStrategy::BrainLlm,
+                        preferred_agent_name: None,
+                        required_skill_id: None,
+                        agent_spawn_spec: None,
+                    },
+                }
+            } else {
+                DispatchHint {
                     strategy: DispatchStrategy::BrainLlm,
                     preferred_agent_name: None,
                     required_skill_id: None,
                     agent_spawn_spec: None,
-                },
+                }
+            };
+            commands.entity(task_entity).insert(PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: reuse_hint,
             });
         }
 
@@ -206,12 +233,14 @@ pub(crate) fn continue_task_system(
 mod tests {
     use crate::prelude::*;
 
-    use super::user_input_routing_system;
-    use crate::app::MemoryConfig;
+    use super::{continue_task_system, user_input_routing_system};
+    use crate::app::{Clock, MemoryConfig};
     use crate::domain::{
-        ChannelId, ContinueTaskMessage, CreateTaskMessage, FinishTaskMessage, FrontendKind,
-        PendingKnowledgeWriteHooks, SharedKnowledgeBase, SystemOutputMessage, Task, TaskStatus,
-        ToolConfirmationResponseMessage, UserInputMessage, WaitingReason,
+        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
+        ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchStrategy, FinishTaskMessage,
+        FrontendKind, PendingDispatch, PendingKnowledgeWriteHooks, SharedKnowledgeBase,
+        SystemOutputMessage, Task, TaskStatus, ToolConfirmationResponseMessage, UserInputMessage,
+        WaitingReason,
     };
     use crate::systems::command::command_parse_system;
 
@@ -262,6 +291,60 @@ mod tests {
         let mut task = make_waiting_task(channel);
         task.pending_confirmation_id = Some(pending_id);
         task
+    }
+
+    fn make_agent(id: uuid::Uuid, name: &str, kind: AgentKind) -> Agent {
+        Agent {
+            id,
+            profile: AgentProfile {
+                name: name.to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: String::new(),
+            },
+            kind,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        }
+    }
+
+    fn make_task_with_delegate(
+        channel: ChannelId,
+        delegate: Option<uuid::Uuid>,
+        parent: Option<uuid::Uuid>,
+    ) -> Task {
+        let mut task = make_waiting_task(channel);
+        task.delegate = delegate;
+        task.parent_task_id = parent;
+        task
+    }
+
+    /// 运行 continue_task_system，并返回被附加到 Task 上的 PendingDispatch hint（如有）。
+    fn run_continue_and_get_hint(
+        app: &mut App,
+        task: Task,
+        agent: Option<Agent>,
+    ) -> Option<DispatchHint> {
+        let task_id = task.id;
+        app.world_mut().spawn(task);
+        if let Some(a) = agent {
+            app.world_mut().spawn(a);
+        }
+        app.world_mut().spawn(ContinueTaskMessage {
+            task_id,
+            user_input: "继续上一轮".to_string(),
+        });
+        app.update();
+        let pending: Vec<&PendingDispatch> = app
+            .world_mut()
+            .query::<&PendingDispatch>()
+            .iter(app.world())
+            .collect();
+        pending.first().map(|p| p.hint.clone())
     }
 
     #[test]
@@ -527,6 +610,92 @@ mod tests {
             finishes.len(),
             1,
             "command_parse_system should handle /finish while pending confirmation"
+        );
+    }
+
+    // ---- continue_task_system 续轮派发语义测试 ----
+
+    #[test]
+    fn continue_top_level_task_reuses_persistent_delegate() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.add_systems(Update, continue_task_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let task = make_task_with_delegate(telegram_channel(), Some(agent_id), None);
+        let agent = make_agent(agent_id, "reused-agent", AgentKind::Persistent);
+
+        let hint = run_continue_and_get_hint(&mut app, task, Some(agent));
+        let hint = hint.expect("PendingDispatch should be attached after continue");
+
+        assert!(
+            matches!(hint.strategy, DispatchStrategy::DirectDelegate),
+            "TopLevelTask with existing persistent delegate should reuse it via DirectDelegate"
+        );
+        assert_eq!(
+            hint.preferred_agent_name.as_deref(),
+            Some("reused-agent"),
+            "preferred_agent_name should be the reused agent's name"
+        );
+
+        // delegate 必须在重派发前被清空
+        let tasks: Vec<&Task> = app.world_mut().query::<&Task>().iter(app.world()).collect();
+        assert!(
+            tasks.iter().all(|t| t.delegate.is_none()),
+            "delegate must be cleared before re-dispatch"
+        );
+    }
+
+    #[test]
+    fn continue_top_level_task_with_missing_delegate_agent_falls_back_to_brain_llm() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.add_systems(Update, continue_task_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let task = make_task_with_delegate(telegram_channel(), Some(agent_id), None);
+        // 故意不 spawn 对应 agent（delegate 指向的 agent 已不存在 → stale）
+
+        let hint = run_continue_and_get_hint(&mut app, task, None);
+        let hint = hint.expect("PendingDispatch should be attached after continue");
+        assert!(
+            matches!(hint.strategy, DispatchStrategy::BrainLlm),
+            "stale delegate should fall back to BrainLlm"
+        );
+    }
+
+    #[test]
+    fn continue_subtask_always_uses_brain_llm() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.add_systems(Update, continue_task_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let parent_id = uuid::Uuid::new_v4();
+        let task = make_task_with_delegate(telegram_channel(), Some(agent_id), Some(parent_id));
+        let agent = make_agent(agent_id, "sub-agent", AgentKind::Persistent);
+
+        let hint = run_continue_and_get_hint(&mut app, task, Some(agent));
+        let hint = hint.expect("PendingDispatch should be attached after continue");
+        assert!(
+            matches!(hint.strategy, DispatchStrategy::BrainLlm),
+            "SubTask must always re-run Brain, even with a valid persistent delegate"
+        );
+    }
+
+    #[test]
+    fn continue_task_without_delegate_uses_brain_llm() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.add_systems(Update, continue_task_system);
+
+        let task = make_task_with_delegate(telegram_channel(), None, None);
+
+        let hint = run_continue_and_get_hint(&mut app, task, None);
+        let hint = hint.expect("PendingDispatch should be attached after continue");
+        assert!(
+            matches!(hint.strategy, DispatchStrategy::BrainLlm),
+            "no delegate should fall back to BrainLlm"
         );
     }
 }

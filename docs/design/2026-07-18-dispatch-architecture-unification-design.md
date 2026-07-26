@@ -280,6 +280,24 @@ SystemSet：在 `HarnessSet::Dispatch` 之前。
 - 未来扩展（权限检查、资源配额检查）有归属
 - 解决 `task_dispatch` 与 `brain_dispatch` 边界混乱（腐化点严重 5）
 
+#### 决策 11.1：续轮（continue）派发语义——TopLevelTask 复用 delegate，省去每轮 Brain
+
+续轮由 `continue_task_system`（`src/systems/routing.rs`）在将 `Waiting(User)` 任务置 `Ready` 并追加 STM 后，生成 `PendingDispatch` 派发请求。其策略选择如下：
+
+- TopLevelTask（`parent_task_id == None`）且上一轮 `task.delegate` 指向一个现存的 `AgentKind::Persistent` Agent
+  → `DispatchHint { strategy: DirectDelegate, preferred_agent_name: Some(agent.profile.name), .. }`
+  （恢复 2026-06-07 设计意图，省去每轮重跑 Brain LLM 的一次决策开销）
+- 否则（无 delegate / delegate 指向的 Agent 已不存在（stale）/ SubTask）→ `strategy: BrainLlm`，与原行为一致
+
+无论走哪条路径，`continue_task_system` 都会先把 `task.delegate` 置 `None`，再附加 `PendingDispatch`：
+
+- BrainLlm 分支的 `dispatch_system` 对"已有 delegate"的任务会跳过（`if task.delegate.is_some() { continue }`），置 `None` 可避免误判为"已绑定执行者"而被跳过。
+- DirectDelegate 分支会按 `preferred_agent_name` 重新 `mark_waiting_for_agent` 并写入新的 delegate，因此清空不影响最终委派结果。
+
+作用域限制：仅 TopLevelTask 适用 delegate 复用。SubTask 因为依赖 DAG 准备与 spawn spec，始终走 BrainLlm，不在此优化范围内。
+
+__历史说明__：2026-06-07 的 `docs/archive/superpowers/specs/2026-06-07-continue-existing-delegate-design.md` 已经明确"continue 默认复用 delegate"。该意图在 2026-07-18 派发架构统一提交（`477c1bb`）中被静默反转——统一实现删除了 `task_dispatch.rs` 中的 delegate 复用快路径，并强制续轮清空 delegate 改挂 `BrainLlm`，且统一设计文档当时未记录该反转，违反 AGENTS.md 文档同步要求。本次变更恢复 2026-06-07 的设计意图，并把续轮派发语义正式写入本设计文档。
+
 ### 2.6 WorkItem 派发统一
 
 #### 决策 12：WorkItem 创建器与派发器职责切分
@@ -906,6 +924,7 @@ __阶段 4 实施偏差记录（2026-07-19）__：
    - SubTask 通过 preparation system + BrainLlm 策略派发
    - Brain LLM 失败时 Task 标 Failed
    - DirectDelegate 策略下 spawn_spec 携带和复用
+   - 续轮（continue）：TopLevelTask 复用上一轮 delegate 走 DirectDelegate；无 delegate / stale / SubTask 回退 BrainLlm（对应 `routing::tests::continue_*` 单测，见「决策 11.1」）
 4. __WorkItem 派发迁移阶段__：
    - SkillUpdate WorkItem 通过创建器 + dispatch_system 派发
    - ProfileGeneration WorkItem 同上
