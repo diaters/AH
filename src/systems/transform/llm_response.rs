@@ -18,6 +18,7 @@ use crate::{
         ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
         WorkItemLifecycleHookPending, WorkItemType,
     },
+    ecs::EntityIndex,
     user_plugins::hook_point::HookPoint,
 };
 
@@ -212,6 +213,7 @@ fn handle_profile_generation_invalid(
 #[allow(clippy::too_many_arguments, clippy::drop_non_drop)]
 fn handle_evaluation_work_item_result(
     commands: &mut Commands,
+    index: &EntityIndex,
     tasks: &mut Query<(
         Entity,
         &mut Task,
@@ -244,9 +246,9 @@ fn handle_evaluation_work_item_result(
                     "failed to parse evaluation result"
                 );
                 // 解析失败，恢复任务状态避免死锁
-                if let Some((_, mut task, _, _)) = tasks
-                    .iter_mut()
-                    .find(|(_, t, _, _)| t.id == work_item.task_id)
+                if let Some((_, mut task, _, _)) = index
+                    .get_task(&work_item.task_id)
+                    .and_then(|e| tasks.get_mut(e).ok())
                     && matches!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator))
                 {
                     let old_status = task.status.clone();
@@ -325,9 +327,9 @@ fn handle_evaluation_work_item_result(
     };
 
     // 更新任务状态（两阶段应用，避免借用冲突）
-    if let Some((_, mut task, _, _)) = tasks
-        .iter_mut()
-        .find(|(_, t, _, _)| t.id == work_item.task_id)
+    if let Some((_, mut task, _, _)) = index
+        .get_task(&work_item.task_id)
+        .and_then(|e| tasks.get_mut(e).ok())
     {
         let old_status = task.status.clone();
 
@@ -472,7 +474,7 @@ fn handle_evaluation_work_item_result(
         // 注入纠偏上下文到 STM（AutoCorrect / AskUser 均适用）
         if let Some((role, content, metadata)) = effects.stm_injection
             && let Some((_, _, Some(mut stm), _)) =
-                tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
+                index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())
         {
             stm.add_entry(role, &content, metadata);
         }
@@ -504,6 +506,7 @@ fn handle_evaluation_work_item_result(
 #[allow(clippy::too_many_arguments)]
 fn handle_summarization_work_item_result(
     commands: &mut Commands,
+    index: &EntityIndex,
     tasks: &mut Query<(
         Entity,
         &mut Task,
@@ -565,7 +568,8 @@ fn handle_summarization_work_item_result(
 
             // 恢复任务状态：从 Waiting(Summarization) 恢复为 Waiting(User)
             // 这适用于 UserCommand 和 TokenThreshold 触发的摘要
-            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
+            if let Some((_, mut task, _, _)) =
+                index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())
                 && matches!(
                     task.status,
                     TaskStatus::Waiting(WaitingReason::Summarization)
@@ -598,7 +602,8 @@ fn handle_summarization_work_item_result(
             });
 
             // 即使摘要失败，也恢复任务状态，避免任务卡住
-            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
+            if let Some((_, mut task, _, _)) =
+                index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())
                 && matches!(
                     task.status,
                     TaskStatus::Waiting(WaitingReason::Summarization)
@@ -633,7 +638,8 @@ fn handle_summarization_work_item_result(
             });
 
             // 即使摘要失败，也恢复任务状态，避免任务卡住
-            if let Some((_, mut task, _, _)) = tasks.iter_mut().find(|(_, t, _, _)| t.id == task_id)
+            if let Some((_, mut task, _, _)) =
+                index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())
                 && matches!(
                     task.status,
                     TaskStatus::Waiting(WaitingReason::Summarization)
@@ -720,6 +726,7 @@ pub fn llm_response_system(
     config: Res<MemoryConfig>,
     eval_config: Res<crate::domain::TaskEvaluationConfig>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     mut tasks: Query<(
         Entity,
         &mut Task,
@@ -765,6 +772,7 @@ pub fn llm_response_system(
                     WorkItemType::Evaluation => {
                         handle_evaluation_work_item_result(
                             &mut commands,
+                            &index,
                             &mut tasks,
                             entity,
                             work_item_entity,
@@ -778,6 +786,7 @@ pub fn llm_response_system(
                     WorkItemType::Summarization => {
                         handle_summarization_work_item_result(
                             &mut commands,
+                            &index,
                             &mut tasks,
                             entity,
                             work_item_entity,
@@ -1439,6 +1448,7 @@ pub fn llm_response_system(
 pub fn tool_calling_orchestrator_system(
     clock: Res<Clock>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     mut calling_states: Query<(Entity, &mut ToolCallingState)>,
     tool_results: Query<(Entity, &ToolExecutionResultMessage)>,
     mut tasks: Query<&mut Task>,
@@ -1451,9 +1461,11 @@ pub fn tool_calling_orchestrator_system(
         // 仅在任务处于”由 tool calling loop 驱动的等待态”时继续，否则跳过
         // ExperienceCollection WorkItem 的原任务可能已是终态，但仍需继续 tool calling
         let is_work_item = state.work_item_id.is_some();
-        let task_is_waiting = tasks.iter().any(|t| {
-            t.id == state.task_id
-                && matches!(
+        let task_is_waiting = index
+            .get_task(&state.task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .map(|t| {
+                matches!(
                     t.status,
                     TaskStatus::Waiting(
                         WaitingReason::ToolExecution
@@ -1461,7 +1473,8 @@ pub fn tool_calling_orchestrator_system(
                             | WaitingReason::SubTaskBatch { .. }
                     )
                 )
-        });
+            })
+            .unwrap_or(false);
         if !task_is_waiting && !is_work_item {
             continue;
         }
@@ -1545,7 +1558,9 @@ pub fn tool_calling_orchestrator_system(
                 );
                 // WorkItem 不修改原任务状态
                 if state.work_item_id.is_none()
-                    && let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
+                    && let Some(mut task) = index
+                        .get_task(&state.task_id)
+                        .and_then(|e| tasks.get_mut(e).ok())
                 {
                     task.last_error = Some(format!(
                         "tool calling exceeded absolute hard limit ({}/{})",
@@ -1585,9 +1600,9 @@ pub fn tool_calling_orchestrator_system(
         }
 
         // 在 follow-up 中保留当前通道上下文，避免多轮 tool calling 后丢失来源信息。
-        let system_prompt = tasks
-            .iter()
-            .find(|task| task.id == state.task_id)
+        let system_prompt = index
+            .get_task(&state.task_id)
+            .and_then(|e| tasks.get(e).ok())
             .and_then(|task| task.origin_channel.as_ref())
             .map(|ch| ch.to_prompt_context());
 
@@ -1621,7 +1636,9 @@ pub fn tool_calling_orchestrator_system(
 
         // Set task back to Waiting(Agent) — 但不修改 ExperienceCollection 关联的原任务状态
         if state.work_item_id.is_none()
-            && let Some(mut task) = tasks.iter_mut().find(|t| t.id == state.task_id)
+            && let Some(mut task) = index
+                .get_task(&state.task_id)
+                .and_then(|e| tasks.get_mut(e).ok())
             && matches!(
                 task.status,
                 TaskStatus::Waiting(

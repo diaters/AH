@@ -120,8 +120,16 @@ fn on_task_completed_dispatches_on_finish_command() {
     let mut task = make_ready_task();
     task.status = TaskStatus::Waiting(harness::WaitingReason::User);
     let task_id = task.id;
+    let task_entity = app
+        .world_mut()
+        .spawn((task, HarnessIdPlaceholder, ShortTermMemory::default()))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex，
+    // 供 finish_task_system 等 O(1) 解析 TaskId → Entity。
     app.world_mut()
-        .spawn((task, HarnessIdPlaceholder, ShortTermMemory::default()));
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 发送 /finish 命令
     input_tx

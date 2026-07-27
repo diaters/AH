@@ -93,44 +93,61 @@ fn test_config() -> HarnessConfig {
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut App) {
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    app.world_mut().spawn((
-        Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "gpt-4.1-mini".to_string(),
+    let brain_id = uuid::Uuid::new_v4();
+    let brain_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: brain_id,
+                profile: AgentProfile {
+                    name: "brain".to_string(),
+                    model: "gpt-4.1-mini".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["brain".to_string()],
+                    description: "Brain Agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string()],
-                description: "Brain Agent".to_string(),
+            LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(brain_id, brain_entity);
+
+    let default_id = uuid::Uuid::new_v4();
+    let default_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: default_id,
+                profile: AgentProfile {
+                    name: "default-llm-agent".to_string(),
+                    model: "gpt-4.1-mini".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["llm".to_string(), "default".to_string()],
+                    description: "Default LLM Agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
-    app.world_mut().spawn((
-        Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "Default LLM Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(default_id, default_entity);
 }
 
 /// 按顺序返回预设 LLM 输出的执行器，用于端到端测试。

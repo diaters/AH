@@ -193,6 +193,12 @@ fn spawn_task_with_stm(world: &mut World) -> (Entity, Task) {
     let mut task = Task::from_user_input_ready("test prompt", 3, default_channel());
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
     let entity = world.spawn((task.clone(), ShortTermMemory::default())).id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 tool_calling_orchestrator_system 等 O(1) 解析 TaskId → Entity。
+    world
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task.id, entity);
     (entity, task)
 }
 

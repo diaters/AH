@@ -5,9 +5,10 @@ use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, EntryRole, ExecutorFuture, ExperienceCollectionRequestMessage, FrontendKind,
-    HarnessConfig, LongTermMemory, PendingDispatch, ShortTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, WorkItem, build_harness_app, llm::ExecutorRegistry,
+    DispatchStrategy, EntityIndex, EntryRole, ExecutorFuture, ExperienceCollectionRequestMessage,
+    FrontendKind, HarnessConfig, LongTermMemory, PendingDispatch, ShortTermMemory, Task,
+    TaskRoutingPolicy, TaskStatus, WaitingReason, WorkItem, build_harness_app,
+    llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -73,46 +74,62 @@ fn test_config() -> HarnessConfig {
 }
 
 /// Helper function to spawn a default agent for tests
+///
+/// 同时写入 `EntityIndex.agents`，模拟 `spawn_agent` 封装的索引维护，
+/// 供 `dispatch_system` 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
 fn spawn_default_agent(app: &mut bevy_app::App) {
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    app.world_mut().spawn((
-        Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string()],
-                description: "Brain Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+    let brain_agent = Agent {
+        id: uuid::Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "brain".to_string(),
+            model: "gpt-4.1-mini".to_string(),
         },
-        LongTermMemory::default(),
-    ));
-    app.world_mut().spawn((
-        Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "Default LLM Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+        capabilities: AgentCapabilities {
+            tags: vec!["brain".to_string()],
+            description: "Brain Agent".to_string(),
         },
-        LongTermMemory::default(),
-    ));
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let brain_id = brain_agent.id;
+    let brain_entity = app
+        .world_mut()
+        .spawn((brain_agent, LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(brain_id, brain_entity);
+
+    let default_agent = Agent {
+        id: uuid::Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "default-llm-agent".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["llm".to_string(), "default".to_string()],
+            description: "Default LLM Agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let default_id = default_agent.id;
+    let default_entity = app
+        .world_mut()
+        .spawn((default_agent, LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(default_id, default_entity);
 }
 
 #[test]
@@ -165,6 +182,12 @@ fn multi_turn_task_lifecycle() {
             ShortTermMemory::default(),
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    // 模拟阶段 1 spawn 封装的索引维护（生产代码经 spawn_task 自动写入）
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
 
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
@@ -366,73 +389,97 @@ fn experience_collection_triggered_on_agent_termination() {
 
     // Create parent agent with memory
     let parent_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: parent_id,
-            profile: AgentProfile {
-                name: "parent".to_string(),
-                model: "gpt-4".to_string(),
+    let parent_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: parent_id,
+                profile: AgentProfile {
+                    name: "parent".to_string(),
+                    model: "gpt-4".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["general".to_string()],
+                    description: "parent agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["general".to_string()],
-                description: "parent agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(parent_id, parent_entity);
 
     // Create child task-scoped agent
     let child_id = uuid::Uuid::new_v4();
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: child_id,
-            profile: AgentProfile {
-                name: "child".to_string(),
-                model: "gpt-4".to_string(),
+    let child_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: child_id,
+                profile: AgentProfile {
+                    name: "child".to_string(),
+                    model: "gpt-4".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["general".to_string()],
+                    description: "child agent".to_string(),
+                },
+                kind: AgentKind::TaskScoped,
+                parent_id: Some(parent_id),
+                bound_task_id: Some(task_id),
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["general".to_string()],
-                description: "child agent".to_string(),
-            },
-            kind: AgentKind::TaskScoped,
-            parent_id: Some(parent_id),
-            bound_task_id: Some(task_id),
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(child_id, child_entity);
 
     // Create a task for the terminated message to reference
-    app.world_mut().spawn(Task {
-        id: task_id,
-        content: "test task".to_string(),
-        creator: parent_id,
-        delegate: Some(child_id),
-        status: TaskStatus::Done,
-        pending_confirmation_id: None,
-        input_summary: "test".to_string(),
-        result_summary: "completed".to_string(),
-        priority: 0,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: true,
-        parent_task_id: None,
-        batch_id: None,
-        origin_channel: Some(default_channel()),
-        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-        last_evaluated_turn: None,
-    });
+    let task_entity = app
+        .world_mut()
+        .spawn(Task {
+            id: task_id,
+            content: "test task".to_string(),
+            creator: parent_id,
+            delegate: Some(child_id),
+            status: TaskStatus::Done,
+            pending_confirmation_id: None,
+            input_summary: "test".to_string(),
+            result_summary: "completed".to_string(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+            last_evaluated_turn: None,
+        })
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // Trigger termination by spawning TaskTerminatedMessage
     app.world_mut()
@@ -539,6 +586,11 @@ fn multi_turn_memory_records_user_and_assistant() {
             ShortTermMemory::default(),
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
 
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
@@ -971,7 +1023,7 @@ fn second_dispatch_prompt_includes_correct_history() {
 
     // 创建 Waiting(User) 状态的任务，并预填充对话历史
     let task_id = uuid::Uuid::new_v4();
-    let _entity_id = app
+    let entity_id = app
         .world_mut()
         .spawn((
             Task {
@@ -1008,6 +1060,13 @@ fn second_dispatch_prompt_includes_correct_history() {
             },
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
+    // 抑制未使用警告：本测试只验证 LLM prompt 内容，不读取 entity_id
+    let _ = entity_id;
 
     // 模拟用户继续对话
     app.world_mut().spawn(harness::UserInputMessage {
@@ -1104,6 +1163,11 @@ fn task_content_updates_on_continue() {
             ShortTermMemory::default(),
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
 
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {

@@ -16,6 +16,7 @@ use crate::{
         ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
         WorkItem,
     },
+    ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
 };
@@ -51,10 +52,11 @@ pub fn tool_dispatch_system(
     )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // 两者都仅用于转发给 handle_tool_action（dry-run 校验需要 skill_loader）。
-    clock_and_loader: (Res<Clock>, Res<SkillLoader>),
+    // 合并 index / clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action。
+    index_clock_loader: (Res<EntityIndex>, Res<Clock>, Res<SkillLoader>),
 ) {
+    let index = &index_clock_loader.0;
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
@@ -82,7 +84,11 @@ pub fn tool_dispatch_system(
         };
 
         // 获取 Agent 权限
-        let Some(agent) = agents.iter().find(|a| a.id == request.request.agent_id) else {
+        // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
+        let Some(agent) = index
+            .get_agent(&request.request.agent_id)
+            .and_then(|e| agents.get(e).ok())
+        else {
             warn!(
                 event = "AgentNotFound",
                 agent_id = %request.request.agent_id,
@@ -185,17 +191,20 @@ pub fn tool_dispatch_system(
                     tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
                     current_task_id: request.request.task_id,
                     current_agent_id: request.request.agent_id,
-                    current_origin_channel: tasks
-                        .iter()
-                        .find(|(_, t)| t.id == request.request.task_id)
+                    // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                    current_origin_channel: index
+                        .get_task(&request.request.task_id)
+                        .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
                 };
                 let action = executor.execute(&request.tool_input, &ctx);
 
                 // Find the task entity
-                if let Some((task_entity, _)) =
-                    tasks.iter().find(|(_, t)| t.id == request.request.task_id)
+                // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                if let Some((task_entity, _)) = index
+                    .get_task(&request.request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
                 {
                     let parent_agent_id = agent.parent_id;
                     handle_tool_action(
@@ -212,20 +221,28 @@ pub fn tool_dispatch_system(
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         parent_agent_id,
-                        &clock_and_loader.0,
+                        &index_clock_loader.1,
                         &context_queries,
-                        &clock_and_loader.1,
+                        &index_clock_loader.2,
                         &calling_states,
                     );
                 }
 
-                restore_task_after_tool(&mut tasks, &calling_states, request.request.task_id);
+                restore_task_after_tool(
+                    &mut tasks,
+                    &calling_states,
+                    index,
+                    request.request.task_id,
+                );
             }
             ToolPermission::Confirm => {
                 // 顺序审批：同一任务同一时间仅允许一个待确认请求
-                let already_pending = tasks.iter().any(|(_, t)| {
-                    t.id == request.request.task_id && t.pending_confirmation_id.is_some()
-                });
+                // UUID+条件复合查询拆为 UUID 解析 + 调用方断言两步
+                let already_pending = index
+                    .get_task(&request.request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
+                    .map(|(_, t)| t.pending_confirmation_id.is_some())
+                    .unwrap_or(false);
                 if already_pending {
                     debug!(
                         event = "ToolConfirmationQueued",
@@ -237,22 +254,26 @@ pub fn tool_dispatch_system(
                 }
 
                 // Find the task to check parent_task_id
-                let task_for_approval = tasks
-                    .iter()
-                    .find(|(_, t)| t.id == request.request.task_id)
+                // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                let task_for_approval = index
+                    .get_task(&request.request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
                     .map(|(_, t)| t.clone());
 
                 // 统一按 task.parent_task_id 查找父 Agent
+                // 经 EntityIndex O(1) 解析 parent TaskId 与 parent AgentId（替代全量线性扫描）
                 let parent_approval = task_for_approval
                     .as_ref()
                     .and_then(|task| task.parent_task_id)
                     .and_then(|parent_task_id| {
-                        tasks
-                            .iter()
-                            .find(|(_, t)| t.id == parent_task_id)
+                        index
+                            .get_task(&parent_task_id)
+                            .and_then(|e| tasks.get(e).ok())
                             .and_then(|(_, parent_task)| parent_task.delegate)
                             .and_then(|parent_agent_id| {
-                                agents.iter().find(|a| a.id == parent_agent_id)
+                                index
+                                    .get_agent(&parent_agent_id)
+                                    .and_then(|e| agents.get(e).ok())
                             })
                             .filter(|parent| parent.has_permission(&tool_name))
                             .map(|parent| parent.id)
@@ -400,6 +421,7 @@ mod tests {
         world.insert_resource(HarnessSettings(HarnessConfig::default()));
         world.insert_resource(NativeProcessBackend::default());
         world.insert_resource(Clock::default());
+        world.insert_resource(crate::ecs::EntityIndex::default());
 
         // 注册需要确认的测试工具
         let mut registry = SpaceToolRegistry::default();
@@ -455,26 +477,38 @@ mod tests {
                 last_evaluated_turn: None,
             })
             .id();
+        // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
-        world.spawn(Agent {
-            id: agent_id,
-            profile: AgentProfile {
-                name: "test-agent".to_string(),
-                model: "test".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec![],
-                description: "test".to_string(),
-            },
-            kind: AgentKind::TaskScoped,
-            parent_id: None,
-            bound_task_id: Some(task_id),
-            tool_permissions: AgentToolPermissions {
-                default_permission: ToolPermission::Confirm,
-                overrides: HashMap::new(),
-            },
-            system_prompt: None,
-        });
+        let agent_entity = world
+            .spawn(Agent {
+                id: agent_id,
+                profile: AgentProfile {
+                    name: "test-agent".to_string(),
+                    model: "test".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec![],
+                    description: "test".to_string(),
+                },
+                kind: AgentKind::TaskScoped,
+                parent_id: None,
+                bound_task_id: Some(task_id),
+                tool_permissions: AgentToolPermissions {
+                    default_permission: ToolPermission::Confirm,
+                    overrides: HashMap::new(),
+                },
+                system_prompt: None,
+            })
+            .id();
+        // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .agents
+            .insert(agent_id, agent_entity);
 
         // spawn 3 个需要确认的工具请求
         for _ in 0..3 {

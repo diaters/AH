@@ -117,65 +117,91 @@ fn completes_brain_dispatch_flow() {
 
     // 手动创建 Brain Agent
     let brain_id = Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: brain_id,
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "gpt-4.1-mini".to_string(),
+    let brain_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: brain_id,
+                profile: AgentProfile {
+                    name: "brain".to_string(),
+                    model: "gpt-4.1-mini".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["brain".to_string(), "dispatcher".to_string()],
+                    description: "Brain Agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string(), "dispatcher".to_string()],
-                description: "Brain Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_agent 封装的索引维护），
+    // 供 dispatch_system 等 O(1) 解析 AgentId → Entity。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(brain_id, brain_entity);
 
     // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
     let default_agent_id = Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: default_agent_id,
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
+    let default_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: default_agent_id,
+                profile: AgentProfile {
+                    name: "default-llm-agent".to_string(),
+                    model: "gpt-4.1-mini".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["llm".to_string(), "default".to_string()],
+                    description: "Default LLM Agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "Default LLM Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(default_agent_id, default_entity);
 
     // 创建一个 Ready 状态的任务并附加 PendingDispatch(BrainLlm)
     // 老的 brain_dispatch_system 兜底路径已移除，所有 TopLevelTask 必须通过
     // PendingDispatch 流入 dispatch_system 走统一派发。
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
-    app.world_mut().spawn((
-        task,
-        harness::ShortTermMemory::default(),
-        PendingDispatch {
-            kind: DispatchKind::Task,
-            hint: DispatchHint {
-                strategy: DispatchStrategy::BrainLlm,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
+    let task_id = task.id;
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            task,
+            harness::ShortTermMemory::default(),
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::BrainLlm,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
             },
-        },
-    ));
+        ))
+        .id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 brain_decision_system 等 O(1) 解析 TaskId → Entity。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     for _ in 0..16 {
         app.update();

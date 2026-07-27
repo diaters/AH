@@ -8,8 +8,9 @@ use tracing::debug;
 use crate::{
     contracts::{AgentCapabilitySummary, BrainSelectionPolicy, FirstBrainPolicy},
     domain::{
-        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task, ToolPermission,
+        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentId, AgentKind,
+        AgentRequestKind, MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task,
+        ToolPermission,
     },
     infrastructure::skills::SkillRegistry,
 };
@@ -21,7 +22,9 @@ use super::brain_dispatch::{
 /// 查找 Brain Agent
 ///
 /// 通过 Tag 查找所有带 "brain" 标签的 Persistent Agent，使用 FirstBrainPolicy 选择。
-pub fn find_brain_agent<'a>(agents: &'a [&Agent]) -> Option<&'a Agent> {
+/// 返回选中的 `AgentId`，调用方经 `EntityIndex` 解析到 `&Agent`（ADR-005 §3：
+/// UUID 寻址改用 EntityIndex O(1) 解析，不在本函数内做二次线性扫描）。
+pub fn find_brain_agent(agents: &[&Agent]) -> Option<AgentId> {
     let brain_candidates: Vec<AgentCapabilitySummary> = agents
         .iter()
         .filter(|a| {
@@ -31,8 +34,7 @@ pub fn find_brain_agent<'a>(agents: &'a [&Agent]) -> Option<&'a Agent> {
         .collect();
 
     let policy = FirstBrainPolicy;
-    let brain_agent_id = policy.select_brain(&brain_candidates)?;
-    agents.iter().find(|a| a.id == brain_agent_id).copied()
+    policy.select_brain(&brain_candidates)
 }
 
 /// 构建所有 Persistent Agent 的描述列表（供 Brain LLM prompt 使用）
@@ -85,18 +87,18 @@ pub fn build_brain_tools(
 
 /// 构建 Brain LLM 执行请求
 ///
-/// 组合 Brain Agent 选择、prompt 构建（含候选 Agent 名下 skills 清单）、工具过滤，
+/// 组合 prompt 构建（含候选 Agent 名下 skills 清单）、工具过滤，
 /// 产出 `AgentExecutionRequestMessage`。调用方负责 spawn 返回的 request。
 ///
-/// 返回 `None` 表示未找到 Brain Agent。
+/// `brain_agent` 由调用方经 `EntityIndex` 解析后传入（ADR-005 §3）。
 pub fn build_brain_execution_request(
     task: &Task,
     short_term: Option<&ShortTermMemory>,
+    brain_agent: &Agent,
     agents: &[&Agent],
     registry: &SpaceToolRegistry,
     skill_registry: &SkillRegistry,
-) -> Option<(AgentExecutionRequestMessage, MessageDispatchedHookPending)> {
-    let brain_agent = find_brain_agent(agents)?;
+) -> (AgentExecutionRequestMessage, MessageDispatchedHookPending) {
     let all_agent_descriptions = build_agent_descriptions(agents.iter().copied(), skill_registry);
 
     let prompt_with_history = build_prompt_with_history(&task.content, short_term);
@@ -127,10 +129,10 @@ pub fn build_brain_execution_request(
         model_override: None,
     };
 
-    Some((
+    (
         AgentExecutionRequestMessage { request },
         MessageDispatchedHookPending,
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -198,8 +200,7 @@ mod tests {
         let brain_agent = make_persistent_agent("brain", vec!["brain".to_string()]);
         let agents = [&brain_agent];
         let found = find_brain_agent(&agents);
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().profile.name, "brain");
+        assert_eq!(found, Some(brain_agent.id));
     }
 
     #[test]

@@ -123,7 +123,13 @@ fn turn_limit_creates_evaluation_workitem() {
         harness::EntryMetadata::default(),
     );
 
-    app.world_mut().spawn((task, stm));
+    let task_entity = app.world_mut().spawn((task, stm)).id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 llm_response_system 内 handle_evaluation_work_item_result 等 O(1) 解析 TaskId → Entity。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 添加评估器 Agent
     app.world_mut().spawn(harness::Agent {
@@ -224,7 +230,13 @@ fn setup_eval_test_app(
         stm.add_entry(role, format!("msg {}", i), EntryMetadata::default());
     }
 
-    app.world_mut().spawn((task, stm));
+    let task_entity = app.world_mut().spawn((task, stm)).id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 llm_response_system 内 handle_evaluation_work_item_result 等 O(1) 解析 TaskId → Entity。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     app.world_mut().spawn(harness::Agent {
         id: uuid::Uuid::new_v4(),
@@ -291,7 +303,13 @@ fn setup_manual_eval_scenario(
         };
         stm.add_entry(role, format!("msg {}", i), EntryMetadata::default());
     }
-    app.world_mut().spawn((task, stm));
+    let task_entity = app.world_mut().spawn((task, stm)).id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 llm_response_system 内 handle_evaluation_work_item_result 等 O(1) 解析 TaskId → Entity。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 注意：不添加 evaluator agent，避免 dispatch 系统自动处理
     let work_item_id = uuid::Uuid::new_v4();

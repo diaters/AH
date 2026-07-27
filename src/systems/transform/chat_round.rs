@@ -10,17 +10,22 @@ use crate::{
         ChatRoundStartedMessage, ChatSession, OutputContent, Task, TaskStatus,
         TaskTerminatedMessage, ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
     },
+    ecs::EntityIndex,
 };
 
 /// 消费 ChatRoundStartedMessage，将父任务阻塞到 Waiting(SubTaskBatch { batch_id })。
 pub fn chat_round_block_system(
     mut commands: Commands,
     clock: Res<Clock>,
+    index: Res<EntityIndex>,
     mut tasks: Query<&mut Task>,
     started: Query<(Entity, &ChatRoundStartedMessage)>,
 ) {
     for (entity, msg) in &started {
-        if let Some(mut parent) = tasks.iter_mut().find(|t| t.id == msg.parent_task_id) {
+        if let Some(mut parent) = index
+            .get_task(&msg.parent_task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
+        {
             parent.status = TaskStatus::Waiting(WaitingReason::SubTaskBatch {
                 batch_id: msg.batch_id,
             });
@@ -47,11 +52,16 @@ pub fn chat_round_block_system(
 /// 父任务状态恢复由 tool_calling_orchestrator_system 统一处理。
 pub fn chat_round_completion_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     tasks: Query<&Task>,
     ready: Query<(Entity, &ChatRoundReadyMessage)>,
 ) {
     for (entity, msg) in &ready {
-        if tasks.iter().any(|t| t.id == msg.parent_task_id) {
+        if index
+            .get_task(&msg.parent_task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .is_some()
+        {
             debug!(
                 event = "ChatRoundCompleted",
                 parent_task_id = %msg.parent_task_id,

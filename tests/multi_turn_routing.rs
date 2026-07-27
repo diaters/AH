@@ -3,9 +3,9 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExternalInput,
-    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntityIndex, ExecutorFuture,
+    ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task,
+    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -45,45 +45,61 @@ fn test_config() -> HarnessConfig {
 }
 
 /// Helper: spawn brain + default-llm-agent（统一 dispatch 架构要求）
+///
+/// 同时写入 `EntityIndex.agents`，模拟 `spawn_agent` 封装的索引维护，
+/// 供 `dispatch_system` 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
 fn spawn_default_agents(app: &mut bevy_app::App) {
-    app.world_mut().spawn((
-        Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string()],
-                description: "Brain Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+    let brain_agent = Agent {
+        id: uuid::Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "brain".to_string(),
+            model: "gpt-4.1-mini".to_string(),
         },
-        LongTermMemory::default(),
-    ));
-    app.world_mut().spawn((
-        Agent {
-            id: uuid::Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "Default LLM Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+        capabilities: AgentCapabilities {
+            tags: vec!["brain".to_string()],
+            description: "Brain Agent".to_string(),
         },
-        LongTermMemory::default(),
-    ));
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let brain_id = brain_agent.id;
+    let brain_entity = app
+        .world_mut()
+        .spawn((brain_agent, LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(brain_id, brain_entity);
+
+    let default_agent = Agent {
+        id: uuid::Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "default-llm-agent".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["llm".to_string(), "default".to_string()],
+            description: "Default LLM Agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let default_id = default_agent.id;
+    let default_entity = app
+        .world_mut()
+        .spawn((default_agent, LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(default_id, default_entity);
 }
 
 #[test]
@@ -139,32 +155,40 @@ fn user_input_continues_waiting_task() {
 
     // Create a task in Waiting(User) state (multi-turn)
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id,
-            content: "existing task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "existing task".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "existing task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "existing task".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
@@ -339,60 +363,76 @@ fn multiple_waiting_user_tasks_routes_to_one() {
 
     // 创建两个 Waiting(User) 状态的任务
     let task_id_1 = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id_1,
-            content: "first waiting task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "first".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity_1 = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id_1,
+                content: "first waiting task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "first".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id_1, task_entity_1);
 
     let task_id_2 = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id_2,
-            content: "second waiting task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "second".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity_2 = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id_2,
+                content: "second waiting task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "second".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id_2, task_entity_2);
 
     // 模拟用户输入
     app.world_mut().spawn(harness::UserInputMessage {
@@ -443,32 +483,41 @@ fn finish_command_ends_multi_turn_conversation() {
 
     // 创建 Waiting(User) 状态的多轮对话任务
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id,
-            content: "active multi-turn task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "active task".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "active multi-turn task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "active task".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 finish_task_system 等 O(1) 解析 TaskId → Entity。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 模拟用户输入 /finish
     app.world_mut().spawn(harness::UserInputMessage {

@@ -20,11 +20,17 @@ use crate::domain::{
     ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
     WaitingForTasksInfo, WaitingReason, WorkItem,
 };
+use crate::ecs::EntityIndex;
 use crate::infrastructure::skills::{SkillLoader, apply_skill_operations};
 
 /// 清除任务上正在等待的工具确认 ID。
-pub fn clear_task_pending_confirmation_id(tasks: &mut Query<(Entity, &mut Task)>, task_id: TaskId) {
-    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
+pub fn clear_task_pending_confirmation_id(
+    tasks: &mut Query<(Entity, &mut Task)>,
+    index: &EntityIndex,
+    task_id: TaskId,
+) {
+    // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+    if let Some((_, mut task)) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
         task.pending_confirmation_id = None;
     }
 }
@@ -260,11 +266,16 @@ pub fn validate_task_ownership(
 }
 
 /// 收集目标任务的结果
-pub fn collect_task_results(task_ids: &[TaskId], tasks: &Query<&Task>) -> Vec<TaskWaitResult> {
+pub fn collect_task_results(
+    task_ids: &[TaskId],
+    tasks: &Query<&Task>,
+    index: &EntityIndex,
+) -> Vec<TaskWaitResult> {
     task_ids
         .iter()
         .map(|id| {
-            let task = tasks.iter().find(|t| t.id == *id);
+            // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+            let task = index.get_task(id).and_then(|e| tasks.get(e).ok());
             TaskWaitResult {
                 task_id: id.to_string(),
                 status: task
@@ -1347,9 +1358,11 @@ fn spawn_experience_candidate_result(
 pub fn restore_task_after_tool(
     tasks: &mut Query<(Entity, &mut Task)>,
     calling_states: &Query<(Entity, &ToolCallingState)>,
+    index: &EntityIndex,
     task_id: TaskId,
 ) {
-    if let Some((_, mut task)) = tasks.iter_mut().find(|(_, t)| t.id == task_id) {
+    // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+    if let Some((_, mut task)) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
         if !matches!(task.status, TaskStatus::Waiting(_)) {
             return;
         }

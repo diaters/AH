@@ -52,26 +52,35 @@ fn test_config() -> HarnessConfig {
 }
 
 /// Helper function to spawn a default agent for tests
+///
+/// 同时写入 `EntityIndex.agents`，模拟 `spawn_agent` 封装的索引维护，
+/// 供 `dispatch_system` 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
 fn spawn_default_agent(app: &mut bevy_app::App) {
-    app.world_mut().spawn((
-        Agent {
-            id: Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "Default LLM Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+    let agent = Agent {
+        id: Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "default-llm-agent".to_string(),
+            model: "gpt-4.1-mini".to_string(),
         },
-        LongTermMemory::default(),
-    ));
+        capabilities: AgentCapabilities {
+            tags: vec!["llm".to_string(), "default".to_string()],
+            description: "Default LLM Agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let agent_id = agent.id;
+    let entity = app
+        .world_mut()
+        .spawn((agent, LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(agent_id, entity);
 }
 
 /// 构造测试用 PendingDispatch(DirectDelegate) Component，
@@ -333,25 +342,33 @@ fn large_input_is_handled() {
     app.update();
     spawn_default_agent(&mut app);
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    app.world_mut().spawn((
-        Agent {
-            id: Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string()],
-                description: "Brain Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+    let brain_agent = Agent {
+        id: Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "brain".to_string(),
+            model: "gpt-4.1-mini".to_string(),
         },
-        LongTermMemory::default(),
-    ));
+        capabilities: AgentCapabilities {
+            tags: vec!["brain".to_string()],
+            description: "Brain Agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let brain_id = brain_agent.id;
+    let brain_entity = app
+        .world_mut()
+        .spawn((brain_agent, LongTermMemory::default()))
+        .id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_agent 封装的索引维护），
+    // 供 dispatch_system 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(brain_id, brain_entity);
 
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);

@@ -9,12 +9,14 @@ use crate::domain::{
     SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
     UserOutputMessage,
 };
+use crate::ecs::EntityIndex;
 
 /// 将 ECS 状态变化转为 EngineEvent 推送给所有前端
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn frontend_output_system(
     registry: Res<FrontendRegistry>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     outputs: Query<(Entity, &UserOutputMessage)>,
     system_outputs: Query<(Entity, &SystemOutputMessage)>,
     all_tasks: Query<(Entity, &Task)>,
@@ -29,9 +31,10 @@ pub(crate) fn frontend_output_system(
 ) {
     // 用户可见文本输出
     for (entity, output) in &outputs {
-        let Some(target) = all_tasks
-            .iter()
-            .find(|(_, t)| t.id == output.task_id)
+        // UUID 寻址改用 EntityIndex O(1) 解析
+        let Some(target) = index
+            .get_task(&output.task_id)
+            .and_then(|e| all_tasks.get(e).ok())
             .and_then(|(_, t)| t.routing_policy.output_channel.clone())
             .map(|channel| EventTarget::Directed(vec![channel]))
         else {
@@ -63,9 +66,10 @@ pub(crate) fn frontend_output_system(
 
     // 系统通知输出（不进入 STM，路由到 task 的 output_channel）
     for (entity, output) in &system_outputs {
-        let Some(target) = all_tasks
-            .iter()
-            .find(|(_, t)| t.id == output.task_id)
+        // UUID 寻址改用 EntityIndex O(1) 解析
+        let Some(target) = index
+            .get_task(&output.task_id)
+            .and_then(|e| all_tasks.get(e).ok())
             .and_then(|(_, t)| t.routing_policy.output_channel.clone())
             .map(|channel| EventTarget::Directed(vec![channel]))
         else {
@@ -165,8 +169,10 @@ pub(crate) fn frontend_output_system(
         // 事件任务的审批必须走路由策略中显式配置的 approval_channel。
         // 普通聊天任务的 approval_channel 与 output_channel 相同，由
         // TaskRoutingPolicy::conversational 构造时设置。
-        let Some((task_entity, task)) =
-            all_tasks.iter().find(|(_, t)| t.id == confirmation.task_id)
+        // UUID 寻址改用 EntityIndex O(1) 解析
+        let Some((task_entity, task)) = index
+            .get_task(&confirmation.task_id)
+            .and_then(|e| all_tasks.get(e).ok())
         else {
             commands.entity(entity).despawn();
             continue;
@@ -287,6 +293,7 @@ mod tests {
         FrontendKind, Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind,
         ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
     };
+    use crate::ecs::EntityIndex;
 
     use super::frontend_output_system;
 
@@ -320,6 +327,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let origin_channel = ChannelId {
@@ -329,7 +337,11 @@ mod tests {
         };
         let task = Task::from_user_input("test", 3, origin_channel.clone());
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
@@ -373,6 +385,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let approval_channel = ChannelId {
@@ -389,7 +402,11 @@ mod tests {
             ),
         );
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
@@ -433,6 +450,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let task = Task::from_trigger(
@@ -441,7 +459,11 @@ mod tests {
             TaskRoutingPolicy::event(None, Some("nightly summary timer".to_string())),
         );
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
         app.world_mut().spawn(UserOutputMessage {
             task_id,
             content: "should not be sent".to_string(),
@@ -468,6 +490,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let origin_channel = ChannelId {
@@ -477,7 +500,11 @@ mod tests {
         };
         let task = Task::from_user_input("test", 3, origin_channel);
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
         app.world_mut().spawn(UserOutputMessage {
             task_id,
             content: "hello".to_string(),
@@ -507,6 +534,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let task = Task::from_trigger(
@@ -515,7 +543,11 @@ mod tests {
             TaskRoutingPolicy::event(None, Some("nightly summary timer".to_string())),
         );
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
@@ -558,6 +590,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let approval_channel = ChannelId {
@@ -574,7 +607,11 @@ mod tests {
             ),
         );
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
@@ -624,6 +661,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let output_channel = ChannelId {
@@ -637,7 +675,11 @@ mod tests {
             TaskRoutingPolicy::scheduled_task(Some(output_channel.clone()), "scheduled task"),
         );
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
@@ -682,6 +724,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let origin_channel = ChannelId {
@@ -691,7 +734,11 @@ mod tests {
         };
         let task = Task::from_user_input("test", 3, origin_channel);
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         // First update: task status change from Pending -> Running
         {
@@ -750,6 +797,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let origin_channel = ChannelId {
@@ -759,7 +807,11 @@ mod tests {
         };
         let task = Task::from_user_input("test", 3, origin_channel);
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         for status in [
             TaskStatus::Running,
@@ -815,6 +867,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let origin_channel = ChannelId {
@@ -824,7 +877,11 @@ mod tests {
         };
         let task = Task::from_user_input("test", 3, origin_channel);
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         // Pending -> Running
         {
@@ -891,6 +948,7 @@ mod tests {
         app.insert_resource(FrontendRegistry {
             frontends: vec![Box::new(frontend)],
         });
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, frontend_output_system);
 
         let origin_channel = ChannelId {
@@ -900,7 +958,11 @@ mod tests {
         };
         let task = Task::from_user_input("test", 3, origin_channel.clone());
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         // Update task status to trigger event
         {

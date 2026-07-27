@@ -14,6 +14,7 @@ use crate::domain::{
     PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationKind,
     ProfileGenerationRequestMessage, WorkItem, sanitize_tags,
 };
+use crate::ecs::EntityIndex;
 use crate::user_plugins::hook_point::HookPoint;
 
 /// Profile 更新触发系统：检测 LTM/SkillPackage 写回成功后，触发 profile 更新评估。
@@ -23,6 +24,7 @@ use crate::user_plugins::hook_point::HookPoint;
 #[allow(dead_code)] // 任务 11 系统注册时启用
 pub(crate) fn profile_update_trigger_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     mut store: ResMut<ExperienceStore>,
     agents: Query<&Agent>,
 ) {
@@ -61,7 +63,8 @@ pub(crate) fn profile_update_trigger_system(
     }
 
     for (task_id, (agent_id, candidate_ids)) in groups {
-        let Some(agent) = agents.iter().find(|a| a.id == agent_id) else {
+        // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
+        let Some(agent) = index.get_agent(&agent_id).and_then(|e| agents.get(e).ok()) else {
             // Agent 不存在，标记为已触发以跳过
             for id in &candidate_ids {
                 store.profile_update_triggered.insert(*id);
@@ -264,6 +267,7 @@ mod tests {
         ExperienceKindHint, ExperienceStore, GeneratedProfile, ProfileGenerationContext,
         ProfileGenerationKind, WorkItem,
     };
+    use crate::ecs::EntityIndex;
     use bevy_ecs::system::RunSystemOnce;
 
     fn make_test_agent(name: &str, tags: &[&str], agent_id: crate::domain::AgentId) -> Agent {
@@ -309,8 +313,22 @@ mod tests {
     fn make_test_world_with_agents(store: ExperienceStore, agents: Vec<Agent>) -> World {
         let mut world = World::new();
         world.insert_resource(store);
-        for agent in agents {
-            world.spawn(agent);
+        world.insert_resource(EntityIndex::default());
+        // 经 EntityIndex 注册 agent，模拟阶段 1 spawn_agent 封装的索引维护
+        // 先 spawn 所有 agent 收集 entity，再统一写入索引避免可变借用冲突
+        let spawned: Vec<(crate::domain::AgentId, Entity)> = agents
+            .into_iter()
+            .map(|agent| {
+                let id = agent.id;
+                let entity = world.spawn(agent).id();
+                (id, entity)
+            })
+            .collect();
+        for (id, entity) in spawned {
+            world
+                .resource_mut::<EntityIndex>()
+                .agents
+                .insert(id, entity);
         }
         world
     }

@@ -4,7 +4,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, BrainConfig, ChannelId,
-    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, OutputContent, build_harness_app,
+    EntityIndex, ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, OutputContent,
+    build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
     llm::ExecutorRegistry,
 };
@@ -54,45 +55,61 @@ fn brain_enabled_config() -> HarnessConfig {
 }
 
 /// Spawn Brain Agent 与 default-llm-agent（auto_channel_reply 测试需要两者）。
+///
+/// 同时写入 `EntityIndex.agents`，确保 `dispatch_system` 能经 index O(1) 解析
+/// brain_agent_id → Entity（ADR-005 §3 阶段 2 要求）。
 fn spawn_brain_and_default_agent(app: &mut bevy_app::App) {
-    app.world_mut().spawn((
-        Agent {
-            id: Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "brain".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["brain".to_string()],
-                description: "Brain Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+    let brain_agent = Agent {
+        id: Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "brain".to_string(),
+            model: "gpt-4.1-mini".to_string(),
         },
-        harness::LongTermMemory::default(),
-    ));
-    app.world_mut().spawn((
-        Agent {
-            id: Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "默认 Agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+        capabilities: AgentCapabilities {
+            tags: vec!["brain".to_string()],
+            description: "Brain Agent".to_string(),
         },
-        harness::LongTermMemory::default(),
-    ));
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let brain_id = brain_agent.id;
+    let brain_entity = app
+        .world_mut()
+        .spawn((brain_agent, harness::LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(brain_id, brain_entity);
+
+    let default_agent = Agent {
+        id: Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "default-llm-agent".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["llm".to_string(), "default".to_string()],
+            description: "默认 Agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let default_id = default_agent.id;
+    let default_entity = app
+        .world_mut()
+        .spawn((default_agent, harness::LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(default_id, default_entity);
 }
 
 /// 验证来自 Telegram 的输入经 Agent 处理后，回复会自动通过 sendMessage 返回。

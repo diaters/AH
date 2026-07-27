@@ -39,15 +39,27 @@ Accepted（v2 — 经 `improve-codebase-architecture` 技能 grilling 四轮决�
    （`ExperienceStore.inboxes` 内部虽有 `HashMap<TaskId, _>`，但那是经验收件箱、按 TaskId O(1) 索引，不属本设计问题），
    Bevy 原生关系（`ChildOf` / `Related`）对 Task / Agent 层级零命中。拿到一个 UUID，无从知道它对应哪个 ECS Entity。
 
-3. __线性扫描（真实规模远小于原估计）__：因无法从 UUID 解析 Entity，系统在全量 `Query<&Task>` 上做
-   `tasks.iter().find(|t| t.id == …)`，全库共 __16 处__（生产约 13 处，TUI 本地快照 3 处应排除出验收），
-   散布于 routing / command / experience / tools / waiting / chat_round。行号示例（已核对）：
-   [routing.rs:36](../../src/systems/routing.rs#L36)、[command.rs:38](../../src/systems/command.rs#L38)、
-   [experience/collection.rs:19](../../src/systems/experience/collection.rs#L19) 为生产 `tasks.iter().find`；
-   [dispatch.rs:85](../../src/systems/tools/dispatch.rs#L85) 实为 `agents.iter().find`（属 Agent 扫描，同样由两表 index 解决）；
-   [orchestrator.rs:1529](../../src/systems/tools/orchestrator.rs#L1529) 位于 `#[test]` 内、非生产代码；
-   [waiting.rs:27-30](../../src/systems/tools/waiting.rs#L27-L30) 的 `all_tasks.iter().any(|t| t.id == …)` 也是按 UUID 全量扫描。
-   每次查找都是 O(n)。原估 "55+" 严重高估。
+3. __线性扫描（实际规模经全量扫描核实）__：因无法从 UUID 解析 Entity，系统在全量 `Query<&Task>` /
+   `Query<&Agent>` 上做 `tasks.iter().find(|t| t.id == …)` / `agents.iter().find(|a| a.id == …)`。
+   __全库核实共 50 处__（2026-07-27 阶段 2 启动前重新扫描）：
+
+   - __36 处 UUID 寻址__（含 `iter().find` / `iter().any` / `iter_mut().find`，散布于 routing / experience /
+     tools / waiting / transform/llm_response / subtask / brain_decision / summarization / maintenance /
+     contracts/tools / frontend_output / brain_llm_builder）— 本设计改造对象
+   - __4 处 UUID+条件复合__（闭包同时含 id 与 status 等字段，可拆为 UUID 解析 + 调用方断言两步）— 本设计改造对象
+     （[llm_response.rs:1454](../../src/systems/transform/llm_response.rs#L1454)、
+     [dispatch.rs:226](../../src/systems/tools/dispatch.rs#L226)、
+     [waiting.rs:27-30](../../src/systems/tools/waiting.rs#L27-L30) / [53-56](../../src/systems/tools/waiting.rs#L53-L56)）
+   - __5 处复合查询__（不通过 id 查找、按 status / origin_channel / kind / tags 等非 UUID 字段筛选）— __非本设计改造对象__：
+     [routing.rs:36](../../src/systems/routing.rs#L36)、[command.rs:38/95/116](../../src/systems/command.rs#L38)
+     （按 channel+status 找活跃任务）、[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762)
+     （按 kind+tags 找 Persistent agent）。这些是真正的领域查询、ADR §3 设计意图不覆盖，
+     后续是否引入次级索引（如 `ChannelActiveTaskIndex` / `PersistentAgentByTagIndex`）单独立项评审
+   - __5 处 TUI 本地快照__（[tui/app.rs:665/891/1132/1167](../../src/tui/app.rs#L665)、
+     [tui/status.rs:122](../../src/tui/status.rs#L122)）— 排除出验收
+
+   原 v1 估算"约 13 处"严重低估（实际 40 处生产需改造）；原 v0 估算"55+"亦不准确。
+   每次查找都是 O(n)。
 
 4. __实体级状态被迫进全局 Resource（根因部分在本设计）__：`ExperienceStore` 是 `#[derive(Resource)]` 全局枢纽，
    其 `PendingExperienceHooks`（[contribution.rs:192-194](../../src/domain/contribution.rs#L192-L194)，注意该自承注释挂在
@@ -115,8 +127,36 @@ __分阶段、保持 `main` 可编译可测__：
   - `Task` 实体创建统一走 `user_message_to_task_system` 的 `commands.spawn((task, stm, …))`（[task_creation.rs:88](../../src/systems/transform/task_creation.rs#L88)）；
   - `Agent` 仅 2 处（[maintenance.rs:226](../../src/systems/maintenance.rs#L226) / [372](../../src/systems/maintenance.rs#L372)）。
   在 `spawn_task` / `spawn_agent` 封装内统一写 index，外部调用签名不变，__不需逐个改几十处__；不需要 `spawn_session` 封装（session 不进 ECS）。
-- __阶段 2（逐个替换查找）__：按模块分批把约 __13 处__生产 `tasks.iter().find(|t| t.id == …)` 改为 `index.get` 或 `ChildOf` 关系查询
-  （routing → command → experience → tools → waiting → chat_round），每批带测试、独立 PR。__TUI 3 处本地快照查找排除出验收__。
+- __阶段 2（逐个替换查找）__：按模块分批把 __40 处__生产 UUID 寻址点改为 `index.get` 或 `ChildOf` 关系查询
+  （36 处纯 UUID 寻址 + 4 处 UUID+条件复合，后者拆为 UUID 解析 + 调用方断言两步）。__5 处复合查询明确移出本设计范围__
+  （见第 3 点）。批次切分（保持 ADR §3 原始 6 批次口径）：
+
+  1. __routing__（1 处）：[routing.rs:138](../../src/systems/routing.rs#L138) — `continue_task_system` 按 `msg.task_id` 查 task
+     （注：原列 [routing.rs:36](../../src/systems/routing.rs#L36) 经核实为 channel+status 复合查询，移出范围）✅ 已落地（PR-1，2026-07-27）
+  2. __experience__（6 处）：[collection.rs:19/63/226/234](../../src/systems/experience/collection.rs#L19) +
+     [profile_update.rs:64](../../src/systems/experience/profile_update.rs#L64) + [governance.rs:27](../../src/systems/experience/governance.rs#L27)
+     （原列 [command.rs:38/95/116](../../src/systems/command.rs#L38) 全部为复合查询，移出范围；command 批次语义由 experience 接续）✅ 已落地（PR-2，2026-07-27）
+  3. __tools/dispatch+orchestrator+approval+async_dispatch__（9 处，含 1 处 UUID+条件复合）：
+     [dispatch.rs:85/198/226/255](../../src/systems/tools/dispatch.rs#L85) +
+     [orchestrator.rs:27/267/1352](../../src/systems/tools/orchestrator.rs#L27) +
+     [approval.rs:65](../../src/systems/tools/approval.rs#L65) + [async_dispatch.rs:101](../../src/systems/tools/async_dispatch.rs#L101)
+     （注：[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762) 经核实为 kind+tags 复合查询，移出范围）✅ 已落地（PR-3，2026-07-27）
+  4. __waiting__（2 处，UUID+条件复合，需轻度重构）：[waiting.rs:27-30](../../src/systems/tools/waiting.rs#L27-L30) / [53-56](../../src/systems/tools/waiting.rs#L53-L56)
+     ✅ 已落地（PR-4，2026-07-27）
+  5. __transform 系列__（14 处，含 1 处 UUID+条件复合）：
+     [chat_round.rs:23/54](../../src/systems/transform/chat_round.rs#L23) +
+     [task_lifecycle.rs:239/277](../../src/systems/transform/task_lifecycle.rs#L239) +
+     [llm_response.rs:475/568/601/636/1454/1548/1624](../../src/systems/transform/llm_response.rs#L475) +
+     [subtask.rs:26/114](../../src/systems/transform/subtask.rs#L26) + [brain_decision.rs:63](../../src/systems/transform/brain_decision.rs#L63)
+     ✅ 已落地（PR-5，2026-07-27）
+  6. __散点__（10 处，含 ADR v2 漏列 4 处：`summarization.rs` 1 处 + `maintenance.rs` 3 处 + `frontend_output.rs` 2 处
+     中的 1 处 + `brain_llm_builder.rs` BrainLlm 分支 1 处）：
+     [contracts/tools.rs:76/78](../../src/contracts/tools.rs#L76) +
+     [frontend_output.rs:169](../../src/systems/frontend_output.rs#L169) + [maintenance.rs:309/407/480](../../src/systems/maintenance.rs#L309) +
+     [brain_llm_builder.rs:35](../../src/systems/dispatch/brain_llm_builder.rs#L35) + [summarization.rs:30](../../src/systems/summarization.rs#L30)
+     ✅ 已落地（PR-6，2026-07-27）
+
+  每批带测试、独立 PR。__5 处 TUI 本地快照查找排除出验收__（[tui/app.rs:665/891/1132/1167](../../src/tui/app.rs#L665)、[tui/status.rs:122](../../src/tui/status.rs#L122)）。
 - __阶段 3（关系 ECS 化）__：引入 `ChildOf` 替换 `parent_task_id` 的 UUID 字段并删除该字段；
   `waiting` 维持 `Vec<TaskId>`（[task.rs:145](../../src/domain/task.rs#L145)，本就是，无 `Vec<Entity>` 改动）；`batch_id` 保留。
 
@@ -139,7 +179,7 @@ __边界兜底（grilling 自我质疑结论 + 评审修正）__：
 
 ### 正面
 
-- __leverage__：约 13 处 O(n) 线性查找 + 散落 UUID 收敛为 1 个查询接口（index 或关系查询）。
+- __leverage__：约 40 处 O(n) 线性查找 + 散落 UUID 收敛为 1 个查询接口（index 或关系查询）。
 - __locality__：层级关系逻辑集中，不再重写过滤；index 维护点集中在 spawn / despawn 封装。
 - __引用完整性__：父 despawn 经封装清 index + `RemovedComponents` 兜底，关系不再悬空；子任务不级联、独立存活。
 - __测试更直接__：断言对象从"手搓的 find 函数"变为"关系是否建立、index 是否命中"，更贴近真实运行时。
@@ -149,7 +189,7 @@ __边界兜底（grilling 自我质疑结论 + 评审修正）__：
 
 - 新增 `EntityIndex` Resource 及两表维护成本（集中在 spawn / despawn）。
 - 阶段 1 收口 spawn 点（实际很少：Task 1 处元组形式 + Agent 2 处）。
-- 阶段 2 涉及约 13 处生产调用点改造，需分批、带测试、独立 PR 控制风险。
+- 阶段 2 涉及约 40 处生产调用点改造，需分批、带测试、独立 PR 控制风险。
 - `ChildOf` 非级联需显式机制（非递归 despawn），增加少量正确性约束。
 
 ## 关联文件

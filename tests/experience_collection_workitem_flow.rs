@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus, WorkItemType,
-    build_harness_app, llm::ExecutorRegistry,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, EntityIndex,
+    ExecutorFuture, FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus,
+    WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -54,8 +54,15 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
     let task_id = task.id;
     let governing_agent_id = uuid::Uuid::new_v4();
     task.delegate = Some(governing_agent_id);
+    let task_entity = app
+        .world_mut()
+        .spawn((task, harness::ShortTermMemory::default()))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
     app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 不绑定 TaskScoped agent：验证顶层持久型任务不依赖 agent 终止也能触发
     app.world_mut()
@@ -211,22 +218,30 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     let governing_agent_id = uuid::Uuid::new_v4();
     let collector_id = uuid::Uuid::new_v4();
 
-    app.world_mut().spawn(harness::Agent {
-        id: governing_agent_id,
-        profile: harness::AgentProfile {
-            name: "persistent-worker".to_string(),
-            model: "test".to_string(),
-        },
-        capabilities: harness::AgentCapabilities {
-            tags: vec![],
-            description: "worker".to_string(),
-        },
-        kind: harness::AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
-        system_prompt: None,
-    });
+    let agent_entity = app
+        .world_mut()
+        .spawn(harness::Agent {
+            id: governing_agent_id,
+            profile: harness::AgentProfile {
+                name: "persistent-worker".to_string(),
+                model: "test".to_string(),
+            },
+            capabilities: harness::AgentCapabilities {
+                tags: vec![],
+                description: "worker".to_string(),
+            },
+            kind: harness::AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: harness::AgentToolPermissions::default(),
+            system_prompt: None,
+        })
+        .id();
+    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(governing_agent_id, agent_entity);
 
     // 任务 18 改造后 experience_collection_completion_system 需要 Task 实体来判定
     // delegate_is_persistent 并路由到 route_persistent_agent_experience；
@@ -238,7 +253,12 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     task.status = TaskStatus::Done;
     task.created_at = now;
     task.updated_at = now;
-    app.world_mut().spawn(task);
+    let task_entity = app.world_mut().spawn(task).id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     let candidate = harness::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),

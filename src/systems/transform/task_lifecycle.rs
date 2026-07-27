@@ -13,6 +13,7 @@ use crate::{
         SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
         TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
     },
+    ecs::EntityIndex,
     systems::NativeProcessBackend,
 };
 
@@ -36,23 +37,24 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
 pub fn retry_ready_system(
     clock: Res<Clock>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     messages: Query<(Entity, &RetryReadyMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
     for (entity, message) in &messages {
-        for mut task in &mut tasks {
-            if task.id == message.task_id {
-                debug!(
-                    event = "RetryReady",
-                    task_id = %task.id,
-                    retry_count = task.retry_count,
-                    max_retries = task.max_retries,
-                    last_error = ?task.last_error,
-                    "marking task ready for retry"
-                );
-                task.mark_ready_for_retry(clock.0);
-                break;
-            }
+        if let Some(mut task) = index
+            .get_task(&message.task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
+        {
+            debug!(
+                event = "RetryReady",
+                task_id = %task.id,
+                retry_count = task.retry_count,
+                max_retries = task.max_retries,
+                last_error = ?task.last_error,
+                "marking task ready for retry"
+            );
+            task.mark_ready_for_retry(clock.0);
         }
 
         commands.entity(entity).despawn();
@@ -232,11 +234,15 @@ pub fn init_previous_task_status_system(mut commands: Commands, tasks: Query<Ent
 pub fn finish_task_system(
     clock: Res<Clock>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     messages: Query<(Entity, &FinishTaskMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
     for (entity, msg) in &messages {
-        if let Some(mut task) = tasks.iter_mut().find(|t| t.id == msg.task_id) {
+        if let Some(mut task) = index
+            .get_task(&msg.task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
+        {
             debug!(
                 event = "TaskFinished",
                 task_id = %task.id,
@@ -269,12 +275,15 @@ pub fn finish_task_system(
 /// 才 spawn worker。
 pub fn tool_calling_turn_reset_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     tasks: Query<&Task>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     tool_requests: Query<&ToolExecutionRequestMessage>,
 ) {
     for (state_entity, state) in &calling_states {
-        if let Some(task) = tasks.iter().find(|t| t.id == state.task_id)
+        if let Some(task) = index
+            .get_task(&state.task_id)
+            .and_then(|e| tasks.get(e).ok())
             && task.status == TaskStatus::Waiting(WaitingReason::User)
             && task.pending_confirmation_id.is_none()
         {
@@ -494,6 +503,9 @@ mod tests {
         use crate::domain::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
 
         let mut world = World::new();
+        // tool_calling_turn_reset_system 经 EntityIndex O(1) 解析 TaskId → Entity，
+        // 需注入资源并填充 task 映射（模拟 spawn_task 封装的索引维护）。
+        world.insert_resource(crate::ecs::EntityIndex::default());
 
         // 构造 Task：模拟 async 工具确认后的中间态
         // - status = Waiting(User)（dispatch.rs:317 在 ToolRequiresUserConfirmation 时设置）
@@ -510,7 +522,11 @@ mod tests {
         let task_id = task.id;
         task.status = TaskStatus::Waiting(WaitingReason::User);
         task.pending_confirmation_id = None;
-        world.spawn(task);
+        let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         // 构造 ToolCallingState：工具调用循环的载体，不应被 reset 错误 despawn
         let calling_state_entity = world
