@@ -373,73 +373,97 @@ fn experience_collection_triggered_on_agent_termination() {
 
     // Create parent agent with memory
     let parent_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: parent_id,
-            profile: AgentProfile {
-                name: "parent".to_string(),
-                model: "gpt-4".to_string(),
+    let parent_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: parent_id,
+                profile: AgentProfile {
+                    name: "parent".to_string(),
+                    model: "gpt-4".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["general".to_string()],
+                    description: "parent agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["general".to_string()],
-                description: "parent agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(parent_id, parent_entity);
 
     // Create child task-scoped agent
     let child_id = uuid::Uuid::new_v4();
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: child_id,
-            profile: AgentProfile {
-                name: "child".to_string(),
-                model: "gpt-4".to_string(),
+    let child_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: child_id,
+                profile: AgentProfile {
+                    name: "child".to_string(),
+                    model: "gpt-4".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["general".to_string()],
+                    description: "child agent".to_string(),
+                },
+                kind: AgentKind::TaskScoped,
+                parent_id: Some(parent_id),
+                bound_task_id: Some(task_id),
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["general".to_string()],
-                description: "child agent".to_string(),
-            },
-            kind: AgentKind::TaskScoped,
-            parent_id: Some(parent_id),
-            bound_task_id: Some(task_id),
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        LongTermMemory::default(),
-    ));
+            LongTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(child_id, child_entity);
 
     // Create a task for the terminated message to reference
-    app.world_mut().spawn(Task {
-        id: task_id,
-        content: "test task".to_string(),
-        creator: parent_id,
-        delegate: Some(child_id),
-        status: TaskStatus::Done,
-        pending_confirmation_id: None,
-        input_summary: "test".to_string(),
-        result_summary: "completed".to_string(),
-        priority: 0,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: true,
-        parent_task_id: None,
-        batch_id: None,
-        origin_channel: Some(default_channel()),
-        routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-        last_evaluated_turn: None,
-    });
+    let task_entity = app
+        .world_mut()
+        .spawn(Task {
+            id: task_id,
+            content: "test task".to_string(),
+            creator: parent_id,
+            delegate: Some(child_id),
+            status: TaskStatus::Done,
+            pending_confirmation_id: None,
+            input_summary: "test".to_string(),
+            result_summary: "completed".to_string(),
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: true,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: Some(default_channel()),
+            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+            last_evaluated_turn: None,
+        })
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // Trigger termination by spawning TaskTerminatedMessage
     app.world_mut()

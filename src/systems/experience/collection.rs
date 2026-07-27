@@ -8,15 +8,21 @@ use crate::domain::{
     ExperienceStore, LlmToolCall, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
     TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemType,
 };
+use crate::ecs::EntityIndex;
 
 /// 任务终态经验收集触发系统：任务进入终态后统一生成经验收集请求。
 pub(crate) fn task_terminated_experience_trigger_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     terminated: Query<(Entity, &TaskTerminatedMessage)>,
     tasks: Query<&Task>,
 ) {
     for (_entity, terminated_msg) in &terminated {
-        let Some(task) = tasks.iter().find(|task| task.id == terminated_msg.task_id) else {
+        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+        let Some(task) = index
+            .get_task(&terminated_msg.task_id)
+            .and_then(|e| tasks.get(e).ok())
+        else {
             debug!(
                 event = "ExperienceCollectionTaskNotFound",
                 task_id = %terminated_msg.task_id,
@@ -55,12 +61,17 @@ pub(crate) fn task_terminated_experience_trigger_system(
 /// 经验收集 WorkItem 创建系统：将收集请求转换为独立 WorkItem。
 pub(crate) fn experience_collection_workitem_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     requests: Query<(Entity, &ExperienceCollectionRequestMessage)>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
 ) {
     for (entity, request) in &requests {
-        let Some((task, stm)) = tasks.iter().find(|(t, _)| t.id == request.task_id) else {
+        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+        let Some((task, stm)) = index
+            .get_task(&request.task_id)
+            .and_then(|e| tasks.get(e).ok())
+        else {
             debug!(
                 event = "ExperienceCollectionTaskNotFound",
                 task_id = %request.task_id,
@@ -206,6 +217,7 @@ fn build_experience_collection_conversation(
 /// 候选不进入父任务 inbox，而是按 kind_hint 分流到 skill-updater / LTM。
 pub(crate) fn experience_collection_completion_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     mut store: ResMut<ExperienceStore>,
     agents: Query<&Agent>,
     tasks: Query<(
@@ -222,16 +234,18 @@ pub(crate) fn experience_collection_completion_system(
             store.collect_top_level_governance_candidates(msg.task_id)
         };
 
+        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
         let Some((task, injected_skill_component, policy_component)) =
-            tasks.iter().find(|(t, _, _)| t.id == msg.task_id)
+            index.get_task(&msg.task_id).and_then(|e| tasks.get(e).ok())
         else {
             commands.entity(entity).despawn();
             continue;
         };
 
+        // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
         let delegate_is_persistent = task
             .delegate
-            .and_then(|aid| agents.iter().find(|a| a.id == aid))
+            .and_then(|aid| index.get_agent(&aid).and_then(|e| agents.get(e).ok()))
             .map(|a| a.kind == AgentKind::Persistent)
             .unwrap_or(false);
 

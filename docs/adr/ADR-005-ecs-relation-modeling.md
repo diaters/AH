@@ -132,10 +132,10 @@ __分阶段、保持 `main` 可编译可测__：
   （见第 3 点）。批次切分（保持 ADR §3 原始 6 批次口径）：
 
   1. __routing__（1 处）：[routing.rs:138](../../src/systems/routing.rs#L138) — `continue_task_system` 按 `msg.task_id` 查 task
-     （注：原列 [routing.rs:36](../../src/systems/routing.rs#L36) 经核实为 channel+status 复合查询，移出范围）
+     （注：原列 [routing.rs:36](../../src/systems/routing.rs#L36) 经核实为 channel+status 复合查询，移出范围）✅ 已落地（PR-1，2026-07-27）
   2. __experience__（6 处）：[collection.rs:19/63/226/234](../../src/systems/experience/collection.rs#L19) +
      [profile_update.rs:64](../../src/systems/experience/profile_update.rs#L64) + [governance.rs:27](../../src/systems/experience/governance.rs#L27)
-     （原列 [command.rs:38/95/116](../../src/systems/command.rs#L38) 全部为复合查询，移出范围；command 批次语义由 experience 接续）
+     （原列 [command.rs:38/95/116](../../src/systems/command.rs#L38) 全部为复合查询，移出范围；command 批次语义由 experience 接续）✅ 已落地（PR-2，2026-07-27）
   3. __tools/dispatch+orchestrator+approval+async_dispatch__（9 处，含 1 处 UUID+条件复合）：
      [dispatch.rs:85/198/226/255](../../src/systems/tools/dispatch.rs#L85) +
      [orchestrator.rs:27/267/1352](../../src/systems/tools/orchestrator.rs#L27) +

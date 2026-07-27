@@ -9,6 +9,7 @@ use crate::domain::{
     Task, TaskInjectedSkill, ToolCalledHookPending, ToolConfirmationRequestMessage,
     ToolExecutionRequestMessage,
 };
+use crate::ecs::EntityIndex;
 use crate::infrastructure::skills::SkillRegistry;
 
 /// 经验治理系统：顶层唯一最终分流点。
@@ -17,6 +18,7 @@ use crate::infrastructure::skills::SkillRegistry;
 /// 决议产出后：若无需确认则进入 WritebackPending，若需确认则进入 NeedsUserApproval。
 pub(crate) fn experience_governance_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     mut store: ResMut<ExperienceStore>,
     agents: Query<&Agent>,
     skill_registry: Res<SkillRegistry>,
@@ -24,7 +26,11 @@ pub(crate) fn experience_governance_system(
     requests: Query<(Entity, &ExperienceGovernanceRequestMessage)>,
 ) {
     for (entity, request) in &requests {
-        let agent = match agents.iter().find(|a| a.id == request.agent_id) {
+        // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
+        let agent = match index
+            .get_agent(&request.agent_id)
+            .and_then(|e| agents.get(e).ok())
+        {
             Some(a) => a,
             None => {
                 debug!(
@@ -98,9 +104,10 @@ pub(crate) fn experience_governance_system(
                         })
                     } else {
                         // 非默认 agent：检查 task 是否注入了 skill，按 self_updatable 分流
-                        let injected_skill = tasks
-                            .iter()
-                            .find(|(t, _)| t.id == request.task_id)
+                        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                        let injected_skill = index
+                            .get_task(&request.task_id)
+                            .and_then(|e| tasks.get(e).ok())
                             .and_then(|(_, is)| is)
                             .and_then(|is| is.skill_id.clone());
 
@@ -215,9 +222,10 @@ pub(crate) fn experience_governance_system(
                 // SkillUpdate destination：spawn SkillUpdateRequestMessage，
                 // 由 skill_update_workitem_system 消费构造 skill-updater WorkItem。
                 // 候选状态保持 GovernanceResolved，等 skill_update_completion_system 完成后再置 Persisted。
-                let injected_skill = tasks
-                    .iter()
-                    .find(|(t, _)| t.id == request.task_id)
+                // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                let injected_skill = index
+                    .get_task(&request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
                     .and_then(|(_, is)| is)
                     .and_then(|is| is.skill_id.clone());
 
@@ -395,6 +403,7 @@ mod tests {
         ExperienceCandidate, ExperienceKindHint, FrontendKind, ProfileGenerationRequestMessage,
         TaskRoutingPolicy, TaskStatus,
     };
+    use crate::ecs::EntityIndex;
     use crate::infrastructure::skills::{SkillEntry, SkillId};
 
     /// 构造测试用 Agent（tags 决定是否为 default agent）。
@@ -487,7 +496,35 @@ mod tests {
         app.add_systems(Update, experience_governance_system);
         app.insert_resource(ExperienceStore::default());
         app.insert_resource(SkillRegistry::default());
+        app.insert_resource(EntityIndex::default());
         app
+    }
+
+    /// 在 EntityIndex 中注册 agent（模拟阶段 1 spawn_agent 封装的索引维护）。
+    fn register_agent(app: &mut App, agent_id: crate::domain::AgentId, agent: Agent) {
+        let entity = app.world_mut().spawn(agent).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .agents
+            .insert(agent_id, entity);
+    }
+
+    /// 在 EntityIndex 中注册 task（模拟阶段 1 spawn_task 封装的索引维护）。
+    fn register_task(
+        app: &mut App,
+        task_id: crate::domain::TaskId,
+        task: Task,
+        injected_skill: Option<TaskInjectedSkill>,
+    ) {
+        let entity = if let Some(is) = injected_skill {
+            app.world_mut().spawn((task, is)).id()
+        } else {
+            app.world_mut().spawn(task).id()
+        };
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
     }
 
     /// 在 store 中插入候选并返回其 ID。
@@ -538,16 +575,17 @@ mod tests {
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "test-skill");
 
-        // 非默认 agent
-        app.world_mut()
-            .spawn(make_agent(agent_id, "worker", &["llm"]));
-        // task 注入了 skill
-        app.world_mut().spawn((
+        // 非默认 agent（经 EntityIndex 注册，模拟阶段 1 spawn_agent 封装）
+        register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
+        // task 注入了 skill（经 EntityIndex 注册，模拟阶段 1 spawn_task 封装）
+        register_task(
+            &mut app,
+            task_id,
             make_task(task_id),
-            TaskInjectedSkill {
+            Some(TaskInjectedSkill {
                 skill_id: Some(skill_id.clone()),
-            },
-        ));
+            }),
+        );
         // skill registry 中 skill self_updatable=true
         app.world_mut()
             .resource_mut::<SkillRegistry>()
@@ -598,14 +636,15 @@ mod tests {
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "locked-skill");
 
-        app.world_mut()
-            .spawn(make_agent(agent_id, "worker", &["llm"]));
-        app.world_mut().spawn((
+        register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
+        register_task(
+            &mut app,
+            task_id,
             make_task(task_id),
-            TaskInjectedSkill {
+            Some(TaskInjectedSkill {
                 skill_id: Some(skill_id.clone()),
-            },
-        ));
+            }),
+        );
         // skill self_updatable=false
         app.world_mut()
             .resource_mut::<SkillRegistry>()
@@ -652,10 +691,9 @@ mod tests {
         let task_id = uuid::Uuid::new_v4();
         let candidate_id = uuid::Uuid::new_v4();
 
-        app.world_mut()
-            .spawn(make_agent(agent_id, "worker", &["llm"]));
-        // task 不注入 skill
-        app.world_mut().spawn(make_task(task_id));
+        register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
+        // task 不注入 skill（经 EntityIndex 注册，模拟阶段 1 spawn_task 封装）
+        register_task(&mut app, task_id, make_task(task_id), None);
         stage_candidate(
             &mut app,
             make_skill_candidate(candidate_id, task_id, agent_id),
@@ -692,16 +730,21 @@ mod tests {
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("default", "some-skill");
 
-        // default agent
-        app.world_mut()
-            .spawn(make_agent(agent_id, "default-agent", &["default"]));
+        // default agent（经 EntityIndex 注册）
+        register_agent(
+            &mut app,
+            agent_id,
+            make_agent(agent_id, "default-agent", &["default"]),
+        );
         // 即使 task 注入了 skill，default agent 也应走 IncubationProposal（保留 plan 疏漏修正）
-        app.world_mut().spawn((
+        register_task(
+            &mut app,
+            task_id,
             make_task(task_id),
-            TaskInjectedSkill {
+            Some(TaskInjectedSkill {
                 skill_id: Some(skill_id.clone()),
-            },
-        ));
+            }),
+        );
         app.world_mut()
             .resource_mut::<SkillRegistry>()
             .upsert(make_skill_entry(skill_id, true));
@@ -743,14 +786,15 @@ mod tests {
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "missing-skill");
 
-        app.world_mut()
-            .spawn(make_agent(agent_id, "worker", &["llm"]));
-        app.world_mut().spawn((
+        register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
+        register_task(
+            &mut app,
+            task_id,
             make_task(task_id),
-            TaskInjectedSkill {
+            Some(TaskInjectedSkill {
                 skill_id: Some(skill_id.clone()),
-            },
-        ));
+            }),
+        );
         // 故意不向 registry 添加 skill
         stage_candidate(
             &mut app,
