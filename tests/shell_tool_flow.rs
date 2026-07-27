@@ -137,26 +137,47 @@ fn test_config() -> HarnessConfig {
 
 fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
     let id = Uuid::new_v4();
-    world.spawn(Agent {
-        id,
-        profile: AgentProfile {
-            name: "shell-agent".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["test".to_string()],
-            description: "shell test agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions {
-            default_permission: harness::ToolPermission::Allow,
-            overrides: Default::default(),
-        },
-        system_prompt: None,
-    });
+    let entity = world
+        .spawn(Agent {
+            id,
+            profile: AgentProfile {
+                name: "shell-agent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["test".to_string()],
+                description: "shell test agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: harness::ToolPermission::Allow,
+                overrides: Default::default(),
+            },
+            system_prompt: None,
+        })
+        .id();
+    world
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(id, entity);
     id
+}
+
+/// spawn 一个 Task + ShortTermMemory 并同步写入 EntityIndex（阶段 2 起 tool_dispatch_system 依赖）。
+fn spawn_shell_task(
+    world: &mut harness::prelude::World,
+    content: &str,
+) -> (harness::prelude::Entity, Uuid) {
+    let task = Task::from_user_input_ready(content, 3, default_channel());
+    let task_id = task.id;
+    let task_entity = world.spawn((task, ShortTermMemory::default())).id();
+    world
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
+    (task_entity, task_id)
 }
 
 /// 验证 shell 工具注册表已经收敛为六个简化后的高层工具。
@@ -220,14 +241,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
 
     app.update();
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell read", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell read");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -317,14 +331,7 @@ fn shell_list_returns_only_active_sessions() {
 
     app.update();
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell list", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell list");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -406,14 +413,7 @@ fn shell_exec_returns_result_message() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell test", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell test");
 
     let request = AgentExecutionRequest {
         task_id,
@@ -483,14 +483,7 @@ fn shell_exec_passes_env_to_child_process() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell exec env", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell exec env");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -548,14 +541,7 @@ fn shell_start_returns_running_handle() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell start", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell start");
 
     let request = AgentExecutionRequest {
         task_id,
@@ -620,14 +606,7 @@ fn shell_start_passes_env_to_child_process() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell start env", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell start env");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -743,14 +722,7 @@ fn shell_exec_with_exit_code_error() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell error test", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell error test");
 
     let request = AgentExecutionRequest {
         task_id,
@@ -813,14 +785,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell stop", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell stop");
 
     let start_request = AgentExecutionRequest {
         task_id,
@@ -964,6 +929,10 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         .spawn((task, ShortTermMemory::default()))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1101,14 +1070,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell shape", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell shape");
 
     let make_request = |tool_name: &str| AgentExecutionRequest {
         task_id,
@@ -1182,14 +1144,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell timeout", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell timeout");
 
     let request = AgentExecutionRequest {
         task_id,
@@ -1244,14 +1199,7 @@ fn shell_read_returns_output_text() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell read", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell read");
 
     let start_request = AgentExecutionRequest {
         task_id,
@@ -1356,14 +1304,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell exec timeout", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell exec timeout");
 
     let request = AgentExecutionRequest {
         task_id,
@@ -1439,14 +1380,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
 
     app.update();
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("shell exec timeout", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell exec timeout");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1568,14 +1502,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
     let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
-    let task_a_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task A", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_a_id = app.world().get::<Task>(task_a_entity).unwrap().id;
+    let (_task_a_entity, task_a_id) = spawn_shell_task(app.world_mut(), "task A");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1602,14 +1529,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
     app.update();
 
     // Task B calls shell_list - should NOT see Task A's session
-    let task_b_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task B", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_b_id = app.world().get::<Task>(task_b_entity).unwrap().id;
+    let (_task_b_entity, task_b_id) = spawn_shell_task(app.world_mut(), "task B");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1671,14 +1591,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
     app.update();
 
     let agent_id = spawn_shell_agent(app.world_mut());
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("active session cleanup", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (task_entity, task_id) = spawn_shell_task(app.world_mut(), "active session cleanup");
 
     for (tool_call_id, command) in [
         ("call_short_lived_session", "sleep 0.1"),
@@ -1806,14 +1719,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
     let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
-    let task_a_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task A read", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_a_id = app.world().get::<Task>(task_a_entity).unwrap().id;
+    let (_task_a_entity, task_a_id) = spawn_shell_task(app.world_mut(), "task A read");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1856,14 +1762,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
     };
 
     // Task B tries to read Task A's session
-    let task_b_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task B read", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_b_id = app.world().get::<Task>(task_b_entity).unwrap().id;
+    let (_task_b_entity, task_b_id) = spawn_shell_task(app.world_mut(), "task B read");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1932,14 +1831,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
     let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
-    let task_a_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task A input", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_a_id = app.world().get::<Task>(task_a_entity).unwrap().id;
+    let (_task_a_entity, task_a_id) = spawn_shell_task(app.world_mut(), "task A input");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -1982,14 +1874,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
     };
 
     // Task B tries to input to Task A's session
-    let task_b_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task B input", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_b_id = app.world().get::<Task>(task_b_entity).unwrap().id;
+    let (_task_b_entity, task_b_id) = spawn_shell_task(app.world_mut(), "task B input");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -2057,14 +1942,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
     let agent_id = spawn_shell_agent(app.world_mut());
 
     // Task A creates a session
-    let task_a_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task A stop", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_a_id = app.world().get::<Task>(task_a_entity).unwrap().id;
+    let (_task_a_entity, task_a_id) = spawn_shell_task(app.world_mut(), "task A stop");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -2107,14 +1985,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
     };
 
     // Task B tries to stop Task A's session
-    let task_b_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task B stop", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_b_id = app.world().get::<Task>(task_b_entity).unwrap().id;
+    let (_task_b_entity, task_b_id) = spawn_shell_task(app.world_mut(), "task B stop");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -2182,14 +2053,7 @@ fn task_termination_stops_owned_shell_sessions() {
     let agent_id = spawn_shell_agent(app.world_mut());
 
     // Create a task and start a long-running session
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("task termination test", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (task_entity, task_id) = spawn_shell_task(app.world_mut(), "task termination test");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -2263,14 +2127,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
     let agent_id = spawn_shell_agent(app.world_mut());
 
     // Create a task and start a long-running session
-    let task_entity = app
-        .world_mut()
-        .spawn((
-            Task::from_user_input_ready("failed task test", 3, default_channel()),
-            ShortTermMemory::default(),
-        ))
-        .id();
-    let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    let (task_entity, task_id) = spawn_shell_task(app.world_mut(), "failed task test");
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request: AgentExecutionRequest {

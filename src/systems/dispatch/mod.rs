@@ -14,7 +14,7 @@ mod workitem_lifecycle_hook;
 
 pub(crate) use agent_lifecycle_hook::{agent_started_hook_system, agent_stopped_hook_system};
 pub(crate) use brain_dispatch::parse_brain_skill_selection;
-pub(crate) use brain_llm_builder::build_brain_execution_request;
+pub(crate) use brain_llm_builder::{build_brain_execution_request, find_brain_agent};
 pub(crate) use dispatch_system::dispatch_system;
 pub(crate) use message_dispatched_hook::on_message_dispatched_hook_system;
 pub(crate) use subtask_dispatch_preparation::subtask_dispatch_preparation_system;

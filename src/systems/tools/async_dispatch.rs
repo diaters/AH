@@ -34,6 +34,7 @@ use crate::{
         ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
         ToolWorkerOutput, ToolWorkerPayload,
     },
+    ecs::EntityIndex,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
 };
 
@@ -60,6 +61,7 @@ pub fn async_tool_dispatch_system(
     settings: Res<HarnessSettings>,
     executors: Res<BuiltinToolExecutors>,
     registry: Option<Res<SpaceToolRegistry>>,
+    index: Res<EntityIndex>,
     agents: Query<&Agent>,
     tasks: Query<&Task>,
     sender: Res<ToolResultSender>,
@@ -98,7 +100,10 @@ pub fn async_tool_dispatch_system(
         if !request.confirmed_once
             && let (Some(registry), Some(agent)) = (
                 registry.as_deref(),
-                agents.iter().find(|a| a.id == request.request.agent_id),
+                // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
+                index
+                    .get_agent(&request.request.agent_id)
+                    .and_then(|e| agents.get(e).ok()),
             )
         {
             if registry.get(&request.tool_name).is_none() {
@@ -158,9 +163,10 @@ pub fn async_tool_dispatch_system(
         // 从 Task.origin_channel 注入 current_origin_channel（Task 14 Step E）：
         // schedule_task 等需要继承通道的异步工具靠此字段在 worker 内拿到真值。
         // Task 不存在时（测试世界或异常状态）降级为 None，与既有容忍语义一致。
-        let current_origin_channel = tasks
-            .iter()
-            .find(|t| t.id == task_id)
+        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+        let current_origin_channel = index
+            .get_task(&task_id)
+            .and_then(|e| tasks.get(e).ok())
             .and_then(|t| t.origin_channel.clone());
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state

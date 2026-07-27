@@ -42,22 +42,28 @@ fn test_config() -> HarnessConfig {
 /// 创建测试用的 Agent
 fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) -> AgentId {
     let id = uuid::Uuid::new_v4();
-    world.spawn(Agent {
-        id,
-        profile: AgentProfile {
-            name: "test-agent".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["test".to_string()],
-            description: "test agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions,
-        system_prompt: None,
-    });
+    let entity = world
+        .spawn(Agent {
+            id,
+            profile: AgentProfile {
+                name: "test-agent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["test".to_string()],
+                description: "test agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions,
+            system_prompt: None,
+        })
+        .id();
+    world
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(id, entity);
     id
 }
 
@@ -334,6 +340,10 @@ fn confirm_tool_requires_user_confirmation() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());
@@ -1071,30 +1081,41 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
-    app.world_mut().spawn(Agent {
-        id: child_id,
-        profile: AgentProfile {
-            name: "child-agent".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec![],
-            description: "child".to_string(),
-        },
-        kind: AgentKind::TaskScoped,
-        parent_id: Some(parent_id),
-        bound_task_id: Some(task_id),
-        tool_permissions: AgentToolPermissions {
-            default_permission: ToolPermission::Deny,
-            overrides: {
-                let mut m = HashMap::new();
-                m.insert("shell_exec".to_string(), ToolPermission::Confirm);
-                m
+    let child_entity = app
+        .world_mut()
+        .spawn(Agent {
+            id: child_id,
+            profile: AgentProfile {
+                name: "child-agent".to_string(),
+                model: "test-model".to_string(),
             },
-        },
-        system_prompt: None,
-    });
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: "child".to_string(),
+            },
+            kind: AgentKind::TaskScoped,
+            parent_id: Some(parent_id),
+            bound_task_id: Some(task_id),
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Deny,
+                overrides: {
+                    let mut m = HashMap::new();
+                    m.insert("shell_exec".to_string(), ToolPermission::Confirm);
+                    m
+                },
+            },
+            system_prompt: None,
+        })
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(child_id, child_entity);
 
     // 注册 echo 工具
     let mut registry = SpaceToolRegistry::default();
@@ -1189,6 +1210,10 @@ fn user_allows_tool_always() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 注册测试工具（使用 echo 工具）
     create_test_tool_registry(app.world_mut());

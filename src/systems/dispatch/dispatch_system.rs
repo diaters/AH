@@ -25,11 +25,14 @@ use crate::{
         PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskInjectedSkill, TaskStatus,
         ToolPermission, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
+    ecs::EntityIndex,
     infrastructure::skills::{PluginSkillContributions, SkillLoader, SkillRegistry},
     user_plugins::hook_point::HookPoint,
 };
 
-use super::{build_brain_execution_request, prompt_builder::build_prompt_with_context};
+use super::{
+    build_brain_execution_request, find_brain_agent, prompt_builder::build_prompt_with_context,
+};
 
 /// 统一派发 System
 ///
@@ -39,6 +42,7 @@ use super::{build_brain_execution_request, prompt_builder::build_prompt_with_con
 pub fn dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
     skill_registry: Res<SkillRegistry>,
@@ -178,16 +182,8 @@ pub fn dispatch_system(
 
         match hint.strategy {
             DispatchStrategy::BrainLlm => {
-                // 调用 brain_llm_builder 构造 Brain LLM 执行请求
-                let brain_request = build_brain_execution_request(
-                    &task,
-                    short_term,
-                    &agent_refs,
-                    &registry,
-                    &skill_registry,
-                );
-
-                let Some((request_message, hook_pending)) = brain_request else {
+                // 1. 过滤 brain candidates 并选择 brain_agent_id（复合查询，保留遍历）
+                let Some(brain_agent_id) = find_brain_agent(&agent_refs) else {
                     // 未找到 Brain Agent → Task Failed
                     let error = ExecutionError::Unknown(
                         "no brain agent found for BrainLlm dispatch".to_string(),
@@ -202,7 +198,36 @@ pub fn dispatch_system(
                     continue;
                 };
 
-                let brain_agent_id = request_message.request.agent_id;
+                // 2. 经 EntityIndex O(1) 解析 AgentId → Entity → &Agent（ADR-005 §3）
+                let Some(brain_agent) = index
+                    .get_agent(&brain_agent_id)
+                    .and_then(|e| agents.get(e).ok())
+                    .map(|(a, _)| a)
+                else {
+                    // 索引不一致 → Task Failed
+                    let error = ExecutionError::Unknown(format!(
+                        "brain agent {brain_agent_id} not found in EntityIndex"
+                    ));
+                    task.mark_failed(&error, clock.0);
+                    commands.entity(task_entity).remove::<PendingDispatch>();
+                    warn!(
+                        event = "DispatchTaskBrainLlmIndexMiss",
+                        task_id = %task.id,
+                        brain_agent_id = %brain_agent_id,
+                        "brain agent id not in EntityIndex, marking task as failed"
+                    );
+                    continue;
+                };
+
+                // 3. 构建 Brain LLM 执行请求（brain_agent 已解析，不再返回 Option）
+                let (request_message, hook_pending) = build_brain_execution_request(
+                    &task,
+                    short_term,
+                    brain_agent,
+                    &agent_refs,
+                    &registry,
+                    &skill_registry,
+                );
 
                 // 附加 AwaitingBrainDecision，由 brain_decision_system 处理 Brain 输出后移除
                 commands.entity(task_entity).insert(AwaitingBrainDecision {

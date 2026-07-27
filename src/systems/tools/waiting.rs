@@ -7,6 +7,7 @@ use crate::prelude::*;
 use crate::{
     app::Clock,
     domain::{SubTaskCompletedMessage, Task, WaitingForTasksInfo},
+    ecs::EntityIndex,
 };
 
 use super::orchestrator::{collect_task_results, spawn_wait_result_message};
@@ -16,6 +17,7 @@ pub fn on_subtask_completed_check_waiting(
     messages: Query<(Entity, &SubTaskCompletedMessage)>,
     waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
     all_tasks: Query<&Task>,
+    index: Res<EntityIndex>,
     mut commands: Commands,
 ) {
     for (_msg_entity, msg) in &messages {
@@ -23,14 +25,17 @@ pub fn on_subtask_completed_check_waiting(
         for (entity, task, info) in &waiting_tasks {
             if info.target_task_ids.contains(&msg.child_task_id) {
                 // 检查是否所有目标都完成
+                // UUID+条件复合查询拆为 UUID 解析 + 调用方断言两步
                 let all_terminal = info.target_task_ids.iter().all(|id| {
-                    all_tasks
-                        .iter()
-                        .any(|t| t.id == *id && t.status.is_terminal())
+                    index
+                        .get_task(id)
+                        .and_then(|e| all_tasks.get(e).ok())
+                        .map(|t| t.status.is_terminal())
+                        .unwrap_or(false)
                 });
 
                 if all_terminal {
-                    let results = collect_task_results(&info.target_task_ids, &all_tasks);
+                    let results = collect_task_results(&info.target_task_ids, &all_tasks, &index);
                     spawn_wait_result_message(&mut commands, task.id, info, results, false);
                     commands.entity(entity).remove::<WaitingForTasksInfo>();
                 }
@@ -45,19 +50,23 @@ pub fn check_waiting_tasks_system(
     mut commands: Commands,
     waiting_tasks: Query<(Entity, &Task, &WaitingForTasksInfo)>,
     all_tasks: Query<&Task>,
+    index: Res<EntityIndex>,
 ) {
     for (entity, task, info) in &waiting_tasks {
         let timed_out = clock.0 >= info.timeout_at;
 
         // 检查所有目标任务是否都已终态
+        // UUID+条件复合查询拆为 UUID 解析 + 调用方断言两步
         let all_terminal = info.target_task_ids.iter().all(|id| {
-            all_tasks
-                .iter()
-                .any(|t| t.id == *id && t.status.is_terminal())
+            index
+                .get_task(id)
+                .and_then(|e| all_tasks.get(e).ok())
+                .map(|t| t.status.is_terminal())
+                .unwrap_or(false)
         });
 
         if timed_out || all_terminal {
-            let results = collect_task_results(&info.target_task_ids, &all_tasks);
+            let results = collect_task_results(&info.target_task_ids, &all_tasks, &index);
             spawn_wait_result_message(&mut commands, task.id, info, results, timed_out);
 
             // 移除等待信息组件

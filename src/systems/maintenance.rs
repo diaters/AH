@@ -62,7 +62,13 @@ pub(crate) fn agent_factory_system(
     }
 
     for (entity, terminated) in &terminated_messages {
-        handle_termination(&mut commands, &agents, &mut tasks, terminated.task_id);
+        handle_termination(
+            &mut commands,
+            &agents,
+            &mut tasks,
+            &index,
+            terminated.task_id,
+        );
         commands.entity(entity).despawn();
     }
 }
@@ -306,7 +312,10 @@ fn handle_spawn_request(
     registry: &SpaceToolRegistry,
     request: &AgentSpawnRequestMessage,
 ) {
-    let Some((_, parent_agent)) = agents.iter().find(|(_, a)| a.id == request.parent_agent_id)
+    // UUID 寻址改用 EntityIndex O(1) 解析
+    let Some((_, parent_agent)) = index
+        .get_agent(&request.parent_agent_id)
+        .and_then(|e| agents.get(e).ok())
     else {
         warn!(
             event = "SpawnRequestFailed",
@@ -317,6 +326,7 @@ fn handle_spawn_request(
         );
         mark_task_failed(
             tasks,
+            index,
             clock,
             request.task_id,
             "parent agent not found for spawn request",
@@ -350,7 +360,7 @@ fn handle_spawn_request(
             "Agent spawn rejected: all requested tools {:?} are denied for parent agent",
             request.tools
         );
-        mark_task_failed(tasks, clock, request.task_id, &msg);
+        mark_task_failed(tasks, index, clock, request.task_id, &msg);
         return;
     }
 
@@ -404,7 +414,11 @@ fn handle_spawn_request(
     );
 
     // 更新 Task 的 delegate 为实际执行的 task-scoped agent
-    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id) {
+    // UUID 寻址改用 EntityIndex O(1) 解析
+    if let Some(mut task) = index
+        .get_task(&request.task_id)
+        .and_then(|e| tasks.get_mut(e).ok())
+    {
         task.delegate = Some(id);
     }
 
@@ -443,6 +457,7 @@ fn handle_termination(
     commands: &mut Commands,
     agents: &Query<(Entity, &Agent)>,
     tasks: &mut Query<&mut Task>,
+    index: &EntityIndex,
     _task_id: TaskId,
 ) {
     for (entity, agent) in agents {
@@ -452,9 +467,10 @@ fn handle_termination(
         let Some(bound_task_id) = agent.bound_task_id else {
             continue;
         };
-        let is_terminal = tasks
-            .iter()
-            .find(|t| t.id == bound_task_id)
+        // UUID 寻址改用 EntityIndex O(1) 解析
+        let is_terminal = index
+            .get_task(&bound_task_id)
+            .and_then(|e| tasks.get(e).ok())
             .is_some_and(|task| task.status.is_terminal());
         if is_terminal {
             debug!(
@@ -473,11 +489,13 @@ fn handle_termination(
 
 fn mark_task_failed(
     tasks: &mut Query<&mut Task>,
+    index: &EntityIndex,
     clock: &Clock,
     task_id: TaskId,
     error_message: &str,
 ) {
-    if let Some(mut task) = tasks.iter_mut().find(|t| t.id == task_id) {
+    // UUID 寻址改用 EntityIndex O(1) 解析
+    if let Some(mut task) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
         task.last_error = Some(error_message.to_string());
         task.status = crate::domain::TaskStatus::Failed(FailureReason::AgentError);
         task.updated_at = clock.0;

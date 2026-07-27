@@ -208,29 +208,37 @@ fn task_scoped_agent_lifecycle() {
 
     {
         let world = app.world_mut();
-        world.spawn(Task {
-            id: task_id,
-            content: "test".to_string(),
-            creator: parent_agent_id,
-            delegate: None,
-            status: TaskStatus::Done,
-            pending_confirmation_id: None,
-            input_summary: String::new(),
-            result_summary: "done".to_string(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        });
+        let task_entity = world
+            .spawn(Task {
+                id: task_id,
+                content: "test".to_string(),
+                creator: parent_agent_id,
+                delegate: None,
+                status: TaskStatus::Done,
+                pending_confirmation_id: None,
+                input_summary: String::new(),
+                result_summary: "done".to_string(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            })
+            .id();
+        // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+        // 供 maintenance::handle_termination 等 O(1) 解析 TaskId → Entity（ADR-005 §3 阶段 2）。
+        world
+            .resource_mut::<harness::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
         world.spawn(TaskTerminatedMessage { task_id });
     }
 

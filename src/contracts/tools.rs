@@ -2,10 +2,10 @@
 //!
 //! 定义工具目录和审批策略相关的 trait 接口。
 
-use crate::prelude::Entity;
 use crate::prelude::Query;
 
 use crate::domain::{Agent, AgentId, Task, ToolDefinition, ToolPermission};
+use crate::ecs::EntityIndex;
 
 /// 工具目录
 ///
@@ -48,8 +48,9 @@ pub trait ToolApprovalPolicy: Send + Sync + 'static {
         tool_name: &str,
         agent: &Agent,
         task: &Task,
-        tasks: &Query<(Entity, &Task)>,
+        tasks: &Query<&Task>,
         agents: &Query<&Agent>,
+        index: &EntityIndex,
     ) -> ApprovalRoute;
 }
 
@@ -63,19 +64,24 @@ impl ToolApprovalPolicy for DefaultToolApprovalPolicy {
         tool_name: &str,
         agent: &Agent,
         task: &Task,
-        tasks: &Query<(Entity, &Task)>,
+        tasks: &Query<&Task>,
         agents: &Query<&Agent>,
+        index: &EntityIndex,
     ) -> ApprovalRoute {
         let permission = agent.tool_permissions.get_permission(tool_name);
 
         match permission {
             ToolPermission::Allow => ApprovalRoute::AutoAllow,
             ToolPermission::Confirm => {
+                // UUID 寻址改用 EntityIndex O(1) 解析
                 if let Some(parent_task_id) = task.parent_task_id
-                    && let Some((_, parent_task)) =
-                        tasks.iter().find(|(_, t)| t.id == parent_task_id)
+                    && let Some(parent_task) = index
+                        .get_task(&parent_task_id)
+                        .and_then(|e| tasks.get(e).ok())
                     && let Some(parent_agent_id) = parent_task.delegate
-                    && let Some(parent_agent) = agents.iter().find(|a| a.id == parent_agent_id)
+                    && let Some(parent_agent) = index
+                        .get_agent(&parent_agent_id)
+                        .and_then(|e| agents.get(e).ok())
                     && parent_agent.has_permission(tool_name)
                 {
                     return ApprovalRoute::ParentApproval { parent_agent_id };
@@ -131,6 +137,7 @@ mod tests {
     #[test]
     fn allow_returns_auto_allow() {
         let mut app = App::new();
+        app.insert_resource(EntityIndex::default());
         let agent = make_agent(ToolPermission::Allow);
         let task = Task::from_user_input("test", 3, default_channel());
         app.world_mut().spawn(agent.clone());
@@ -138,11 +145,11 @@ mod tests {
 
         let policy = DefaultToolApprovalPolicy;
         let world = app.world_mut();
-        let mut state = SystemState::<(Query<(Entity, &Task)>, Query<&Agent>)>::new(world);
-        let (tasks, agents) = state.get(world);
+        let mut state = SystemState::<(Query<&Task>, Query<&Agent>, Res<EntityIndex>)>::new(world);
+        let (tasks, agents, index) = state.get(world);
 
         assert_eq!(
-            policy.determine_approval_route("test_tool", &agent, &task, &tasks, &agents),
+            policy.determine_approval_route("test_tool", &agent, &task, &tasks, &agents, &index,),
             ApprovalRoute::AutoAllow
         );
     }
@@ -150,6 +157,7 @@ mod tests {
     #[test]
     fn deny_returns_deny() {
         let mut app = App::new();
+        app.insert_resource(EntityIndex::default());
         let agent = make_agent(ToolPermission::Deny);
         let task = Task::from_user_input("test", 3, default_channel());
         app.world_mut().spawn(agent.clone());
@@ -157,11 +165,11 @@ mod tests {
 
         let policy = DefaultToolApprovalPolicy;
         let world = app.world_mut();
-        let mut state = SystemState::<(Query<(Entity, &Task)>, Query<&Agent>)>::new(world);
-        let (tasks, agents) = state.get(world);
+        let mut state = SystemState::<(Query<&Task>, Query<&Agent>, Res<EntityIndex>)>::new(world);
+        let (tasks, agents, index) = state.get(world);
 
         assert_eq!(
-            policy.determine_approval_route("test_tool", &agent, &task, &tasks, &agents),
+            policy.determine_approval_route("test_tool", &agent, &task, &tasks, &agents, &index,),
             ApprovalRoute::Deny
         );
     }
@@ -169,6 +177,7 @@ mod tests {
     #[test]
     fn confirm_without_parent_returns_user_confirmation() {
         let mut app = App::new();
+        app.insert_resource(EntityIndex::default());
         let agent = make_agent(ToolPermission::Confirm);
         let task = Task::from_user_input("test", 3, default_channel());
         app.world_mut().spawn(agent.clone());
@@ -176,11 +185,11 @@ mod tests {
 
         let policy = DefaultToolApprovalPolicy;
         let world = app.world_mut();
-        let mut state = SystemState::<(Query<(Entity, &Task)>, Query<&Agent>)>::new(world);
-        let (tasks, agents) = state.get(world);
+        let mut state = SystemState::<(Query<&Task>, Query<&Agent>, Res<EntityIndex>)>::new(world);
+        let (tasks, agents, index) = state.get(world);
 
         assert_eq!(
-            policy.determine_approval_route("test_tool", &agent, &task, &tasks, &agents),
+            policy.determine_approval_route("test_tool", &agent, &task, &tasks, &agents, &index,),
             ApprovalRoute::UserConfirmation
         );
     }

@@ -29,6 +29,7 @@ use harness::domain::{
     ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolFuture,
     ToolRequestPending, ToolWorkerOutput,
 };
+use harness::ecs::EntityIndex;
 use harness::systems::tools::builtin::scheduled::ListScheduledTasksTool;
 use harness::triggers::scheduled_task::{
     DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
@@ -82,6 +83,12 @@ fn spawn_waiting_task(world: &mut World, content: &str) -> (Entity, Uuid) {
     let task_id = task.id;
     task.status = TaskStatus::Waiting(harness::domain::WaitingReason::ToolExecution);
     let entity = world.spawn((task, ShortTermMemory::default())).id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 tool_calling_orchestrator_system 等 O(1) 解析 TaskId → Entity。
+    world
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity);
     (entity, task_id)
 }
 

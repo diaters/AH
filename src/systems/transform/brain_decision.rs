@@ -20,6 +20,7 @@ use crate::{
         AwaitingBrainDecision, DispatchHint, DispatchKind, DispatchStrategy, FailureReason,
         OutputContent, PendingDispatch, Task, TaskStatus,
     },
+    ecs::EntityIndex,
     infrastructure::skills::SkillRegistry,
     systems::dispatch::parse_brain_skill_selection,
 };
@@ -36,10 +37,12 @@ use crate::{
 /// - Brain 选的 skill 不属于该 Agent → 降级为 None + warn 日志（设计 gap：Brain prompt 当前未包含 skills 列表）
 /// - Brain LLM 调用返回可重试错误且未超 retry 上限 → schedule_retry
 /// - Brain LLM 调用返回不可重试错误或超 retry → mark_failed
+#[allow(clippy::too_many_arguments)]
 pub fn brain_decision_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     mut tasks: Query<(Entity, &mut Task, Option<&AwaitingBrainDecision>)>,
     agents: Query<&Agent>,
     skill_registry: Res<SkillRegistry>,
@@ -59,8 +62,9 @@ pub fn brain_decision_system(
 
         let result = &result_message.result;
 
-        let Some((task_entity, mut task, awaiting)) =
-            tasks.iter_mut().find(|(_, t, _)| t.id == result.task_id)
+        let Some((task_entity, mut task, awaiting)) = index
+            .get_task(&result.task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
         else {
             commands.entity(entity).despawn();
             continue;

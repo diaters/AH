@@ -136,7 +136,14 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
     let mut task = Task::from_user_input_ready("profile generation", 3, default_channel());
     task.id = task_id;
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
-    app.world_mut().spawn((task, ShortTermMemory::default()));
+    let task_entity = app
+        .world_mut()
+        .spawn((task, ShortTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 预置候选到 ExperienceStore
     let candidate_id = uuid::Uuid::new_v4();
@@ -438,7 +445,14 @@ fn profile_generation_does_not_loop_after_successful_submit() {
     let mut task = Task::from_user_input_ready("profile generation", 3, default_channel());
     task.id = task_id;
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
-    app.world_mut().spawn((task, ShortTermMemory::default()));
+    let task_entity = app
+        .world_mut()
+        .spawn((task, ShortTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 预置候选到 ExperienceStore
     let candidate_id = uuid::Uuid::new_v4();

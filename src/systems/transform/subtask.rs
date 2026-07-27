@@ -11,6 +11,7 @@ use crate::{
         BatchTaskState, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage,
         Task, TaskStatus, ToolCallingState, WaitingReason,
     },
+    ecs::EntityIndex,
 };
 
 /// 子任务批次阻塞 System
@@ -19,11 +20,15 @@ use crate::{
 pub fn sub_task_batch_block_system(
     mut commands: Commands,
     clock: Res<Clock>,
+    index: Res<EntityIndex>,
     messages: Query<(Entity, &SubTaskBatchCreatedMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
     for (entity, msg) in &messages {
-        if let Some(mut parent_task) = tasks.iter_mut().find(|t| t.id == msg.parent_task_id) {
+        if let Some(mut parent_task) = index
+            .get_task(&msg.parent_task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
+        {
             debug!(
                 event = "ParentTaskBlocked",
                 parent_task_id = %msg.parent_task_id,
@@ -45,6 +50,7 @@ pub fn sub_task_batch_block_system(
 /// 更新 SubTaskBatchState，检查是否全部完成。
 pub fn sub_task_completion_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     messages: Query<(Entity, &SubTaskCompletedMessage)>,
     mut tasks: Query<&mut Task>,
     mut batch_states: Query<(Entity, &mut SubTaskBatchState)>,
@@ -111,7 +117,10 @@ pub fn sub_task_completion_system(
             }
 
             // 恢复父 Task 状态
-            if let Some(mut parent_task) = tasks.iter_mut().find(|t| t.id == msg.parent_task_id) {
+            if let Some(mut parent_task) = index
+                .get_task(&msg.parent_task_id)
+                .and_then(|e| tasks.get_mut(e).ok())
+            {
                 let has_calling_state =
                     calling_states.iter().any(|cs| cs.task_id == parent_task.id);
                 parent_task.status = if has_calling_state {

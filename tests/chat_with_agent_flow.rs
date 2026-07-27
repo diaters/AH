@@ -79,25 +79,32 @@ fn chat_with_agent_creates_chat_subtask() {
 
     // 创建 Persistent Agent 作为 chat target
     let reviewer_id = Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: reviewer_id,
-            profile: AgentProfile {
-                name: "reviewer".to_string(),
-                model: "test-model".to_string(),
+    let reviewer_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: reviewer_id,
+                profile: AgentProfile {
+                    name: "reviewer".to_string(),
+                    model: "test-model".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["review".to_string()],
+                    description: "reviewer agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["review".to_string()],
-                description: "reviewer agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        harness::LongTermMemory::default(),
-    ));
+            harness::LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(reviewer_id, reviewer_entity);
 
     // 创建父 Agent（Allow 权限以直接执行工具）
     let parent_agent_id = Uuid::new_v4();
@@ -105,53 +112,67 @@ fn chat_with_agent_creates_chat_subtask() {
         default_permission: ToolPermission::Allow,
         ..Default::default()
     };
-    app.world_mut().spawn((
-        Agent {
-            id: parent_agent_id,
-            profile: AgentProfile {
-                name: "parent-agent".to_string(),
-                model: "test-model".to_string(),
+    let parent_agent_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: parent_agent_id,
+                profile: AgentProfile {
+                    name: "parent-agent".to_string(),
+                    model: "test-model".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["general".to_string()],
+                    description: "parent agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: perms,
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["general".to_string()],
-                description: "parent agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: perms,
-            system_prompt: None,
-        },
-        harness::LongTermMemory::default(),
-    ));
+            harness::LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(parent_agent_id, parent_agent_entity);
 
     let parent_task_id = Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: parent_task_id,
-            content: "review doc".to_string(),
-            creator: Uuid::nil(),
-            delegate: Some(parent_agent_id),
-            status: TaskStatus::Ready,
-            pending_confirmation_id: None,
-            input_summary: "review doc".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        harness::ShortTermMemory::default(),
-    ));
+    let parent_task_entity = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: parent_task_id,
+                content: "review doc".to_string(),
+                creator: Uuid::nil(),
+                delegate: Some(parent_agent_id),
+                status: TaskStatus::Ready,
+                pending_confirmation_id: None,
+                input_summary: "review doc".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            harness::ShortTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(parent_task_id, parent_task_entity);
 
     // 模拟父 Agent 调用 chat_with_agent 工具
     app.world_mut().spawn(harness::ToolExecutionRequestMessage {
@@ -238,25 +259,32 @@ fn chat_with_agent_multi_round_via_handle() {
 
     // 创建 Persistent Agent 作为 chat target
     let reviewer_id = Uuid::new_v4();
-    app.world_mut().spawn((
-        Agent {
-            id: reviewer_id,
-            profile: AgentProfile {
-                name: "reviewer".to_string(),
-                model: "test-model".to_string(),
+    let reviewer_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: reviewer_id,
+                profile: AgentProfile {
+                    name: "reviewer".to_string(),
+                    model: "test-model".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["review".to_string()],
+                    description: "reviewer agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["review".to_string()],
-                description: "reviewer agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        },
-        harness::LongTermMemory::default(),
-    ));
+            harness::LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(reviewer_id, reviewer_entity);
 
     // 创建父 Agent（Allow 权限）
     let parent_agent_id = Uuid::new_v4();
@@ -264,53 +292,67 @@ fn chat_with_agent_multi_round_via_handle() {
         default_permission: ToolPermission::Allow,
         ..Default::default()
     };
-    app.world_mut().spawn((
-        Agent {
-            id: parent_agent_id,
-            profile: AgentProfile {
-                name: "parent-agent".to_string(),
-                model: "test-model".to_string(),
+    let parent_agent_entity = app
+        .world_mut()
+        .spawn((
+            Agent {
+                id: parent_agent_id,
+                profile: AgentProfile {
+                    name: "parent-agent".to_string(),
+                    model: "test-model".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec!["general".to_string()],
+                    description: "parent agent".to_string(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: perms,
+                system_prompt: None,
             },
-            capabilities: AgentCapabilities {
-                tags: vec!["general".to_string()],
-                description: "parent agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: perms,
-            system_prompt: None,
-        },
-        harness::LongTermMemory::default(),
-    ));
+            harness::LongTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(parent_agent_id, parent_agent_entity);
 
     let parent_task_id = Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: parent_task_id,
-            content: "review doc".to_string(),
-            creator: Uuid::nil(),
-            delegate: Some(parent_agent_id),
-            status: TaskStatus::Ready,
-            pending_confirmation_id: None,
-            input_summary: "review doc".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        harness::ShortTermMemory::default(),
-    ));
+    let parent_task_entity = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: parent_task_id,
+                content: "review doc".to_string(),
+                creator: Uuid::nil(),
+                delegate: Some(parent_agent_id),
+                status: TaskStatus::Ready,
+                pending_confirmation_id: None,
+                input_summary: "review doc".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            harness::ShortTermMemory::default(),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(parent_task_id, parent_task_entity);
 
     app.update();
 

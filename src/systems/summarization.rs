@@ -11,6 +11,7 @@ use crate::{
         DispatchHint, DispatchKind, DispatchStrategy, PendingDispatch, SummarizationRequestMessage,
         SummarizationTrigger, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType,
     },
+    ecs::EntityIndex,
 };
 
 /// 摘要调度系统：将摘要请求转为 WorkItem
@@ -20,14 +21,18 @@ use crate::{
 pub(crate) fn summarization_dispatch_system(
     clock: Res<Clock>,
     mut commands: Commands,
+    index: Res<EntityIndex>,
     requests: Query<(Entity, &SummarizationRequestMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
     for (entity, request) in &requests {
         // 对于非 TaskComplete 触发的摘要，标记任务为等待摘要
         // TaskComplete 触发的摘要不需要改变任务状态（任务已是终态）
+        // UUID 寻址改用 EntityIndex O(1) 解析
         if request.trigger != SummarizationTrigger::TaskComplete
-            && let Some(mut task) = tasks.iter_mut().find(|t| t.id == request.task_id)
+            && let Some(mut task) = index
+                .get_task(&request.task_id)
+                .and_then(|e| tasks.get_mut(e).ok())
             && !task.status.is_terminal()
         {
             let old_status = task.status.clone();

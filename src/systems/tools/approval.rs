@@ -15,6 +15,7 @@ use crate::{
         ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         ToolReturnedHookPending, WaitingReason, WorkItem,
     },
+    ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
     systems::NativeProcessBackend,
 };
@@ -34,6 +35,7 @@ use super::orchestrator::{
 ///       3. 支持 GrantMode::Permanent 将权限写入 Agent
 pub fn approval_dispatch_system(
     mut commands: Commands,
+    index: Res<EntityIndex>,
     tasks: Query<&Task>,
     approval_requests: Query<(Entity, &ApprovalRequestMessage)>,
 ) {
@@ -62,7 +64,10 @@ pub fn approval_dispatch_system(
         );
 
         // 记录原 Task 状态
-        if let Some(task) = tasks.iter().find(|t| t.id == request.source_task_id)
+        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+        if let Some(task) = index
+            .get_task(&request.source_task_id)
+            .and_then(|e| tasks.get(e).ok())
             && task.status == TaskStatus::Waiting(WaitingReason::Approval)
         {
             debug!(
@@ -117,10 +122,11 @@ pub fn approval_result_system(
     )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // 两者都仅用于转发给 handle_tool_action（dry-run 校验需要 skill_loader）。
-    clock_and_loader: (Res<Clock>, Res<SkillLoader>),
+    // 合并 index / clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action。
+    index_clock_loader: (Res<EntityIndex>, Res<Clock>, Res<SkillLoader>),
 ) {
+    let index = &index_clock_loader.0;
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
         let Some((request_entity, tool_request)) = tool_requests
@@ -177,8 +183,8 @@ pub fn approval_result_system(
                     ToolReturnedHookPending,
                 ));
 
-                restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
-                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
+                restore_task_after_tool(&mut tasks, &calling_states, index, result.source_task_id);
+                clear_task_pending_confirmation_id(&mut tasks, index, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
             }
             ApprovalDecision::Approved => {
@@ -193,9 +199,9 @@ pub fn approval_result_system(
 
                 // Permanent 模式：更新 Agent 权限
                 if result.grant_mode == GrantMode::Permanent
-                    && let Some(mut agent) = agents
-                        .iter_mut()
-                        .find(|a| a.id == tool_request.request.agent_id)
+                    && let Some(mut agent) = index
+                        .get_agent(&tool_request.request.agent_id)
+                        .and_then(|e| agents.get_mut(e).ok())
                 {
                     agent.grant_permission(tool_request.tool_name.clone());
                     debug!(
@@ -231,8 +237,17 @@ pub fn approval_result_system(
                         tool_request,
                         ToolError::NotFound(format!("executor for {}", tool_request.tool_name)),
                     );
-                    clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
-                    restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
+                    clear_task_pending_confirmation_id(
+                        &mut tasks,
+                        index,
+                        tool_request.request.task_id,
+                    );
+                    restore_task_after_tool(
+                        &mut tasks,
+                        &calling_states,
+                        index,
+                        result.source_task_id,
+                    );
                     commands.entity(entity).despawn();
                     continue;
                 };
@@ -248,18 +263,20 @@ pub fn approval_result_system(
                     tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,
-                    current_origin_channel: tasks
-                        .iter()
-                        .find(|(_, t)| t.id == tool_request.request.task_id)
+                    // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                    current_origin_channel: index
+                        .get_task(&tool_request.request.task_id)
+                        .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
                 // Find the task entity
-                if let Some((task_entity, _)) = tasks
-                    .iter_mut()
-                    .find(|(_, t)| t.id == tool_request.request.task_id)
+                // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+                if let Some((task_entity, _)) = index
+                    .get_task(&tool_request.request.task_id)
+                    .and_then(|e| tasks.get_mut(e).ok())
                 {
                     handle_tool_action(
                         &mut commands,
@@ -275,15 +292,15 @@ pub fn approval_result_system(
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         None,
-                        &clock_and_loader.0,
+                        &index_clock_loader.1,
                         &context_queries,
-                        &clock_and_loader.1,
+                        &index_clock_loader.2,
                         &calling_states,
                     );
                 }
 
-                clear_task_pending_confirmation_id(&mut tasks, tool_request.request.task_id);
-                restore_task_after_tool(&mut tasks, &calling_states, result.source_task_id);
+                clear_task_pending_confirmation_id(&mut tasks, index, tool_request.request.task_id);
+                restore_task_after_tool(&mut tasks, &calling_states, index, result.source_task_id);
             }
         }
 
@@ -314,6 +331,7 @@ mod tests {
         world.insert_resource(crate::domain::SharedKnowledgeBase::default());
         world.insert_resource(crate::domain::ExperienceStore::default());
         world.insert_resource(crate::domain::PendingExperienceHooks::default());
+        world.insert_resource(crate::ecs::EntityIndex::default());
         world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
             std::path::PathBuf::from("/nonexistent_skills_root"),
         ));
@@ -390,6 +408,10 @@ mod tests {
         let mut task = dummy_task(task_id);
         task.pending_confirmation_id = Some(request_id);
         let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         world.spawn(dummy_request(task_id, agent_id, request_id));
         world.spawn(ApprovalResultMessage {
@@ -420,6 +442,10 @@ mod tests {
         let mut task = dummy_task(task_id);
         task.pending_confirmation_id = Some(request_id);
         let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
 
         world.spawn(dummy_request(task_id, agent_id, request_id));
         world.spawn(ApprovalResultMessage {

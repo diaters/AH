@@ -991,25 +991,32 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
 
     // Spawn skill-updater Agent（持有 submit_skill_update 工具所需 tag）
     let agent_id = Uuid::new_v4();
-    app.world_mut().spawn(Agent {
-        id: agent_id,
-        profile: AgentProfile {
-            name: "skill-updater".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["skill-updater".to_string()],
-            description: "skill-updater agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions {
-            default_permission: ToolPermission::Allow,
-            overrides: std::collections::HashMap::new(),
-        },
-        system_prompt: None,
-    });
+    let agent_entity = app
+        .world_mut()
+        .spawn(Agent {
+            id: agent_id,
+            profile: AgentProfile {
+                name: "skill-updater".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["skill-updater".to_string()],
+                description: "skill-updater agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Allow,
+                overrides: std::collections::HashMap::new(),
+            },
+            system_prompt: None,
+        })
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(agent_id, agent_entity);
 
     // Spawn Task + ShortTermMemory（dispatch_system 会查询 task）
     let task_entity = app
@@ -1020,6 +1027,10 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // Spawn WorkItem + SkillUpdateContext（让 orchestrator 能反查 context 注入 skill_id）
     let (work_item_id, work_item_entity) =
@@ -1166,25 +1177,32 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
     );
 
     let agent_id = Uuid::new_v4();
-    app.world_mut().spawn(Agent {
-        id: agent_id,
-        profile: AgentProfile {
-            name: "skill-updater".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["skill-updater".to_string()],
-            description: "skill-updater agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions {
-            default_permission: ToolPermission::Allow,
-            overrides: std::collections::HashMap::new(),
-        },
-        system_prompt: None,
-    });
+    let agent_entity = app
+        .world_mut()
+        .spawn(Agent {
+            id: agent_id,
+            profile: AgentProfile {
+                name: "skill-updater".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["skill-updater".to_string()],
+                description: "skill-updater agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Allow,
+                overrides: std::collections::HashMap::new(),
+            },
+            system_prompt: None,
+        })
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(agent_id, agent_entity);
 
     let task_entity = app
         .world_mut()
@@ -1194,6 +1212,10 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
@@ -1789,25 +1811,32 @@ fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
     );
 
     let agent_id = Uuid::new_v4();
-    app.world_mut().spawn(Agent {
-        id: agent_id,
-        profile: AgentProfile {
-            name: "skill-updater".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["skill-updater".to_string()],
-            description: "skill-updater agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions {
-            default_permission: ToolPermission::Allow,
-            overrides: std::collections::HashMap::new(),
-        },
-        system_prompt: None,
-    });
+    let agent_entity = app
+        .world_mut()
+        .spawn(Agent {
+            id: agent_id,
+            profile: AgentProfile {
+                name: "skill-updater".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["skill-updater".to_string()],
+                description: "skill-updater agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Allow,
+                overrides: std::collections::HashMap::new(),
+            },
+            system_prompt: None,
+        })
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(agent_id, agent_entity);
 
     let task_entity = app
         .world_mut()
@@ -1817,6 +1846,10 @@ fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);
@@ -1956,25 +1989,32 @@ fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
     );
 
     let agent_id = Uuid::new_v4();
-    app.world_mut().spawn(Agent {
-        id: agent_id,
-        profile: AgentProfile {
-            name: "skill-updater".to_string(),
-            model: "test-model".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["skill-updater".to_string()],
-            description: "skill-updater agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions {
-            default_permission: ToolPermission::Allow,
-            overrides: std::collections::HashMap::new(),
-        },
-        system_prompt: None,
-    });
+    let agent_entity = app
+        .world_mut()
+        .spawn(Agent {
+            id: agent_id,
+            profile: AgentProfile {
+                name: "skill-updater".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec!["skill-updater".to_string()],
+                description: "skill-updater agent".to_string(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Allow,
+                overrides: std::collections::HashMap::new(),
+            },
+            system_prompt: None,
+        })
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(agent_id, agent_entity);
 
     let task_entity = app
         .world_mut()
@@ -1984,6 +2024,10 @@ fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     let (work_item_id, work_item_entity) =
         spawn_work_item_with_context(app.world_mut(), skill_id.clone(), 1, candidate_id);

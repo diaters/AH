@@ -166,7 +166,14 @@ fn update_flow_modifies_agents_toml_and_ecs() {
     let mut task = Task::from_user_input_ready("profile update", 3, default_channel());
     task.id = task_id;
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
-    app.world_mut().spawn((task, ShortTermMemory::default()));
+    let task_entity = app
+        .world_mut()
+        .spawn((task, ShortTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 预置候选到 ExperienceStore（更新流程从 Persisted 开始）
     let candidate_id = uuid::Uuid::new_v4();
@@ -295,7 +302,14 @@ fn skip_profile_update_silently_ends() {
     let mut task = Task::from_user_input_ready("profile update skip", 3, default_channel());
     task.id = task_id;
     task.status = TaskStatus::Waiting(WaitingReason::Agent);
-    app.world_mut().spawn((task, ShortTermMemory::default()));
+    let task_entity = app
+        .world_mut()
+        .spawn((task, ShortTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     let candidate_id = uuid::Uuid::new_v4();
     let candidate = harness::ExperienceCandidate {

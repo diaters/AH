@@ -75,7 +75,13 @@ fn disabled_approval_channel_marks_event_task_failed() {
         TaskRoutingPolicy::event(Some(approval_channel), Some("test".to_string())),
     );
     let task_id = task.id;
-    app.world_mut().spawn(task);
+    let task_entity = app.world_mut().spawn(task).id();
+    // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
+    // 供 frontend_output_system 等 O(1) 解析 TaskId → Entity（ADR-005 §3 阶段 2）。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     app.world_mut().spawn(ToolConfirmationRequestMessage {
         request_id: Uuid::new_v4(),

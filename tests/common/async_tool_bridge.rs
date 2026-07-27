@@ -27,6 +27,7 @@ use harness::domain::{
     BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolAsyncResult, ToolContext,
     ToolError, ToolFuture, ToolResultReceiver, ToolResultSender, ToolWorkerOutput,
 };
+use harness::ecs::EntityIndex;
 
 /// 建测试 World：真实 multi-thread Runtime + 假时钟（起点为真实 now）+ 工具结果通道。
 pub fn setup_bridge_world() -> World {
@@ -42,6 +43,9 @@ pub fn setup_bridge_world() -> World {
     let (tx, rx) = mpsc::unbounded_channel::<ToolAsyncResult>();
     world.insert_resource(ToolResultSender(tx));
     world.insert_resource(ToolResultReceiver(rx));
+
+    // EntityIndex：阶段 2 起 async_tool_dispatch_system 依赖 O(1) UUID 解析
+    world.insert_resource(EntityIndex::default());
 
     world
 }

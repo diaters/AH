@@ -168,16 +168,21 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
    [dispatch.rs:85/198/226/255](../../src/systems/tools/dispatch.rs#L85) +
    [orchestrator.rs:27/267/1352](../../src/systems/tools/orchestrator.rs#L27) +
    [approval.rs:65](../../src/systems/tools/approval.rs#L65) + [async_dispatch.rs:101](../../src/systems/tools/async_dispatch.rs#L101)
-   （注：[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762) 经核实为 kind+tags 复合查询，移出范围）
+   （注：[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762) 经核实为 kind+tags 复合查询，移出范围）✅ 已落地（PR-3，2026-07-27）
 4. __waiting__（2 处，UUID+条件复合，需轻度重构）：[waiting.rs:27-30](../../src/systems/tools/waiting.rs#L27-L30) / [53-56](../../src/systems/tools/waiting.rs#L53-L56)
+   ✅ 已落地（PR-4，2026-07-27）
 5. __transform 系列__（14 处，含 1 处 UUID+条件复合）：
    [chat_round.rs:23/54](../../src/systems/transform/chat_round.rs#L23) +
    [task_lifecycle.rs:239/277](../../src/systems/transform/task_lifecycle.rs#L239) +
    [llm_response.rs:475/568/601/636/1454/1548/1624](../../src/systems/transform/llm_response.rs#L475) +
    [subtask.rs:26/114](../../src/systems/transform/subtask.rs#L26) + [brain_decision.rs:63](../../src/systems/transform/brain_decision.rs#L63)
-6. __散点__（8 处）：[contracts/tools.rs:76/78](../../src/contracts/tools.rs#L76) +
+   ✅ 已落地（PR-5，2026-07-27）
+6. __散点__（10 处，含 ADR v2 漏列 4 处：`summarization.rs` 1 处 + `maintenance.rs` 3 处 + `frontend_output.rs` 2 处
+   中的 1 处 + `brain_llm_builder.rs` BrainLlm 分支 1 处）：
+   [contracts/tools.rs:76/78](../../src/contracts/tools.rs#L76) +
    [frontend_output.rs:169](../../src/systems/frontend_output.rs#L169) + [maintenance.rs:309/407/480](../../src/systems/maintenance.rs#L309) +
    [brain_llm_builder.rs:35](../../src/systems/dispatch/brain_llm_builder.rs#L35) + [summarization.rs:30](../../src/systems/summarization.rs#L30)
+   ✅ 已落地（PR-6，2026-07-27）
 
 __5 处复合查询明确移出本设计范围__：[routing.rs:36](../../src/systems/routing.rs#L36) + [command.rs:38/95/116](../../src/systems/command.rs#L38)
 （按 channel+status 找活跃任务）、[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762)（按 kind+tags 找 Persistent agent）。

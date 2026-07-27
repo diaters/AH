@@ -210,7 +210,11 @@ fn dispatch_injects_current_origin_channel_from_task() {
         ),
         last_evaluated_turn: None,
     };
-    world.spawn(task);
+    let task_entity = world.spawn(task).id();
+    world
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 构造引用该 task_id 的请求
     let mut request = make_request("channel_probe", "call-channel-probe");
