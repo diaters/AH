@@ -19,15 +19,17 @@
 
 Harness 已用 Bevy ECS 把 `Task` / `WorkItem` / `Agent` 建模为 Component，但实体之间的"领域关系"
 仍以裸 UUID 表达，且代码库内无任何 `TaskId → Entity` 索引、对 Task / Agent 层级无任何 Bevy 原生关系
-（`ChildOf` 零命中）。系统只能对全量 `Query<&Task>` 做 `tasks.iter().find(|t| t.id == …)` 线性扫描，
-全库共 __16 处__（生产约 13 处，TUI 本地快照 3 处应排除出验收）。
+（`ChildOf` 零命中）。系统只能对全量 `Query<&Task>` / `Query<&Agent>` 做
+`tasks.iter().find(|t| t.id == …)` / `agents.iter().find(|a| a.id == …)` 线性扫描。
+__全库核实共 50 处__（2026-07-27 阶段 2 启动前重新扫描）：40 处生产 UUID 寻址点（36 纯 UUID + 4 UUID+条件复合），
+5 处复合查询（不属本设计范围），5 处 TUI 本地快照（排除出验收）。原 v1 估算"约 13 处"严重低估。
 
 ### 1.2 已识别的 ECS 理念违背（仅限本设计范围）
 
 | 违反点 | 位置 | 说明 |
 |---|---|---|
 | 关系用裸 UUID 替代 ECS 关系 | [task.rs:91](../../src/domain/task.rs#L91) 等 | `parent_task_id` / `delegate` / `creator` 等以 UUID 嵌在 Component |
-| 全量线性扫描 | [routing.rs:36](../../src/systems/routing.rs#L36) 等约 13 处生产代码 | O(n) 查找，无法组合查询（原估 "55+" 严重高估） |
+| 全量线性扫描 | [routing.rs:36](../../src/systems/routing.rs#L36) 等约 40 处生产 UUID 寻址点 | O(n) 查找，无法组合查询（原 v1 估"约 13 处"严重低估、原 v0 估"55+"亦不准确） |
 | 实体级状态进全局 Resource | [contribution.rs:192-194](../../src/domain/contribution.rs#L192-L194)（`PendingExperienceHooks` 自承，非 `ExperienceStore` 主体） | 经验治理 Resource 化衍生补丁；本设计仅消除其"UUID 无法关联回实体"的根因 |
 | 悬空 UUID | 上述所有 UUID 字段 | 指向实体 despawn 后 UUID 残留 |
 
@@ -37,7 +39,7 @@ Harness 已用 Bevy ECS 把 `Task` / `WorkItem` / `Agent` 建模为 Component，
 
 ### 1.3 目标
 
-- 引入中心 `EntityIndex`（`TaskId` / `AgentId` → `Entity` __两表__），消灭约 13 处生产线性扫描
+- 引入中心 `EntityIndex`（`TaskId` / `AgentId` → `Entity` __两表__），消灭约 40 处生产 UUID 线性扫描
 - 层级关系（仅 `parent_task → child`）改用 Bevy `ChildOf`，使组合查询替代手搓过滤
 - 非归属引用保留 UUID、运行期经 index O(1) 解析
 - 消除悬空 UUID，索引维护点集中到 spawn / despawn 封装
@@ -155,25 +157,57 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
 
 ### 阶段 2 — 逐个替换查找（分批、独立 PR）
 
-按模块顺序改造（约 13 处生产代码，TUI 3 处排除）：
+按 ADR §3 原始 6 批次切分，每批次对应实际代码模块（全量核实 40 处生产 UUID 寻址点）：
 
-1. `routing`
-2. `command`
-3. `experience/collection`
-4. `tools/dispatch` + `tools/orchestrator`
-5. `waiting`
-6. `chat_round` + `task_lifecycle`
+1. __routing__（1 处）：[routing.rs:138](../../src/systems/routing.rs#L138) — `continue_task_system` 按 `msg.task_id` 查 task
+   （注：原列 [routing.rs:36](../../src/systems/routing.rs#L36) 经核实为 channel+status 复合查询，移出范围）
+2. __experience__（6 处）：[collection.rs:19/63/226/234](../../src/systems/experience/collection.rs#L19) +
+   [profile_update.rs:64](../../src/systems/experience/profile_update.rs#L64) + [governance.rs:27](../../src/systems/experience/governance.rs#L27)
+   （原列 [command.rs:38/95/116](../../src/systems/command.rs#L38) 全部为复合查询，移出范围；command 批次语义由 experience 接续）
+3. __tools/dispatch+orchestrator+approval+async_dispatch__（9 处，含 1 处 UUID+条件复合）：
+   [dispatch.rs:85/198/226/255](../../src/systems/tools/dispatch.rs#L85) +
+   [orchestrator.rs:27/267/1352](../../src/systems/tools/orchestrator.rs#L27) +
+   [approval.rs:65](../../src/systems/tools/approval.rs#L65) + [async_dispatch.rs:101](../../src/systems/tools/async_dispatch.rs#L101)
+   （注：[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762) 经核实为 kind+tags 复合查询，移出范围）
+4. __waiting__（2 处，UUID+条件复合，需轻度重构）：[waiting.rs:27-30](../../src/systems/tools/waiting.rs#L27-L30) / [53-56](../../src/systems/tools/waiting.rs#L53-L56)
+5. __transform 系列__（14 处，含 1 处 UUID+条件复合）：
+   [chat_round.rs:23/54](../../src/systems/transform/chat_round.rs#L23) +
+   [task_lifecycle.rs:239/277](../../src/systems/transform/task_lifecycle.rs#L239) +
+   [llm_response.rs:475/568/601/636/1454/1548/1624](../../src/systems/transform/llm_response.rs#L475) +
+   [subtask.rs:26/114](../../src/systems/transform/subtask.rs#L26) + [brain_decision.rs:63](../../src/systems/transform/brain_decision.rs#L63)
+6. __散点__（8 处）：[contracts/tools.rs:76/78](../../src/contracts/tools.rs#L76) +
+   [frontend_output.rs:169](../../src/systems/frontend_output.rs#L169) + [maintenance.rs:309/407/480](../../src/systems/maintenance.rs#L309) +
+   [brain_llm_builder.rs:35](../../src/systems/dispatch/brain_llm_builder.rs#L35) + [summarization.rs:30](../../src/systems/summarization.rs#L30)
 
-每处 `tasks.iter().find(|t| t.id == …)` 改为：
+__5 处复合查询明确移出本设计范围__：[routing.rs:36](../../src/systems/routing.rs#L36) + [command.rs:38/95/116](../../src/systems/command.rs#L38)
+（按 channel+status 找活跃任务）、[orchestrator.rs:762](../../src/systems/tools/orchestrator.rs#L762)（按 kind+tags 找 Persistent agent）。
+非 UUID 寻址、ADR §3 设计意图不覆盖。后续是否引入次级索引（如 `ChannelActiveTaskIndex`、`PersistentAgentByTagIndex`）单独立项评审。
+
+每处纯 UUID 寻址的 `tasks.iter().find(|t| t.id == …)` / `agents.iter().find(|a| a.id == …)` 改为：
 
 ```rust
 // UUID 入口：经 index O(1) 解析
-let entity = index.tasks.get(&target_id).copied()?;
+let entity = index.get_task(&target_id)?;
 let task = tasks.get(entity)?;
 
-// 或层级场景：关系查询替代扫描
+// 或层级场景：关系查询替代扫描（阶段 3）
 fn collect_children(children: Query<&Task, With<ChildOf<ParentEntity>>>) { /* 直接子节点 */ }
 ```
+
+UUID+条件复合（4 处）拆为 UUID 解析 + 调用方断言两步：
+
+```rust
+// 原：tasks.iter().any(|t| t.id == id && t.status.is_terminal())
+// 新：
+if let Some(entity) = index.get_task(&id)
+    && let Ok(task) = tasks.get(entity)
+    && task.status.is_terminal()
+{
+    // ...
+}
+```
+
+5 处 TUI 本地快照（[tui/app.rs:665/891/1132/1167](../../src/tui/app.rs#L665)、[tui/status.rs:122](../../src/tui/status.rs#L122)）排除出验收。
 
 ### 阶段 3 — 关系 ECS 化
 

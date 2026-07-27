@@ -3,9 +3,9 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExternalInput,
-    FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, EntityIndex, ExecutorFuture,
+    ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task,
+    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -139,32 +139,40 @@ fn user_input_continues_waiting_task() {
 
     // Create a task in Waiting(User) state (multi-turn)
     let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id,
-            content: "existing task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "existing task".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id,
+                content: "existing task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "existing task".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
@@ -339,60 +347,76 @@ fn multiple_waiting_user_tasks_routes_to_one() {
 
     // 创建两个 Waiting(User) 状态的任务
     let task_id_1 = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id_1,
-            content: "first waiting task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "first".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity_1 = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id_1,
+                content: "first waiting task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "first".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id_1, task_entity_1);
 
     let task_id_2 = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id_2,
-            content: "second waiting task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "second".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let task_entity_2 = app
+        .world_mut()
+        .spawn((
+            Task {
+                id: task_id_2,
+                content: "second waiting task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Waiting(WaitingReason::User),
+                pending_confirmation_id: None,
+                input_summary: "second".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: true,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(default_channel()),
+                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ))
+        .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id_2, task_entity_2);
 
     // 模拟用户输入
     app.world_mut().spawn(harness::UserInputMessage {

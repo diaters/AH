@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use tracing::debug;
 
+use crate::ecs::EntityIndex;
 use crate::{
     app::Clock,
     domain::{
@@ -128,14 +129,16 @@ pub(crate) fn user_input_routing_system(
 pub(crate) fn continue_task_system(
     mut commands: Commands,
     clock: Res<Clock>,
+    index: ResMut<EntityIndex>,
     continue_messages: Query<(Entity, &ContinueTaskMessage)>,
     agents: Query<&Agent>,
     mut tasks: Query<(Entity, &mut Task, Option<&mut ShortTermMemory>)>,
 ) {
     for (entity, msg) in &continue_messages {
-        // 更新任务状态和追加用户输入到 ShortTermMemory
-        if let Some((task_entity, mut task, short_term)) =
-            tasks.iter_mut().find(|(_, t, _)| t.id == msg.task_id)
+        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
+        if let Some((task_entity, mut task, short_term)) = index
+            .get_task(&msg.task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
         {
             let stm_entries_before = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
             let stm_tokens_before = short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
@@ -242,6 +245,7 @@ mod tests {
         SystemOutputMessage, Task, TaskStatus, ToolConfirmationResponseMessage, UserInputMessage,
         WaitingReason,
     };
+    use crate::ecs::EntityIndex;
     use crate::systems::command::command_parse_system;
 
     fn telegram_channel() -> ChannelId {
@@ -330,7 +334,12 @@ mod tests {
         agent: Option<Agent>,
     ) -> Option<DispatchHint> {
         let task_id = task.id;
-        app.world_mut().spawn(task);
+        // 经 spawn 后同步写 EntityIndex（模拟阶段 1 spawn_task 封装的索引维护）
+        let entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
         if let Some(a) = agent {
             app.world_mut().spawn(a);
         }
@@ -619,6 +628,7 @@ mod tests {
     fn continue_top_level_task_reuses_persistent_delegate() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
+        app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
         let agent_id = uuid::Uuid::new_v4();
@@ -650,6 +660,7 @@ mod tests {
     fn continue_top_level_task_with_missing_delegate_agent_falls_back_to_brain_llm() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
+        app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
         let agent_id = uuid::Uuid::new_v4();
@@ -668,6 +679,7 @@ mod tests {
     fn continue_subtask_always_uses_brain_llm() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
+        app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
         let agent_id = uuid::Uuid::new_v4();
@@ -687,6 +699,7 @@ mod tests {
     fn continue_task_without_delegate_uses_brain_llm() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
+        app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
         let task = make_task_with_delegate(telegram_channel(), None, None);

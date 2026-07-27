@@ -5,9 +5,10 @@ use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
     AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, EntryRole, ExecutorFuture, ExperienceCollectionRequestMessage, FrontendKind,
-    HarnessConfig, LongTermMemory, PendingDispatch, ShortTermMemory, Task, TaskRoutingPolicy,
-    TaskStatus, WaitingReason, WorkItem, build_harness_app, llm::ExecutorRegistry,
+    DispatchStrategy, EntityIndex, EntryRole, ExecutorFuture, ExperienceCollectionRequestMessage,
+    FrontendKind, HarnessConfig, LongTermMemory, PendingDispatch, ShortTermMemory, Task,
+    TaskRoutingPolicy, TaskStatus, WaitingReason, WorkItem, build_harness_app,
+    llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -165,6 +166,12 @@ fn multi_turn_task_lifecycle() {
             ShortTermMemory::default(),
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    // 模拟阶段 1 spawn 封装的索引维护（生产代码经 spawn_task 自动写入）
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
 
     // Simulate user input
     app.world_mut().spawn(harness::UserInputMessage {
@@ -539,6 +546,11 @@ fn multi_turn_memory_records_user_and_assistant() {
             ShortTermMemory::default(),
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
 
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
@@ -971,7 +983,7 @@ fn second_dispatch_prompt_includes_correct_history() {
 
     // 创建 Waiting(User) 状态的任务，并预填充对话历史
     let task_id = uuid::Uuid::new_v4();
-    let _entity_id = app
+    let entity_id = app
         .world_mut()
         .spawn((
             Task {
@@ -1008,6 +1020,13 @@ fn second_dispatch_prompt_includes_correct_history() {
             },
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
+    // 抑制未使用警告：本测试只验证 LLM prompt 内容，不读取 entity_id
+    let _ = entity_id;
 
     // 模拟用户继续对话
     app.world_mut().spawn(harness::UserInputMessage {
@@ -1104,6 +1123,11 @@ fn task_content_updates_on_continue() {
             ShortTermMemory::default(),
         ))
         .id();
+    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .tasks
+        .insert(task_id, entity_id);
 
     // 模拟用户继续输入
     app.world_mut().spawn(harness::UserInputMessage {
