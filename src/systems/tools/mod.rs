@@ -25,7 +25,7 @@ pub use async_dispatch::async_tool_dispatch_system;
 pub use backend::NativeProcessBackend;
 pub use cancel_monitor::cancel_monitor_system;
 pub use channel_send_dispatch::channel_send_dispatch_system;
-pub use confirmation::{tool_confirmation_request_system, tool_confirmation_result_system};
+pub use confirmation::tool_confirmation_result_system;
 pub use dispatch::tool_dispatch_system;
 pub use effect_commit::commit_tool_effects_system;
 pub use ingest_tool_results::ingest_tool_results_system;

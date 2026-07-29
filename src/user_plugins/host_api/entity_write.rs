@@ -1,8 +1,7 @@
 //! 插件对 World 的写指令。dispatcher 在 hook 完成后 replay。
 //!
-//! 注意：本枚举在后续任务会继续扩展（CreateWorkItem、SetApprovalDecision、
-//! ExperienceSetPinned、SetTaskTag 等）。每个新增变体都要同步追加到 `replay`
-//! 函数匹配分支。
+//! 注：每个变体都需在 `replay` 函数中提供对应匹配分支；部分变体当前为 deferred 占位，
+//! 详见 `user_plugins/dispatcher.rs`。
 
 use crossbeam_channel::Sender;
 use rhai::Engine;
@@ -10,9 +9,8 @@ use uuid::Uuid;
 
 /// 插件对 World 的写指令。dispatcher 在 hook 完成后 replay。
 ///
-/// 注意：本枚举在后续任务会继续扩展（CreateWorkItem、SetApprovalDecision、
-/// ExperienceSetPinned、SetTaskTag 等）。每个新增变体都要同步追加到 `replay`
-/// 函数匹配分支。
+/// 注：每个变体都需在 `replay` 函数中提供对应匹配分支；部分变体当前为 deferred 占位，
+/// 详见 `user_plugins/dispatcher.rs`。
 #[derive(Debug)]
 pub enum WorldCommand {
     CreateTask {

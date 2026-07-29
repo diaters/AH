@@ -1,5 +1,7 @@
 # AI Harness 数据流转指南
 
+> **状态：当前有效** — 数据流转概述，面向评估者与架构审查者；实施依据见 `docs/superpowers/specs/2026-07-10-data-flow-guide-design.md`
+
 > 本文档以__数据流转__为主线，帮助项目评估者与架构审查者快速理解 AI Harness 框架的运转方式。
 > 目标读者：具备软件工程基础但首次接触 AI Harness 的开发者。
 >
@@ -244,8 +246,7 @@ __System 清单：__
 | System | 行为 |
 |--------|------|
 | `brain_dispatch_system` | Brain 模式：将 Ready Task 交给 Brain Agent 做智能调度决策 |
-| `task_dispatch_system` | __核心 System__：按 tag 匹配 Agent + 构建含 STM/LTM 的 prompt |
-| `workitem_dispatch_system` | 为治理型 WorkItem（摘要/评估/经验收集）匹配 Agent |
+| `dispatch_system` | __核心 System__：扫描 `PendingDispatch` 派发 Task / WorkItem，按 tag 匹配 Agent + 构建含 STM/LTM 的 prompt |
 | `tool_dispatch_system` | 检查工具权限：Allow→执行 Confirm→审批 Deny→拒绝 |
 | `evaluation_trigger_system` | 检测 Task 对话轮数，达到阈值时创建 Evaluation WorkItem |
 | `approval_dispatch_system` | 处理父 Agent 审批请求（当前为 MVP 自动通过） |
@@ -257,7 +258,7 @@ __分发决策流：__
 graph TD
     T[Task { status: Ready }] --> BD{brain_dispatch_system}
     BD -->|Brain 启用| BRAIN[Brain Agent 决策<br/>→ 选择执行 Agent]
-    BD -->|子任务 / 无 Brain| TD[task_dispatch_system<br/>tag 匹配 Agent]
+    BD -->|子任务 / 无 Brain| TD[dispatch_system<br/>tag 匹配 Agent]
 
     TD --> BUILD[构建 prompt<br/>Task.content + STM 历史 + LTM.Relevant]
     BUILD --> AER[AgentExecutionRequest<br/>→ agent_execution_system]
@@ -322,8 +323,7 @@ __System 清单：__
 
 | System | 行为 |
 |--------|------|
-| `frontend_output_system` | 将 UserOutputMessage/SystemOutputMessage/状态变更推送给前端 |
-| `tool_confirmation_request_system` | 将审批请求转为前端可渲染的事件 |
+| `frontend_output_system` | 将 UserOutputMessage/SystemOutputMessage/状态变更/审批请求推送给前端 |
 
 __数据变化：__
 
@@ -370,7 +370,7 @@ AgentSpawnRequestMessage → agent_factory_system
 STM.estimated_tokens > THRESHOLD
     → memory_compression_system
     → Summarization WorkItem
-    → workitem_dispatch_system → 分发到 summarizer Agent 执行
+    → dispatch_system → 分发到 summarizer Agent 执行
     → 结果写回 STM.summary_prefix
 
 Agent 终止
@@ -427,7 +427,7 @@ stateDiagram-v2
 | 迁移 | 发生阶段 | 触发 System |
 |------|---------|------------|
 | Pending → Ready | Transform | `user_message_to_task_system` |
-| Ready → Waiting(Agent) | Dispatch | `task_dispatch_system` / `brain_dispatch_system` |
+| Ready → Waiting(Agent) | Dispatch | `dispatch_system` / `brain_dispatch_system` |
 | Waiting(Agent) → Running | Execution | `agent_execution_system` |
 | Running → Waiting(User) | Transform | `llm_response_system`（文本响应后） |
 | Running → Waiting(ToolExec) | Transform | `llm_response_system`（LLM 返回 ToolCalls 后） |
@@ -525,8 +525,7 @@ __IM 通道隔离规则：__
 | Transform | `sub_task_completion_system` | SubTaskCompletedMessage | SubTaskBatchState 更新 |
 | Transform | `sub_task_batch_block_system` | SubTaskBatchCreatedMessage | 父 Task → Waiting(SubTaskBatch) |
 | Dispatch | `brain_dispatch_system` | Task Ready | Brain 决策 / 执行请求 |
-| Dispatch | `task_dispatch_system` | Task Ready | AgentExecutionRequest（含 prompt） |
-| Dispatch | `workitem_dispatch_system` | WorkItem Pending | AgentExecutionRequest |
+| Dispatch | `dispatch_system` | Task Ready / WorkItem Pending | AgentExecutionRequest（含 prompt） |
 | Dispatch | `tool_dispatch_system` | ToolExecutionRequestMessage | ToolExecutionResultMessage / 审批请求 |
 | Dispatch | `evaluation_trigger_system` | 对话轮数 | Evaluation WorkItem |
 | Dispatch | `approval_dispatch_system` | ApprovalRequestMessage | 审批结果（MVP 自动通过） |
@@ -534,8 +533,7 @@ __IM 通道隔离规则：__
 | Execution | `agent_execution_system` | AgentExecutionRequest | tokio 异步执行 + Task → Running |
 | Execution | `agent_termination_system` | Agent 终止事件 | 经验收集触发 |
 | Execution | `experience_collection_dispatch_system` | 经验收集触发 | ExperienceCollection WorkItem |
-| Output | `frontend_output_system` | UserOutputMessage / SystemOutputMessage | EngineEvent → 前端/IM |
-| Output | `tool_confirmation_request_system` | ToolConfirmationRequestMessage | 前端审批事件 |
+| Output | `frontend_output_system` | UserOutput / SystemOutput / ToolConfirmationRequest | 前端推送 |
 | Maintenance | `load_agents_system` | agents.toml | Persistent Agent 实体 |
 | Maintenance | `agent_factory_system` | AgentSpawnRequestMessage | TaskScoped Agent 实体 |
 | Maintenance | `memory_compression_system` | STM 超阈值 | Summarization WorkItem |

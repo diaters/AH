@@ -21,7 +21,6 @@ use crate::{
 /// SubTask 派发前置系统
 ///
 /// 在 `HarnessSet::Dispatch` 中运行，通过 `.before(dispatch_system)` 保证顺序。
-/// 当前阶段未启用（在 `plugins/dispatch.rs` 中注释掉注册），等阶段 3 启用。
 pub fn subtask_dispatch_preparation_system(
     _clock: Res<Clock>,
     mut commands: Commands,

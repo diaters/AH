@@ -43,7 +43,7 @@
 - [x] 实现经验模块两层分层汇聚治理（非顶层贡献 / 顶层治理 / 四类去向）
 - [x] 为 `SharedKnowledgeUpgradeQueue` 增加文件持久化
 - [x] 为 `IncubationProposal` 增加用户审批后的持久型 Agent 创建执行链路
-- [ ] 清理旧经验直写链路：`memory_contribution_system` / `memory_absorption_system`（当前为过渡态保留）
+- [x] 清理旧经验直写链路：`memory_contribution_system` / `memory_absorption_system`（已删除，过渡态已收敛）
 - [ ] 实现顶层治理对候选 `kind_hint` 的修正能力
 - [x] 实现非顶层基于多个子候选整理组合候选的主动重写
 - [x] 顺序工具确认：同一任务的多个工具确认请求按顺序逐个弹出
@@ -54,7 +54,8 @@
 ### 中优先级
 
 - [ ] 补齐插件系统的未完整实现链路：
-  - 替换 `tool_executor` stub，实现插件 Tool 的真实 Rhai 执行逻辑并补齐测试
+  - [x] 替换 `tool_executor` stub，实现插件 Tool 的真实 Rhai 执行逻辑并补齐测试
+    （`RhaiPluginAsyncWrapper::run_async` 已实现 spawn_blocking + 协作式取消 + `max_operations` 兜底）
   - 实现 slash command 的真实 Rhai 脚本派发（当前仅解析加载，执行仅打印 stub 日志）
   - 实现 `WorldCommand` 中 deferred 的变体：`CreateWorkItem`、`SetApprovalDecision`、
     `ExperienceSetPinned`、`SetTaskMetadata`、`SetTaskTag`

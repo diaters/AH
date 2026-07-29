@@ -334,7 +334,7 @@ mod tests {
         agent: Option<Agent>,
     ) -> Option<DispatchHint> {
         let task_id = task.id;
-        // 经 spawn 后同步写 EntityIndex（模拟阶段 1 spawn_task 封装的索引维护）
+        // 经 spawn 后同步写 EntityIndex
         let entity = app.world_mut().spawn(task).id();
         app.world_mut()
             .resource_mut::<EntityIndex>()

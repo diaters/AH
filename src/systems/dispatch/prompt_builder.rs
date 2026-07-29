@@ -1,9 +1,7 @@
 //! 共享 prompt 构建模块
 //!
 //! 提供带历史对话、长期记忆与通道上下文的 prompt 构建，
-//! 供 `dispatch_system` 的 DirectDelegate 分支与原 `task_dispatch_system` 复用。
-//!
-//! 历史来源：从 `task_dispatch.rs` 提取，统一 LTM/STM/通道上下文 prompt 构建逻辑。
+//! 供 `dispatch_system` 的 DirectDelegate 分支使用。
 
 use crate::domain::{ChannelId, LongTermMemory, ShortTermMemory};
 

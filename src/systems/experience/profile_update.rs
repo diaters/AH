@@ -314,7 +314,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(store);
         world.insert_resource(EntityIndex::default());
-        // 经 EntityIndex 注册 agent，模拟阶段 1 spawn_agent 封装的索引维护
+        // 经 EntityIndex 注册 agent
         // 先 spawn 所有 agent 收集 entity，再统一写入索引避免可变借用冲突
         let spawned: Vec<(crate::domain::AgentId, Entity)> = agents
             .into_iter()
