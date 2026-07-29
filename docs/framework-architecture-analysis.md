@@ -1,6 +1,6 @@
 # AI Harness 框架架构分析
 
-> **状态：历史背景** — 早期框架模块布局分析，部分结构已被 `docs/current-state.md` 与 `docs/wiki/system-pipeline.md` 取代，仅供了解演进脉络
+> __状态：历史背景__ — 早期框架模块布局分析，部分结构已被 `docs/current-state.md` 与 `docs/wiki/system-pipeline.md` 取代，仅供了解演进脉络
 
 ## 1. 项目层级总览
 

@@ -1,7 +1,7 @@
 # AI Harness 数据流转指南
 
-> **状态：当前有效** — 数据流转概述，面向评估者与架构审查者；实施依据见 `docs/superpowers/specs/2026-07-10-data-flow-guide-design.md`
-
+> __状态：当前有效__ — 数据流转概述，面向评估者与架构审查者；实施依据见 `docs/superpowers/specs/2026-07-10-data-flow-guide-design.md`
+>
 > 本文档以__数据流转__为主线，帮助项目评估者与架构审查者快速理解 AI Harness 框架的运转方式。
 > 目标读者：具备软件工程基础但首次接触 AI Harness 的开发者。
 >

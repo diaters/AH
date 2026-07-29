@@ -1,23 +1,23 @@
 # 文档索引
 
-本文件是 AI Harness 文档体系的**统一入口**。任何读者都应先读本节，再按需深入。
+本文件是 AI Harness 文档体系的__统一入口__。任何读者都应先读本节，再按需深入。
 
 ## 真相源分层（先读这段）
 
 判断"某篇文档是否仍是有效真相源"，看其文件顶部状态标注：
 
-- **`当前有效`** — 可作为当前架构与实现的依据。
-- **`历史背景`** — 早期思路，部分已被取代，仅供了解演进脉络，不可作依据。
-- **`已归档`** — 已移入 `docs/archive/`，方案被后续设计完全取代，仅增不改。
+- __`当前有效`__ — 可作为当前架构与实现的依据。
+- __`历史背景`__ — 早期思路，部分已被取代，仅供了解演进脉络，不可作依据。
+- __`已归档`__ — 已移入 `docs/archive/`，方案被后续设计完全取代，仅增不改。
 
 分层结论：
 
 | 层级 | 范围 | 是否当前真相源 |
 | --- | --- | --- |
-| **唯一真相源** | `docs/current-state.md` | 是 — 能力、架构结论与限制的最终依据 |
-| **当前有效设计文档** | `docs/design/`（逐篇标注）、`docs/wiki/`、`docs/adr/`、根目录带 `状态：当前有效` 的架构/指南文档 | 是 |
-| **活跃规格与计划** | `docs/superpowers/` 下 `specs/`、`plans/`（标注 `当前有效`/`活跃`） | 是 — 功能合并 main 后应归档 |
-| **历史 / 已归档** | `docs/archive/`、标注 `历史背景`/`已归档` 的文档 | 否 — 仅供查阅 |
+| __唯一真相源__ | `docs/current-state.md` | 是 — 能力、架构结论与限制的最终依据 |
+| __当前有效设计文档__ | `docs/design/`（逐篇标注）、`docs/wiki/`、`docs/adr/`、根目录带 `状态：当前有效` 的架构/指南文档 | 是 |
+| __活跃规格与计划__ | `docs/superpowers/` 下 `specs/`、`plans/`（标注 `当前有效`/`活跃`） | 是 — 功能合并 main 后应归档 |
+| __历史 / 已归档__ | `docs/archive/`、标注 `历史背景`/`已归档` 的文档 | 否 — 仅供查阅 |
 
 > 治理规则见 `AGENTS.md` 的「文档结构治理」与「文档生命周期」。当 `design/` 文档与 `current-state.md` 矛盾时，以 `current-state.md` 为准并归档前者。
 
@@ -48,12 +48,12 @@
 | `adr/ADR-001-brain-agent-scheduling.md` | Brain Agent 调度机制 | 已决议 |
 | `adr/ADR-002-agent-controlled-evolution.md` | Agent 受控演化模型 | 已决议 |
 | `adr/ADR-003-deprecate-spawn-agent-tool.md` | 废弃 `spawn_agent` Tool | 已决议（对应工具已退役，见 `current-state.md` 已废弃项） |
-| `adr/ADR-004-skill-first-class-and-experience-governance-reform.md` | Skill 成为一等公民与经验治理改造 | 已决议（进行中，见 `superpowers/plans/2026-07-18-skill-first-class-and-experience-governance.md`） |
+| `adr/ADR-004-skill-first-class-and-experience-governance-reform.md` | Skill 一等公民与经验治理改造 | 已决议（进行中，见 superpowers 计划） |
 | `adr/ADR-005-ecs-relation-modeling.md` | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 已决议（最新） |
 
 ## 设计文档（design/）
 
-> 完整状态表见 `design/README.md`。当前共 9 篇：**7 篇当前有效、2 篇历史背景**。
+> 完整状态表见 `design/README.md`。当前共 9 篇：__7 篇当前有效、2 篇历史背景__。
 
 | 文档 | 标注 | 主题 |
 | --- | --- | --- |
@@ -69,7 +69,7 @@
 
 ## 活跃规格与计划（superpowers/）
 
-> 完整清单见 `superpowers/README.md`。当前：**13 个活跃计划、12 个规格**（其中 11 篇标注 `当前有效`，1 篇 `knowledge-manager-agent-design-revision.md` 为草案，1 篇 `knowledge-manager-agent-design.md` 待补状态）。
+> 完整清单见 `superpowers/README.md`。当前：__13 个活跃计划、12 个规格__（其中 11 篇标注 `当前有效`，1 篇草案，1 篇待补状态）。
 
 注意：标记为 `当前有效` 的规格若对应功能已合并 main（对照 `current-state.md` 的"已实现"章节），应按生命周期规则在 7 天内归档到 `docs/archive/superpowers/`。索引只反映文档自身声明状态，是否归档以实际合入为准。
 
@@ -87,7 +87,7 @@
 - `archive/design/` — 已被取代的设计文档
 - `archive/superpowers/` — 已完成的计划与过期规格
 
-归档文档在文件顶部标注 `> **状态：已归档**` 并指向 `current-state.md`。
+归档文档在文件顶部标注 `> __状态：已归档__` 并指向 `current-state.md`。
 
 ## 文档地图
 
@@ -113,7 +113,8 @@ docs/
 
 ## 插件系统
 
-`plugins/` 目录以 Rhai 脚本承载 Channel/Provider 适配与业务逻辑，受 `docs/plugin-development.md` 约束。Channel/Provider 的实际配置接入见 `configuration.md` 与仓库根的 `*.toml.example` 模板。
+`plugins/` 目录以 Rhai 脚本承载 Channel/Provider 适配与业务逻辑，受 `docs/plugin-development.md` 约束。
+Channel/Provider 的实际配置接入见 `configuration.md` 与仓库根的 `*.toml.example` 模板。
 
 ## 目录职责
 
