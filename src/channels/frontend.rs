@@ -200,8 +200,13 @@ impl Frontend for ChannelFrontend {
                 if recipients.is_empty() {
                     return;
                 }
-                // task_name 截断到 30 字符（按字符截断，UTF-8 安全）
-                let short_name: String = name.chars().take(30).collect();
+                // task_name 截断到 30 字符（按字符截断，UTF-8 安全）；超长追加省略号
+                let short_name: String = if name.chars().count() > 30 {
+                    let truncated: String = name.chars().take(30).collect();
+                    format!("{truncated}…")
+                } else {
+                    name.clone()
+                };
                 let transition = match old_status {
                     Some(old) => {
                         format!("{} → {}", status_label(old), status_label(status))
@@ -650,6 +655,43 @@ mod tests {
         assert_eq!(
             msg.content,
             "[a1b2c3d4] build feature: 运行中 → 已完成 @TestAgent"
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn renders_task_status_change_with_long_name_truncated() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let long_name = "测".repeat(40);
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: long_name,
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: Some("TestAgent".to_string()),
+            waiting_reason: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        let expected_short = format!("{}…", "测".repeat(30));
+        assert!(
+            msg.content.contains(&expected_short),
+            "消息应包含截断后的 30 个字符 + 省略号，实际: {}",
+            msg.content
+        );
+        assert!(
+            !msg.content.contains(&"测".repeat(31)),
+            "消息不应包含第 31 个及之后的字符，实际: {}",
+            msg.content
         );
         assert!(rx.try_recv().is_err());
     }
