@@ -131,6 +131,7 @@ pub(crate) fn frontend_output_system(
         } else {
             None
         };
+        // 通过 delegate agent_id 解析 agent name
         let agent_name = task.delegate.and_then(|agent_id| {
             index
                 .get_agent(&agent_id)
@@ -1084,5 +1085,76 @@ mod tests {
             .expect("should emit TaskStatusChanged with agent_name and waiting_reason");
         assert_eq!(agent_name.as_deref(), Some("TestAgent"));
         assert_eq!(waiting_reason, Some(WaitingReasonKind::Tool));
+    }
+
+    #[test]
+    fn task_status_changed_agent_name_none_when_no_delegate() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.insert_resource(EntityIndex::default());
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let mut task = Task::from_user_input("test", 3, origin_channel);
+        // 不设置 delegate（保持 None），也不 spawn agent entity
+        task.status = TaskStatus::Waiting(WaitingReason::Agent);
+        let task_id = task.id;
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        let agent_name = events
+            .iter()
+            .find_map(|e| match e {
+                EngineEvent::TaskStatusChanged { agent_name, .. } => Some(agent_name.clone()),
+                _ => None,
+            })
+            .expect("should emit TaskStatusChanged");
+        assert_eq!(agent_name, None);
+    }
+
+    #[test]
+    fn waiting_reason_to_kind_mappings() {
+        use super::waiting_reason_to_kind;
+
+        let cases = [
+            (WaitingReason::Agent, WaitingReasonKind::Agent),
+            (WaitingReason::User, WaitingReasonKind::User),
+            (WaitingReason::Approval, WaitingReasonKind::User),
+            (WaitingReason::RetryBackoff, WaitingReasonKind::Retry),
+            (WaitingReason::Evaluator, WaitingReasonKind::Other),
+            (
+                WaitingReason::Session {
+                    handle_id: Uuid::new_v4(),
+                },
+                WaitingReasonKind::Tool,
+            ),
+            (
+                WaitingReason::SubTaskBatch {
+                    batch_id: Uuid::new_v4(),
+                },
+                WaitingReasonKind::Tool,
+            ),
+        ];
+
+        for (reason, expected) in cases {
+            assert_eq!(waiting_reason_to_kind(&reason), expected);
+        }
     }
 }

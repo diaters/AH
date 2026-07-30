@@ -690,6 +690,7 @@ impl App {
                 self.update_all_subtask_progress();
             }
             EngineEvent::BatchProgress { .. } => {}
+            // TUI 暂不展示工具调用开始事件，任务 4 中实现
             EngineEvent::ToolCallStarted { .. } => {}
         }
     }
