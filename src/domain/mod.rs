@@ -86,7 +86,7 @@ pub use execution::{
 // frontend
 pub use frontend::{
     AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
-    MessageRole, TaskStatusKind, UserAction,
+    MessageRole, TaskStatusKind, UserAction, WaitingReasonKind,
 };
 
 // memory

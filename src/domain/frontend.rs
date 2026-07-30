@@ -80,6 +80,16 @@ pub enum TaskStatusKind {
     Failed,
 }
 
+/// 等待原因（前端展示用，精简版）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingReasonKind {
+    Agent,
+    Tool,
+    User,
+    Retry,
+    Other,
+}
+
 /// 审批选项
 #[derive(Debug, Clone)]
 pub struct ApprovalOption {
@@ -132,6 +142,8 @@ pub enum EngineEvent {
         parent_id: Option<TaskId>,
         /// 任务来源的前端通道，事件任务为 None
         origin_channel: Option<ChannelId>,
+        agent_name: Option<String>,
+        waiting_reason: Option<WaitingReasonKind>,
     },
     /// 子任务批次进度
     BatchProgress {
@@ -140,6 +152,65 @@ pub enum EngineEvent {
         completed: usize,
         total: usize,
     },
+    /// 工具调用开始（不含结果）
+    ToolCallStarted {
+        target: EventTarget,
+        task_id: TaskId,
+        agent_name: String,
+        tool_name: String,
+        tool_input_summary: String,
+    },
+}
+
+/// 生成工具调用的输入摘要（用于前端展示，避免长参数刷屏）
+pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> String {
+    match tool_name {
+        "shell_exec" | "shell_start" => tool_input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                if s.len() > 80 {
+                    format!("{}…", &s[..80])
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_default(),
+        "channel_send" => {
+            let channel = tool_input
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content = tool_input
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content_preview = if content.len() > 50 {
+                format!("{}…", &content[..50])
+            } else {
+                content.to_string()
+            };
+            format!("channel={channel} content={content_preview}")
+        }
+        "create_tasks" => tool_input
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .map(|arr| format!("{} 个子任务", arr.len()))
+            .unwrap_or_default(),
+        "wait_tasks" => tool_input
+            .get("task_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| format!("等待 {} 个任务", arr.len()))
+            .unwrap_or_default(),
+        _ => {
+            let s = serde_json::to_string(tool_input).unwrap_or_default();
+            if s.len() > 100 {
+                format!("{}…", &s[..100])
+            } else {
+                s
+            }
+        }
+    }
 }
 
 impl EngineEvent {
@@ -152,6 +223,7 @@ impl EngineEvent {
             Self::AgentStatusChanged { target, .. } => target,
             Self::TaskStatusChanged { target, .. } => target,
             Self::BatchProgress { target, .. } => target,
+            Self::ToolCallStarted { target, .. } => target,
         }
     }
 }
