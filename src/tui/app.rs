@@ -794,7 +794,7 @@ mod tests {
 
     use crate::domain::{
         AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, FrontendKind,
-        MessageRole, TaskStatusKind,
+        MessageRole, TaskStatusKind, WaitingReasonKind,
     };
     use crate::tui::chat::{ApprovalCardState, ChatMessage};
 
@@ -1525,5 +1525,62 @@ mod tests {
         // 审批应被移除，回到 Chat 模式
         assert!(app.pending_approvals.is_empty());
         assert!(matches!(app.mode, AppMode::Chat));
+    }
+
+    #[test]
+    fn tool_call_started_converted_to_system_message() {
+        let mut app = test_app();
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        app.handle_engine_event(EngineEvent::ToolCallStarted {
+            target: EventTarget::Broadcast,
+            task_id,
+            agent_name: "TestAgent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            tool_input_summary: "ls -la".to_string(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            app.messages.last(),
+            Some(ChatMessage::System(content)) if content == "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec: ls -la"
+        ));
+    }
+
+    #[test]
+    fn tool_call_started_without_summary_omits_colon() {
+        let mut app = test_app();
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        app.handle_engine_event(EngineEvent::ToolCallStarted {
+            target: EventTarget::Broadcast,
+            task_id,
+            agent_name: "TestAgent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            tool_input_summary: String::new(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            app.messages.last(),
+            Some(ChatMessage::System(content)) if content == "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec"
+        ));
+    }
+
+    #[test]
+    fn task_status_changed_persists_agent_name_and_waiting_reason() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "test task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: Some("TestAgent".to_string()),
+            waiting_reason: Some(WaitingReasonKind::Tool),
+        });
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].agent_name, Some("TestAgent".to_string()));
+        assert_eq!(app.tasks[0].waiting_reason, Some(WaitingReasonKind::Tool));
     }
 }
