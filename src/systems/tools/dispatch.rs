@@ -7,14 +7,14 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    app::{Clock, FrontendRegistry, HarnessSettings},
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
-        ChatSession, ConfirmationOption, ConfirmationSource, ExperienceStore,
-        PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory,
-        SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
-        WorkItem,
+        ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
+        ExperienceStore, PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase,
+        ShortTermMemory, SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus,
+        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolPermission, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -52,11 +52,18 @@ pub fn tool_dispatch_system(
     )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 index / clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action。
-    index_clock_loader: (Res<EntityIndex>, Res<Clock>, Res<SkillLoader>),
+    // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
+    // frontend_registry 用于在 Allow 路径推送 ToolCallStarted 事件。
+    index_clock_loader: (
+        Res<EntityIndex>,
+        Res<Clock>,
+        Res<SkillLoader>,
+        Res<FrontendRegistry>,
+    ),
 ) {
     let index = &index_clock_loader.0;
+    let frontend_registry = &index_clock_loader.3;
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
@@ -161,6 +168,26 @@ pub fn tool_dispatch_system(
                     );
                     continue;
                 };
+
+                // 推送 ToolCallStarted 事件到所有前端
+                let tool_input_summary =
+                    crate::domain::summarize_tool_input(&tool_name, &request.tool_input);
+                let target = index
+                    .get_task(&request.request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
+                    .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+                    .map(|channel| EventTarget::Directed(vec![channel]))
+                    .unwrap_or(EventTarget::Broadcast);
+                let event = EngineEvent::ToolCallStarted {
+                    target,
+                    task_id: request.request.task_id,
+                    agent_name: agent.profile.name.clone(),
+                    tool_name: tool_name.clone(),
+                    tool_input_summary,
+                };
+                for frontend in &frontend_registry.frontends {
+                    frontend.push_event(event.clone());
+                }
 
                 debug!(
                     event = "ToolExecutionAllowed",
@@ -394,7 +421,7 @@ pub fn tool_dispatch_system(
 mod tests {
     use super::*;
     use crate::{
-        app::{Clock, HarnessConfig, HarnessSettings},
+        app::{Clock, FrontendRegistry, HarnessConfig, HarnessSettings},
         domain::{
             Agent, AgentCapabilities, AgentExecutionRequest, AgentKind, AgentProfile,
             AgentRequestKind, AgentToolPermissions, BuiltinToolExecutors, ChannelId,
@@ -422,6 +449,8 @@ mod tests {
         world.insert_resource(NativeProcessBackend::default());
         world.insert_resource(Clock::default());
         world.insert_resource(crate::ecs::EntityIndex::default());
+        // tool_dispatch_system 在 Allow 路径推送 ToolCallStarted 需要 FrontendRegistry
+        world.insert_resource(FrontendRegistry { frontends: vec![] });
 
         // 注册需要确认的测试工具
         let mut registry = SpaceToolRegistry::default();

@@ -259,3 +259,57 @@ pub trait Frontend: Send + Sync + 'static {
     /// 拉取待处理的用户动作（ECS 每帧调用）
     fn poll_actions(&self) -> Vec<UserAction>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_shell_exec_command() {
+        let input = serde_json::json!({"command": "ls -la"});
+        assert_eq!(summarize_tool_input("shell_exec", &input), "ls -la");
+    }
+
+    #[test]
+    fn summarize_shell_exec_long_command_truncated() {
+        let long_command = "a".repeat(100);
+        let input = serde_json::json!({"command": long_command});
+        let result = summarize_tool_input("shell_exec", &input);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 81);
+    }
+
+    #[test]
+    fn summarize_channel_send() {
+        let input = serde_json::json!({"channel": "qq", "content": "hello"});
+        assert_eq!(
+            summarize_tool_input("channel_send", &input),
+            "channel=qq content=hello"
+        );
+    }
+
+    #[test]
+    fn summarize_create_tasks() {
+        let input = serde_json::json!({"tasks": [{"goal": "a"}, {"goal": "b"}]});
+        assert_eq!(summarize_tool_input("create_tasks", &input), "2 个子任务");
+    }
+
+    #[test]
+    fn summarize_wait_tasks() {
+        let input = serde_json::json!({"task_ids": ["id1", "id2", "id3"]});
+        assert_eq!(summarize_tool_input("wait_tasks", &input), "等待 3 个任务");
+    }
+
+    #[test]
+    fn summarize_unknown_tool_fallback_json() {
+        let input = serde_json::json!({"key": "value"});
+        let result = summarize_tool_input("unknown_tool", &input);
+        assert!(result.contains("\"key\""));
+    }
+
+    #[test]
+    fn summarize_missing_field_returns_empty() {
+        let input = serde_json::json!({});
+        assert_eq!(summarize_tool_input("shell_exec", &input), "");
+    }
+}
