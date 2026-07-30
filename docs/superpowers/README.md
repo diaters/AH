@@ -10,18 +10,36 @@
 |------|------|------|
 | `plans/2026-07-04-sequential-tool-confirmation-plan.md` | 顺序工具确认实施 | 活跃 |
 | `plans/2026-07-05-per-user-turn-tool-limit.md` | 单轮工具调用软限制实施 | 活跃 |
+| `plans/2026-07-06-timer-local-timezone-schedule-task-plan.md` | 定时任务本地时区调度实施 | 活跃 |
 | `plans/2026-07-07-dynamic-scheduled-task-approval-routing.md` | 动态 scheduled task 审批路由与事件任务审批通道检查实施 | 活跃 |
+| `plans/2026-07-07-log-level-restructure.md` | 日志级别重构实施 | 活跃 |
 | `plans/2026-07-08-im-channel-task-identification.md` | IM 通道任务标识实施 | 活跃 |
+| `plans/2026-07-10-data-flow-guide-plan.md` | 数据流转指南实施 | 活跃 |
+| `plans/2026-07-10-knowledge-manager-agent.md` | 知识管理 Agent 实施 | 活跃 |
+| `plans/2026-07-10-per-agent-multi-model-fallback.md` | 单 Agent 多模型降级实施 | 活跃 |
+| `plans/2026-07-10-tui-global-task-panel.md` | TUI 全局任务面板实施 | 活跃 |
+| `plans/2026-07-13-agent-profile-llm-generation.md` | Agent Profile LLM 生成实施 | 活跃 |
+| `plans/2026-07-18-dispatch-architecture-unification.md` | 调度架构统一实施 | 活跃 |
 | `plans/2026-07-18-skill-first-class-and-experience-governance.md` | Skill 一等公民与经验治理改造实施 | 活跃 |
 
 ### 活跃规格
 
 | 文件 | 主题 | 状态 |
 |------|------|------|
-| `specs/2026-07-04-sequential-tool-confirmation-design.md` | 顺序工具确认设计 | 活跃 |
-| `specs/2026-07-05-per-user-turn-tool-limit-design.md` | 单轮工具调用软限制设计 | 活跃 |
-| `specs/2026-07-07-dynamic-scheduled-task-approval-routing-design.md` | 动态 scheduled task 审批路由与事件任务审批通道检查设计 | 活跃 |
-| `specs/2026-07-08-im-channel-task-identification-design.md` | IM 通道任务标识设计 | 活跃 |
+| `specs/2026-07-04-sequential-tool-confirmation-design.md` | 顺序工具确认设计 | 当前有效 |
+| `specs/2026-07-05-per-user-turn-tool-limit-design.md` | 单轮工具调用软限制设计 | 当前有效 |
+| `specs/2026-07-06-timer-local-timezone-schedule-task-design.md` | 定时任务本地时区调度设计 | 当前有效 |
+| `specs/2026-07-07-dynamic-scheduled-task-approval-routing-design.md` | 动态 scheduled task 审批路由与事件任务审批通道检查设计 | 当前有效 |
+| `specs/2026-07-07-log-level-restructure-design.md` | 日志级别重构设计 | 当前有效 |
+| `specs/2026-07-08-im-channel-task-identification-design.md` | IM 通道任务标识设计 | 当前有效 |
+| `specs/2026-07-10-data-flow-guide-design.md` | 数据流转指南设计 | 当前有效 |
+| `specs/2026-07-10-knowledge-manager-agent-design.md` | 知识管理 Agent 设计 | 未标注状态 |
+| `specs/2026-07-10-knowledge-manager-agent-design-revision.md` | 知识管理 Agent 设计修订 | 草案 |
+| `specs/2026-07-10-per-agent-multi-model-fallback-design.md` | 单 Agent 多模型降级设计 | 当前有效 |
+| `specs/2026-07-10-tui-global-task-panel-design.md` | TUI 全局任务面板设计 | 当前有效 |
+| `specs/2026-07-13-plugin-system-v2-application-model-design.md` | 插件系统 v2 应用模型设计 | 当前有效 |
+
+> 注意：规格状态以文件自身顶部标注为准。标记为 `当前有效` 的规格若对应功能已合并 main（对照 `docs/current-state.md` 的"已实现"章节），应按下方生命周期规则在 7 天内归档到 `docs/archive/superpowers/`。`knowledge-manager-agent-design.md` 缺状态标注，建议补 `当前有效` 或 `草案`。
 
 ### 已归档
 

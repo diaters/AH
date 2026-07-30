@@ -76,8 +76,7 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
             let schedule_clone = schedule.clone();
 
             // 双账本单一修改入口：state + registry 同一闭包内落账，watch 一次广播。
-            // created_at 用 apply 时刻的 Utc::now()，与原 schedule_task_commit_system
-            // 行为一致——「apply 时刻才知道的真相」原则。
+            // created_at 用 apply 时刻的 Utc::now()——「apply 时刻才知道的真相」原则。
             update_scheduler_state(world, |state, registry| {
                 state.dynamic_tasks_mut().push(DynamicScheduledTask {
                     id: id_owned,

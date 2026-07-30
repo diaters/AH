@@ -1,5 +1,7 @@
 # AI Harness 框架架构分析
 
+> __状态：历史背景__ — 早期框架模块布局分析，部分结构已被 `docs/current-state.md` 与 `docs/wiki/system-pipeline.md` 取代，仅供了解演进脉络
+
 ## 1. 项目层级总览
 
 ```text
@@ -252,7 +254,6 @@ graph TB
 
     subgraph "Output 阶段"
         H1["frontend_output_system<br/>推送 EngineEvent"]
-        H2["tool_confirmation_request_system<br/>推送确认请求"]
     end
 
     subgraph "Maintenance 阶段"

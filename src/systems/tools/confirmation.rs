@@ -11,9 +11,9 @@ use crate::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, ExecutionError,
         ExperienceStore, GrantMode, PendingExperienceHooks, ProfileGenerationContext,
         SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task, TaskStatus, ToolActionKind,
-        ToolCallingState, ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolPermission, ToolReturnedHookPending, WaitingReason, WorkItem,
+        ToolCallingState, ToolConfirmationResponseMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+        ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -24,17 +24,6 @@ use super::orchestrator::{
     clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
     spawn_tool_error,
 };
-
-/// Tool 确认请求输出 System
-///
-/// 将确认请求通过 frontend_output_system 推送给前端
-pub fn tool_confirmation_request_system(
-    _agents: Query<&Agent>,
-    _requests: Query<(Entity, &ToolConfirmationRequestMessage)>,
-) {
-    // frontend_output_system 负责监听 Added<ToolConfirmationRequestMessage> 并推送给前端，
-    // 此 system 保留为占位，后续可在此添加额外逻辑（如日志增强）
-}
 
 /// Tool 确认响应处理 System
 ///

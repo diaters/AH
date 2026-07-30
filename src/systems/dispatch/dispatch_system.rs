@@ -8,10 +8,9 @@
 //!
 //! ## 当前状态
 //!
-//! 阶段 5：`task_dispatch_system` 与 `workitem_dispatch_system` 已退役，
 //! 所有派发请求统一通过 `PendingDispatch` 流入本 system 处理。
 //! DirectDelegate 分支复用 `prompt_builder::build_prompt_with_context`，
-//! 与原 `task_dispatch_system` 行为对齐（LTM/STM/通道上下文 + skills 系统提示）。
+//! 构建 LTM/STM/通道上下文 + skills 系统提示。
 
 use crate::prelude::*;
 use tracing::{debug, warn};
@@ -284,7 +283,7 @@ pub fn dispatch_system(
                         .cloned()
                         .collect();
 
-                    // 构建 prompt：完整 LTM/STM/通道上下文（与原 task_dispatch 行为对齐）
+                    // 构建 prompt：完整 LTM/STM/通道上下文
                     let prompt = build_prompt_with_context(
                         &task.content,
                         short_term,

@@ -95,7 +95,7 @@ pub fn workitem_lifecycle_hook_system(world: &mut World) {
 ///   - Summarization: `Task Waiting(Summarization)` → `Waiting(User)`
 ///   - ExperienceCollection: 不回滚 Task
 ///
-/// Task 状态恢复逻辑迁移自 `workitem_dispatch.rs`（task 5.1 将删除该文件）。
+/// Task 状态恢复逻辑（WorkItem 失败时的状态回退）。
 fn handle_workitem_failure_by_context(world: &mut World, entity: Entity, work_item: &WorkItem) {
     // 1. SkillUpdateContext：候选保持 GovernanceResolved（仅日志，不强制降级）
     if world.get::<SkillUpdateContext>(entity).is_some() {

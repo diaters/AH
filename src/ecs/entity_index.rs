@@ -2,8 +2,8 @@
 //!
 //! 设计依据：`docs/adr/ADR-005-ecs-relation-modeling.md`。
 //!
-//! 阶段 0（本文件）仅引入 `EntityIndex` Resource 与 `RemovedComponents` 兜底清理系统，
-//! **运行期不改变任何既有调用**。两表的写入由阶段 1 的 `spawn_*` / `despawn_*` 中心封装负责
+//! 本文件提供 `EntityIndex` Resource 与 `RemovedComponents` 兜底清理系统。
+//! 两表的写入由 `spawn_*` / `despawn_*` 中心封装负责
 //! （封装内同步维护映射）；本文件的监听作为双保险之一，在组件移除的下一帧自动摘除陈旧映射。
 
 use crate::domain::{
@@ -36,7 +36,7 @@ impl EntityIndex {
     }
 }
 
-/// 中心 Task 创建封装：spawn 实体并同步写入 `EntityIndex.tasks`（阶段 1 收口点，双保险之一）。
+/// 中心 Task 创建封装：spawn 实体并同步写入 `EntityIndex.tasks`（双保险之一）。
 ///
 /// 仅经此封装创建 Task 实体，可保证索引与 ECS 一致。`Task` 实体的销毁见 [`despawn_task`]。
 pub fn spawn_task(
@@ -116,7 +116,7 @@ mod tests {
         app
     }
 
-    /// 测试夹具：构造并 spawn 一个 Task 实体（不写 index，由调用方模拟阶段 1 封装）。
+    /// 测试夹具：构造并 spawn 一个 Task 实体（不写 index，由调用方手动写入索引）。
     fn make_task_entity(world: &mut World) -> (TaskId, Entity) {
         let task = Task::from_user_input(
             "test",
@@ -138,7 +138,7 @@ mod tests {
 
         let (id, entity) = make_task_entity(app.world_mut());
 
-        // 写入映射（模拟阶段 1 的 spawn 封装）
+        // 写入映射
         app.world_mut()
             .resource_mut::<EntityIndex>()
             .tasks

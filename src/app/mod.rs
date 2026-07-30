@@ -315,8 +315,8 @@ pub fn build_harness_app(
     app.insert_resource(ShutdownState::default());
     app.insert_resource(channel_manager);
 
-    // 中心索引：外部 UUID 身份 → ECS Entity 映射（ADR-005 阶段 0，仅注册 Resource；
-    // 写入在阶段 1 的 spawn/despawn 封装接入；陈旧兜底见下方 Maintenance 清理系统）。
+    // 中心索引：外部 UUID 身份 → ECS Entity 映射。
+    // 写入由 spawn/despawn 中心封装维护；陈旧兜底见下方 Maintenance 清理系统。
     app.init_resource::<crate::ecs::EntityIndex>();
 
     // Space Resources
@@ -366,7 +366,7 @@ pub fn build_harness_app(
         (agent_factory_system.in_set(HarnessSet::Maintenance),),
     );
 
-    // ADR-005 阶段 0：index 陈旧兜底清理（双保险之一）。
+    // index 陈旧兜底清理（双保险之一）。
     // 即使绕过中心 despawn 封装直接 despawn，下一帧也能自动摘除映射。
     app.add_systems(
         Update,

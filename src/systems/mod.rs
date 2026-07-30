@@ -54,8 +54,7 @@ pub(crate) use tools::{
     channel_send_dispatch_system, check_waiting_tasks_system, on_approval_requested_hook_system,
     on_approval_resolved_hook_system, on_subtask_completed_check_waiting,
     on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
-    tool_confirmation_request_system, tool_confirmation_result_system, tool_dispatch_system,
-    tool_result_system,
+    tool_confirmation_result_system, tool_dispatch_system, tool_result_system,
 };
 // `async_tool_dispatch_system` 供集成测试经 `harness::systems::async_tool_dispatch_system`
 // 调用 `world.run_system_once(...)`，故单独 `pub use`（其余 tools 内部系统保持

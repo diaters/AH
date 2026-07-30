@@ -500,7 +500,7 @@ mod tests {
         app
     }
 
-    /// 在 EntityIndex 中注册 agent（模拟阶段 1 spawn_agent 封装的索引维护）。
+    /// 在 EntityIndex 中注册 agent。
     fn register_agent(app: &mut App, agent_id: crate::domain::AgentId, agent: Agent) {
         let entity = app.world_mut().spawn(agent).id();
         app.world_mut()
@@ -509,7 +509,7 @@ mod tests {
             .insert(agent_id, entity);
     }
 
-    /// 在 EntityIndex 中注册 task（模拟阶段 1 spawn_task 封装的索引维护）。
+    /// 在 EntityIndex 中注册 task。
     fn register_task(
         app: &mut App,
         task_id: crate::domain::TaskId,
@@ -575,9 +575,9 @@ mod tests {
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "test-skill");
 
-        // 非默认 agent（经 EntityIndex 注册，模拟阶段 1 spawn_agent 封装）
+        // 非默认 agent（经 EntityIndex 注册）
         register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
-        // task 注入了 skill（经 EntityIndex 注册，模拟阶段 1 spawn_task 封装）
+        // task 注入了 skill（经 EntityIndex 注册）
         register_task(
             &mut app,
             task_id,
@@ -692,7 +692,7 @@ mod tests {
         let candidate_id = uuid::Uuid::new_v4();
 
         register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
-        // task 不注入 skill（经 EntityIndex 注册，模拟阶段 1 spawn_task 封装）
+        // task 不注入 skill（经 EntityIndex 注册）
         register_task(&mut app, task_id, make_task(task_id), None);
         stage_candidate(
             &mut app,
