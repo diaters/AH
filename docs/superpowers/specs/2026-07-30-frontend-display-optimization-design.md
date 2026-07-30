@@ -76,12 +76,12 @@ pub enum WaitingReasonKind {
 | `WaitingReason` | `WaitingReasonKind` |
 |---|---|
 | `Agent` | `Agent` |
-| `Tool` / `Session` / `Tasks` | `Tool` |
-| `User` | `User` |
+| `ToolExecution` / `Session { .. }` / `SubTaskBatch { .. }` | `Tool` |
+| `User` / `Approval` | `User` |
 | `RetryBackoff` | `Retry` |
-| 其他 | `Other` |
+| `Evaluator` / `Summarization` / `ChatAgent` | `Other` |
 
-注：`Session`（等待 shell 会话）与 `Tasks`（等待子任务）本质都是等待工具/子任务执行，归为 `Tool` 语义。
+注：`Session`（等待 shell 会话）与 `SubTaskBatch`（等待子任务批次）本质都是等待工具/子任务执行，归为 `Tool` 语义；`Approval` 本质是等待用户审批确认，归为 `User` 语义。
 
 #### 新增 `ToolCallStarted` 事件
 
