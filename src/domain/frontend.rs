@@ -142,7 +142,9 @@ pub enum EngineEvent {
         parent_id: Option<TaskId>,
         /// 任务来源的前端通道，事件任务为 None
         origin_channel: Option<ChannelId>,
+        /// 被指派 agent 的名称，无 delegate 时为 None
         agent_name: Option<String>,
+        /// 等待原因，仅当 status 为 Waiting 时有意义
         waiting_reason: Option<WaitingReasonKind>,
     },
     /// 子任务批次进度
@@ -169,8 +171,9 @@ pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> 
             .get("command")
             .and_then(|v| v.as_str())
             .map(|s| {
-                if s.len() > 80 {
-                    format!("{}…", &s[..80])
+                if s.chars().count() > 80 {
+                    let truncated: String = s.chars().take(80).collect();
+                    format!("{truncated}…")
                 } else {
                     s.to_string()
                 }
@@ -185,8 +188,9 @@ pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> 
                 .get("content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let content_preview = if content.len() > 50 {
-                format!("{}…", &content[..50])
+            let content_preview = if content.chars().count() > 50 {
+                let truncated: String = content.chars().take(50).collect();
+                format!("{truncated}…")
             } else {
                 content.to_string()
             };
@@ -204,8 +208,9 @@ pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> 
             .unwrap_or_default(),
         _ => {
             let s = serde_json::to_string(tool_input).unwrap_or_default();
-            if s.len() > 100 {
-                format!("{}…", &s[..100])
+            if s.chars().count() > 100 {
+                let truncated: String = s.chars().take(100).collect();
+                format!("{truncated}…")
             } else {
                 s
             }
