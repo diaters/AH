@@ -312,4 +312,31 @@ mod tests {
         let input = serde_json::json!({});
         assert_eq!(summarize_tool_input("shell_exec", &input), "");
     }
+
+    #[test]
+    fn summarize_shell_exec_chinese_command_truncated() {
+        let long_command = "中".repeat(100);
+        let input = serde_json::json!({"command": long_command});
+        let result = summarize_tool_input("shell_exec", &input);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 81);
+    }
+
+    #[test]
+    fn summarize_channel_send_long_content_truncated() {
+        let long_content = "文".repeat(60);
+        let input = serde_json::json!({"channel": "qq", "content": long_content});
+        let result = summarize_tool_input("channel_send", &input);
+        assert!(result.ends_with('…'));
+        let content_part = result.split(" content=").nth(1).expect("应包含 content 段");
+        assert_eq!(content_part.chars().count(), 51);
+    }
+
+    #[test]
+    fn summarize_unknown_tool_long_json_truncated() {
+        let long_value = "字".repeat(120);
+        let input = serde_json::json!({"key": long_value});
+        let result = summarize_tool_input("unknown_tool", &input);
+        assert!(result.ends_with('…'));
+    }
 }
