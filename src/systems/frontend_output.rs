@@ -7,7 +7,7 @@ use crate::app::FrontendRegistry;
 use crate::domain::{
     Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, FrontendKind, MessageRole,
     SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
-    UserOutputMessage,
+    UserOutputMessage, WaitingReason, WaitingReasonKind,
 };
 use crate::ecs::EntityIndex;
 
@@ -22,6 +22,7 @@ pub(crate) fn frontend_output_system(
     all_tasks: Query<(Entity, &Task)>,
     tasks: Query<&Task, Changed<Task>>,
     agents: Query<&Agent, Changed<Agent>>,
+    all_agents: Query<&Agent>,
     confirmations: Query<
         (Entity, &ToolConfirmationRequestMessage),
         Added<ToolConfirmationRequestMessage>,
@@ -130,6 +131,16 @@ pub(crate) fn frontend_output_system(
         } else {
             None
         };
+        let agent_name = task.delegate.and_then(|agent_id| {
+            index
+                .get_agent(&agent_id)
+                .and_then(|e| all_agents.get(e).ok())
+                .map(|a| a.profile.name.clone())
+        });
+        let waiting_reason = match &task.status {
+            TaskStatus::Waiting(reason) => Some(waiting_reason_to_kind(reason)),
+            _ => None,
+        };
         let event = EngineEvent::TaskStatusChanged {
             target,
             task_id: task.id,
@@ -139,6 +150,8 @@ pub(crate) fn frontend_output_system(
             result,
             parent_id: task.parent_task_id,
             origin_channel: task.origin_channel.clone(),
+            agent_name,
+            waiting_reason,
         };
         if task.status.is_terminal() {
             last_status.remove(&task.id);
@@ -280,6 +293,20 @@ fn task_status_to_kind(status: &crate::domain::TaskStatus) -> TaskStatusKind {
     }
 }
 
+fn waiting_reason_to_kind(reason: &WaitingReason) -> WaitingReasonKind {
+    match reason {
+        WaitingReason::Agent => WaitingReasonKind::Agent,
+        WaitingReason::ToolExecution
+        | WaitingReason::Session { .. }
+        | WaitingReason::SubTaskBatch { .. } => WaitingReasonKind::Tool,
+        WaitingReason::User | WaitingReason::Approval => WaitingReasonKind::User,
+        WaitingReason::RetryBackoff => WaitingReasonKind::Retry,
+        WaitingReason::Evaluator | WaitingReason::Summarization | WaitingReason::ChatAgent => {
+            WaitingReasonKind::Other
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -289,9 +316,10 @@ mod tests {
 
     use crate::app::FrontendRegistry;
     use crate::domain::{
-        ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend,
-        FrontendKind, Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind,
-        ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
+        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
+        ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend, FrontendKind,
+        Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
+        UserAction, UserOutputMessage, WaitingReason, WaitingReasonKind,
     };
     use crate::ecs::EntityIndex;
 
@@ -987,5 +1015,74 @@ mod tests {
             })
             .expect("should emit TaskStatusChanged with origin_channel");
         assert_eq!(origin, Some(origin_channel));
+    }
+
+    #[test]
+    fn task_status_changed_includes_agent_name_and_waiting_reason() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let frontend = MockFrontend {
+            kind: FrontendKind::Telegram,
+            events: events.clone(),
+        };
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        });
+        app.insert_resource(EntityIndex::default());
+        app.add_systems(Update, frontend_output_system);
+
+        let origin_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let mut task = Task::from_user_input("test", 3, origin_channel);
+        task.delegate = Some(Uuid::nil());
+        task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+        let task_id = task.id;
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        let agent = Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "TestAgent".to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        };
+        let agent_entity = app.world_mut().spawn(agent).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .agents
+            .insert(Uuid::nil(), agent_entity);
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        let (agent_name, waiting_reason) = events
+            .iter()
+            .find_map(|e| match e {
+                EngineEvent::TaskStatusChanged {
+                    agent_name,
+                    waiting_reason,
+                    ..
+                } => Some((agent_name.clone(), *waiting_reason)),
+                _ => None,
+            })
+            .expect("should emit TaskStatusChanged with agent_name and waiting_reason");
+        assert_eq!(agent_name.as_deref(), Some("TestAgent"));
+        assert_eq!(waiting_reason, Some(WaitingReasonKind::Tool));
     }
 }

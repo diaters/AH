@@ -690,6 +690,7 @@ impl App {
                 self.update_all_subtask_progress();
             }
             EngineEvent::BatchProgress { .. } => {}
+            EngineEvent::ToolCallStarted { .. } => {}
         }
     }
 
@@ -836,6 +837,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
@@ -861,6 +864,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 1（已完成）
@@ -873,6 +878,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 2（运行中）
@@ -885,6 +892,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 验证主任务进度
@@ -1102,6 +1111,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 1（已完成）
@@ -1114,6 +1125,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 2（失败）
@@ -1126,6 +1139,8 @@ mod tests {
             result: Some("error".to_string()),
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 验证：Done 和 Failed 都计入已完成
@@ -1149,6 +1164,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 触发另一个任务更新，确保零进度保持
@@ -1162,6 +1179,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
@@ -1187,6 +1206,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: Some(qq_channel.clone()),
+            agent_name: None,
+            waiting_reason: None,
         });
         assert_eq!(app.tasks[0].origin_channel, Some(qq_channel));
         assert_eq!(app.tasks[0].completed_at, None);
@@ -1205,6 +1226,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert!(app.tasks[0].completed_at.is_some());
     }
@@ -1222,6 +1245,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
@@ -1232,6 +1257,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].status, TaskStatusKind::Done);
@@ -1253,6 +1280,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         // 添加已完成的子任务
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
@@ -1264,6 +1293,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 手动将 completed_at 设为 6 秒前（超过 5 秒阈值）
@@ -1293,6 +1324,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // completed_at 刚设置，不会超过 5 秒
@@ -1318,6 +1351,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         app.cleanup_completed_tasks();

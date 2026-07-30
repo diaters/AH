@@ -105,6 +105,8 @@ mod tests {
                 user_id: "qq_user".to_string(),
                 thread_id: None,
             }),
+            agent_name: None,
+            waiting_reason: None,
         });
 
         let received = event_rx.try_recv();

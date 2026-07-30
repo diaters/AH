@@ -338,6 +338,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
         assert_eq!(msg.content, "[a1b2c3d4] 状态: 运行中 → 已完成");
@@ -467,6 +469,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
         assert_eq!(msg.content, "[00000000] 状态: 运行中 → 已完成");
@@ -492,6 +496,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
         assert_eq!(msg.content, "[00000000] 状态: 运行中");
@@ -510,6 +516,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert!(rx.try_recv().is_err());
     }
