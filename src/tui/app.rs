@@ -56,6 +56,10 @@ pub struct TaskState {
     pub origin_channel: Option<ChannelId>,
     /// 任务进入终态的时刻
     pub completed_at: Option<std::time::Instant>,
+    /// 被指派 agent 的名称，无 delegate 时为 None
+    pub agent_name: Option<String>,
+    /// 等待原因，仅当 status 为 Waiting 时有意义
+    pub waiting_reason: Option<crate::domain::WaitingReasonKind>,
 }
 
 /// 待处理审批
@@ -654,6 +658,8 @@ impl App {
                 result,
                 parent_id,
                 origin_channel,
+                agent_name,
+                waiting_reason,
                 ..
             } => {
                 let completed_at =
@@ -672,6 +678,8 @@ impl App {
                     if completed_at.is_some() {
                         task.completed_at = completed_at;
                     }
+                    task.agent_name = agent_name;
+                    task.waiting_reason = waiting_reason;
                 } else {
                     self.tasks.push(TaskState {
                         id: task_id,
@@ -683,6 +691,8 @@ impl App {
                         completed_count: 0,
                         origin_channel,
                         completed_at,
+                        agent_name,
+                        waiting_reason,
                     });
                 }
 
@@ -690,8 +700,29 @@ impl App {
                 self.update_all_subtask_progress();
             }
             EngineEvent::BatchProgress { .. } => {}
-            // TUI 暂不展示工具调用开始事件，任务 4 中实现
-            EngineEvent::ToolCallStarted { .. } => {}
+            EngineEvent::ToolCallStarted {
+                task_id,
+                agent_name,
+                tool_name,
+                tool_input_summary,
+                ..
+            } => {
+                let short_id = task_id
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("????")
+                    .to_string();
+                let content = if tool_input_summary.is_empty() {
+                    format!("[{}] 🔧 {} 调用 {}", short_id, agent_name, tool_name)
+                } else {
+                    format!(
+                        "[{}] 🔧 {} 调用 {}: {}",
+                        short_id, agent_name, tool_name, tool_input_summary
+                    )
+                };
+                self.messages.push(ChatMessage::System(content));
+            }
         }
     }
 
@@ -737,7 +768,7 @@ impl App {
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(30)])
+            .constraints([Constraint::Min(1), Constraint::Length(48)])
             .split(main_layout[0]);
 
         ChatPanel::render(self, frame, content_layout[0]);

@@ -34,14 +34,16 @@ impl Frontend for TuiFrontend {
     }
 
     fn push_event(&self, event: EngineEvent) {
-        // TaskStatusChanged 始终接收（全局任务概览）
-        let for_me = matches!(event, EngineEvent::TaskStatusChanged { .. })
-            || match event.target() {
-                EventTarget::Broadcast => true,
-                EventTarget::Directed(targets) => targets
-                    .iter()
-                    .any(|t| t.frontend == FrontendKind::Tui && t.user_id == self.user_id),
-            };
+        // TaskStatusChanged 与 ToolCallStarted 始终接收（全局任务概览）
+        let for_me = matches!(
+            event,
+            EngineEvent::TaskStatusChanged { .. } | EngineEvent::ToolCallStarted { .. }
+        ) || match event.target() {
+            EventTarget::Broadcast => true,
+            EventTarget::Directed(targets) => targets
+                .iter()
+                .any(|t| t.frontend == FrontendKind::Tui && t.user_id == self.user_id),
+        };
         if for_me {
             debug!(
                 event = "TuiFrontendPushEvent",

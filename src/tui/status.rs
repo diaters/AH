@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::domain::{AgentStatusKind, ChannelId, FrontendKind, TaskStatusKind};
+use crate::domain::{ChannelId, FrontendKind, TaskStatusKind};
 
 pub struct StatusPanel;
 
@@ -64,42 +64,6 @@ impl StatusPanel {
                 format!(" {count} approval{}", if count > 1 { "s" } else { "" }),
                 Style::default().fg(Color::Yellow),
             )]));
-        }
-
-        lines.push(Line::from(""));
-
-        // Agent 列表
-        lines.push(Line::from(Span::styled(
-            "Agents",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
-
-        for agent in &app.agents {
-            let (icon, color) = match agent.status {
-                AgentStatusKind::Idle => ("\u{25cf}", Color::Green),
-                AgentStatusKind::Running => ("\u{25cf}", Color::Yellow),
-                AgentStatusKind::WaitingApproval => ("\u{25cf}", Color::Magenta),
-                AgentStatusKind::WaitingTool => ("\u{25cf}", Color::Cyan),
-            };
-            let status_text = match agent.status {
-                AgentStatusKind::Idle => "idle",
-                AgentStatusKind::Running => "running",
-                AgentStatusKind::WaitingApproval => "waiting",
-                AgentStatusKind::WaitingTool => "waiting",
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{icon} "), Style::default().fg(color)),
-                Span::styled(
-                    format!("{} ", agent.name),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    status_text.to_string(),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
         }
 
         lines.push(Line::from(""));
@@ -162,14 +126,34 @@ impl StatusPanel {
                 };
 
                 let (label_text, label_color) = Self::origin_label(&main_task.origin_channel);
-                lines.push(Line::from(vec![
+                let mut spans = vec![
                     Span::styled(format!("{icon} "), Style::default().fg(main_color)),
                     Span::styled(format!("[{label_text}] "), Style::default().fg(label_color)),
                     Span::styled(
                         format!("{}{}", main_task.name, progress_text),
                         Style::default().fg(main_color).add_modifier(Modifier::BOLD),
                     ),
-                ]));
+                ];
+                if let Some(ref agent) = main_task.agent_name {
+                    spans.push(Span::styled(
+                        format!(" @{agent}"),
+                        Style::default().fg(Color::White),
+                    ));
+                }
+                if let Some(reason) = main_task.waiting_reason {
+                    let reason_text = match reason {
+                        crate::domain::WaitingReasonKind::Agent => "⏳agent",
+                        crate::domain::WaitingReasonKind::Tool => "⏳tool",
+                        crate::domain::WaitingReasonKind::User => "⏳user",
+                        crate::domain::WaitingReasonKind::Retry => "⏳retry",
+                        crate::domain::WaitingReasonKind::Other => "⏳other",
+                    };
+                    spans.push(Span::styled(
+                        format!(" {reason_text}"),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+                lines.push(Line::from(spans));
 
                 // Render subtasks
                 if let Some(subtasks) = subtasks_by_parent.get(&main_task.id) {
@@ -191,14 +175,21 @@ impl StatusPanel {
                             Self::get_dimmed_color_if_completed(subtask.status, sub_color);
 
                         // 子任务行：缩进 + 虚线前缀
-                        lines.push(Line::from(vec![
+                        let mut sub_spans = vec![
                             Span::styled("  │ ", Style::default().fg(Color::DarkGray)), // 虚线效果
                             Span::styled(
                                 format!("{sub_icon} "),
                                 Style::default().fg(sub_task_color),
                             ),
                             Span::styled(&subtask.name, Style::default().fg(sub_task_color)),
-                        ]));
+                        ];
+                        if let Some(ref agent) = subtask.agent_name {
+                            sub_spans.push(Span::styled(
+                                format!(" @{agent}"),
+                                Style::default().fg(Color::White),
+                            ));
+                        }
+                        lines.push(Line::from(sub_spans));
                     }
                 }
             }
