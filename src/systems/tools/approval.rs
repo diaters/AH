@@ -6,14 +6,14 @@ use crate::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    app::{Clock, FrontendRegistry, HarnessSettings},
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
-        ApprovalResultMessage, BuiltinToolExecutors, ChatSession, ExecutionError, ExperienceStore,
-        GrantMode, PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillUpdateContext, Task, TaskStatus, ToolCallingState, ToolContext,
-        ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, WaitingReason, WorkItem,
+        ApprovalResultMessage, BuiltinToolExecutors, ChatSession, EngineEvent, EventTarget,
+        ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks,
+        ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory, SkillUpdateContext, Task,
+        TaskStatus, ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -122,11 +122,18 @@ pub fn approval_result_system(
     )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 index / clock / skill_loader 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action。
-    index_clock_loader: (Res<EntityIndex>, Res<Clock>, Res<SkillLoader>),
+    // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
+    // frontend_registry 用于在 Approved 路径推送 ToolCallStarted 事件。
+    index_clock_loader_frontends: (
+        Res<EntityIndex>,
+        Res<Clock>,
+        Res<SkillLoader>,
+        Res<FrontendRegistry>,
+    ),
 ) {
-    let index = &index_clock_loader.0;
+    let index = &index_clock_loader_frontends.0;
+    let frontend_registry = &index_clock_loader_frontends.3;
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
         let Some((request_entity, tool_request)) = tool_requests
@@ -252,6 +259,42 @@ pub fn approval_result_system(
                     continue;
                 };
 
+                // 推送 ToolCallStarted 事件到所有前端（仅当 task 有 output_channel 时；
+                // 无 output_channel 时不推送，避免向无关 IM 通道广播）
+                let tool_input_summary = crate::domain::summarize_tool_input(
+                    &tool_request.tool_name,
+                    &tool_request.tool_input,
+                );
+                let agent_name = index
+                    .get_agent(&tool_request.request.agent_id)
+                    .and_then(|e| agents.get(e).ok())
+                    .map(|a| a.profile.name.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                if let Some(target) = index
+                    .get_task(&tool_request.request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
+                    .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+                    .map(|channel| EventTarget::Directed(vec![channel]))
+                {
+                    let event = EngineEvent::ToolCallStarted {
+                        target,
+                        task_id: tool_request.request.task_id,
+                        agent_name,
+                        tool_name: tool_request.tool_name.clone(),
+                        tool_input_summary,
+                    };
+                    for frontend in &frontend_registry.frontends {
+                        frontend.push_event(event.clone());
+                    }
+                } else {
+                    debug!(
+                        event = "ToolCallStartedDroppedNoChannel",
+                        task_id = %tool_request.request.task_id,
+                        tool_name = %tool_request.tool_name,
+                        "dropping ToolCallStarted because task has no output channel"
+                    );
+                }
+
                 let ctx = ToolContext {
                     knowledge: &knowledge,
                     experience_store: &experience_store,
@@ -292,9 +335,9 @@ pub fn approval_result_system(
                         &mut experience_store,
                         &mut pending_experience_hooks,
                         None,
-                        &index_clock_loader.1,
+                        &index_clock_loader_frontends.1,
                         &context_queries,
-                        &index_clock_loader.2,
+                        &index_clock_loader_frontends.2,
                         &calling_states,
                     );
                 }
@@ -335,6 +378,7 @@ mod tests {
         world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
             std::path::PathBuf::from("/nonexistent_skills_root"),
         ));
+        world.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         world
     }
 

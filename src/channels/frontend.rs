@@ -183,7 +183,6 @@ impl Frontend for ChannelFrontend {
             EngineEvent::TaskStatusChanged {
                 target,
                 task_id,
-                name,
                 status,
                 old_status,
                 agent_name,
@@ -200,13 +199,9 @@ impl Frontend for ChannelFrontend {
                 if recipients.is_empty() {
                     return;
                 }
-                // task_name 截断到 30 字符（按字符截断，UTF-8 安全）；超长追加省略号
-                let short_name: String = if name.chars().count() > 30 {
-                    let truncated: String = name.chars().take(30).collect();
-                    format!("{truncated}…")
-                } else {
-                    name.clone()
-                };
+                // IM 通道不渲染 task name（即 input_summary）：用户原始输入常为长句，
+                // 截断后语义不完整且含 markdown 符号，在纯文本 IM 下可读性差。
+                // task_short_id 已足够识别任务。
                 let transition = match old_status {
                     Some(old) => {
                         format!("{} → {}", status_label(old), status_label(status))
@@ -214,19 +209,10 @@ impl Frontend for ChannelFrontend {
                     None => status_label(status).to_string(),
                 };
                 let content = match agent_name.as_deref() {
-                    Some(agent) => format!(
-                        "[{}] {}: {} @{}",
-                        task_short_id(task_id),
-                        short_name,
-                        transition,
-                        agent
-                    ),
-                    None => format!(
-                        "[{}] {}: {}",
-                        task_short_id(task_id),
-                        short_name,
-                        transition
-                    ),
+                    Some(agent) => {
+                        format!("[{}]: {} @{}", task_short_id(task_id), transition, agent)
+                    }
+                    None => format!("[{}]: {}", task_short_id(task_id), transition),
                 };
                 for channel_id in recipients {
                     let msg = ChannelOutboundMessage {
@@ -405,7 +391,7 @@ mod tests {
             waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4] test: 运行中 → 已完成");
+        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成");
         assert!(rx.try_recv().is_err());
     }
 
@@ -536,7 +522,7 @@ mod tests {
             waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000] task: 运行中 → 已完成");
+        assert_eq!(msg.content, "[00000000]: 运行中 → 已完成");
         assert!(rx.try_recv().is_err());
     }
 
@@ -563,7 +549,7 @@ mod tests {
             waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000] task: 运行中");
+        assert_eq!(msg.content, "[00000000]: 运行中");
         assert!(rx.try_recv().is_err());
     }
 
@@ -652,10 +638,7 @@ mod tests {
             waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(
-            msg.content,
-            "[a1b2c3d4] build feature: 运行中 → 已完成 @TestAgent"
-        );
+        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
         assert!(rx.try_recv().is_err());
     }
 
@@ -682,15 +665,11 @@ mod tests {
             waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        let expected_short = format!("{}…", "测".repeat(30));
+        // IM 通道不渲染 task name（即使很长也不应出现在输出中），仅显示 id + 状态 + agent
+        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
         assert!(
-            msg.content.contains(&expected_short),
-            "消息应包含截断后的 30 个字符 + 省略号，实际: {}",
-            msg.content
-        );
-        assert!(
-            !msg.content.contains(&"测".repeat(31)),
-            "消息不应包含第 31 个及之后的字符，实际: {}",
+            !msg.content.contains('测'),
+            "消息不应包含 task name 内容，实际: {}",
             msg.content
         );
         assert!(rx.try_recv().is_err());

@@ -169,24 +169,33 @@ pub fn tool_dispatch_system(
                     continue;
                 };
 
-                // 推送 ToolCallStarted 事件到所有前端
+                // 推送 ToolCallStarted 事件到所有前端（仅当 task 有 output_channel 时；
+                // 无 output_channel 时不推送，避免向无关 IM 通道广播）
                 let tool_input_summary =
                     crate::domain::summarize_tool_input(&tool_name, &request.tool_input);
-                let target = index
+                if let Some(target) = index
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .and_then(|(_, t)| t.routing_policy.output_channel.clone())
                     .map(|channel| EventTarget::Directed(vec![channel]))
-                    .unwrap_or(EventTarget::Broadcast);
-                let event = EngineEvent::ToolCallStarted {
-                    target,
-                    task_id: request.request.task_id,
-                    agent_name: agent.profile.name.clone(),
-                    tool_name: tool_name.clone(),
-                    tool_input_summary,
-                };
-                for frontend in &frontend_registry.frontends {
-                    frontend.push_event(event.clone());
+                {
+                    let event = EngineEvent::ToolCallStarted {
+                        target,
+                        task_id: request.request.task_id,
+                        agent_name: agent.profile.name.clone(),
+                        tool_name: tool_name.clone(),
+                        tool_input_summary,
+                    };
+                    for frontend in &frontend_registry.frontends {
+                        frontend.push_event(event.clone());
+                    }
+                } else {
+                    debug!(
+                        event = "ToolCallStartedDroppedNoChannel",
+                        task_id = %request.request.task_id,
+                        tool_name = %tool_name,
+                        "dropping ToolCallStarted because task has no output channel"
+                    );
                 }
 
                 debug!(
