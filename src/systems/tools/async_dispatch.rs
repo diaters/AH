@@ -26,13 +26,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    app::{AsyncRuntime, Clock, HarnessSettings},
+    app::{AsyncRuntime, Clock, FrontendRegistry, HarnessSettings},
     contracts::SessionBackend,
     domain::{
-        Agent, BuiltinToolExecutors, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
-        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
-        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
-        ToolWorkerOutput, ToolWorkerPayload,
+        Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
+        ScheduledTaskInfoSnapshot, ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task,
+        ToolActionKind, ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission,
+        ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
     },
     ecs::EntityIndex,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
@@ -69,6 +69,7 @@ pub fn async_tool_dispatch_system(
     scheduler_state: Option<Res<SchedulerState>>,
     scheduled_registry: Option<Res<ScheduledTaskRegistry>>,
     experience_store: Option<Res<crate::domain::ExperienceStore>>,
+    frontend_registry: Option<Res<FrontendRegistry>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
     for (entity, request) in &requests {
@@ -228,6 +229,51 @@ pub fn async_tool_dispatch_system(
                 payload,
             });
         });
+
+        // 推送 ToolCallStarted 事件到所有前端（仅当 task 有 output_channel 且
+        // frontend_registry 可见时；无 output_channel 时不推送，避免向无关 IM 通道广播）。
+        //
+        // **覆盖路径**：Allow 权限的 Async 工具由本系统直接认领，不经过
+        // `tool_dispatch_system` 的 Allow 路径，故在此补充推送。Confirm 路径的
+        // Async 工具在 `tool_confirmation_result_system` 已推送，本系统认领时
+        // `pending_confirmation_id` 已清除，不会重复推送（ToolCallStarted 无幂等去重，
+        // 但 Confirm 路径推送后请求实体被原地改造，本系统不会再次进入认领分支）。
+        //
+        // **使用 `frontend_registry: Option`**：测试世界可能不装 FrontendRegistry，
+        // 此时跳过推送（测试不验证事件）。
+        if let Some(frontend_registry) = frontend_registry.as_deref() {
+            let tool_input_summary =
+                crate::domain::summarize_tool_input(&tool_name, &request.tool_input);
+            let agent_name = index
+                .get_agent(&request.request.agent_id)
+                .and_then(|e| agents.get(e).ok())
+                .map(|a| a.profile.name.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            if let Some(target) = index
+                .get_task(&request.request.task_id)
+                .and_then(|e| tasks.get(e).ok())
+                .and_then(|t| t.routing_policy.output_channel.clone())
+                .map(|channel| EventTarget::Directed(vec![channel]))
+            {
+                let event = EngineEvent::ToolCallStarted {
+                    target,
+                    task_id: request.request.task_id,
+                    agent_name,
+                    tool_name: tool_name.clone(),
+                    tool_input_summary,
+                };
+                for frontend in &frontend_registry.frontends {
+                    frontend.push_event(event.clone());
+                }
+            } else {
+                debug!(
+                    event = "ToolCallStartedDroppedNoChannel",
+                    task_id = %request.request.task_id,
+                    tool_name = %tool_name,
+                    "dropping ToolCallStarted because task has no output channel"
+                );
+            }
+        }
 
         debug!(
             event = "AsyncToolDispatched",

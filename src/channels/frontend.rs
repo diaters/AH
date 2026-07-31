@@ -185,6 +185,7 @@ impl Frontend for ChannelFrontend {
                 task_id,
                 status,
                 old_status,
+                agent_name,
                 ..
             } => {
                 let targets = match target {
@@ -198,24 +199,72 @@ impl Frontend for ChannelFrontend {
                 if recipients.is_empty() {
                     return;
                 }
-                let status_text = match old_status {
-                    Some(old) => format!(
-                        "[{}] 状态: {} → {}",
-                        task_short_id(task_id),
-                        status_label(old),
-                        status_label(status)
-                    ),
-                    None => format!(
-                        "[{}] 状态: {}",
-                        task_short_id(task_id),
-                        status_label(status)
-                    ),
+                // IM 通道不渲染 task name（即 input_summary）：用户原始输入常为长句，
+                // 截断后语义不完整且含 markdown 符号，在纯文本 IM 下可读性差。
+                // task_short_id 已足够识别任务。
+                let transition = match old_status {
+                    Some(old) => {
+                        format!("{} → {}", status_label(old), status_label(status))
+                    }
+                    None => status_label(status).to_string(),
+                };
+                let content = match agent_name.as_deref() {
+                    Some(agent) => {
+                        format!("[{}]: {} @{}", task_short_id(task_id), transition, agent)
+                    }
+                    None => format!("[{}]: {}", task_short_id(task_id), transition),
                 };
                 for channel_id in recipients {
                     let msg = ChannelOutboundMessage {
                         recipient: channel_id.user_id,
                         thread_id: channel_id.thread_id,
-                        content: status_text.clone(),
+                        content: content.clone(),
+                        parse_mode: None,
+                        reply_markup: None,
+                        attachments: vec![],
+                    };
+                    self.send_message(msg);
+                }
+            }
+            EngineEvent::ToolCallStarted {
+                target,
+                task_id,
+                agent_name,
+                tool_name,
+                tool_input_summary,
+            } => {
+                let targets = match target {
+                    EventTarget::Broadcast => return,
+                    EventTarget::Directed(v) => v,
+                };
+                let recipients: Vec<ChannelId> = targets
+                    .into_iter()
+                    .filter(|cid| self.matches(cid))
+                    .collect();
+                if recipients.is_empty() {
+                    return;
+                }
+                let content = if tool_input_summary.is_empty() {
+                    format!(
+                        "[{}] 🔧 {} 调用 {}",
+                        task_short_id(task_id),
+                        agent_name,
+                        tool_name
+                    )
+                } else {
+                    format!(
+                        "[{}] 🔧 {} 调用 {}: {}",
+                        task_short_id(task_id),
+                        agent_name,
+                        tool_name,
+                        tool_input_summary
+                    )
+                };
+                for channel_id in recipients {
+                    let msg = ChannelOutboundMessage {
+                        recipient: channel_id.user_id,
+                        thread_id: channel_id.thread_id,
+                        content: content.clone(),
                         parse_mode: None,
                         reply_markup: None,
                         attachments: vec![],
@@ -338,9 +387,11 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4] 状态: 运行中 → 已完成");
+        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成");
         assert!(rx.try_recv().is_err());
     }
 
@@ -467,9 +518,11 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000] 状态: 运行中 → 已完成");
+        assert_eq!(msg.content, "[00000000]: 运行中 → 已完成");
         assert!(rx.try_recv().is_err());
     }
 
@@ -492,9 +545,11 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000] 状态: 运行中");
+        assert_eq!(msg.content, "[00000000]: 运行中");
         assert!(rx.try_recv().is_err());
     }
 
@@ -510,7 +565,113 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn renders_tool_call_started() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::ToolCallStarted {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            agent_name: "TestAgent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            tool_input_summary: "ls -la".to_string(),
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(
+            msg.content,
+            "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec: ls -la"
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn renders_tool_call_started_without_summary() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::ToolCallStarted {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            agent_name: "TestAgent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            tool_input_summary: String::new(),
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn renders_task_status_change_with_name_and_agent() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "build feature".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: Some("TestAgent".to_string()),
+            waiting_reason: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn renders_task_status_change_with_long_name_truncated() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let long_name = "测".repeat(40);
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: long_name,
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: Some("TestAgent".to_string()),
+            waiting_reason: None,
+        });
+        let (_, msg) = rx.try_recv().expect("one outbound message");
+        // IM 通道不渲染 task name（即使很长也不应出现在输出中），仅显示 id + 状态 + agent
+        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
+        assert!(
+            !msg.content.contains('测'),
+            "消息不应包含 task name 内容，实际: {}",
+            msg.content
+        );
         assert!(rx.try_recv().is_err());
     }
 }

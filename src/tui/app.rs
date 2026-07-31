@@ -56,6 +56,10 @@ pub struct TaskState {
     pub origin_channel: Option<ChannelId>,
     /// 任务进入终态的时刻
     pub completed_at: Option<std::time::Instant>,
+    /// 被指派 agent 的名称，无 delegate 时为 None
+    pub agent_name: Option<String>,
+    /// 等待原因，仅当 status 为 Waiting 时有意义
+    pub waiting_reason: Option<crate::domain::WaitingReasonKind>,
 }
 
 /// 待处理审批
@@ -654,6 +658,8 @@ impl App {
                 result,
                 parent_id,
                 origin_channel,
+                agent_name,
+                waiting_reason,
                 ..
             } => {
                 let completed_at =
@@ -672,6 +678,8 @@ impl App {
                     if completed_at.is_some() {
                         task.completed_at = completed_at;
                     }
+                    task.agent_name = agent_name;
+                    task.waiting_reason = waiting_reason;
                 } else {
                     self.tasks.push(TaskState {
                         id: task_id,
@@ -683,6 +691,8 @@ impl App {
                         completed_count: 0,
                         origin_channel,
                         completed_at,
+                        agent_name,
+                        waiting_reason,
                     });
                 }
 
@@ -690,6 +700,29 @@ impl App {
                 self.update_all_subtask_progress();
             }
             EngineEvent::BatchProgress { .. } => {}
+            EngineEvent::ToolCallStarted {
+                task_id,
+                agent_name,
+                tool_name,
+                tool_input_summary,
+                ..
+            } => {
+                let short_id = task_id
+                    .to_string()
+                    .split('-')
+                    .next()
+                    .unwrap_or("????")
+                    .to_string();
+                let content = if tool_input_summary.is_empty() {
+                    format!("[{}] 🔧 {} 调用 {}", short_id, agent_name, tool_name)
+                } else {
+                    format!(
+                        "[{}] 🔧 {} 调用 {}: {}",
+                        short_id, agent_name, tool_name, tool_input_summary
+                    )
+                };
+                self.messages.push(ChatMessage::System(content));
+            }
         }
     }
 
@@ -735,7 +768,7 @@ impl App {
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(30)])
+            .constraints([Constraint::Min(1), Constraint::Length(48)])
             .split(main_layout[0]);
 
         ChatPanel::render(self, frame, content_layout[0]);
@@ -761,7 +794,7 @@ mod tests {
 
     use crate::domain::{
         AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, FrontendKind,
-        MessageRole, TaskStatusKind,
+        MessageRole, TaskStatusKind, WaitingReasonKind,
     };
     use crate::tui::chat::{ApprovalCardState, ChatMessage};
 
@@ -836,6 +869,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].name, "test task");
@@ -861,6 +896,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 1（已完成）
@@ -873,6 +910,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 2（运行中）
@@ -885,6 +924,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 验证主任务进度
@@ -1102,6 +1143,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 1（已完成）
@@ -1114,6 +1157,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 添加子任务 2（失败）
@@ -1126,6 +1171,8 @@ mod tests {
             result: Some("error".to_string()),
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 验证：Done 和 Failed 都计入已完成
@@ -1149,6 +1196,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 触发另一个任务更新，确保零进度保持
@@ -1162,6 +1211,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         let main_task = app.tasks.iter().find(|t| t.id == main_id).unwrap();
@@ -1187,6 +1238,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: Some(qq_channel.clone()),
+            agent_name: None,
+            waiting_reason: None,
         });
         assert_eq!(app.tasks[0].origin_channel, Some(qq_channel));
         assert_eq!(app.tasks[0].completed_at, None);
@@ -1205,6 +1258,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert!(app.tasks[0].completed_at.is_some());
     }
@@ -1222,6 +1277,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
@@ -1232,6 +1289,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].status, TaskStatusKind::Done);
@@ -1253,6 +1312,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
         // 添加已完成的子任务
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
@@ -1264,6 +1325,8 @@ mod tests {
             result: None,
             parent_id: Some(main_id),
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // 手动将 completed_at 设为 6 秒前（超过 5 秒阈值）
@@ -1293,6 +1356,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         // completed_at 刚设置，不会超过 5 秒
@@ -1318,6 +1383,8 @@ mod tests {
             result: None,
             parent_id: None,
             origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
         });
 
         app.cleanup_completed_tasks();
@@ -1458,5 +1525,62 @@ mod tests {
         // 审批应被移除，回到 Chat 模式
         assert!(app.pending_approvals.is_empty());
         assert!(matches!(app.mode, AppMode::Chat));
+    }
+
+    #[test]
+    fn tool_call_started_converted_to_system_message() {
+        let mut app = test_app();
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        app.handle_engine_event(EngineEvent::ToolCallStarted {
+            target: EventTarget::Broadcast,
+            task_id,
+            agent_name: "TestAgent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            tool_input_summary: "ls -la".to_string(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            app.messages.last(),
+            Some(ChatMessage::System(content)) if content == "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec: ls -la"
+        ));
+    }
+
+    #[test]
+    fn tool_call_started_without_summary_omits_colon() {
+        let mut app = test_app();
+        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        app.handle_engine_event(EngineEvent::ToolCallStarted {
+            target: EventTarget::Broadcast,
+            task_id,
+            agent_name: "TestAgent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            tool_input_summary: String::new(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            app.messages.last(),
+            Some(ChatMessage::System(content)) if content == "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec"
+        ));
+    }
+
+    #[test]
+    fn task_status_changed_persists_agent_name_and_waiting_reason() {
+        let mut app = test_app();
+        let task_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            name: "test task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: Some("TestAgent".to_string()),
+            waiting_reason: Some(WaitingReasonKind::Tool),
+        });
+        assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].agent_name, Some("TestAgent".to_string()));
+        assert_eq!(app.tasks[0].waiting_reason, Some(WaitingReasonKind::Tool));
     }
 }
