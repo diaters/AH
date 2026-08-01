@@ -3,7 +3,7 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, FinishTaskMessage,
+    ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, FinishTaskMessage,
     NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks, ReloadPluginsMessage,
     ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
     SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy, TaskStatus,
@@ -241,6 +241,27 @@ pub(crate) fn command_parse_system(
                     "spawning ReloadTriggersMessage"
                 );
                 commands.spawn(ReloadTriggersMessage);
+                commands.entity(entity).despawn();
+            }
+            UserCommand::ClearCurrentTask => {
+                // /clear - 删除当前任务（不触发终态处理链路）
+                let current_task = tasks.iter().find(|(t, _)| {
+                    !t.status.is_terminal()
+                        && t.origin_channel == Some(input.origin_channel.clone())
+                });
+
+                if let Some((task, _)) = current_task {
+                    debug!(
+                        event = "ClearCommandReceived",
+                        task_id = %task.id,
+                        task_status = ?task.status,
+                        task_content = %task.content,
+                        "clearing current task via /clear command"
+                    );
+                    commands.spawn(ClearTaskMessage { task_id: task.id });
+                } else {
+                    debug!(event = "ClearCommandNoTask", "no active task to clear");
+                }
                 commands.entity(entity).despawn();
             }
             UserCommand::PluginCommand {
