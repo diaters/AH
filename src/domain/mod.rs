@@ -101,7 +101,7 @@ pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ContinueTaskMessage,
-    CreateTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage,
+    CreateTaskMessage, ClearTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage,
     LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
     ModelChainStateUpdate, OutputKind, OutputMessage, PendingChannelSend, ReloadPluginsMessage,
     ReloadTriggersMessage, RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage,
