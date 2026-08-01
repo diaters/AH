@@ -9,7 +9,7 @@ use crate::{
     app::{Clock, MemoryConfig},
     contracts::SessionBackend,
     domain::{
-        FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
+        ClearTaskMessage, FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
         SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
         TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
     },
@@ -252,6 +252,66 @@ pub fn finish_task_system(
             );
             task.mark_done("finished by user", clock.0);
         }
+        commands.entity(entity).despawn();
+    }
+}
+
+/// 清除任务 System
+///
+/// 处理 /clear 命令，直接 despawn task entity 及其附属组件，
+/// 不触发终态处理链路（摘要、经验收集、hook 派发等）。
+pub fn clear_task_system(
+    mut commands: Commands,
+    mut index: ResMut<EntityIndex>,
+    messages: Query<(Entity, &ClearTaskMessage)>,
+    calling_states: Query<(Entity, &ToolCallingState)>,
+    backend: Res<NativeProcessBackend>,
+) {
+    for (entity, msg) in &messages {
+        // 停止关联 shell sessions
+        match backend.stop_task_sessions(msg.task_id) {
+            Ok(stopped_sessions) => {
+                if !stopped_sessions.is_empty() {
+                    debug!(
+                        event = "TaskShellSessionsStopped",
+                        task_id = %msg.task_id,
+                        stopped_sessions = ?stopped_sessions,
+                        "stopped active shell sessions on /clear"
+                    );
+                }
+            }
+            Err(e) => {
+                debug!(
+                    event = "TaskShellSessionsStopFailed",
+                    task_id = %msg.task_id,
+                    error = %e,
+                    "failed to stop shell sessions on /clear"
+                );
+            }
+        }
+
+        // Despawn 关联的 ToolCallingState
+        for (cs_entity, cs) in &calling_states {
+            if cs.task_id == msg.task_id {
+                debug!(
+                    event = "ToolCallingStateCleared",
+                    task_id = %msg.task_id,
+                    iteration = cs.iteration,
+                    "despawning ToolCallingState on /clear"
+                );
+                commands.entity(cs_entity).despawn();
+            }
+        }
+
+        debug!(
+            event = "TaskCleared",
+            task_id = %msg.task_id,
+            "clearing task via /clear command (no termination hooks)"
+        );
+
+        // 使用中心封装 despawn task（同步维护 EntityIndex）
+        crate::ecs::despawn_task(&mut commands, &mut index, msg.task_id);
+
         commands.entity(entity).despawn();
     }
 }
