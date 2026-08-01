@@ -9,9 +9,10 @@ use crate::{
     app::{Clock, MemoryConfig},
     contracts::SessionBackend,
     domain::{
-        ClearTaskMessage, FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
-        SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
-        TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
+        ClearTaskMessage, FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage,
+        ShortTermMemory, SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task,
+        TaskStatus, TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage,
+        WaitingReason,
     },
     ecs::EntityIndex,
     systems::NativeProcessBackend,
@@ -646,11 +647,11 @@ mod tests {
 
     #[test]
     fn clear_task_system_despawns_task_entity() {
-        use crate::ecs::EntityIndex;
         use crate::domain::{
-            ClearTaskMessage, ChannelId, FrontendKind, PreviousTaskStatus, ShortTermMemory, Task,
+            ChannelId, ClearTaskMessage, FrontendKind, PreviousTaskStatus, ShortTermMemory, Task,
             TaskStatus,
         };
+        use crate::ecs::EntityIndex;
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
@@ -725,19 +726,16 @@ mod tests {
             .query::<&ClearTaskMessage>()
             .iter(app.world())
             .collect();
-        assert!(
-            remaining.is_empty(),
-            "ClearTaskMessage should be despawned"
-        );
+        assert!(remaining.is_empty(), "ClearTaskMessage should be despawned");
     }
 
     #[test]
     fn clear_task_system_does_not_spawn_task_terminated_message() {
-        use crate::ecs::EntityIndex;
         use crate::domain::{
-            ClearTaskMessage, ChannelId, FrontendKind, PreviousTaskStatus, ShortTermMemory, Task,
+            ChannelId, ClearTaskMessage, FrontendKind, PreviousTaskStatus, ShortTermMemory, Task,
             TaskStatus, TaskTerminatedMessage,
         };
+        use crate::ecs::EntityIndex;
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
@@ -809,11 +807,11 @@ mod tests {
 
     #[test]
     fn clear_task_system_does_not_spawn_summarization_request() {
-        use crate::ecs::EntityIndex;
         use crate::domain::{
-            ClearTaskMessage, ChannelId, EntryMetadata, EntryRole, FrontendKind,
+            ChannelId, ClearTaskMessage, EntryMetadata, EntryRole, FrontendKind,
             PreviousTaskStatus, ShortTermMemory, SummarizationRequestMessage, Task, TaskStatus,
         };
+        use crate::ecs::EntityIndex;
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
@@ -830,7 +828,11 @@ mod tests {
         let task_id = uuid::Uuid::new_v4();
 
         let mut stm = ShortTermMemory::default();
-        stm.add_entry(EntryRole::User, "some content to summarize", EntryMetadata::default());
+        stm.add_entry(
+            EntryRole::User,
+            "some content to summarize",
+            EntryMetadata::default(),
+        );
         let entity = app
             .world_mut()
             .spawn((

@@ -3,11 +3,11 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, FinishTaskMessage,
-    NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks, ReloadPluginsMessage,
-    ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
-    SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy, TaskStatus,
-    UserCommand, UserInputMessage,
+    ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
+    FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
+    ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
+    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy,
+    TaskStatus, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
