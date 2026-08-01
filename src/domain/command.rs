@@ -9,6 +9,8 @@ pub enum UserCommand {
     NewTask { topic: String },
     /// /finish - 结束当前任务
     FinishCurrentTask,
+    /// /clear - 删除当前任务（不触发终态处理链路）
+    ClearCurrentTask,
     /// /summarize - 触发总结
     Summarize,
     /// /remember - 添加知识到 SharedKnowledgeBase
@@ -43,6 +45,8 @@ impl UserCommand {
             }
         } else if trimmed == "/finish" {
             Self::FinishCurrentTask
+        } else if trimmed == "/clear" {
+            Self::ClearCurrentTask
         } else if trimmed == "/summarize" {
             Self::Summarize
         } else if let Some(stripped) = trimmed.strip_prefix("/remember ") {
@@ -85,5 +89,17 @@ impl UserCommand {
     /// 判断是否是指令
     pub fn is_command(&self) -> bool {
         !matches!(self, Self::PlainText(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_clear() {
+        let cmd = UserCommand::parse("/clear");
+        assert_eq!(cmd, UserCommand::ClearCurrentTask);
+        assert!(cmd.is_command());
     }
 }
