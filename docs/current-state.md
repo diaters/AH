@@ -65,6 +65,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 工具调用软限制：单轮用户输入内达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，让 LLM 总结并询问用户；绝对硬上限（HARD_LIMIT_MULTIPLIER × max_iterations）时强制失败
 - 工具权限、审批流程、结果回写与用户确认 UI 已可用
 - `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
+- `ask_user` 工具：LLM 在工具调用循环中向用户提出开放文本问题，用户回复作为工具结果返回（声明式 Sync 工具，详见 [async-tool-bridge.md](async-tool-bridge.md#sync-工具分类)）
 - `Space` 已收敛为最小共享资源边界，当前只保留 `SharedKnowledgeBase` 和
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
