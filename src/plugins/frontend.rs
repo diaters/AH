@@ -5,7 +5,7 @@
 use crate::prelude::*;
 
 use crate::systems::{
-    HarnessSet, command_parse_system, continue_task_system, finish_task_system,
+    HarnessSet, clear_task_system, command_parse_system, continue_task_system, finish_task_system,
     frontend_input_system, frontend_output_system, input_ingress_system,
     on_message_received_hook_system, on_shared_knowledge_write_hook_system,
     on_task_created_hook_system, reload_plugins_system, reload_triggers_message_consumer_system,
@@ -57,6 +57,10 @@ impl Plugin for FrontendPlugin {
                     .after(command_parse_system),
                 // 任务完成
                 finish_task_system
+                    .in_set(HarnessSet::Transform)
+                    .after(command_parse_system),
+                // 任务清除（/clear，不触发终态处理链路）
+                clear_task_system
                     .in_set(HarnessSet::Transform)
                     .after(command_parse_system),
                 // 用户输入路由

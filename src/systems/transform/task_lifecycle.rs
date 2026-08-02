@@ -6,12 +6,13 @@ use crate::prelude::*;
 use tracing::{debug, info};
 
 use crate::{
-    app::{Clock, MemoryConfig},
+    app::{Clock, FrontendRegistry, MemoryConfig},
     contracts::SessionBackend,
     domain::{
-        FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
-        SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus,
-        TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
+        ClearTaskMessage, EngineEvent, EventTarget, FailureReason, FinishTaskMessage,
+        PreviousTaskStatus, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+        ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
     },
     ecs::EntityIndex,
     systems::NativeProcessBackend,
@@ -252,6 +253,84 @@ pub fn finish_task_system(
             );
             task.mark_done("finished by user", clock.0);
         }
+        commands.entity(entity).despawn();
+    }
+}
+
+/// 清除任务 System
+///
+/// 处理 /clear 命令，直接 despawn task entity 及其附属组件，
+/// 不触发终态处理链路（摘要、经验收集、hook 派发等）。
+pub fn clear_task_system(
+    mut commands: Commands,
+    mut index: ResMut<EntityIndex>,
+    registry: Res<FrontendRegistry>,
+    tasks: Query<&Task>,
+    messages: Query<(Entity, &ClearTaskMessage)>,
+    calling_states: Query<(Entity, &ToolCallingState)>,
+    backend: Res<NativeProcessBackend>,
+) {
+    for (entity, msg) in &messages {
+        // 停止关联 shell sessions
+        match backend.stop_task_sessions(msg.task_id) {
+            Ok(stopped_sessions) => {
+                if !stopped_sessions.is_empty() {
+                    debug!(
+                        event = "TaskShellSessionsStopped",
+                        task_id = %msg.task_id,
+                        stopped_sessions = ?stopped_sessions,
+                        "stopped active shell sessions on /clear"
+                    );
+                }
+            }
+            Err(e) => {
+                debug!(
+                    event = "TaskShellSessionsStopFailed",
+                    task_id = %msg.task_id,
+                    error = %e,
+                    "failed to stop shell sessions on /clear"
+                );
+            }
+        }
+
+        // Despawn 关联的 ToolCallingState
+        for (cs_entity, cs) in &calling_states {
+            if cs.task_id == msg.task_id {
+                debug!(
+                    event = "ToolCallingStateCleared",
+                    task_id = %msg.task_id,
+                    iteration = cs.iteration,
+                    "despawning ToolCallingState on /clear"
+                );
+                commands.entity(cs_entity).despawn();
+            }
+        }
+
+        debug!(
+            event = "TaskCleared",
+            task_id = %msg.task_id,
+            "clearing task via /clear command (no termination hooks)"
+        );
+
+        // 推送前端移除通知（despawn 前读取任务路由信息）
+        let target = index
+            .get_task(&msg.task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .and_then(|t| t.routing_policy.output_channel.clone())
+            .map(|channel| EventTarget::Directed(vec![channel]));
+        if let Some(target) = target {
+            let event = EngineEvent::TaskCleared {
+                target,
+                task_id: msg.task_id,
+            };
+            for frontend in &registry.frontends {
+                frontend.push_event(event.clone());
+            }
+        }
+
+        // 使用中心封装 despawn task（同步维护 EntityIndex）
+        crate::ecs::despawn_task(&mut commands, &mut index, msg.task_id);
+
         commands.entity(entity).despawn();
     }
 }
@@ -582,5 +661,358 @@ mod tests {
              is still pending (Waiting(User) + pending_confirmation_id cleared by confirmation). \
              Otherwise the LLM tool-calling loop cannot resume after worker completes."
         );
+    }
+
+    #[test]
+    fn clear_task_system_despawns_task_entity() {
+        use crate::domain::{
+            ChannelId, ClearTaskMessage, FrontendKind, PreviousTaskStatus, ShortTermMemory, Task,
+            TaskStatus,
+        };
+        use crate::ecs::EntityIndex;
+
+        let mut app = App::new();
+        app.init_resource::<EntityIndex>();
+        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.add_systems(Update, clear_task_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Task {
+                    id: task_id,
+                    content: "to clear".to_string(),
+                    creator: uuid::Uuid::nil(),
+                    delegate: None,
+                    status: TaskStatus::Running,
+                    pending_confirmation_id: None,
+                    input_summary: "test".to_string(),
+                    result_summary: String::new(),
+                    priority: 0,
+                    created_at: now,
+                    updated_at: now,
+                    retry_count: 0,
+                    max_retries: 3,
+                    next_retry_at: None,
+                    last_error: None,
+                    multi_turn: false,
+                    parent_task_id: None,
+                    batch_id: None,
+                    origin_channel: Some(channel),
+                    routing_policy: crate::domain::TaskRoutingPolicy::conversational(ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "test".to_string(),
+                        thread_id: None,
+                    }),
+                    last_evaluated_turn: None,
+                },
+                ShortTermMemory::default(),
+                PreviousTaskStatus(TaskStatus::Pending),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        app.world_mut().spawn(ClearTaskMessage { task_id });
+
+        app.update();
+
+        assert!(
+            app.world().get::<Task>(entity).is_none(),
+            "task entity should be despawned after clear_task_system"
+        );
+        assert!(
+            app.world()
+                .resource::<EntityIndex>()
+                .get_task(&task_id)
+                .is_none(),
+            "EntityIndex mapping should be removed after clear_task_system"
+        );
+        let remaining: Vec<_> = app
+            .world_mut()
+            .query::<&ClearTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(remaining.is_empty(), "ClearTaskMessage should be despawned");
+    }
+
+    #[test]
+    fn clear_task_system_does_not_spawn_task_terminated_message() {
+        use crate::domain::{
+            ChannelId, ClearTaskMessage, FrontendKind, PreviousTaskStatus, ShortTermMemory, Task,
+            TaskStatus, TaskTerminatedMessage,
+        };
+        use crate::ecs::EntityIndex;
+
+        let mut app = App::new();
+        app.init_resource::<EntityIndex>();
+        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.add_systems(Update, (clear_task_system, task_termination_system));
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Task {
+                    id: task_id,
+                    content: "to clear".to_string(),
+                    creator: uuid::Uuid::nil(),
+                    delegate: None,
+                    status: TaskStatus::Running,
+                    pending_confirmation_id: None,
+                    input_summary: "test".to_string(),
+                    result_summary: String::new(),
+                    priority: 0,
+                    created_at: now,
+                    updated_at: now,
+                    retry_count: 0,
+                    max_retries: 3,
+                    next_retry_at: None,
+                    last_error: None,
+                    multi_turn: false,
+                    parent_task_id: None,
+                    batch_id: None,
+                    origin_channel: Some(channel),
+                    routing_policy: crate::domain::TaskRoutingPolicy::conversational(ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "test".to_string(),
+                        thread_id: None,
+                    }),
+                    last_evaluated_turn: None,
+                },
+                ShortTermMemory::default(),
+                PreviousTaskStatus(TaskStatus::Pending),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        app.world_mut().spawn(ClearTaskMessage { task_id });
+
+        app.update();
+
+        let terminated: Vec<_> = app
+            .world_mut()
+            .query::<&TaskTerminatedMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            terminated.is_empty(),
+            "/clear should not spawn TaskTerminatedMessage"
+        );
+    }
+
+    #[test]
+    fn clear_task_system_does_not_spawn_summarization_request() {
+        use crate::domain::{
+            ChannelId, ClearTaskMessage, EntryMetadata, EntryRole, FrontendKind,
+            PreviousTaskStatus, ShortTermMemory, SummarizationRequestMessage, Task, TaskStatus,
+        };
+        use crate::ecs::EntityIndex;
+
+        let mut app = App::new();
+        app.init_resource::<EntityIndex>();
+        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.add_systems(Update, (clear_task_system, task_termination_system));
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(
+            EntryRole::User,
+            "some content to summarize",
+            EntryMetadata::default(),
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                Task {
+                    id: task_id,
+                    content: "to clear".to_string(),
+                    creator: uuid::Uuid::nil(),
+                    delegate: None,
+                    status: TaskStatus::Running,
+                    pending_confirmation_id: None,
+                    input_summary: "test".to_string(),
+                    result_summary: String::new(),
+                    priority: 0,
+                    created_at: now,
+                    updated_at: now,
+                    retry_count: 0,
+                    max_retries: 3,
+                    next_retry_at: None,
+                    last_error: None,
+                    multi_turn: false,
+                    parent_task_id: None,
+                    batch_id: None,
+                    origin_channel: Some(channel),
+                    routing_policy: crate::domain::TaskRoutingPolicy::conversational(ChannelId {
+                        frontend: FrontendKind::Tui,
+                        user_id: "test".to_string(),
+                        thread_id: None,
+                    }),
+                    last_evaluated_turn: None,
+                },
+                stm,
+                PreviousTaskStatus(TaskStatus::Pending),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        app.world_mut().spawn(ClearTaskMessage { task_id });
+
+        app.update();
+
+        let summarize: Vec<_> = app
+            .world_mut()
+            .query::<&SummarizationRequestMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            summarize.is_empty(),
+            "/clear should not spawn SummarizationRequestMessage"
+        );
+    }
+
+    #[test]
+    fn clear_task_system_pushes_task_cleared_event() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::app::FrontendRegistry;
+        use crate::domain::{
+            ChannelId, ClearTaskMessage, EngineEvent, EventTarget, Frontend, FrontendKind,
+            PreviousTaskStatus, ShortTermMemory, Task, TaskStatus, UserAction,
+        };
+        use crate::ecs::EntityIndex;
+
+        struct MockFrontend {
+            events: Arc<Mutex<Vec<EngineEvent>>>,
+        }
+        impl Frontend for MockFrontend {
+            fn kind(&self) -> FrontendKind {
+                FrontendKind::Tui
+            }
+            fn push_event(&self, event: EngineEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+            fn poll_actions(&self) -> Vec<UserAction> {
+                vec![]
+            }
+        }
+
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(MockFrontend {
+                events: events.clone(),
+            })],
+        });
+        app.init_resource::<EntityIndex>();
+        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.add_systems(Update, clear_task_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Task {
+                    id: task_id,
+                    content: "to clear".to_string(),
+                    creator: uuid::Uuid::nil(),
+                    delegate: None,
+                    status: TaskStatus::Running,
+                    pending_confirmation_id: None,
+                    input_summary: "test".to_string(),
+                    result_summary: String::new(),
+                    priority: 0,
+                    created_at: now,
+                    updated_at: now,
+                    retry_count: 0,
+                    max_retries: 3,
+                    next_retry_at: None,
+                    last_error: None,
+                    multi_turn: false,
+                    parent_task_id: None,
+                    batch_id: None,
+                    origin_channel: Some(channel.clone()),
+                    routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
+                    last_evaluated_turn: None,
+                },
+                ShortTermMemory::default(),
+                PreviousTaskStatus(TaskStatus::Pending),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        app.world_mut().spawn(ClearTaskMessage { task_id });
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        match events
+            .iter()
+            .find(|e| matches!(e, EngineEvent::TaskCleared { .. }))
+        {
+            Some(EngineEvent::TaskCleared {
+                target,
+                task_id: tid,
+            }) => {
+                assert_eq!(*tid, task_id);
+                match target {
+                    EventTarget::Directed(v) => {
+                        assert_eq!(v.len(), 1);
+                        assert_eq!(v[0].frontend, FrontendKind::Tui);
+                    }
+                    other => panic!("expected Directed target, got {other:?}"),
+                }
+            }
+            other => panic!("expected TaskCleared event, got {other:?}"),
+        }
     }
 }

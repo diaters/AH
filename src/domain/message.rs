@@ -270,6 +270,12 @@ pub struct FinishTaskMessage {
     pub task_id: TaskId,
 }
 
+/// /clear 命令触发的任务清除消息
+#[derive(Debug, Clone, Component)]
+pub struct ClearTaskMessage {
+    pub task_id: TaskId,
+}
+
 // ============ Tool 执行 ============
 
 /// Tool 执行请求消息

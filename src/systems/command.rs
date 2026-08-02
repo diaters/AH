@@ -3,11 +3,11 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, FinishTaskMessage,
-    NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks, ReloadPluginsMessage,
-    ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry, ShortTermMemory,
-    SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy, TaskStatus,
-    UserCommand, UserInputMessage,
+    ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
+    FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
+    ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
+    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy,
+    TaskStatus, UserCommand, UserInputMessage,
 };
 
 /// 命令解析系统：解析用户输入中的指令
@@ -241,6 +241,27 @@ pub(crate) fn command_parse_system(
                     "spawning ReloadTriggersMessage"
                 );
                 commands.spawn(ReloadTriggersMessage);
+                commands.entity(entity).despawn();
+            }
+            UserCommand::ClearCurrentTask => {
+                // /clear - 删除当前任务（不触发终态处理链路）
+                let current_task = tasks.iter().find(|(t, _)| {
+                    !t.status.is_terminal()
+                        && t.origin_channel == Some(input.origin_channel.clone())
+                });
+
+                if let Some((task, _)) = current_task {
+                    debug!(
+                        event = "ClearCommandReceived",
+                        task_id = %task.id,
+                        task_status = ?task.status,
+                        task_content = %task.content,
+                        "clearing current task via /clear command"
+                    );
+                    commands.spawn(ClearTaskMessage { task_id: task.id });
+                } else {
+                    debug!(event = "ClearCommandNoTask", "no active task to clear");
+                }
                 commands.entity(entity).despawn();
             }
             UserCommand::PluginCommand {
@@ -798,5 +819,128 @@ mod tests {
             summarize_count, 0,
             "Telegram /summarize should not touch QQ task"
         );
+    }
+
+    #[test]
+    fn clear_command_spawns_clear_task_message() {
+        use crate::domain::{ClearTaskMessage, FrontendKind, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        app.world_mut().spawn((
+            Task {
+                id: task_id,
+                content: "active task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Running,
+                pending_confirmation_id: None,
+                input_summary: "test".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "/clear".to_string(),
+            origin_channel: channel,
+        });
+
+        app.update();
+
+        let clear_msgs: Vec<&ClearTaskMessage> = app
+            .world_mut()
+            .query::<&ClearTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(clear_msgs.len(), 1);
+        assert_eq!(clear_msgs[0].task_id, task_id);
+    }
+
+    #[test]
+    fn clear_does_not_clear_other_channel_task() {
+        use crate::domain::{ClearTaskMessage, FrontendKind, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        let qq_channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "qq-user".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        app.world_mut().spawn((
+            Task {
+                id: uuid::Uuid::new_v4(),
+                content: "qq active task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Ready,
+                pending_confirmation_id: None,
+                input_summary: "qq".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(qq_channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(qq_channel),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        let tg_channel = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "tg-user".to_string(),
+            thread_id: None,
+        };
+        app.world_mut().spawn(UserInputMessage {
+            content: "/clear".to_string(),
+            origin_channel: tg_channel,
+        });
+
+        app.update();
+
+        let clear_count = app
+            .world_mut()
+            .query::<&ClearTaskMessage>()
+            .iter(app.world())
+            .count();
+        assert_eq!(clear_count, 0, "Telegram /clear should not touch QQ task");
     }
 }
