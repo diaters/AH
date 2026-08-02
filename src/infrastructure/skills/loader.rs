@@ -27,6 +27,8 @@ pub struct LoadedSkill {
     pub instructions: String,
     pub version: u32,
     pub self_updatable: bool,
+    /// Skill 目录路径（SKILL.md 所在目录），用于解析相对路径资源。
+    pub skill_dir: PathBuf,
 }
 
 /// Skill 加载器：扫描 Agent 的 skills 目录，解析 SKILL.md。
@@ -74,7 +76,8 @@ impl SkillLoader {
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
                     let content = std::fs::read_to_string(&skill_md).ok()?;
-                    parse_skill_md(&content)
+                    // path 即为 skill 目录
+                    parse_skill_md(&content, path)
                 } else {
                     None
                 }
@@ -96,7 +99,9 @@ impl SkillLoader {
             .iter()
             .filter_map(|c| {
                 let content = std::fs::read_to_string(&c.path).ok()?;
-                parse_skill_md(&content).map(|mut s| {
+                // c.path 是 SKILL.md 文件路径，取其父目录作为 skill_dir
+                let skill_dir = c.path.parent()?.to_path_buf();
+                parse_skill_md(&content, skill_dir).map(|mut s| {
                     s.name = format!("{}:{}", c.plugin_id, s.name);
                     s
                 })
@@ -123,8 +128,10 @@ impl SkillLoader {
                 if let Ok(skill_entries) = std::fs::read_dir(&skills_dir) {
                     for skill_entry in skill_entries.flatten() {
                         let skill_path = skill_entry.path().join("SKILL.md");
+                        // skill_entry.path() 即为 skill 目录
+                        let skill_dir = skill_entry.path();
                         if let Ok(content) = std::fs::read_to_string(&skill_path)
-                            && let Some(loaded) = parse_skill_md(&content)
+                            && let Some(loaded) = parse_skill_md(&content, skill_dir)
                         {
                             // 使用目录名作为 skill_name（而非 frontmatter name），
                             // 确保 skill_md_path() 能正确重建文件路径。
@@ -148,7 +155,21 @@ impl SkillLoader {
         registry
     }
 
+    /// 将相对路径转换为相对于工作区根目录的路径（如果可能）。
+    ///
+    /// 如果路径不在当前工作目录下，返回原路径。
+    fn relativize_to_workspace(path: &std::path::Path) -> PathBuf {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        path.strip_prefix(&cwd).unwrap_or(path).to_path_buf()
+    }
+
     /// 将 Skill 列表格式化为系统提示注入文本。
+    ///
+    /// 每个 skill 会注入：
+    /// - 名称
+    /// - 描述
+    /// - **Skill 目录**：相对于工作区根目录的路径，便于 LLM 定位资源
+    /// - 使用说明
     pub fn format_skills_prompt(skills: &[LoadedSkill]) -> String {
         if skills.is_empty() {
             return String::new();
@@ -157,13 +178,19 @@ impl SkillLoader {
         for skill in skills {
             prompt.push_str(&format!("### {}\n", skill.name));
             prompt.push_str(&format!("{}\n\n", skill.description));
+            // 注入 skill 目录路径
+            let relative_dir = Self::relativize_to_workspace(&skill.skill_dir);
+            prompt.push_str(&format!(
+                "**Skill 目录**: `{}`\n\n",
+                relative_dir.display()
+            ));
             prompt.push_str(&format!("{}\n\n", skill.instructions));
         }
         prompt
     }
 }
 
-pub fn parse_skill_md(content: &str) -> Option<LoadedSkill> {
+pub fn parse_skill_md(content: &str, skill_dir: PathBuf) -> Option<LoadedSkill> {
     let mut lines = content.lines();
     let first = lines.next()?;
     if first.trim() != "---" {
@@ -220,6 +247,7 @@ pub fn parse_skill_md(content: &str) -> Option<LoadedSkill> {
         instructions,
         version,
         self_updatable,
+        skill_dir,
     })
 }
 
@@ -235,18 +263,60 @@ mod tests {
             instructions: "1. 运行脚本".to_string(),
             version: 1,
             self_updatable: true,
+            skill_dir: PathBuf::from(".harness/assets/agents/main/skills/smoke-test"),
         }];
         let prompt = SkillLoader::format_skills_prompt(&skills);
         assert!(prompt.contains("## 可用技能"));
         assert!(prompt.contains("### smoke-test"));
         assert!(prompt.contains("验证工具链"));
         assert!(prompt.contains("1. 运行脚本"));
+        assert!(prompt.contains("**Skill 目录**"));
     }
 
     #[test]
     fn format_skills_prompt_empty_returns_empty() {
         let prompt = SkillLoader::format_skills_prompt(&[]);
         assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn format_skills_prompt_includes_skill_dir() {
+        let skills = vec![LoadedSkill {
+            name: "my-skill".to_string(),
+            description: "测试技能".to_string(),
+            instructions: "1. 运行 scripts/setup.sh".to_string(),
+            version: 1,
+            self_updatable: true,
+            skill_dir: PathBuf::from(".harness/assets/agents/main/skills/my-skill"),
+        }];
+        let prompt = SkillLoader::format_skills_prompt(&skills);
+        assert!(prompt.contains("**Skill 目录**"));
+        assert!(prompt.contains("my-skill"));
+        // 路径在 instructions 之前
+        let dir_pos = prompt.find("**Skill 目录**").unwrap();
+        let instr_pos = prompt.find("scripts/setup.sh").unwrap();
+        assert!(dir_pos < instr_pos, "路径应在说明之前注入");
+    }
+
+    #[test]
+    fn format_skills_prompt_relative_path_injection() {
+        // 绝对路径应被转换为相对路径
+        let cwd = std::env::current_dir().unwrap();
+        let abs_dir = cwd.join(".harness/assets/agents/main/skills/test-skill");
+        let skills = vec![LoadedSkill {
+            name: "test-skill".to_string(),
+            description: "测试".to_string(),
+            instructions: "do stuff".to_string(),
+            version: 1,
+            self_updatable: true,
+            skill_dir: abs_dir,
+        }];
+        let prompt = SkillLoader::format_skills_prompt(&skills);
+        // 相对路径应出现在输出中
+        assert!(
+            prompt.contains(".harness/assets/agents/main/skills/test-skill"),
+            "绝对路径应被转换为相对路径"
+        );
     }
 
     #[test]
@@ -272,6 +342,8 @@ mod tests {
         assert_eq!(skills[0].name, "my-plugin:negotiation");
         assert_eq!(skills[0].description, "谈判技巧");
         assert_eq!(skills[0].instructions, "1. 倾听");
+        // skill_dir 应为 SKILL.md 的父目录
+        assert_eq!(skills[0].skill_dir, dir.path());
     }
 
     #[test]
@@ -301,16 +373,17 @@ mod version_field_tests {
     #[test]
     fn parse_skill_md_with_version_and_self_updatable() {
         let content = "---\nname: my-skill\ndescription: A skill\nversion: 3\nself_updatable: false\n---\n\n## Usage\n\nDo the thing.\n";
-        let parsed = parse_skill_md(content).unwrap();
+        let parsed = parse_skill_md(content, PathBuf::from(".harness/skills/my-skill")).unwrap();
         assert_eq!(parsed.version, 3);
         assert!(!parsed.self_updatable);
+        assert_eq!(parsed.skill_dir, PathBuf::from(".harness/skills/my-skill"));
     }
 
     #[test]
     fn parse_skill_md_defaults_when_fields_missing() {
         let content =
             "---\nname: my-skill\ndescription: A skill\n---\n\n## Usage\n\nDo the thing.\n";
-        let parsed = parse_skill_md(content).unwrap();
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
         assert_eq!(parsed.version, 1);
         assert!(parsed.self_updatable);
     }
@@ -318,7 +391,7 @@ mod version_field_tests {
     #[test]
     fn parse_skill_md_self_updatable_true_explicit() {
         let content = "---\nname: my-skill\ndescription: A skill\nself_updatable: true\n---\n\n## Usage\n\nDo the thing.\n";
-        let parsed = parse_skill_md(content).unwrap();
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
         assert!(parsed.self_updatable);
     }
 
@@ -326,21 +399,21 @@ mod version_field_tests {
     fn parse_skill_md_rejects_unclosed_frontmatter() {
         // 缺少闭合 ---
         let content = "---\nname: my-skill\ndescription: A skill\n\n## Usage\n\nDo it.\n";
-        assert!(parse_skill_md(content).is_none());
+        assert!(parse_skill_md(content, PathBuf::from("skills/my-skill")).is_none());
     }
 
     #[test]
     fn parse_skill_md_rejects_missing_name() {
         // name 字段缺失
         let content = "---\ndescription: A skill\n---\n\n## Usage\n\nDo it.\n";
-        assert!(parse_skill_md(content).is_none());
+        assert!(parse_skill_md(content, PathBuf::from("skills/my-skill")).is_none());
     }
 
     #[test]
     fn parse_skill_md_invalid_version_falls_back_to_default() {
         // 无效 version 值，静默回退到默认 1
         let content = "---\nname: my-skill\nversion: abc\n---\n\n## Usage\n\nDo it.\n";
-        let parsed = parse_skill_md(content).unwrap();
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
         assert_eq!(parsed.version, 1);
     }
 
@@ -348,7 +421,7 @@ mod version_field_tests {
     fn parse_skill_md_invalid_self_updatable_falls_back_to_default() {
         // 无效 self_updatable 值，静默回退到默认 true
         let content = "---\nname: my-skill\nself_updatable: maybe\n---\n\n## Usage\n\nDo it.\n";
-        let parsed = parse_skill_md(content).unwrap();
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
         assert!(parsed.self_updatable);
     }
 }

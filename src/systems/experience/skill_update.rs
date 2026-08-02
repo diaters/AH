@@ -422,8 +422,16 @@ pub(crate) fn skill_update_completion_system(
         }
 
         // 8. 解析新内容并刷新 SkillRegistry；若解析失败，文件已写入，候选仍置 Persisted
+        // skill_dir 从 skill_id 重建路径，与 SkillLoader::skill_md_path 语义一致
+        let skill_dir = {
+            let base_dir = std::path::PathBuf::from(".harness/assets/agents");
+            base_dir
+                .join(&msg.skill_id.owner_agent_name)
+                .join("skills")
+                .join(&msg.skill_id.skill_name)
+        };
         let parsed_entry =
-            crate::infrastructure::skills::loader::parse_skill_md(&new_content).map(|parsed| {
+            crate::infrastructure::skills::loader::parse_skill_md(&new_content, skill_dir).map(|parsed| {
                 SkillEntry {
                     skill_id: msg.skill_id.clone(),
                     name: parsed.name,
