@@ -361,6 +361,7 @@ pub fn tool_confirmation_result_system(
                         &context_queries,
                         &index_clock_loader_frontends.2,
                         &calling_states,
+                        frontend_registry,
                     );
                 }
 
