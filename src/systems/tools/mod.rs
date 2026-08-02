@@ -320,7 +320,8 @@ pub fn register_builtin_tools(
     registry.register(ToolDefinition {
         name: "ask_user".to_string(),
         description: "向用户提出问题并等待回复。当需要用户提供偏好、确认方向或补充信息时调用。\
-                      问题应清晰具体，让用户能直接文本回复。".to_string(),
+                      问题应清晰具体，让用户能直接文本回复。"
+            .to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
