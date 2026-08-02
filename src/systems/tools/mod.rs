@@ -40,10 +40,11 @@ use crate::domain::{
 };
 
 use self::builtin::{
-    ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool, ListExperienceCandidatesTool,
-    ListScheduledTasksTool, ScheduleTaskTool, ShellExecTool, ShellInputTool, ShellListTool,
-    ShellReadTool, ShellStartTool, ShellStopTool, SkipProfileUpdateTool,
-    SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillUpdateTool, WaitTasksTool,
+    AskUserTool, ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool,
+    ListExperienceCandidatesTool, ListScheduledTasksTool, ScheduleTaskTool, ShellExecTool,
+    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
+    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
+    SubmitSkillUpdateTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -314,6 +315,30 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ListExperienceCandidatesTool));
+
+    // ask_user tool
+    registry.register(ToolDefinition {
+        name: "ask_user".to_string(),
+        description: "向用户提出问题并等待回复。当需要用户提供偏好、确认方向或补充信息时调用。\
+                      问题应清晰具体，让用户能直接文本回复。"
+            .to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "向用户提出的问题文本"
+                    }
+                },
+                "required": ["question"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("ask_user".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(AskUserTool));
 
     // chat_with_agent tool
     registry.register(ToolDefinition {

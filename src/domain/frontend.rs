@@ -201,6 +201,18 @@ pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> 
             };
             format!("channel={channel} content={content_preview}")
         }
+        "ask_user" => tool_input
+            .get("question")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                if s.chars().count() > 80 {
+                    let truncated: String = s.chars().take(80).collect();
+                    format!("{truncated}…")
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_default(),
         "create_tasks" => tool_input
             .get("tasks")
             .and_then(|v| v.as_array())
@@ -344,5 +356,26 @@ mod tests {
         let input = serde_json::json!({"key": long_value});
         let result = summarize_tool_input("unknown_tool", &input);
         assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn summarize_ask_user_short_question() {
+        let input = serde_json::json!({"question": "用什么框架?"});
+        assert_eq!(summarize_tool_input("ask_user", &input), "用什么框架?");
+    }
+
+    #[test]
+    fn summarize_ask_user_long_question_truncated() {
+        let long_question = "a".repeat(100);
+        let input = serde_json::json!({"question": long_question});
+        let result = summarize_tool_input("ask_user", &input);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 81);
+    }
+
+    #[test]
+    fn summarize_ask_user_missing_question_returns_empty() {
+        let input = serde_json::json!({});
+        assert_eq!(summarize_tool_input("ask_user", &input), "");
     }
 }

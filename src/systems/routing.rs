@@ -5,10 +5,12 @@ use crate::ecs::EntityIndex;
 use crate::{
     app::Clock,
     domain::{
-        Agent, AgentKind, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
-        DispatchStrategy, EntryMetadata, EntryRole, PendingDispatch, ShortTermMemory,
-        SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage,
-        UserCommand, UserInputMessage, WaitingReason,
+        Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
+        AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
+        DispatchStrategy, EntryMetadata, EntryRole, OutputContent, PendingDispatch,
+        ShortTermMemory, SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus,
+        ToolConfirmationResponseMessage, ToolExecutionResultMessage, UserCommand, UserInputMessage,
+        WaitingReason,
     },
 };
 
@@ -25,7 +27,8 @@ fn parse_confirmation_option(content: &str) -> Option<String> {
 pub(crate) fn user_input_routing_system(
     mut commands: Commands,
     user_inputs: Query<(Entity, &UserInputMessage)>,
-    tasks: Query<&Task>,
+    mut tasks: Query<(Entity, &mut Task)>,
+    ask_user_pendings: Query<&AskUserPending>,
 ) {
     for (entity, input) in &user_inputs {
         // 命令优先（即使在等待工具确认期间也允许 /finish 等指令）
@@ -34,7 +37,7 @@ pub(crate) fn user_input_routing_system(
         }
 
         // 优先处理处于 Waiting(User) 且正在等待工具确认的任务
-        if let Some(task) = tasks.iter().find(|t| {
+        if let Some((_, task)) = tasks.iter().find(|(_, t)| {
             t.status == TaskStatus::Waiting(WaitingReason::User)
                 && t.origin_channel == Some(input.origin_channel.clone())
                 && t.pending_confirmation_id.is_some()
@@ -77,13 +80,60 @@ pub(crate) fn user_input_routing_system(
             continue;
         }
 
+        // ask_user 等待分支：用户回复 ask_user 工具的问题
+        // 注意：iter().find().map(|(e, _)| e) 仅提取 Entity，立即释放 Mut<Task> 借用，
+        // 否则与下方 tasks.get_mut(task_entity) 同实体冲突会触发 Bevy 运行时 panic。
+        let ask_user_task_entity = tasks
+            .iter()
+            .find(|(_, t)| {
+                t.status == TaskStatus::Waiting(WaitingReason::AskUser)
+                    && t.origin_channel == Some(input.origin_channel.clone())
+            })
+            .map(|(e, _)| e);
+
+        if let Some(task_entity) = ask_user_task_entity {
+            if let Ok(pending) = ask_user_pendings.get(task_entity) {
+                // 通过 get_mut 在单次借用内完成读 task.id 与写 task.status，
+                // 避免 iter().find() 残留的 Mut<Task> 与 get_mut() 冲突。
+                if let Ok((_, mut task)) = tasks.get_mut(task_entity) {
+                    commands.spawn(ToolExecutionResultMessage {
+                        result: AgentExecutionResult {
+                            task_id: task.id,
+                            agent_id: pending.agent_id,
+                            request_kind: AgentRequestKind::LlmCompletion,
+                            result: Ok(AgentExecutionOutput {
+                                content: OutputContent::Text("ask_user completed".to_string()),
+                                reasoning_content: None,
+                            }),
+                            prompt: String::new(),
+                            system_prompt: None,
+                            tools: vec![],
+                            reasoning_content: None,
+                            work_item_id: None,
+                        },
+                        tool_name: "ask_user".to_string(),
+                        tool_output: Ok(serde_json::json!({"answer": input.content})),
+                        tool_call_id: Some(pending.tool_call_id.clone()),
+                        processed: false,
+                        original_tool_output: None,
+                    });
+                    commands.entity(task_entity).remove::<AskUserPending>();
+                    // 恢复 task 状态为 Waiting(ToolExecution)，让 LLM loop 续跑
+                    task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                }
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 查找是否有 Waiting(User) 状态的任务
         let waiting_tasks: Vec<_> = tasks
             .iter()
-            .filter(|t| {
+            .filter(|(_, t)| {
                 t.status == TaskStatus::Waiting(WaitingReason::User)
                     && t.origin_channel == Some(input.origin_channel.clone())
             })
+            .map(|(_, t)| t.clone())
             .collect();
 
         if let Some(task) = waiting_tasks.first() {
@@ -239,10 +289,11 @@ mod tests {
     use super::{continue_task_system, user_input_routing_system};
     use crate::app::{Clock, MemoryConfig};
     use crate::domain::{
-        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-        ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchStrategy, FinishTaskMessage,
-        FrontendKind, PendingDispatch, PendingKnowledgeWriteHooks, SharedKnowledgeBase,
-        SystemOutputMessage, Task, TaskStatus, ToolConfirmationResponseMessage, UserInputMessage,
+        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, AskUserPending,
+        ChannelId, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchStrategy,
+        FinishTaskMessage, FrontendKind, PendingDispatch, PendingKnowledgeWriteHooks,
+        SharedKnowledgeBase, SystemOutputMessage, Task, TaskStatus,
+        ToolConfirmationResponseMessage, ToolExecutionResultMessage, UserInputMessage,
         WaitingReason,
     };
     use crate::ecs::EntityIndex;
@@ -709,6 +760,203 @@ mod tests {
         assert!(
             matches!(hint.strategy, DispatchStrategy::BrainLlm),
             "no delegate should fall back to BrainLlm"
+        );
+    }
+
+    // ---- ask_user 等待分支测试 ----
+
+    fn make_ask_user_waiting_task(
+        channel: ChannelId,
+        agent_id: uuid::Uuid,
+    ) -> (Task, AskUserPending) {
+        let mut task = make_waiting_task(channel);
+        task.status = TaskStatus::Waiting(WaitingReason::AskUser);
+        let pending = AskUserPending {
+            tool_call_id: "test_call_id".to_string(),
+            agent_id,
+        };
+        (task, pending)
+    }
+
+    #[test]
+    fn ask_user_reply_routes_to_waiting_task() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        let task_id = task.id;
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut().entity_mut(task_entity).insert(pending);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "用 React".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let results: Vec<&ToolExecutionResultMessage> = app
+            .world_mut()
+            .query::<&ToolExecutionResultMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tool_name, "ask_user");
+        assert_eq!(
+            results[0].tool_output,
+            Ok(serde_json::json!({"answer": "用 React"}))
+        );
+        assert_eq!(results[0].tool_call_id, Some("test_call_id".to_string()));
+        assert_eq!(results[0].result.task_id, task_id);
+    }
+
+    #[test]
+    fn ask_user_reply_removes_pending_component() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut().entity_mut(task_entity).insert(pending);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "用 React".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let pendings: Vec<&AskUserPending> = app
+            .world_mut()
+            .query::<&AskUserPending>()
+            .iter(app.world())
+            .collect();
+        assert!(pendings.is_empty(), "AskUserPending should be removed");
+    }
+
+    #[test]
+    fn ask_user_reply_restores_task_to_waiting_tool_execution() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut().entity_mut(task_entity).insert(pending);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "用 React".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let tasks: Vec<&Task> = app.world_mut().query::<&Task>().iter(app.world()).collect();
+        assert_eq!(
+            tasks[0].status,
+            TaskStatus::Waiting(WaitingReason::ToolExecution),
+            "task should be restored to Waiting(ToolExecution)"
+        );
+    }
+
+    #[test]
+    fn cross_channel_input_not_routed_to_ask_user_task() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        app.world_mut().spawn(task).insert(pending);
+
+        // QQ 通道的输入不应路由到 Telegram 的 ask_user 任务
+        app.world_mut().spawn(UserInputMessage {
+            content: "hello from QQ".to_string(),
+            origin_channel: qq_channel(),
+        });
+
+        app.update();
+
+        let results: Vec<&ToolExecutionResultMessage> = app
+            .world_mut()
+            .query::<&ToolExecutionResultMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            results.is_empty(),
+            "QQ input should not be routed to Telegram ask_user task"
+        );
+
+        // 应该创建新任务
+        let creates: Vec<&CreateTaskMessage> = app
+            .world_mut()
+            .query::<&CreateTaskMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(creates.len(), 1, "should create new task for QQ input");
+    }
+
+    #[test]
+    fn command_during_ask_user_still_executes() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        app.world_mut().spawn(task).insert(pending);
+
+        // 输入是命令（/finish）
+        app.world_mut().spawn(UserInputMessage {
+            content: "/finish".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        // 命令应被 user_input_routing_system 跳过（不处理，留给 command_parse_system）
+        let results: Vec<&ToolExecutionResultMessage> = app
+            .world_mut()
+            .query::<&ToolExecutionResultMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            results.is_empty(),
+            "command should not be routed as ask_user reply"
+        );
+    }
+
+    #[test]
+    fn multiple_ask_user_tasks_same_channel_picks_first() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+
+        let agent_id = uuid::Uuid::new_v4();
+        let (task1, pending1) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        let (task2, pending2) = make_ask_user_waiting_task(telegram_channel(), agent_id);
+        let task1_id = task1.id;
+
+        let task1_entity = app.world_mut().spawn(task1).id();
+        app.world_mut().entity_mut(task1_entity).insert(pending1);
+        let _task2_entity = app.world_mut().spawn(task2).id();
+        app.world_mut().entity_mut(_task2_entity).insert(pending2);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "回复".to_string(),
+            origin_channel: telegram_channel(),
+        });
+
+        app.update();
+
+        let results: Vec<&ToolExecutionResultMessage> = app
+            .world_mut()
+            .query::<&ToolExecutionResultMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(results.len(), 1, "only one task should be picked");
+        assert_eq!(
+            results[0].result.task_id, task1_id,
+            "should pick first task"
         );
     }
 }

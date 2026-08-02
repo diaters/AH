@@ -140,7 +140,7 @@ pub use summarization::SummarizationTrigger;
 
 // task
 pub use task::{
-    NewlyCreatedTask, PreviousTaskStatus, Task, TaskRoutingPolicy, TaskStatus,
+    AskUserPending, NewlyCreatedTask, PreviousTaskStatus, Task, TaskRoutingPolicy, TaskStatus,
     ToolCalledHookPending, ToolReturnedHookPending, WaitingForSessionInfo, WaitingForTasksInfo,
 };
 

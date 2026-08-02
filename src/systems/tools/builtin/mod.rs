@@ -1,5 +1,6 @@
 //! 内置 Tool 实现
 
+mod ask_user;
 mod chat_with_agent;
 mod create_tasks;
 mod list_experience_candidates;
@@ -12,6 +13,7 @@ mod submit_profile_update;
 mod submit_skill_update;
 mod wait_tasks;
 
+pub use ask_user::AskUserTool;
 pub use chat_with_agent::ChatWithAgentTool;
 pub use create_tasks::CreateTasksTool;
 pub use list_experience_candidates::ListExperienceCandidatesTool;

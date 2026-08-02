@@ -7,17 +7,18 @@ use serde::Serialize;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::app::Clock;
+use crate::app::{Clock, FrontendRegistry};
 use crate::contracts::SessionBackend;
 use crate::domain::{
-    Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, BatchTaskState,
-    ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind, DispatchStrategy,
-    EntryRole, ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateSubmission,
-    ExperienceKindHint, ExperienceStore, FrontendKind, OutputContent, PendingDispatch,
-    PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellSessionResult,
-    ShortTermMemory, SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState,
-    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, AskUserPending,
+    BatchTaskState, ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind,
+    DispatchStrategy, EngineEvent, EntryRole, EventTarget, ExperienceCandidate,
+    ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
+    FrontendKind, MessageRole, OutputContent, PendingDispatch, PendingExperienceHooks,
+    ProfileGenerationContext, SessionSummary, ShellSessionResult, ShortTermMemory,
+    SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
+    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
     WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::ecs::EntityIndex;
@@ -380,6 +381,8 @@ pub fn handle_tool_action<B: SessionBackend>(
     // 阻止 tool_calling_orchestrator_system 触发 follow-up LLM 请求。
     // 按 (task_id, work_item_id) 严格匹配，与 find_calling_state 语义一致。
     calling_states: &Query<(Entity, &ToolCallingState)>,
+    // ask_user 需要把问题推送到 task 的 output_channel 对应前端。
+    frontend_registry: &FrontendRegistry,
 ) {
     match action {
         Ok(ToolAction::Direct(_value)) => {
@@ -1261,6 +1264,58 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::AskUser { question }) => {
+            let task_id = request.request.task_id;
+            let agent_id = request.request.agent_id;
+            // request.tool_call_id 是 Option<String>，AskUserPending.tool_call_id 是 String。
+            // ask_user 由 LLM 发起，正常情况 tool_call_id 为 Some；None 时用空串兜底（不影响 LLM loop 续跑）。
+            let tool_call_id = request.tool_call_id.clone().unwrap_or_default();
+
+            // 1. 读取 task 的 output_channel
+            let output_channel = tasks
+                .get(task_entity)
+                .map(|(_, t)| t.routing_policy.output_channel.clone())
+                .ok()
+                .flatten();
+
+            // 2. 无 output_channel 时返回错误（避免 task 永远卡在 Waiting(AskUser)）
+            let Some(channel) = output_channel else {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "ask_user requires task with output_channel".to_string(),
+                    ),
+                );
+                return;
+            };
+
+            // 3. 通过 EngineEvent::Text 把问题推送到 output_channel
+            let event = EngineEvent::Text {
+                target: EventTarget::Directed(vec![channel]),
+                role: MessageRole::Agent,
+                content: question.clone(),
+                task_id: Some(task_id),
+            };
+            for frontend in &frontend_registry.frontends {
+                frontend.push_event(event.clone());
+            }
+
+            // 4. 在 task entity 上挂 AskUserPending（先 insert，再切 status，保证不变量）
+            commands.entity(task_entity).insert(AskUserPending {
+                tool_call_id,
+                agent_id,
+            });
+
+            // 5. task.status = Waiting(AskUser)
+            if let Ok((_, mut task)) = tasks.get_mut(task_entity) {
+                task.status = TaskStatus::Waiting(WaitingReason::AskUser);
+            }
+
+            // 6. despawn ToolExecutionRequestMessage
+            commands.entity(request_entity).despawn();
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
@@ -1354,7 +1409,10 @@ fn spawn_experience_candidate_result(
     commands.entity(request_entity).despawn();
 }
 
-/// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
+/// 恢复 Task 状态（从 Waiting(ToolExecution) 恢复到 Ready 或保持 Waiting(ToolExecution)）
+///
+/// 仅处理 Waiting(ToolExecution) 状态。其他 Waiting 变体（AskUser、ChatAgent、
+/// SubTaskBatch 等）由各自的发起系统主动挂起，不应被本函数覆盖。
 pub fn restore_task_after_tool(
     tasks: &mut Query<(Entity, &mut Task)>,
     calling_states: &Query<(Entity, &ToolCallingState)>,
@@ -1363,7 +1421,11 @@ pub fn restore_task_after_tool(
 ) {
     // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
     if let Some((_, mut task)) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
-        if !matches!(task.status, TaskStatus::Waiting(_)) {
+        // 仅恢复 Waiting(ToolExecution)；其他 Waiting 变体由各自系统管理，不在此处覆盖
+        if !matches!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::ToolExecution)
+        ) {
             return;
         }
         let has_calling_state = calling_states.iter().any(|(_, cs)| cs.task_id == task.id);
@@ -1562,5 +1624,369 @@ mod tests {
             }),
             "subtask channel must NOT be the hardcoded Tui/default"
         );
+    }
+
+    // ============ AskUser arm 测试 ============
+    //
+    // 通过 test system wrapper 调用 `handle_tool_action`，验证：
+    // 1. task 切到 Waiting(AskUser)
+    // 2. AskUserPending 组件挂到 task entity（先 insert 再切 status 的不变量）
+    // 3. EngineEvent::Text 推送到 frontend
+    // 4. request_entity 被 despawn
+    // 5. 无 output_channel 时返回错误（task 不切 Waiting）
+
+    use crate::SharedKnowledgeBase;
+    use crate::domain::{Frontend, UserAction};
+    use std::sync::{Arc, Mutex};
+
+    /// 捕获推送事件的 mock frontend
+    struct MockFrontend {
+        kind: FrontendKind,
+        events: Arc<Mutex<Vec<EngineEvent>>>,
+    }
+
+    impl Frontend for MockFrontend {
+        fn kind(&self) -> FrontendKind {
+            self.kind.clone()
+        }
+        fn push_event(&self, event: EngineEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+        fn poll_actions(&self) -> Vec<UserAction> {
+            vec![]
+        }
+    }
+
+    /// 测试 system：从 world 中取第一个 ToolExecutionRequestMessage，
+    /// 调用 handle_tool_action 处理 AskUser action。
+    #[allow(clippy::too_many_arguments)]
+    fn ask_user_test_system(
+        mut commands: Commands,
+        mut tasks: Query<(Entity, &mut Task)>,
+        agents: Query<&mut Agent>,
+        chat_sessions: Query<&ChatSession>,
+        mut short_term_memories: Query<&mut ShortTermMemory>,
+        backend: Res<crate::systems::NativeProcessBackend>,
+        mut experience_store: ResMut<ExperienceStore>,
+        mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
+        clock: Res<Clock>,
+        context_queries: Query<(
+            Entity,
+            Option<&ProfileGenerationContext>,
+            Option<&SkillUpdateContext>,
+            &WorkItem,
+        )>,
+        skill_loader: Res<SkillLoader>,
+        calling_states: Query<(Entity, &ToolCallingState)>,
+        frontend_registry: Res<FrontendRegistry>,
+        requests: Query<(Entity, &ToolExecutionRequestMessage)>,
+    ) {
+        let Some((request_entity, request)) = requests.iter().next() else {
+            return;
+        };
+        let task_entity = tasks
+            .iter()
+            .find(|(_, t)| t.id == request.request.task_id)
+            .map(|(e, _)| e)
+            .expect("task entity should exist for request");
+
+        handle_tool_action(
+            &mut commands,
+            request_entity,
+            task_entity,
+            request,
+            Ok(ToolAction::AskUser {
+                question: "what is your name?".to_string(),
+            }),
+            &mut tasks,
+            &agents,
+            &chat_sessions,
+            &mut short_term_memories,
+            &*backend,
+            &mut experience_store,
+            &mut pending_experience_hooks,
+            None,
+            &clock,
+            &context_queries,
+            &skill_loader,
+            &calling_states,
+            &frontend_registry,
+        );
+    }
+
+    /// 构造一个带 output_channel 的 Task
+    fn make_ask_user_task(channel: ChannelId) -> Task {
+        let now = chrono::Utc::now();
+        Task {
+            id: Uuid::new_v4(),
+            content: "ask".to_string(),
+            creator: Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Pending,
+            pending_confirmation_id: None,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: Some(channel.clone()),
+            routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
+            last_evaluated_turn: None,
+        }
+    }
+
+    /// 构造一个 ToolExecutionRequestMessage，关联到指定 task
+    fn make_ask_user_request(task_id: Uuid, agent_id: Uuid) -> ToolExecutionRequestMessage {
+        ToolExecutionRequestMessage {
+            request: crate::domain::AgentExecutionRequest {
+                task_id,
+                agent_id,
+                request_kind: crate::domain::AgentRequestKind::ToolExecution {
+                    tool_name: "ask_user".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+            },
+            tool_name: "ask_user".to_string(),
+            tool_input: serde_json::json!({"question": "what is your name?"}),
+            pending_confirmation_id: None,
+            tool_call_id: Some("call-1".to_string()),
+            pending_confirmation_options: None,
+            work_item_entity: None,
+            confirmed_once: false,
+        }
+    }
+
+    /// 初始化测试所需资源（不含 frontend，由各测试单独注入）
+    fn init_ask_user_world(world: &mut World) {
+        world.init_resource::<SharedKnowledgeBase>();
+        world.init_resource::<ExperienceStore>();
+        world.init_resource::<PendingExperienceHooks>();
+        world.insert_resource(crate::systems::NativeProcessBackend::default());
+        world.insert_resource(Clock::default());
+        world.insert_resource(SkillLoader::new(std::path::PathBuf::from(
+            "/nonexistent_skills_root",
+        )));
+    }
+
+    /// ask_user 成功路径：task 切到 Waiting(AskUser)，AskUserPending 挂载，
+    /// 问题推送到 frontend，request 被 despawn
+    #[test]
+    fn ask_user_action_sets_task_to_waiting_ask_user() {
+        let mut world = World::new();
+        init_ask_user_world(&mut world);
+        world.insert_resource(FrontendRegistry { frontends: vec![] });
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let task = make_ask_user_task(channel);
+        let task_id = task.id;
+        let task_entity = world.spawn(task).id();
+
+        let agent_id = Uuid::new_v4();
+        world.spawn(ask_user_test_agent(agent_id));
+
+        let request = make_ask_user_request(task_id, agent_id);
+        world.spawn(request);
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(ask_user_test_system);
+        schedule.run(&mut world);
+
+        let task = world
+            .query::<&Task>()
+            .get(&world, task_entity)
+            .expect("task should exist");
+        assert_eq!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::AskUser),
+            "task should be Waiting(AskUser)"
+        );
+
+        let pending = world
+            .query::<&AskUserPending>()
+            .get(&world, task_entity)
+            .expect("AskUserPending should be inserted on task entity");
+        assert_eq!(pending.tool_call_id, "call-1");
+        assert_eq!(pending.agent_id, agent_id);
+
+        let remaining_requests = world
+            .query::<&ToolExecutionRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(remaining_requests, 0, "request should be despawned");
+    }
+
+    /// ask_user 成功路径：EngineEvent::Text 推送到 frontend，内容与 target 正确
+    #[test]
+    fn ask_user_action_pushes_text_event_to_output_channel() {
+        let mut world = World::new();
+        init_ask_user_world(&mut world);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "alice".to_string(),
+            thread_id: None,
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mock = MockFrontend {
+            kind: FrontendKind::Tui,
+            events: events.clone(),
+        };
+        world.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(mock)],
+        });
+
+        let task = make_ask_user_task(channel.clone());
+        let task_id = task.id;
+        let task_entity = world.spawn(task).id();
+
+        let agent_id = Uuid::new_v4();
+        world.spawn(ask_user_test_agent(agent_id));
+
+        world.spawn(make_ask_user_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(ask_user_test_system);
+        schedule.run(&mut world);
+
+        let captured = events.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "exactly one event should be pushed");
+        match &captured[0] {
+            EngineEvent::Text {
+                target,
+                role,
+                content,
+                task_id: evt_task_id,
+            } => {
+                assert_eq!(*role, MessageRole::Agent, "event role should be Agent");
+                assert_eq!(content, "what is your name?");
+                assert_eq!(*evt_task_id, Some(task_id));
+                match target {
+                    EventTarget::Directed(channels) => {
+                        assert_eq!(channels.len(), 1);
+                        assert_eq!(channels[0], channel);
+                    }
+                    other => panic!("expected Directed target, got {other:?}"),
+                }
+            }
+            other => panic!("expected EngineEvent::Text, got {other:?}"),
+        }
+
+        // 同时验证 task 状态也切了（不变量：先 insert 再切 status）
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert_eq!(task.status, TaskStatus::Waiting(WaitingReason::AskUser));
+    }
+
+    /// ask_user 无 output_channel：返回错误，task 不切 Waiting，request 不 despawn
+    #[test]
+    fn ask_user_action_without_output_channel_returns_error() {
+        let mut world = World::new();
+        init_ask_user_world(&mut world);
+        world.insert_resource(FrontendRegistry { frontends: vec![] });
+
+        // 构造一个无 output_channel 的 task（用 scheduled_task 也不行，它可能带 channel）
+        // 直接用 event policy（output_channel = None）
+        let now = chrono::Utc::now();
+        let task_id = Uuid::new_v4();
+        let task = Task {
+            id: task_id,
+            content: "ask-no-channel".to_string(),
+            creator: Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Pending,
+            pending_confirmation_id: None,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: None,
+            routing_policy: crate::domain::TaskRoutingPolicy::event(None, None),
+            last_evaluated_turn: None,
+        };
+        let task_entity = world.spawn(task).id();
+
+        let agent_id = Uuid::new_v4();
+        world.spawn(ask_user_test_agent(agent_id));
+
+        world.spawn(make_ask_user_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(ask_user_test_system);
+        schedule.run(&mut world);
+
+        // task 不应切到 Waiting(AskUser)
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert_ne!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::AskUser),
+            "task must NOT be Waiting(AskUser) when no output_channel"
+        );
+        assert_eq!(task.status, TaskStatus::Pending, "task should stay Pending");
+
+        // AskUserPending 不应挂载
+        let pending_exists = world
+            .query::<&AskUserPending>()
+            .get(&world, task_entity)
+            .is_ok();
+        assert!(
+            !pending_exists,
+            "AskUserPending must NOT be inserted when no output_channel"
+        );
+
+        // 应该生成错误结果消息（spawn_tool_error 会 spawn ToolExecutionResultMessage）
+        let error_results = world
+            .query::<&ToolExecutionResultMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            error_results, 1,
+            "spawn_tool_error should produce one ToolExecutionResultMessage"
+        );
+    }
+
+    /// 构造一个最小 Agent 用于 ask_user 测试
+    fn ask_user_test_agent(agent_id: Uuid) -> Agent {
+        Agent {
+            id: agent_id,
+            profile: crate::domain::AgentProfile {
+                name: "ask-user-agent".to_string(),
+                model: "test".to_string(),
+            },
+            capabilities: crate::domain::AgentCapabilities {
+                tags: vec![],
+                description: "test".to_string(),
+            },
+            kind: AgentKind::TaskScoped,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: crate::domain::AgentToolPermissions {
+                default_permission: crate::domain::ToolPermission::Allow,
+                overrides: std::collections::HashMap::new(),
+            },
+            system_prompt: None,
+        }
     }
 }

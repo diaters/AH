@@ -261,6 +261,7 @@ pub fn tool_dispatch_system(
                         &context_queries,
                         &index_clock_loader.2,
                         &calling_states,
+                        frontend_registry,
                     );
                 }
 

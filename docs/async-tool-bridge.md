@@ -318,6 +318,7 @@ dispatch 创建 `CancellationToken`，挂两份：
   - `submit_{profile_update,skill_update,experience_candidate}`
   - `skip_profile_update`
   - `create_tasks`
+  - `ask_user`
 - __阻塞式 Sync 工具（必须上桥，已退役）__：`execute` 内含真实阻塞 I/O（shell 子进程、
   长时 LLM 调用等）。`shell_exec` 是典型，已迁移至异步桥。
 - __跨帧合规 Sync 工具（候选收编项）__：`wait_tasks` / `chat_with_agent` /

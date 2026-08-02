@@ -256,6 +256,12 @@ pub enum ToolAction {
         /// 本次更新的理由说明
         rationale: String,
     },
+    /// 向用户提出问题并等待开放文本回复。
+    /// executor 只负责解析参数，问题呈现与等待状态由 orchestrator 完成。
+    AskUser {
+        /// 向用户展示的问题文本
+        question: String,
+    },
 }
 
 /// 经验候选提交数据
