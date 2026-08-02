@@ -180,10 +180,7 @@ impl SkillLoader {
             prompt.push_str(&format!("{}\n\n", skill.description));
             // 注入 skill 目录路径
             let relative_dir = Self::relativize_to_workspace(&skill.skill_dir);
-            prompt.push_str(&format!(
-                "**Skill 目录**: `{}`\n\n",
-                relative_dir.display()
-            ));
+            prompt.push_str(&format!("**Skill 目录**: `{}`\n\n", relative_dir.display()));
             prompt.push_str(&format!("{}\n\n", skill.instructions));
         }
         prompt

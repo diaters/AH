@@ -431,8 +431,8 @@ pub(crate) fn skill_update_completion_system(
                 .join(&msg.skill_id.skill_name)
         };
         let parsed_entry =
-            crate::infrastructure::skills::loader::parse_skill_md(&new_content, skill_dir).map(|parsed| {
-                SkillEntry {
+            crate::infrastructure::skills::loader::parse_skill_md(&new_content, skill_dir).map(
+                |parsed| SkillEntry {
                     skill_id: msg.skill_id.clone(),
                     name: parsed.name,
                     description: parsed.description,
@@ -440,8 +440,8 @@ pub(crate) fn skill_update_completion_system(
                     version: msg.new_version,
                     owner_agent_name: msg.skill_id.owner_agent_name.clone(),
                     self_updatable: parsed.self_updatable,
-                }
-            });
+                },
+            );
         if let Some(entry) = parsed_entry {
             skill_registry.refresh(entry);
         } else {
