@@ -167,6 +167,16 @@ pub struct WaitingForSessionInfo {
     pub return_tail_lines: usize,
 }
 
+/// Task 等待用户回复 ask_user 问题的状态信息
+/// 此组件添加到发起 ask_user 的 Task Entity 上
+#[derive(Component, Debug, Clone)]
+pub struct AskUserPending {
+    /// Tool call ID（用于返回结果给 LLM）
+    pub tool_call_id: Option<String>,
+    /// 发起问询的 Agent ID
+    pub agent_id: AgentId,
+}
+
 impl Task {
     /// 基于用户输入创建一个处于 Pending 状态的新任务（支持多轮对话）。
     pub fn from_user_input(

@@ -35,6 +35,8 @@ pub enum WaitingReason {
     },
     /// chat_with_agent 子任务等待父 Agent 下一轮调用
     ChatAgent,
+    /// ask_user 工具等待用户开放文本回复
+    AskUser,
 }
 
 /// 信号载荷

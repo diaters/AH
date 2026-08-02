@@ -300,7 +300,9 @@ fn waiting_reason_to_kind(reason: &WaitingReason) -> WaitingReasonKind {
         WaitingReason::ToolExecution
         | WaitingReason::Session { .. }
         | WaitingReason::SubTaskBatch { .. } => WaitingReasonKind::Tool,
-        WaitingReason::User | WaitingReason::Approval => WaitingReasonKind::User,
+        WaitingReason::User | WaitingReason::Approval | WaitingReason::AskUser => {
+            WaitingReasonKind::User
+        }
         WaitingReason::RetryBackoff => WaitingReasonKind::Retry,
         WaitingReason::Evaluator | WaitingReason::Summarization | WaitingReason::ChatAgent => {
             WaitingReasonKind::Other
@@ -1137,6 +1139,7 @@ mod tests {
             (WaitingReason::Agent, WaitingReasonKind::Agent),
             (WaitingReason::User, WaitingReasonKind::User),
             (WaitingReason::Approval, WaitingReasonKind::User),
+            (WaitingReason::AskUser, WaitingReasonKind::User),
             (WaitingReason::RetryBackoff, WaitingReasonKind::Retry),
             (WaitingReason::Evaluator, WaitingReasonKind::Other),
             (

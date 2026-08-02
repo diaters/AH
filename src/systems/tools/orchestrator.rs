@@ -1261,6 +1261,18 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::AskUser { .. }) => {
+            // ask_user 的 orchestrator 处理逻辑在后续任务实现；
+            // 此占位分支保证 match 穷尽，运行时返回明确错误而非静默。
+            spawn_tool_error(
+                commands,
+                request_entity,
+                request,
+                ToolError::InternalState(
+                    "AskUser action is not yet implemented in orchestrator".to_string(),
+                ),
+            );
+        }
         Err(e) => {
             spawn_tool_error(commands, request_entity, request, e);
         }
