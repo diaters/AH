@@ -6,13 +6,13 @@ use crate::prelude::*;
 use tracing::{debug, info};
 
 use crate::{
-    app::{Clock, MemoryConfig},
+    app::{Clock, FrontendRegistry, MemoryConfig},
     contracts::SessionBackend,
     domain::{
-        ClearTaskMessage, FailureReason, FinishTaskMessage, PreviousTaskStatus, RetryReadyMessage,
-        ShortTermMemory, SubTaskConfig, SummarizationRequestMessage, SummarizationTrigger, Task,
-        TaskStatus, TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage,
-        WaitingReason,
+        ClearTaskMessage, EngineEvent, EventTarget, FailureReason, FinishTaskMessage,
+        PreviousTaskStatus, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+        ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
     },
     ecs::EntityIndex,
     systems::NativeProcessBackend,
@@ -264,6 +264,8 @@ pub fn finish_task_system(
 pub fn clear_task_system(
     mut commands: Commands,
     mut index: ResMut<EntityIndex>,
+    registry: Res<FrontendRegistry>,
+    tasks: Query<&Task>,
     messages: Query<(Entity, &ClearTaskMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
@@ -309,6 +311,22 @@ pub fn clear_task_system(
             task_id = %msg.task_id,
             "clearing task via /clear command (no termination hooks)"
         );
+
+        // 推送前端移除通知（despawn 前读取任务路由信息）
+        let target = index
+            .get_task(&msg.task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .and_then(|t| t.routing_policy.output_channel.clone())
+            .map(|channel| EventTarget::Directed(vec![channel]));
+        if let Some(target) = target {
+            let event = EngineEvent::TaskCleared {
+                target,
+                task_id: msg.task_id,
+            };
+            for frontend in &registry.frontends {
+                frontend.push_event(event.clone());
+            }
+        }
 
         // 使用中心封装 despawn task（同步维护 EntityIndex）
         crate::ecs::despawn_task(&mut commands, &mut index, msg.task_id);
@@ -656,6 +674,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
         app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.add_systems(Update, clear_task_system);
 
@@ -740,6 +759,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
         app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
 
@@ -816,6 +836,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
         app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
 
@@ -886,5 +907,112 @@ mod tests {
             summarize.is_empty(),
             "/clear should not spawn SummarizationRequestMessage"
         );
+    }
+
+    #[test]
+    fn clear_task_system_pushes_task_cleared_event() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::app::FrontendRegistry;
+        use crate::domain::{
+            ChannelId, ClearTaskMessage, EngineEvent, EventTarget, Frontend, FrontendKind,
+            PreviousTaskStatus, ShortTermMemory, Task, TaskStatus, UserAction,
+        };
+        use crate::ecs::EntityIndex;
+
+        struct MockFrontend {
+            events: Arc<Mutex<Vec<EngineEvent>>>,
+        }
+        impl Frontend for MockFrontend {
+            fn kind(&self) -> FrontendKind {
+                FrontendKind::Tui
+            }
+            fn push_event(&self, event: EngineEvent) {
+                self.events.lock().unwrap().push(event);
+            }
+            fn poll_actions(&self) -> Vec<UserAction> {
+                vec![]
+            }
+        }
+
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(MockFrontend {
+                events: events.clone(),
+            })],
+        });
+        app.init_resource::<EntityIndex>();
+        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.add_systems(Update, clear_task_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Task {
+                    id: task_id,
+                    content: "to clear".to_string(),
+                    creator: uuid::Uuid::nil(),
+                    delegate: None,
+                    status: TaskStatus::Running,
+                    pending_confirmation_id: None,
+                    input_summary: "test".to_string(),
+                    result_summary: String::new(),
+                    priority: 0,
+                    created_at: now,
+                    updated_at: now,
+                    retry_count: 0,
+                    max_retries: 3,
+                    next_retry_at: None,
+                    last_error: None,
+                    multi_turn: false,
+                    parent_task_id: None,
+                    batch_id: None,
+                    origin_channel: Some(channel.clone()),
+                    routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
+                    last_evaluated_turn: None,
+                },
+                ShortTermMemory::default(),
+                PreviousTaskStatus(TaskStatus::Pending),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        app.world_mut().spawn(ClearTaskMessage { task_id });
+
+        app.update();
+
+        let events = events.lock().unwrap();
+        match events
+            .iter()
+            .find(|e| matches!(e, EngineEvent::TaskCleared { .. }))
+        {
+            Some(EngineEvent::TaskCleared {
+                target,
+                task_id: tid,
+            }) => {
+                assert_eq!(*tid, task_id);
+                match target {
+                    EventTarget::Directed(v) => {
+                        assert_eq!(v.len(), 1);
+                        assert_eq!(v[0].frontend, FrontendKind::Tui);
+                    }
+                    other => panic!("expected Directed target, got {other:?}"),
+                }
+            }
+            other => panic!("expected TaskCleared event, got {other:?}"),
+        }
     }
 }

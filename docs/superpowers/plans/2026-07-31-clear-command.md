@@ -825,7 +825,58 @@ git commit -m "test: 新增 /clear 通道隔离测试"
 
 ---
 
-### 任务 7：全量验证
+### 任务 7：前端同步 — TUI 移除已清除任务
+
+**背景：** `clear_task_system` 直接 despawn task entity，但 TUI 的任务列表仅通过 `TaskStatusChanged` 增改、仅通过终态清理移除，因此 `/clear` 后 TUI 会残留已清除任务的展示（任务面板 + 等待指示器）。
+
+**文件：**
+- 修改：`src/domain/frontend.rs`
+- 修改：`src/systems/transform/task_lifecycle.rs`
+- 修改：`src/tui/app.rs`
+
+- [x] **步骤 1：新增 `EngineEvent::TaskCleared`**
+
+在 `src/domain/frontend.rs` 的 `EngineEvent` 枚举中新增：
+
+```rust
+/// 任务被 /clear 移除，前端应同步移除对应展示
+TaskCleared {
+    target: EventTarget,
+    task_id: TaskId,
+},
+```
+
+并在 `target()` 方法中补充分支 `Self::TaskCleared { target, .. } => target`。
+
+- [x] **步骤 2：`clear_task_system` 推送移除事件**
+
+`clear_task_system` 新增 `registry: Res<FrontendRegistry>` 与 `tasks: Query<&Task>`，在 `despawn_task` 之前根据 `routing_policy.output_channel` 构造 `EngineEvent::TaskCleared` 并推送给所有前端（IM 通道的 `push_event` 已有 `_ => {}` 兜底，自动忽略）。
+
+- [x] **步骤 3：TUI 处理 `TaskCleared`**
+
+`src/tui/app.rs` 的 `handle_engine_event` 新增分支：从 `self.tasks` 移除该 task 及其子任务（`parent_id == task_id`）。
+
+- [x] **步骤 4：更新与新增测试**
+
+- 既有 3 个 `clear_task_system` 单测补充 `FrontendRegistry` resource
+- 新增 `clear_task_system_pushes_task_cleared_event`（MockFrontend 捕获事件，断言 `target` 指向任务路由通道）
+- 新增 `task_cleared_removes_task_and_children`（TUI 侧）
+
+- [x] **步骤 5：运行测试与静态检查**
+
+运行：`cargo test --all-features`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --all --check`
+预期：全部 PASS
+
+- [x] **步骤 6：Commit**
+
+```bash
+git add src/domain/frontend.rs src/systems/transform/task_lifecycle.rs src/tui/app.rs docs/superpowers/specs/2026-07-31-clear-command-design.md
+git commit -m "feat: /clear 后推送 EngineEvent::TaskCleared，TUI 同步移除残留任务展示"
+```
+
+---
+
+### 任务 8：全量验证
 
 - [ ] **步骤 1：运行全量测试**
 

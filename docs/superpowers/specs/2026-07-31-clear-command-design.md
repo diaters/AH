@@ -54,8 +54,9 @@ pub struct ClearTaskMessage {
 3. Despawn 关联的 `ToolCallingState` entity
 4. Despawn task entity 自身（含 STM、PreviousTaskStatus 等所有附属组件）
 5. Despawn `ClearTaskMessage`
+6. 在 despawn 前读取任务 `routing_policy.output_channel`，向该通道推送 `EngineEvent::TaskCleared`，通知前端移除对应展示（TUI 据此删除任务及其子任务）
 
-**关键属性**：despawn 不会触发 `Changed<Task>`，因此 `task_termination_system`、`task_completion_hook_system` 均不会被触发，summarization、experience collection 等下游操作也不会执行。
+**关键属性**：despawn 不会触发 `Changed<Task>`，因此 `task_termination_system`、`task_completion_hook_system` 均不会被触发，summarization、experience collection 等下游操作也不会执行。前端移除通知（`EngineEvent::TaskCleared`）不属于终态处理链路，仅用于同步展示。
 
 ### 5. 系统注册
 
@@ -67,6 +68,8 @@ pub struct ClearTaskMessage {
 - `clear_task_system` 正确 despawn task 及 ToolCallingState
 - `clear_task_system` 不触发 `TaskTerminatedMessage`
 - `clear_task_system` 不触发 `SummarizationRequestMessage`
+- `clear_task_system` 推送 `EngineEvent::TaskCleared`（含正确的 `target` 与 `task_id`）
+- TUI 收到 `TaskCleared` 后移除任务及其子任务展示
 - 通道隔离：不同通道的 `/clear` 不影响其他通道的 task
 
 ## 涉及文件
@@ -77,5 +80,7 @@ pub struct ClearTaskMessage {
 | `src/domain/message.rs` | 新增 `ClearTaskMessage` |
 | `src/domain/mod.rs` | 导出 `ClearTaskMessage` |
 | `src/systems/command.rs` | 处理 `ClearCurrentTask`，spawn `ClearTaskMessage` |
-| `src/systems/transform/task_lifecycle.rs` | 新增 `clear_task_system` |
+| `src/systems/transform/task_lifecycle.rs` | 新增 `clear_task_system`，推送 `EngineEvent::TaskCleared` |
 | `src/systems/mod.rs` | 注册 `clear_task_system` |
+| `src/domain/frontend.rs` | 新增 `EngineEvent::TaskCleared` 变体 |
+| `src/tui/app.rs` | `handle_engine_event` 处理 `TaskCleared`，移除任务及子任务展示 |

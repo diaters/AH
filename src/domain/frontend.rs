@@ -154,6 +154,11 @@ pub enum EngineEvent {
         completed: usize,
         total: usize,
     },
+    /// 任务被 /clear 移除，前端应同步移除对应展示
+    TaskCleared {
+        target: EventTarget,
+        task_id: TaskId,
+    },
     /// 工具调用开始（不含结果）
     ToolCallStarted {
         target: EventTarget,
@@ -229,6 +234,7 @@ impl EngineEvent {
             Self::TaskStatusChanged { target, .. } => target,
             Self::BatchProgress { target, .. } => target,
             Self::ToolCallStarted { target, .. } => target,
+            Self::TaskCleared { target, .. } => target,
         }
     }
 }

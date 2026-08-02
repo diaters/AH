@@ -699,6 +699,11 @@ impl App {
                 // 更新子任务进度
                 self.update_all_subtask_progress();
             }
+            EngineEvent::TaskCleared { task_id, .. } => {
+                // /clear 销毁任务后，同步移除主任务及其子任务展示
+                self.tasks
+                    .retain(|t| t.id != task_id && t.parent_id.is_none_or(|pid| pid != task_id));
+            }
             EngineEvent::BatchProgress { .. } => {}
             EngineEvent::ToolCallStarted {
                 task_id,
@@ -1582,5 +1587,47 @@ mod tests {
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(app.tasks[0].agent_name, Some("TestAgent".to_string()));
         assert_eq!(app.tasks[0].waiting_reason, Some(WaitingReasonKind::Tool));
+    }
+
+    #[test]
+    fn task_cleared_removes_task_and_children() {
+        let mut app = test_app();
+        let main_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+            name: "main task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: None,
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: Some(WaitingReasonKind::User),
+        });
+        app.handle_engine_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Broadcast,
+            task_id: child_id,
+            name: "child task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: None,
+            result: None,
+            parent_id: Some(main_id),
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        assert_eq!(app.tasks.len(), 2);
+
+        app.handle_engine_event(EngineEvent::TaskCleared {
+            target: EventTarget::Broadcast,
+            task_id: main_id,
+        });
+
+        assert!(
+            app.tasks.is_empty(),
+            "TaskCleared 后应移除主任务及其子任务展示"
+        );
     }
 }
