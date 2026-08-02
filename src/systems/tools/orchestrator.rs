@@ -1409,7 +1409,10 @@ fn spawn_experience_candidate_result(
     commands.entity(request_entity).despawn();
 }
 
-/// 恢复 Task 状态（从 Waiting 恢复到 Ready 或 Waiting(ToolExecution)）
+/// 恢复 Task 状态（从 Waiting(ToolExecution) 恢复到 Ready 或保持 Waiting(ToolExecution)）
+///
+/// 仅处理 Waiting(ToolExecution) 状态。其他 Waiting 变体（AskUser、ChatAgent、
+/// SubTaskBatch 等）由各自的发起系统主动挂起，不应被本函数覆盖。
 pub fn restore_task_after_tool(
     tasks: &mut Query<(Entity, &mut Task)>,
     calling_states: &Query<(Entity, &ToolCallingState)>,
@@ -1418,7 +1421,11 @@ pub fn restore_task_after_tool(
 ) {
     // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
     if let Some((_, mut task)) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
-        if !matches!(task.status, TaskStatus::Waiting(_)) {
+        // 仅恢复 Waiting(ToolExecution)；其他 Waiting 变体由各自系统管理，不在此处覆盖
+        if !matches!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::ToolExecution)
+        ) {
             return;
         }
         let has_calling_state = calling_states.iter().any(|(_, cs)| cs.task_id == task.id);
