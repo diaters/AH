@@ -172,7 +172,7 @@ pub struct WaitingForSessionInfo {
 #[derive(Component, Debug, Clone)]
 pub struct AskUserPending {
     /// Tool call ID（用于返回结果给 LLM）
-    pub tool_call_id: Option<String>,
+    pub tool_call_id: String,
     /// 发起问询的 Agent ID
     pub agent_id: AgentId,
 }
