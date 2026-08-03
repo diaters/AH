@@ -178,6 +178,18 @@ pub struct AskUserPending {
 }
 
 impl Task {
+    /// 任务结果应送达的通道：优先路由策略的 `output_channel`，回退到发起来源 `origin_channel`。
+    ///
+    /// 对话任务经 `from_user_input` 同时设置 `origin_channel` 与
+    /// `routing_policy.output_channel`；scheduled 任务仅有 `routing_policy.output_channel`
+    /// （`origin_channel` 为 None）。统一从该方法读取可保证两类任务行为一致。
+    pub fn delivery_channel(&self) -> Option<&ChannelId> {
+        self.routing_policy
+            .output_channel
+            .as_ref()
+            .or(self.origin_channel.as_ref())
+    }
+
     /// 基于用户输入创建一个处于 Pending 状态的新任务（支持多轮对话）。
     pub fn from_user_input(
         content: impl Into<String>,
@@ -500,6 +512,52 @@ mod tests {
         assert_eq!(policy.output_channel, Some(channel.clone()));
         assert_eq!(policy.approval_channel, Some(channel));
         assert_eq!(policy.approval_context.as_deref(), Some("scheduled task"));
+    }
+
+    #[test]
+    fn delivery_channel_prefers_routing_output_channel() {
+        let base = ChannelId {
+            frontend: crate::domain::FrontendKind::Tui,
+            user_id: "base".to_string(),
+            thread_id: None,
+        };
+        let output = ChannelId {
+            frontend: crate::domain::FrontendKind::QQ,
+            user_id: "group:xxx".to_string(),
+            thread_id: None,
+        };
+        // 模拟 scheduled 任务：origin 有值但路由策略显式指定了 output_channel。
+        let task = Task {
+            routing_policy: TaskRoutingPolicy {
+                output_channel: Some(output.clone()),
+                approval_channel: None,
+                approval_context: None,
+            },
+            ..Task::from_user_input("test", 3, base)
+        };
+        assert_eq!(task.delivery_channel(), Some(&output));
+    }
+
+    #[test]
+    fn delivery_channel_falls_back_to_origin_channel() {
+        let origin = ChannelId {
+            frontend: crate::domain::FrontendKind::Tui,
+            user_id: "origin".to_string(),
+            thread_id: None,
+        };
+        // 事件任务：无 output_channel，应回退到发起来源。
+        let task = Task {
+            routing_policy: TaskRoutingPolicy::event(None, None),
+            ..Task::from_user_input("test", 3, origin.clone())
+        };
+        assert_eq!(task.delivery_channel(), Some(&origin));
+    }
+
+    #[test]
+    fn delivery_channel_none_when_no_channel_configured() {
+        // trigger 任务：既无 output_channel 也无来源会话。
+        let task = Task::from_trigger("webhook", 3, TaskRoutingPolicy::event(None, None));
+        assert_eq!(task.delivery_channel(), None);
     }
 
     #[test]
