@@ -559,7 +559,8 @@ pub struct ReloadTriggersMessage;
 #[derive(Debug, Clone, Component)]
 pub struct PendingChannelSend {
     pub channel: String,
-    /// 显式指定的目标；为 None 时由 dispatch 系统回退到 task 的 origin_channel。
+    /// 显式指定的目标；为 None 时由 dispatch 系统回退到 task 的路由通道
+    /// （优先 `routing_policy.output_channel`，其次 `origin_channel`）。
     pub recipient: Option<String>,
     pub content: String,
     pub attachments: Vec<crate::channels::ChannelAttachment>,
