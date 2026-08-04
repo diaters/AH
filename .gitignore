@@ -30,6 +30,10 @@ Thumbs.db
 # Node (for markdownlint)
 node_modules/
 
+# Python (for plugin scripts)
+__pycache__/
+*.pyc
+
 # Build artifacts
 /dist/
 /build/
@@ -57,3 +61,5 @@ channels.toml
 triggers.toml
 agents.toml
 providers.toml
+
+plugins/bug-workflow

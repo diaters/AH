@@ -133,9 +133,10 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
     ));
 }
 
-/// Test: Task completion triggers summarization when ShortTermMemory has entries
+/// Test: Task completion does NOT trigger summarization (trigger was removed)
+/// STM has no consumer after terminal state.
 #[test]
-fn task_completion_triggers_summarization() {
+fn task_completion_does_not_trigger_summarization() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let summarization_called = executor.summarization_called.clone();
@@ -216,10 +217,11 @@ fn task_completion_triggers_summarization() {
     let task = task.unwrap();
     assert_eq!(task.status, TaskStatus::Done, "Task should be Done");
 
-    // Verify summarization was triggered
+    // Verify summarization was NOT triggered on task completion
+    // (TaskComplete trigger was removed as STM has no consumer after terminal state)
     assert!(
-        summarization_called.load(std::sync::atomic::Ordering::SeqCst),
-        "Summarization should be triggered on task completion"
+        !summarization_called.load(std::sync::atomic::Ordering::SeqCst),
+        "Summarization should NOT be triggered on task completion"
     );
 }
 
@@ -371,9 +373,9 @@ fn summarization_preserves_terminal_task_status() {
 }
 
 /// Test: ShortTermMemory without entries before execution gets entries during execution
-/// and triggers summarization
+/// but does NOT trigger summarization on task completion (TaskComplete trigger was removed)
 #[test]
-fn execution_populates_memory_and_triggers_summarization() {
+fn execution_populates_memory_but_does_not_trigger_summarization() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor = Arc::new(SummarizationMockExecutor::new());
     let _executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
@@ -433,10 +435,11 @@ fn execution_populates_memory_and_triggers_summarization() {
     let task = task.unwrap();
     assert_eq!(task.status, TaskStatus::Done, "Task should be Done");
 
-    // Verify summarization was triggered (memory had entries after execution)
+    // Verify summarization was NOT triggered (TaskComplete trigger was removed:
+    // STM has no consumer after terminal state, so no summarization needed)
     assert!(
-        summarization_called.load(std::sync::atomic::Ordering::SeqCst),
-        "Summarization should be triggered when memory has entries after task completion"
+        !summarization_called.load(std::sync::atomic::Ordering::SeqCst),
+        "Summarization should NOT be triggered on task completion even with memory entries"
     );
 }
 
