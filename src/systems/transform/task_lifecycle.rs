@@ -9,9 +9,9 @@ use crate::{
     app::{Clock, FrontendRegistry, MemoryConfig},
     contracts::SessionBackend,
     domain::{
-        ClearTaskMessage, EngineEvent, EventTarget, FailureReason, FinishTaskMessage,
-        PreviousTaskStatus, RetryReadyMessage, ShortTermMemory, SubTaskConfig,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, TaskTerminatedMessage,
+        Agent, ClearTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
+        EventTarget, FailureReason, FinishTaskMessage, PendingDispatch, PreviousTaskStatus,
+        RetryReadyMessage, ShortTermMemory, SubTaskConfig, Task, TaskStatus, TaskTerminatedMessage,
         ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
     },
     ecs::EntityIndex,
@@ -34,18 +34,19 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
 
 /// 重试就绪 System
 ///
-/// 将到期重试的任务标记为 Ready。
+/// 将到期重试的任务标记为 Ready，并重新附加 PendingDispatch
+/// 使任务进入调度队列（重试路径不会自动进入调度）。
 pub fn retry_ready_system(
     clock: Res<Clock>,
     mut commands: Commands,
     index: Res<EntityIndex>,
+    agents: Query<&Agent>,
     messages: Query<(Entity, &RetryReadyMessage)>,
     mut tasks: Query<&mut Task>,
 ) {
     for (entity, message) in &messages {
-        if let Some(mut task) = index
-            .get_task(&message.task_id)
-            .and_then(|e| tasks.get_mut(e).ok())
+        if let Some(task_entity) = index.get_task(&message.task_id)
+            && let Ok(mut task) = tasks.get_mut(task_entity)
         {
             debug!(
                 event = "RetryReady",
@@ -53,9 +54,52 @@ pub fn retry_ready_system(
                 retry_count = task.retry_count,
                 max_retries = task.max_retries,
                 last_error = ?task.last_error,
+                agent_delegate = ?task.delegate,
                 "marking task ready for retry"
             );
             task.mark_ready_for_retry(clock.0);
+
+            // 重新附加 PendingDispatch，使任务进入调度队列
+            if let Some(agent_id) = task.delegate {
+                // 有 delegate：DirectDelegate 策略，跳过 Brain LLM 决策
+                let agent_name = agents
+                    .iter()
+                    .find(|a| a.id == agent_id)
+                    .map(|a| a.profile.name.clone());
+                if let Some(name) = agent_name {
+                    debug!(
+                        event = "RetryDirectDispatch",
+                        task_id = %task.id,
+                        agent_name = %name,
+                        "re-dispatching task via DirectDelegate on retry"
+                    );
+                    commands.entity(task_entity).insert(PendingDispatch {
+                        kind: DispatchKind::Task,
+                        hint: DispatchHint {
+                            strategy: DispatchStrategy::DirectDelegate,
+                            preferred_agent_name: Some(name),
+                            required_skill_id: None,
+                            agent_spawn_spec: None,
+                        },
+                    });
+                }
+            } else {
+                // 无 delegate：走 BrainLlm 重新调度
+                debug!(
+                    event = "RetryBrainLlm",
+                    task_id = %task.id,
+                    "re-dispatching task via BrainLlm on retry"
+                );
+                commands.entity(task_entity).insert(PendingDispatch {
+                    kind: DispatchKind::Task,
+                    hint: DispatchHint {
+                        strategy: DispatchStrategy::BrainLlm,
+                        preferred_agent_name: None,
+                        required_skill_id: None,
+                        agent_spawn_spec: None,
+                    },
+                });
+            }
         }
 
         commands.entity(entity).despawn();
@@ -72,7 +116,7 @@ pub fn retry_ready_system(
 /// 幂等化的纵深防御层。
 pub fn task_termination_system(
     mut commands: Commands,
-    config: Res<MemoryConfig>,
+    _config: Res<MemoryConfig>,
     mut tasks: Query<(TaskTerminationQuery, &mut PreviousTaskStatus), Changed<Task>>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
@@ -176,42 +220,9 @@ pub fn task_termination_system(
             });
         }
 
-        // 任务完成时触发摘要
-        if let Some(stm) = memory
-            && !stm.entries.is_empty()
-        {
-            let content: String = stm
-                .entries
-                .iter()
-                .map(|e| format!("{:?}: {}", e.role, e.content))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            debug!(
-                event = "SummarizationTriggered",
-                task_id = %task.id,
-                trigger = "TaskComplete",
-                stm_entries = stm.entries.len(),
-                stm_tokens = stm.estimated_tokens,
-                content_len = content.len(),
-                target_tokens = config.summary_target_tokens,
-                "triggering summarization on task completion"
-            );
-            info!(
-                event = "SummarizationTriggered",
-                task_id = %task.id,
-                trigger = "TaskComplete",
-                stm_entries = stm.entries.len(),
-                "触发摘要：STM {} 条目",
-                stm.entries.len()
-            );
-            commands.spawn(SummarizationRequestMessage {
-                task_id: task.id,
-                content_to_summarize: content,
-                target_tokens: config.summary_target_tokens,
-                trigger: SummarizationTrigger::TaskComplete,
-            });
-        }
+        // TaskComplete 触发的摘要已移除：任务终态后 STM 无后续消费者，
+        // 摘要写入 summary_prefix 后不会被读取，浪费 LLM tokens 并产生无用 IM 通知。
+        // TokenThreshold 与 UserCommand 两种触发路径仍然保留。
     }
 }
 

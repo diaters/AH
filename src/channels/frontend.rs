@@ -226,52 +226,10 @@ impl Frontend for ChannelFrontend {
                     self.send_message(msg);
                 }
             }
-            EngineEvent::ToolCallStarted {
-                target,
-                task_id,
-                agent_name,
-                tool_name,
-                tool_input_summary,
-            } => {
-                let targets = match target {
-                    EventTarget::Broadcast => return,
-                    EventTarget::Directed(v) => v,
-                };
-                let recipients: Vec<ChannelId> = targets
-                    .into_iter()
-                    .filter(|cid| self.matches(cid))
-                    .collect();
-                if recipients.is_empty() {
-                    return;
-                }
-                let content = if tool_input_summary.is_empty() {
-                    format!(
-                        "[{}] 🔧 {} 调用 {}",
-                        task_short_id(task_id),
-                        agent_name,
-                        tool_name
-                    )
-                } else {
-                    format!(
-                        "[{}] 🔧 {} 调用 {}: {}",
-                        task_short_id(task_id),
-                        agent_name,
-                        tool_name,
-                        tool_input_summary
-                    )
-                };
-                for channel_id in recipients {
-                    let msg = ChannelOutboundMessage {
-                        recipient: channel_id.user_id,
-                        thread_id: channel_id.thread_id,
-                        content: content.clone(),
-                        parse_mode: None,
-                        reply_markup: None,
-                        attachments: vec![],
-                    };
-                    self.send_message(msg);
-                }
-            }
+            // ToolCallStarted 不推送到 IM 通道：
+            // 面向开发者的调试信息，对 IM 用户无意义，徒增通知噪音。
+            // TUI 前端仍可通过其他路径展示工具调用状态。
+            EngineEvent::ToolCallStarted { .. } => {}
             _ => {}
         }
     }
@@ -572,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_tool_call_started() {
+    fn tool_call_started_does_not_push_to_channel() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
         let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
@@ -587,33 +545,10 @@ mod tests {
             tool_name: "shell_exec".to_string(),
             tool_input_summary: "ls -la".to_string(),
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(
-            msg.content,
-            "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec: ls -la"
+        assert!(
+            rx.try_recv().is_err(),
+            "ToolCallStarted should not push to IM channel"
         );
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn renders_tool_call_started_without_summary() {
-        use uuid::Uuid;
-        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
-        fe.push_event(EngineEvent::ToolCallStarted {
-            target: EventTarget::Directed(vec![ChannelId {
-                frontend: FrontendKind::Telegram,
-                user_id: "u1".to_string(),
-                thread_id: None,
-            }]),
-            task_id,
-            agent_name: "TestAgent".to_string(),
-            tool_name: "shell_exec".to_string(),
-            tool_input_summary: String::new(),
-        });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4] 🔧 TestAgent 调用 shell_exec");
-        assert!(rx.try_recv().is_err());
     }
 
     #[test]
