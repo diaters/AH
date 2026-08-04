@@ -61,7 +61,7 @@ pub fn retry_ready_system(
 
             // 重新附加 PendingDispatch，使任务进入调度队列
             if let Some(agent_id) = task.delegate {
-                // 有 delegate：DirectDelegate 策略，跳过 Brain LLM 决策
+                // 有 delegate：尝试 DirectDelegate 策略
                 let agent_name = agents
                     .iter()
                     .find(|a| a.id == agent_id)
@@ -78,6 +78,23 @@ pub fn retry_ready_system(
                         hint: DispatchHint {
                             strategy: DispatchStrategy::DirectDelegate,
                             preferred_agent_name: Some(name),
+                            required_skill_id: None,
+                            agent_spawn_spec: None,
+                        },
+                    });
+                } else {
+                    // delegate 指向的 agent 不存在（可能已被销毁），fallback 到 BrainLlm
+                    debug!(
+                        event = "RetryDelegateAgentNotFound",
+                        task_id = %task.id,
+                        delegate_agent_id = %agent_id,
+                        "delegate agent not found, falling back to BrainLlm dispatch on retry"
+                    );
+                    commands.entity(task_entity).insert(PendingDispatch {
+                        kind: DispatchKind::Task,
+                        hint: DispatchHint {
+                            strategy: DispatchStrategy::BrainLlm,
+                            preferred_agent_name: None,
                             required_skill_id: None,
                             agent_spawn_spec: None,
                         },

@@ -6,14 +6,24 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::domain::{
-    CreateTaskMessage, RetryReadyMessage, Signal, SignalPayload, TaskRoutingPolicy,
+    CreateTaskMessage, RetryReadyMessage, Signal, SignalPayload, Task, TaskRoutingPolicy,
     TriggerTaskMessage, UserInputMessage,
 };
+use crate::ecs::EntityIndex;
 
 /// 信号转换 System
 ///
 /// 将 Signal 转换为对应的 Message。
-pub fn signal_ingest_system(mut commands: Commands, signals: Query<(Entity, &Signal)>) {
+///
+/// 对于 `RetryWakeup` Signal，在 spawn `RetryReadyMessage` 之前清除 `task.next_retry_at`，
+/// 防止 `retry_wakeup_system` 在下一帧再次触发（因为 `retry_wakeup_system` 和本系统
+/// 在同一 `HarnessSet::Signal` 集合中运行，执行顺序不确定）。
+pub fn signal_ingest_system(
+    mut commands: Commands,
+    index: Res<EntityIndex>,
+    mut tasks: Query<&mut Task>,
+    signals: Query<(Entity, &Signal)>,
+) {
     for (entity, signal) in &signals {
         match &signal.payload {
             SignalPayload::UserInput(content) => {
@@ -41,6 +51,13 @@ pub fn signal_ingest_system(mut commands: Commands, signals: Query<(Entity, &Sig
                 }
             }
             SignalPayload::RetryWakeup(task_id) => {
+                // 立即清除 next_retry_at，防止 retry_wakeup_system 在下一帧再次触发
+                // （因为 retry_wakeup_system 和本系统在同一集合中运行，顺序不确定）
+                if let Some(task_entity) = index.get_task(task_id)
+                    && let Ok(mut task) = tasks.get_mut(task_entity)
+                {
+                    task.next_retry_at = None;
+                }
                 debug!(
                     event = "SignalIngested",
                     signal_source = ?signal.source,
