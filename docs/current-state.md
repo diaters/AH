@@ -74,6 +74,14 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always` 授权的权限会立即复用，后续同工具请求直接执行
 - 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务
 
+#### 工具权限决策链路
+
+- 工具权限决策采用三层回退：`agent.overrides` → `agent.default_permission`（显式配置时）→ `ToolDefinition.default_permission`
+- `Agent::effective_permission(tool_name, registry)` 是权限查询单一入口
+- `default_permission_explicit` 字段区分显式/隐式 Confirm，仅隐式 Confirm 回退到工具默认
+- 子 Agent 权限继承：父 Confirm → 子 Confirm（不再降为 Allow）
+- `EngineEvent::PermissionAudit` 审计事件覆盖 dispatch / async_dispatch / confirmation / approval 路径
+
 #### 异步工具桥
 
 - 异步工具桥已落地：`kind() == Async` 的工具请求经「dispatch 挂起 → tokio worker 异步执行
