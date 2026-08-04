@@ -128,6 +128,7 @@ mod tests {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: permission,
+                default_permission_explicit: true,
                 overrides: std::collections::HashMap::new(),
             },
             system_prompt: None,

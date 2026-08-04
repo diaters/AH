@@ -538,6 +538,7 @@ mod tests {
                 bound_task_id: Some(task_id),
                 tool_permissions: AgentToolPermissions {
                     default_permission: ToolPermission::Confirm,
+                    default_permission_explicit: true,
                     overrides: HashMap::new(),
                 },
                 system_prompt: None,

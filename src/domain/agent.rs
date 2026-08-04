@@ -8,6 +8,17 @@ use std::collections::HashMap;
 
 use super::{AgentId, TaskId, ToolPermission};
 
+/// 权限来源标识，用于审计与调试
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PermissionSource {
+    /// Agent 的 overrides 显式配置（运行时 grant 或 agents.toml 显式）
+    AgentOverride,
+    /// Agent 的 default_permission
+    AgentDefault,
+    /// ToolDefinition.default_permission（最后回退层）
+    ToolDefault,
+}
+
 /// Agent 能力描述
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentCapabilities {
@@ -34,6 +45,10 @@ pub enum AgentKind {
 pub struct AgentToolPermissions {
     /// 未显式配置的 Tool 默认权限
     pub default_permission: ToolPermission,
+    /// default_permission 是否由配置显式设置（true=agents.toml 写过 / 运行时改过；
+    /// false=结构默认值 Confirm）。仅当 false 且 default==Confirm 时回退到 tool_default。
+    #[serde(default)]
+    pub default_permission_explicit: bool,
     /// 针对特定 Tool 的覆盖项
     pub overrides: HashMap<String, ToolPermission>,
 }
@@ -52,6 +67,7 @@ impl Default for AgentToolPermissions {
     fn default() -> Self {
         Self {
             default_permission: ToolPermission::Confirm,
+            default_permission_explicit: false,
             overrides: HashMap::new(),
         }
     }
@@ -59,8 +75,13 @@ impl Default for AgentToolPermissions {
 
 impl From<super::AgentToolsConfig> for AgentToolPermissions {
     fn from(config: super::AgentToolsConfig) -> Self {
+        let (default_permission, default_permission_explicit) = match config.default_permission {
+            Some(p) => (p, true),
+            None => (ToolPermission::Confirm, false),
+        };
         Self {
-            default_permission: config.default_permission.unwrap_or(ToolPermission::Confirm),
+            default_permission,
+            default_permission_explicit,
             overrides: config.overrides,
         }
     }
@@ -129,11 +150,43 @@ mod tests {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Confirm,
+                default_permission_explicit: true,
                 overrides,
             },
             system_prompt: None,
         };
 
         assert!(agent.has_permission("shell_exec"));
+    }
+
+    #[test]
+    fn default_permission_explicit_defaults_to_false() {
+        let perms = AgentToolPermissions::default();
+        assert!(!perms.default_permission_explicit);
+        assert_eq!(perms.default_permission, ToolPermission::Confirm);
+    }
+
+    #[test]
+    fn from_agent_tools_config_some_marks_explicit() {
+        use crate::domain::AgentToolsConfig;
+        let config = AgentToolsConfig {
+            default_permission: Some(ToolPermission::Allow),
+            overrides: std::collections::HashMap::new(),
+        };
+        let perms = AgentToolPermissions::from(config);
+        assert!(perms.default_permission_explicit);
+        assert_eq!(perms.default_permission, ToolPermission::Allow);
+    }
+
+    #[test]
+    fn from_agent_tools_config_none_marks_implicit() {
+        use crate::domain::AgentToolsConfig;
+        let config = AgentToolsConfig {
+            default_permission: None,
+            overrides: std::collections::HashMap::new(),
+        };
+        let perms = AgentToolPermissions::from(config);
+        assert!(!perms.default_permission_explicit);
+        assert_eq!(perms.default_permission, ToolPermission::Confirm);
     }
 }

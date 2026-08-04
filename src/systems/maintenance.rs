@@ -385,6 +385,7 @@ fn handle_spawn_request(
     // 构建 tool_permissions: 子 Agent 默认拒绝，仅显式允许的工具可用
     let tool_permissions = AgentToolPermissions {
         default_permission: ToolPermission::Deny,
+        default_permission_explicit: true,
         overrides: allowed_tools
             .iter()
             .map(|t| (t.clone(), ToolPermission::Allow))
