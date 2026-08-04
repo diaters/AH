@@ -10,11 +10,12 @@ use crate::{
     app::{Clock, FrontendRegistry, HarnessSettings},
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
-        ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
-        ExperienceStore, PendingExperienceHooks, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus,
-        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolPermission, WaitingReason, WorkItem,
+        ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
+        ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
+        PermissionSource, ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory,
+        SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
+        WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -123,6 +124,21 @@ pub fn tool_dispatch_system(
                 required_tag = %required_tag,
                 "agent lacks required tag for tool"
             );
+            // 权限审计：tag 拒绝路径。source 取 ToolDefault（tag 要求来自 ToolDefinition）。
+            let output_channel = index
+                .get_task(&request.request.task_id)
+                .and_then(|e| tasks.get(e).ok())
+                .and_then(|(_, t)| t.routing_policy.output_channel.clone());
+            emit_permission_audit(
+                frontend_registry,
+                output_channel.as_ref(),
+                agent.id,
+                &agent.profile.name,
+                &tool_name,
+                PermissionAction::Deny,
+                PermissionSource::ToolDefault,
+                PermissionAuditContext::TagDenied,
+            );
             spawn_tool_error(
                 &mut commands,
                 entity,
@@ -135,7 +151,14 @@ pub fn tool_dispatch_system(
             continue;
         }
 
-        let (permission, _source) = agent.effective_permission(&tool_name, Some(&registry));
+        let (permission, source) = agent.effective_permission(&tool_name, Some(&registry));
+
+        // 预先提取 output_channel 供 PermissionAudit 使用（避免在三个 match 分支
+        // 中各做一次 task 查询）。clone 后是 owned 值，无 borrow 约束。
+        let output_channel = index
+            .get_task(&request.request.task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .and_then(|(_, t)| t.routing_policy.output_channel.clone());
 
         debug!(
             event = "ToolDispatch",
@@ -150,6 +173,18 @@ pub fn tool_dispatch_system(
 
         match permission {
             ToolPermission::Allow => {
+                // 权限审计：Allow 决策
+                emit_permission_audit(
+                    frontend_registry,
+                    output_channel.as_ref(),
+                    agent.id,
+                    &agent.profile.name,
+                    &tool_name,
+                    PermissionAction::Allow,
+                    source,
+                    PermissionAuditContext::Dispatch,
+                );
+
                 // 直接执行
                 let Some(executor) = executors.get(&tool_name) else {
                     warn!(
@@ -290,6 +325,19 @@ pub fn tool_dispatch_system(
                     continue;
                 }
 
+                // 权限审计：Confirm 决策（已通过 already_pending 去重，
+                // 此处为本次请求的确认决策）。
+                emit_permission_audit(
+                    frontend_registry,
+                    output_channel.as_ref(),
+                    agent.id,
+                    &agent.profile.name,
+                    &tool_name,
+                    PermissionAction::Confirm,
+                    source,
+                    PermissionAuditContext::Dispatch,
+                );
+
                 // Find the task to check parent_task_id
                 // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
                 let task_for_approval = index
@@ -403,6 +451,18 @@ pub fn tool_dispatch_system(
                 request.pending_confirmation_options = Some(options);
             }
             ToolPermission::Deny => {
+                // 权限审计：Deny 决策
+                emit_permission_audit(
+                    frontend_registry,
+                    output_channel.as_ref(),
+                    agent.id,
+                    &agent.profile.name,
+                    &tool_name,
+                    PermissionAction::Deny,
+                    source,
+                    PermissionAuditContext::Dispatch,
+                );
+
                 // 拒绝执行
                 warn!(
                     event = "ToolExecutionDenied",
@@ -427,6 +487,39 @@ pub fn tool_dispatch_system(
                 );
             }
         }
+    }
+}
+
+/// 推送 `EngineEvent::PermissionAudit` 到所有前端。
+///
+/// 仅当 `output_channel` 为 `Some` 时推送——无 output_channel 的 task
+/// （如事件任务）不广播审计事件，避免向无关通道泄漏。这与 `ToolCallStarted`
+/// 的输出通道过滤逻辑保持一致。
+#[allow(clippy::too_many_arguments)]
+fn emit_permission_audit(
+    frontend_registry: &FrontendRegistry,
+    output_channel: Option<&ChannelId>,
+    agent_id: crate::domain::AgentId,
+    agent_name: &str,
+    tool_name: &str,
+    action: PermissionAction,
+    source: PermissionSource,
+    context: PermissionAuditContext,
+) {
+    let Some(channel) = output_channel else {
+        return;
+    };
+    let event = EngineEvent::PermissionAudit {
+        target: EventTarget::Directed(vec![channel.clone()]),
+        agent_id,
+        agent_name: agent_name.to_string(),
+        tool_name: tool_name.to_string(),
+        action,
+        source,
+        context,
+    };
+    for frontend in &frontend_registry.frontends {
+        frontend.push_event(event.clone());
     }
 }
 
@@ -592,5 +685,106 @@ mod tests {
 
         let task = world.query::<&Task>().get(&world, task_entity).unwrap();
         assert!(task.pending_confirmation_id.is_some());
+    }
+
+    /// 捕获推送事件的 mock frontend
+    struct CapturingFrontend {
+        events: std::sync::Arc<std::sync::Mutex<Vec<EngineEvent>>>,
+    }
+    impl crate::domain::Frontend for CapturingFrontend {
+        fn kind(&self) -> crate::domain::FrontendKind {
+            crate::domain::FrontendKind::Tui
+        }
+        fn push_event(&self, event: EngineEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+        fn poll_actions(&self) -> Vec<crate::domain::UserAction> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn emit_permission_audit_constructs_event_with_correct_fields() {
+        use crate::domain::{PermissionAction, PermissionAuditContext, PermissionSource};
+        use std::sync::{Arc, Mutex};
+
+        let events: Arc<Mutex<Vec<EngineEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let frontend = CapturingFrontend {
+            events: events.clone(),
+        };
+        let registry = FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        };
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let agent_id = Uuid::new_v4();
+
+        emit_permission_audit(
+            &registry,
+            Some(&channel),
+            agent_id,
+            "test-agent",
+            "shell_exec",
+            PermissionAction::Allow,
+            PermissionSource::AgentOverride,
+            PermissionAuditContext::Dispatch,
+        );
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 1, "应推送一个 PermissionAudit 事件");
+        match &captured[0] {
+            EngineEvent::PermissionAudit {
+                agent_id: aid,
+                agent_name,
+                tool_name,
+                action,
+                source,
+                context,
+                ..
+            } => {
+                assert_eq!(*aid, agent_id);
+                assert_eq!(agent_name, "test-agent");
+                assert_eq!(tool_name, "shell_exec");
+                assert_eq!(*action, PermissionAction::Allow);
+                assert_eq!(*source, PermissionSource::AgentOverride);
+                assert_eq!(*context, PermissionAuditContext::Dispatch);
+            }
+            other => panic!("expected PermissionAudit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_permission_audit_skips_when_output_channel_is_none() {
+        use crate::domain::{PermissionAction, PermissionAuditContext, PermissionSource};
+
+        let events: std::sync::Arc<std::sync::Mutex<Vec<EngineEvent>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let frontend = CapturingFrontend {
+            events: events.clone(),
+        };
+        let registry = FrontendRegistry {
+            frontends: vec![Box::new(frontend)],
+        };
+
+        emit_permission_audit(
+            &registry,
+            None,
+            Uuid::nil(),
+            "test-agent",
+            "shell_exec",
+            PermissionAction::Allow,
+            PermissionSource::AgentOverride,
+            PermissionAuditContext::Dispatch,
+        );
+
+        assert_eq!(
+            events.lock().unwrap().len(),
+            0,
+            "无 output_channel 时不应推送事件"
+        );
     }
 }
