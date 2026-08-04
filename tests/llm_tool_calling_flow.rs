@@ -224,6 +224,7 @@ fn llm_tool_calling_complete_loop() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -290,6 +291,7 @@ fn tool_calling_exceeds_max_iterations() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -353,6 +355,7 @@ fn tool_calling_records_to_short_term_memory() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -413,6 +416,7 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -476,6 +480,7 @@ fn tool_calling_hard_limit_forces_failure() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );

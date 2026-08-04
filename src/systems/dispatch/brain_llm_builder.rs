@@ -77,7 +77,10 @@ pub fn build_brain_tools(
         .iter()
         .filter(|tool_def| {
             !matches!(
-                brain_agent.tool_permissions.get_permission(&tool_def.name),
+                brain_agent
+                    .tool_permissions
+                    .effective_permission(&tool_def.name, Some(registry))
+                    .0,
                 ToolPermission::Deny
             )
         })

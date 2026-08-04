@@ -248,8 +248,14 @@ mod tests {
             system_prompt: None,
         };
 
-        assert!(agent.has_permission("test_tool"));
-        assert!(!agent.has_permission("other_tool"));
+        assert_eq!(
+            agent.effective_permission("test_tool", None).0,
+            ToolPermission::Allow
+        );
+        assert_eq!(
+            agent.effective_permission("other_tool", None).0,
+            ToolPermission::Confirm
+        );
     }
 
     #[test]
@@ -271,11 +277,17 @@ mod tests {
             system_prompt: None,
         };
 
-        assert!(!agent.has_permission("new_tool"));
+        assert_eq!(
+            agent.effective_permission("new_tool", None).0,
+            ToolPermission::Confirm
+        );
 
         agent.grant_permission("new_tool".to_string());
 
-        assert!(agent.has_permission("new_tool"));
+        assert_eq!(
+            agent.effective_permission("new_tool", None).0,
+            ToolPermission::Allow
+        );
     }
 
     #[test]

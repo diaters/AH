@@ -652,52 +652,6 @@ pub fn register_plugin_tools(
     }
 }
 
-// Re-export tests module for backward compatibility
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
-
-    #[allow(dead_code)]
-    fn test_agent() -> crate::domain::Agent {
-        crate::domain::Agent {
-            id: uuid::Uuid::nil(),
-            profile: AgentProfile {
-                name: "test".to_string(),
-                model: "test-model".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec![],
-                description: "test agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        }
-    }
-
-    #[test]
-    fn agent_tool_permissions_default_is_confirm() {
-        let perms = AgentToolPermissions::default();
-        assert_eq!(
-            perms.get_permission("unknown_tool"),
-            ToolPermission::Confirm
-        );
-    }
-
-    #[test]
-    fn agent_tool_permissions_override() {
-        let mut perms = AgentToolPermissions {
-            default_permission: ToolPermission::Deny,
-            ..Default::default()
-        };
-        perms
-            .overrides
-            .insert("shell_exec".to_string(), ToolPermission::Allow);
-
-        assert_eq!(perms.get_permission("shell_exec"), ToolPermission::Allow);
-        assert_eq!(perms.get_permission("other"), ToolPermission::Deny);
-    }
-}
+// AgentToolPermissions 的查询行为由 effective_permission 统一覆盖，
+// 见 src/domain/agent.rs tests::effective_permission_*。
+// 构造/默认值行为见 default_permission_explicit_defaults_to_false。

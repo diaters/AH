@@ -334,16 +334,20 @@ fn handle_spawn_request(
         return;
     };
 
-    // 过滤 tools：保留父 Agent 有 Allow 或 Confirm 权限的工具
-    let allowed_tools: Vec<String> = request
+    // 过滤 tools：保留父 Agent 非 Deny 的工具，并继承父的 effective_permission
+    let parent_perms: Vec<(String, ToolPermission)> = request
         .tools
         .iter()
-        .filter(|tool| {
-            let perm = parent_agent.tool_permissions.get_permission(tool);
-            !matches!(perm, crate::domain::ToolPermission::Deny)
+        .filter_map(|tool| {
+            let (perm, _source) = parent_agent.effective_permission(tool, Some(registry));
+            if perm == ToolPermission::Deny {
+                return None;
+            }
+            Some((tool.clone(), perm))
         })
-        .cloned()
         .collect();
+
+    let allowed_tools: Vec<String> = parent_perms.iter().map(|(t, _)| t.clone()).collect();
 
     // 只在请求了工具但全部无效时才拒绝
     // 空工具列表是合法的，表示纯 LLM 对话任务
@@ -382,14 +386,11 @@ fn handle_spawn_request(
         "spawning task-scoped agent"
     );
 
-    // 构建 tool_permissions: 子 Agent 默认拒绝，仅显式允许的工具可用
+    // 构建 tool_permissions: 子 Agent 默认拒绝，按工具逐个继承父的 effective_permission
     let tool_permissions = AgentToolPermissions {
         default_permission: ToolPermission::Deny,
         default_permission_explicit: true,
-        overrides: allowed_tools
-            .iter()
-            .map(|t| (t.clone(), ToolPermission::Allow))
-            .collect(),
+        overrides: parent_perms.into_iter().collect(),
     };
 
     spawn_agent(

@@ -110,7 +110,8 @@ pub fn async_tool_dispatch_system(
             if registry.get(&request.tool_name).is_none() {
                 continue; // 工具定义不在 registry → 留给 sync 路径
             }
-            let permission = agent.tool_permissions.get_permission(&request.tool_name);
+            let (permission, _source) =
+                agent.effective_permission(&request.tool_name, Some(registry));
             if matches!(permission, ToolPermission::Confirm) {
                 continue; // 需要确认 → 留给 sync 路径设置 confirmation
             }

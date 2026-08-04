@@ -68,7 +68,7 @@ impl ToolApprovalPolicy for DefaultToolApprovalPolicy {
         agents: &Query<&Agent>,
         index: &EntityIndex,
     ) -> ApprovalRoute {
-        let permission = agent.tool_permissions.get_permission(tool_name);
+        let (permission, _source) = agent.tool_permissions.effective_permission(tool_name, None);
 
         match permission {
             ToolPermission::Allow => ApprovalRoute::AutoAllow,
@@ -82,7 +82,11 @@ impl ToolApprovalPolicy for DefaultToolApprovalPolicy {
                     && let Some(parent_agent) = index
                         .get_agent(&parent_agent_id)
                         .and_then(|e| agents.get(e).ok())
-                    && parent_agent.has_permission(tool_name)
+                    && parent_agent
+                        .tool_permissions
+                        .effective_permission(tool_name, None)
+                        .0
+                        == ToolPermission::Allow
                 {
                     return ApprovalRoute::ParentApproval { parent_agent_id };
                 }

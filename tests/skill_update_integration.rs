@@ -1008,6 +1008,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Allow,
+                default_permission_explicit: true,
                 overrides: std::collections::HashMap::new(),
             },
             system_prompt: None,
@@ -1194,6 +1195,7 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Allow,
+                default_permission_explicit: true,
                 overrides: std::collections::HashMap::new(),
             },
             system_prompt: None,
@@ -1354,6 +1356,7 @@ fn submit_skill_update_rejects_when_work_item_entity_is_none() {
         bound_task_id: None,
         tool_permissions: AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: std::collections::HashMap::new(),
         },
         system_prompt: None,
@@ -1828,6 +1831,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Allow,
+                default_permission_explicit: true,
                 overrides: std::collections::HashMap::new(),
             },
             system_prompt: None,
@@ -2006,6 +2010,7 @@ fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Allow,
+                default_permission_explicit: true,
                 overrides: std::collections::HashMap::new(),
             },
             system_prompt: None,

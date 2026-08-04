@@ -75,8 +75,8 @@ impl AgentToolPermissions {
         let tool_default = registry
             .and_then(|r| r.get(tool_name))
             .map(|d| d.default_permission);
-        let implicit_confirm = !self.default_permission_explicit
-            && self.default_permission == ToolPermission::Confirm;
+        let implicit_confirm =
+            !self.default_permission_explicit && self.default_permission == ToolPermission::Confirm;
         match tool_default {
             Some(tp) if implicit_confirm => (tp, PermissionSource::ToolDefault),
             _ => (self.default_permission, PermissionSource::AgentDefault),
