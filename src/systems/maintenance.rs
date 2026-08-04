@@ -503,3 +503,130 @@ fn mark_task_failed(
         task.updated_at = clock.0;
     }
 }
+
+#[cfg(test)]
+mod o2_inheritance_tests {
+    //! O2 子 Agent 权限继承单元测试
+    //!
+    //! 验证 `handle_spawn_request` 中 `parent_perms` 的 filter_map 逻辑：
+    //! 父 Confirm → 子 Confirm（不再降为 Allow）；父 Allow → 子 Allow；
+    //! 父 Deny → 工具不传入子 overrides。
+
+    use super::*;
+    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolSchema};
+    use std::collections::HashMap;
+
+    /// 构造父 Agent：default + explicit + overrides 完全可控
+    fn make_parent(
+        default: ToolPermission,
+        explicit: bool,
+        overrides: HashMap<String, ToolPermission>,
+    ) -> Agent {
+        Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "parent".to_string(),
+                model: "m".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: default,
+                default_permission_explicit: explicit,
+                overrides,
+            },
+            system_prompt: None,
+        }
+    }
+
+    /// 构造只含一个工具的 SpaceToolRegistry
+    fn make_registry_with(tool_name: &str, perm: ToolPermission) -> SpaceToolRegistry {
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(ToolDefinition {
+            name: tool_name.to_string(),
+            description: "test".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: perm,
+            executor: ToolExecutorKind::Builtin(tool_name.to_string()),
+            required_tag: None,
+        });
+        registry
+    }
+
+    /// 复刻 `handle_spawn_request` 中构造 `parent_perms` 的 filter_map 逻辑，
+    /// 让单元测试不依赖 Commands / World 即可验证权限继承语义。
+    fn collect_parent_perms(
+        parent: &Agent,
+        registry: &SpaceToolRegistry,
+        tools: &[String],
+    ) -> Vec<(String, ToolPermission)> {
+        tools
+            .iter()
+            .filter_map(|tool| {
+                let (perm, _source) = parent.effective_permission(tool, Some(registry));
+                if perm == ToolPermission::Deny {
+                    return None;
+                }
+                Some((tool.clone(), perm))
+            })
+            .collect()
+    }
+
+    /// 父 Confirm → 子 Confirm（不再降为 Allow）
+    #[test]
+    fn child_inherits_confirm_from_parent_confirm() {
+        let mut overrides = HashMap::new();
+        overrides.insert("shell_exec".to_string(), ToolPermission::Confirm);
+        let parent = make_parent(ToolPermission::Deny, true, overrides);
+        let registry = make_registry_with("shell_exec", ToolPermission::Allow);
+
+        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+
+        assert_eq!(parent_perms.len(), 1, "Confirm 工具应保留");
+        assert_eq!(parent_perms[0].0, "shell_exec");
+        assert_eq!(
+            parent_perms[0].1,
+            ToolPermission::Confirm,
+            "父 Confirm 必须原样继承为子 Confirm，不得降级为 Allow"
+        );
+    }
+
+    /// 父 Allow → 子 Allow
+    #[test]
+    fn child_inherits_allow_from_parent_allow() {
+        let mut overrides = HashMap::new();
+        overrides.insert("shell_exec".to_string(), ToolPermission::Allow);
+        let parent = make_parent(ToolPermission::Deny, true, overrides);
+        let registry = make_registry_with("shell_exec", ToolPermission::Confirm);
+
+        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+
+        assert_eq!(parent_perms.len(), 1, "Allow 工具应保留");
+        assert_eq!(
+            parent_perms[0].1,
+            ToolPermission::Allow,
+            "父 Allow 必须原样继承为子 Allow"
+        );
+    }
+
+    /// 父 Deny → 工具不传入子 overrides
+    #[test]
+    fn child_excludes_denied_tool() {
+        let mut overrides = HashMap::new();
+        overrides.insert("shell_exec".to_string(), ToolPermission::Deny);
+        let parent = make_parent(ToolPermission::Deny, true, overrides);
+        let registry = make_registry_with("shell_exec", ToolPermission::Allow);
+
+        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+
+        assert!(
+            parent_perms.is_empty(),
+            "父 Deny 的工具必须被排除，不得进入子 overrides"
+        );
+    }
+}
