@@ -504,6 +504,53 @@ fn mark_task_failed(
     }
 }
 
+/// O7 启动期 required_tag 孤儿扫描。
+///
+/// 遍历 `SpaceToolRegistry` 中所有工具的 `required_tag`，若某工具声明了
+/// `required_tag` 但当前所有 Agent 的 `capabilities.tags` 都不包含该 tag，
+/// 则发出 `RequiredTagOrphan` warn。
+///
+/// 语义：该工具在当前 Agent 集合下不可被路由（无人能满足 required_tag），
+/// 但不阻止启动——task-scoped Agent 可能在运行时被 spawn 并持有该 tag。
+pub fn validate_required_tags(registry: &SpaceToolRegistry, agents: &[Agent]) {
+    use std::collections::HashSet;
+    let all_tags: HashSet<&str> = agents
+        .iter()
+        .flat_map(|a| a.capabilities.tags.iter().map(|s| s.as_str()))
+        .collect();
+    for tool_def in registry.iter() {
+        if let Some(required) = &tool_def.required_tag
+            && !all_tags.contains(required.as_str())
+        {
+            warn!(
+                event = "RequiredTagOrphan",
+                tool_name = %tool_def.name,
+                required_tag = %required,
+                "no agent currently holds the required_tag; tool will be unusable until \
+                 an agent with this tag is loaded (e.g., task-scoped agent at runtime)"
+            );
+        }
+    }
+}
+
+/// O7 启动期 required_tag 孤儿扫描 system。
+///
+/// 通过 `Local<bool>` 保证只在第一次 update 时运行一次，扫描启动期已加载的
+/// 持久化 Agent 与 `SpaceToolRegistry` 中工具的 `required_tag` 匹配关系。
+/// task-scoped Agent 在运行时 spawn 不经此扫描（它们由父 Agent 显式授权）。
+pub(crate) fn validate_required_tags_system(
+    mut ran: Local<bool>,
+    agents: Query<&Agent>,
+    tool_registry: Res<SpaceToolRegistry>,
+) {
+    if *ran {
+        return;
+    }
+    *ran = true;
+    let agent_list: Vec<Agent> = agents.iter().cloned().collect();
+    validate_required_tags(&tool_registry, &agent_list);
+}
+
 #[cfg(test)]
 mod o2_inheritance_tests {
     //! O2 子 Agent 权限继承单元测试
@@ -628,5 +675,69 @@ mod o2_inheritance_tests {
             parent_perms.is_empty(),
             "父 Deny 的工具必须被排除，不得进入子 overrides"
         );
+    }
+}
+
+#[cfg(test)]
+mod required_tag_tests {
+    //! O7 required_tag 启动期孤儿扫描测试
+    //!
+    //! 验证 `validate_required_tags` 在以下场景不 panic（warn 不 panic）：
+    //! - 工具声明 required_tag 且 agent 持有该 tag
+    //! - 工具无 required_tag 且 agents 列表为空
+
+    use super::*;
+    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolSchema};
+
+    fn make_tool_def_with_required_tag(name: &str, required_tag: Option<&str>) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: "test".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: ToolPermission::Allow,
+            executor: ToolExecutorKind::Builtin(name.to_string()),
+            required_tag: required_tag.map(|s| s.to_string()),
+        }
+    }
+
+    fn make_agent_with_tags(tags: Vec<String>) -> Agent {
+        Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "test".to_string(),
+                model: "m".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags,
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        }
+    }
+
+    /// 工具声明 required_tag="profile"，agent 持有 tag="profile"，不 warn
+    #[test]
+    fn validate_required_tags_no_warn_when_tag_held() {
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(make_tool_def_with_required_tag("profile_tool", Some("profile")));
+        let agents = vec![make_agent_with_tags(vec!["profile".to_string()])];
+
+        // 不应 panic
+        validate_required_tags(&registry, &agents);
+    }
+
+    /// 工具无 required_tag，空 agents 列表，不 warn
+    #[test]
+    fn validate_required_tags_no_warn_when_no_required_tag() {
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(make_tool_def_with_required_tag("plain_tool", None));
+        let agents: Vec<Agent> = vec![];
+
+        // 不应 panic
+        validate_required_tags(&registry, &agents);
     }
 }

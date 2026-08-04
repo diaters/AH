@@ -16,7 +16,9 @@ use crate::{
     },
     llm::{ExecutorRegistry, LlmProviderConfig},
     plugins::DefaultRuntimePluginGroup,
-    systems::{HarnessSet, agent_factory_system, load_agents_system},
+    systems::{
+        HarnessSet, agent_factory_system, load_agents_system, validate_required_tags_system,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -361,9 +363,14 @@ pub fn build_harness_app(
     // agent_factory_system 在 HarnessSet::Maintenance 中运行，
     // agent_termination_system 和 experience_collection_cleanup_system
     // 由 ExecutionPlugin 在 HarnessSet::Execution 和 HarnessSet::Maintenance 中注册。
+    // validate_required_tags_system 通过 Local<bool> 保证仅运行一次，扫描启动期
+    // 已加载的持久化 Agent 与工具 required_tag 的匹配关系（O7）。
     app.add_systems(
         Update,
-        (agent_factory_system.in_set(HarnessSet::Maintenance),),
+        (
+            agent_factory_system.in_set(HarnessSet::Maintenance),
+            validate_required_tags_system.in_set(HarnessSet::Maintenance),
+        ),
     );
 
     // index 陈旧兜底清理（双保险之一）。
