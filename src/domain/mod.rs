@@ -43,7 +43,7 @@ pub type ExecutorFuture =
 // agent
 pub use agent::{
     Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
-    AgentToolPermissions,
+    AgentToolPermissions, PermissionSource,
 };
 
 // chat_session
@@ -86,7 +86,8 @@ pub use execution::{
 // frontend
 pub use frontend::{
     AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
-    MessageRole, TaskStatusKind, UserAction, WaitingReasonKind, summarize_tool_input,
+    MessageRole, PermissionAction, PermissionAuditContext, TaskStatusKind, UserAction,
+    WaitingReasonKind, summarize_tool_input,
 };
 
 // memory
