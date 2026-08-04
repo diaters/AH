@@ -113,12 +113,12 @@ Agent 配置通过 `HARNESS_AGENTS_CONFIG` 指定的 TOML 文件加载（默认 
 
 `[agent.tools]` 段配置 Agent 的工具权限，支持 `default_permission` 字段与各工具的 `Allow` / `Confirm` / `Deny` 覆盖项。
 
-**default_permission 回退规则：**
+__default_permission 回退规则：__
 
 - 若显式设置 `default_permission`，对未在 overrides 中列出的工具使用该值
 - 若未设置 `default_permission`（结构默认 Confirm），对未在 overrides 中列出的工具回退到 `ToolDefinition.default_permission`（工具注册时声明的默认值）
 
-**示例：**
+__示例：__
 
 ```toml
 [agent.tools]
