@@ -135,7 +135,7 @@ pub fn tool_dispatch_system(
             continue;
         }
 
-        let permission = agent.tool_permissions.get_permission(&tool_name);
+        let (permission, _source) = agent.effective_permission(&tool_name, Some(&registry));
 
         debug!(
             event = "ToolDispatch",
@@ -312,7 +312,10 @@ pub fn tool_dispatch_system(
                                     .get_agent(&parent_agent_id)
                                     .and_then(|e| agents.get(e).ok())
                             })
-                            .filter(|parent| parent.has_permission(&tool_name))
+                            .filter(|parent| {
+                                parent.effective_permission(&tool_name, Some(&registry)).0
+                                    == ToolPermission::Allow
+                            })
                             .map(|parent| parent.id)
                     });
 
