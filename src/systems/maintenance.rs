@@ -723,7 +723,10 @@ mod required_tag_tests {
     #[test]
     fn validate_required_tags_no_warn_when_tag_held() {
         let mut registry = SpaceToolRegistry::default();
-        registry.register(make_tool_def_with_required_tag("profile_tool", Some("profile")));
+        registry.register(make_tool_def_with_required_tag(
+            "profile_tool",
+            Some("profile"),
+        ));
         let agents = vec![make_agent_with_tags(vec!["profile".to_string()])];
 
         // 不应 panic
