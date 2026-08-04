@@ -30,13 +30,16 @@ use crate::{
     contracts::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
-        ScheduledTaskInfoSnapshot, ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task,
-        ToolActionKind, ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission,
-        ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
+        PermissionAction, PermissionAuditContext, PermissionSource, ScheduledTaskInfoSnapshot,
+        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
+        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
+        ToolWorkerOutput, ToolWorkerPayload,
     },
     ecs::EntityIndex,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
 };
+
+use super::dispatch::emit_permission_audit;
 
 use super::ingest_tool_results::build_scheduler_snapshot;
 
@@ -250,12 +253,37 @@ pub fn async_tool_dispatch_system(
                 .and_then(|e| agents.get(e).ok())
                 .map(|a| a.profile.name.clone())
                 .unwrap_or_else(|| "unknown".to_string());
-            if let Some(target) = index
+            let output_channel = index
                 .get_task(&request.request.task_id)
                 .and_then(|e| tasks.get(e).ok())
-                .and_then(|t| t.routing_policy.output_channel.clone())
-                .map(|channel| EventTarget::Directed(vec![channel]))
-            {
+                .and_then(|t| t.routing_policy.output_channel.clone());
+
+            // 权限审计：Allow 认领（Confirm 路径由 sync 路径发审计，此处不重复）。
+            // source 取当前 effective_permission 的来源；registry/agent 不可见时
+            // （测试世界）取 AgentDefault 兜底。
+            let audit_source = registry
+                .as_deref()
+                .and_then(|r| {
+                    index
+                        .get_agent(&request.request.agent_id)
+                        .and_then(|e| agents.get(e).ok())
+                        .map(|a| (r, a))
+                })
+                .map(|(r, a)| a.effective_permission(&tool_name, Some(r)).1)
+                .unwrap_or(PermissionSource::AgentDefault);
+            emit_permission_audit(
+                frontend_registry,
+                output_channel.as_ref(),
+                request.request.agent_id,
+                &agent_name,
+                &tool_name,
+                PermissionAction::Allow,
+                audit_source,
+                PermissionAuditContext::AsyncDispatch,
+            );
+
+            if let Some(channel) = output_channel {
+                let target = EventTarget::Directed(vec![channel]);
                 let event = EngineEvent::ToolCallStarted {
                     target,
                     task_id: request.request.task_id,

@@ -495,8 +495,11 @@ pub fn tool_dispatch_system(
 /// 仅当 `output_channel` 为 `Some` 时推送——无 output_channel 的 task
 /// （如事件任务）不广播审计事件，避免向无关通道泄漏。这与 `ToolCallStarted`
 /// 的输出通道过滤逻辑保持一致。
+///
+/// `pub(super)` 暴露：async_dispatch / confirmation / approval 等同级模块
+/// 复用同一份审计推送逻辑，避免重复实现。
 #[allow(clippy::too_many_arguments)]
-fn emit_permission_audit(
+pub(super) fn emit_permission_audit(
     frontend_registry: &FrontendRegistry,
     output_channel: Option<&ChannelId>,
     agent_id: crate::domain::AgentId,

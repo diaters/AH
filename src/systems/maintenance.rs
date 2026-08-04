@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -392,6 +392,21 @@ fn handle_spawn_request(
         default_permission_explicit: true,
         overrides: parent_perms.into_iter().collect(),
     };
+
+    // 权限审计（tracing log）：子 Agent 继承父权限的每个 override。
+    // 不发 EngineEvent——spawn 路径无 frontend_registry 访问，且继承日志
+    // 仅供可观测性消费，无需推前端。grant_permission 的日志已在
+    // Agent::grant_permission 方法内（任务 2），此处仅记录继承映射。
+    for (tool, perm) in &tool_permissions.overrides {
+        info!(
+            event = "PermissionInherit",
+            agent_id = %id,
+            tool_name = %tool,
+            permission = ?perm,
+            context = "SpawnInherit",
+            "子 Agent 继承父权限"
+        );
+    }
 
     spawn_agent(
         commands,
