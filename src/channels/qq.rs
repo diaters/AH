@@ -323,6 +323,9 @@ pub struct QqChannel {
     pending_approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
     /// 待处理反馈：用户选择 reject_with_feedback 后等待文本输入
     pending_feedback: Arc<RwLock<HashMap<String, PendingFeedback>>>,
+    /// 记录审批请求消息的 msg_id，key 为 approval_id（request_id 字符串）。
+    /// 用户点击按钮后据此撤回审批请求消息。
+    pending_approval_msg_ids: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl QqChannel {
@@ -343,6 +346,7 @@ impl QqChannel {
             auth_url: QQ_AUTH_URL.to_string(),
             pending_approvals: Arc::new(RwLock::new(HashMap::new())),
             pending_feedback: Arc::new(RwLock::new(HashMap::new())),
+            pending_approval_msg_ids: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -584,32 +588,6 @@ impl QqChannel {
             .ok_or(ChannelError::Auth)?
             .to_string();
         Ok(gw_url)
-    }
-
-    /// 发送入向 ACK 文本给用户。
-    async fn send_ack_text(&self, recipient: &str, content: &str) {
-        let ack_text = if content.starts_with('[') {
-            // 附件消息
-            format!("收到附件：{}", content.lines().next().unwrap_or(""))
-        } else {
-            let preview: String = content.chars().take(50).collect();
-            format!(
-                "收到：{preview}{}",
-                if content.chars().count() > 50 {
-                    "..."
-                } else {
-                    ""
-                }
-            )
-        };
-        if let Err(e) = self.send_text_markdown(recipient, &ack_text).await {
-            tracing::warn!(
-                event = "QqAckFailed",
-                recipient = %recipient,
-                error = %e,
-                "failed to send ACK"
-            );
-        }
     }
 
     /// 处理 /bind 配对命令。
@@ -1293,6 +1271,21 @@ impl QqChannel {
             map.remove(&recipient);
         }
 
+        // 撤回审批请求消息（用户点击按钮后，审批请求消息已无存在意义）
+        let approval_msg_id = self.pending_approval_msg_ids.write().await.remove(request_id_str);
+        if let Some(msg_id) = approval_msg_id {
+            if let Err(e) = self.recall_message(&recipient, &msg_id).await {
+                tracing::warn!(
+                    event = "ChannelRecallFailed",
+                    channel = "qq",
+                    recipient = %recipient,
+                    msg_id = %msg_id,
+                    error = %e,
+                    "recall approval request failed"
+                );
+            }
+        }
+
         // 无锁区：reject_with_feedback 两步交互 或 普通 Confirmation
         if opt.id == "reject_with_feedback" {
             // 两步交互：插入 pending_feedback，提示输入，不发 Confirmation
@@ -1487,11 +1480,23 @@ impl Channel for QqChannel {
                 Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&message.content),
                 Some(ChannelParseMode::Markdown) | None => message.content.clone(),
             };
-            if !content_to_send.trim().is_empty() {
+            let id = if !content_to_send.trim().is_empty() {
                 Some(self.send_text_with_keyboard(&message.recipient, &content_to_send, markup).await?.id)
             } else {
                 None
+            };
+            // 记录审批请求消息的 msg_id，用于用户点击按钮后撤回
+            if message.message_kind == MessageKind::ApprovalRequest {
+                if let Some(ref mid) = id {
+                    if let Some((request_id, _)) = extract_approval_info(markup) {
+                        self.pending_approval_msg_ids
+                            .write()
+                            .await
+                            .insert(request_id.to_string(), mid.clone());
+                    }
+                }
             }
+            id
         } else {
             // === 无键盘路径：普通消息 + 附件 ===
             let (text, inline_attachments) = extract_attachments(&message.content);
@@ -1857,8 +1862,15 @@ impl Channel for QqChannel {
                                 confirmation: None,
                             };
                             let _ = tx.send(inbound);
-                            // 发送 ACK
-                            self.send_ack_text(&recipient, &content).await;
+                            // 用 typing indicator 替代文字 ACK（C2C 有效，群聊静默跳过）
+                            if let Err(e) = self.send_typing(&recipient).await {
+                                tracing::debug!(
+                                    event = "QqTypingFailed",
+                                    recipient = %recipient,
+                                    error = %e,
+                                    "typing indicator failed, skipping silently"
+                                );
+                            }
                         }
                         "INTERACTION_CREATE" => {
                             if let Some(inbound) = self.handle_interaction_create(d).await {
