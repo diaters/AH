@@ -263,9 +263,11 @@ pub fn async_tool_dispatch_system(
             // （测试世界）取 AgentDefault 兜底。
             let audit_source = registry
                 .as_deref()
-                .zip(index
-                    .get_agent(&request.request.agent_id)
-                    .and_then(|e| agents.get(e).ok()))
+                .zip(
+                    index
+                        .get_agent(&request.request.agent_id)
+                        .and_then(|e| agents.get(e).ok()),
+                )
                 .map(|(r, a)| a.effective_permission(&tool_name, Some(r)).1)
                 .unwrap_or(PermissionSource::AgentDefault);
             emit_permission_audit(
