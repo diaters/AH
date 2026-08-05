@@ -1062,6 +1062,40 @@ impl QqChannel {
         Ok(())
     }
 
+    /// 发送输入状态（typing indicator），在用户端显示"Bot 正在输入中…"。
+    ///
+    /// 仅 C2C 场景有效。群聊场景调用此方法静默跳过。
+    #[allow(dead_code)]
+    pub async fn send_typing(&self, recipient: &str) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        let (scope, id) = Self::resolve_recipient(recipient);
+        // typing 仅支持 C2C (scope="users")，群聊静默跳过
+        if scope != "users" {
+            tracing::debug!(
+                event = "QqTypingSkipped",
+                recipient = %recipient,
+                "typing indicator only supported in C2C, skipping"
+            );
+            return Ok(());
+        }
+        let url = format!("{}/v2/{scope}/{id}/typing", self.api_base);
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        Ok(())
+    }
+
     /// 上传媒体到 QQ API，返回 (file_info, ttl)。
     /// - url 模式：传 url=Some(...)，file_data=None
     /// - base64 模式：传 file_data=Some(...)，url=None
@@ -2292,6 +2326,34 @@ mod tests {
             }
             other => panic!("expected Api error, got: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn send_typing_posts_to_c2c_user() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/typing"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.send_typing("user:USER123").await.expect("send_typing");
+    }
+
+    #[tokio::test]
+    async fn send_typing_skips_group_recipient() {
+        let ch = QqChannel::new(make_config());
+        ch.set_token_for_test("fake_token").await;
+        // 群聊 recipient 不发请求，直接返回 Ok
+        ch.send_typing("group:GROUP456")
+            .await
+            .expect("should skip with Ok");
     }
 
     // --- render_buttons_as_numbered_list tests ---
