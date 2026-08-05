@@ -1032,6 +1032,36 @@ impl QqChannel {
         Ok(QqMessageResponse { id: msg_id })
     }
 
+    /// 撤回消息。根据 recipient 的 scope 自动路由到对应 DELETE 端点。
+    ///
+    /// 支持的端点：
+    /// - C2C: `DELETE /v2/users/{openid}/messages/{message_id}`
+    /// - 群聊: `DELETE /v2/groups/{group_openid}/messages/{message_id}`
+    ///
+    /// QQ 限制发送超过 2 分钟的消息不可撤回（API 返回错误码 306011）。
+    /// 调用方通过 `QqMessageResponse.id` 获取 message_id。
+    #[allow(dead_code)]
+    pub async fn recall_message(&self, recipient: &str, msg_id: &str) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        let (scope, id) = Self::resolve_recipient(recipient);
+        let url = format!("{}/v2/{scope}/{id}/messages/{msg_id}", self.api_base);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        Ok(())
+    }
+
     /// 上传媒体到 QQ API，返回 (file_info, ttl)。
     /// - url 模式：传 url=Some(...)，file_data=None
     /// - base64 模式：传 file_data=Some(...)，url=None
@@ -2194,6 +2224,74 @@ mod tests {
             err.to_string().contains("must be HTTPS"),
             "expected HTTPS error, got: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn recall_message_deletes_c2c_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/users/USER123/messages/MSG456"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.recall_message("user:USER123", "MSG456")
+            .await
+            .expect("recall_message");
+    }
+
+    #[tokio::test]
+    async fn recall_message_deletes_group_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/groups/GROUP456/messages/MSG789"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.recall_message("group:GROUP456", "MSG789")
+            .await
+            .expect("recall_message");
+    }
+
+    #[tokio::test]
+    async fn recall_message_returns_api_error_on_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/users/USER123/messages/MSG_OLD"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "code": 306011,
+                "message": "超出可撤回消息时间"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let result = ch.recall_message("user:USER123", "MSG_OLD").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ChannelError::Api { code, message } => {
+                assert_eq!(code, 400);
+                assert!(message.contains("306011") || message.contains("撤回"));
+            }
+            other => panic!("expected Api error, got: {other}"),
+        }
     }
 
     // --- render_buttons_as_numbered_list tests ---
