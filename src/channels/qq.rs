@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::channels::config::QqConfig;
-use crate::channels::traits::{Channel, ChannelError, InboundConfirmation};
+use crate::channels::traits::{Channel, ChannelError, ChannelInboundMessage, InboundConfirmation};
 
 const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
 const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
@@ -1100,7 +1100,6 @@ impl QqChannel {
     ///
     /// QQ API 要求在收到 INTERACTION_CREATE 事件后回调此接口，
     /// 否则用户端按钮会一直显示加载状态。
-    #[allow(dead_code)]
     pub async fn acknowledge_interaction(
         &self,
         interaction_id: &str,
@@ -1125,6 +1124,165 @@ impl QqChannel {
             });
         }
         Ok(())
+    }
+
+    /// 处理 INTERACTION_CREATE 事件。
+    ///
+    /// 返回 `Some(ChannelInboundMessage)` 表示需要上报到引擎，
+    /// 返回 `None` 表示已内部消化（如 reject_with_feedback 进入两步流程）。
+    async fn handle_interaction_create(
+        &self,
+        event_data: &serde_json::Value,
+    ) -> Option<ChannelInboundMessage> {
+        let d = event_data;
+        let interaction_id = d
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or("")
+            .to_string();
+        let button_data = d
+            .get("data")
+            .and_then(|data| data.get("resolved"))
+            .and_then(|resolved| resolved.get("button_data"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        if button_data.is_empty() {
+            tracing::warn!(
+                event = "QqInteractionNoButtonData",
+                interaction_id = %interaction_id,
+                "INTERACTION_CREATE without button_data, skipping"
+            );
+            return None;
+        }
+
+        // button_data 格式: "<request_id>:<option_id>"
+        let Some((request_id_str, option_id)) = button_data.split_once(':') else {
+            tracing::warn!(
+                event = "QqInteractionBadButtonData",
+                button_data = %button_data,
+                "button_data does not contain ':'"
+            );
+            return None;
+        };
+
+        let Ok(request_id) = Uuid::parse_str(request_id_str) else {
+            tracing::warn!(
+                event = "QqInteractionInvalidRequestId",
+                request_id_str = %request_id_str,
+                "request_id is not a valid UUID"
+            );
+            return None;
+        };
+
+        // 发送 ACK 回调（PUT /interactions/{interaction_id}）
+        if let Err(e) = self.acknowledge_interaction(&interaction_id, 0).await {
+            tracing::warn!(
+                event = "QqInteractionAckFailed",
+                interaction_id = %interaction_id,
+                error = %e,
+                "failed to acknowledge interaction"
+            );
+        }
+
+        // 确定 sender_id 和 recipient
+        // chat_type 映射：0=频道, 1=群聊, 2=单聊
+        let chat_type = d.get("chat_type").and_then(serde_json::Value::as_u64);
+        let (sender_id, recipient) = match chat_type {
+            Some(1) => {
+                // 群聊：sender 为点击按钮的群成员，recipient 为群
+                let group_openid = d
+                    .get("group_openid")
+                    .and_then(|g| g.as_str())
+                    .unwrap_or("unknown");
+                let member_openid = d
+                    .get("group_member_openid")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown");
+                (member_openid.to_string(), format!("group:{group_openid}"))
+            }
+            _ => {
+                // C2C：sender 和 recipient 都基于 user_openid
+                let user_openid = d
+                    .get("user_openid")
+                    .or_else(|| d.get("group_member_openid"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                (user_openid.to_string(), format!("user:{user_openid}"))
+            }
+        };
+
+        // 匹配 pending approval（遵循 try_match_approval_reply 的锁模式：
+        // 读锁→clone→drop→写锁仅 remove→drop→无锁区做 HTTP/channel send）
+        // 同时检查 TTL，与 try_match_approval_reply 行为一致
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let pending_opt = {
+            let map = self.pending_approvals.read().await;
+            map.get(&recipient)
+                .filter(|p| {
+                    p.request_id == request_id && now - p.created_at <= PENDING_APPROVAL_TTL_SECS
+                })
+                .cloned()
+        };
+        let Some(pending) = pending_opt else {
+            // 过期或未匹配：写锁清理
+            let mut map = self.pending_approvals.write().await;
+            if let Some(p) = map.get(&recipient)
+                && p.request_id == request_id
+                && now - p.created_at > PENDING_APPROVAL_TTL_SECS
+            {
+                map.remove(&recipient);
+            }
+            return None;
+        };
+        let matched_option = pending.options.iter().find(|opt| opt.id == option_id);
+        let opt = matched_option?;
+
+        // 写锁：仅 remove
+        {
+            let mut map = self.pending_approvals.write().await;
+            map.remove(&recipient);
+        }
+
+        // 无锁区：reject_with_feedback 两步交互 或 普通 Confirmation
+        if opt.id == "reject_with_feedback" {
+            // 两步交互：插入 pending_feedback，提示输入，不发 Confirmation
+            self.pending_feedback.write().await.insert(
+                recipient.clone(),
+                PendingFeedback {
+                    request_id,
+                    recipient: recipient.clone(),
+                },
+            );
+            let _ = self
+                .send_text_markdown(&recipient, "请输入评审建议（发送 /cancel 取消）：")
+                .await;
+            return None;
+        }
+
+        // 普通选项：发送确认提示 + InboundConfirmation
+        let note = format!("已选择：{}", opt.label);
+        let _ = self.send_text_markdown(&recipient, &note).await;
+        Some(ChannelInboundMessage {
+            channel_name: self.name().to_string(),
+            sender_id,
+            chat_id: recipient,
+            thread_id: None,
+            content: String::new(),
+            timestamp_secs: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            confirmation: Some(InboundConfirmation {
+                request_id,
+                option: opt.id.clone(),
+                label: Some(opt.label.clone()),
+                feedback: None,
+            }),
+        })
     }
 
     /// 上传媒体到 QQ API，返回 (file_info, ttl)。
@@ -1371,7 +1529,8 @@ impl Channel for QqChannel {
             .unwrap_or(41250);
 
         // 发送 Identify (op=2)
-        let intents: u64 = (1 << 25) | (1 << 30);
+        // intents: C2C (1<<25) | INTERACTION_CREATE (1<<26) | GROUP_AT (1<<30)
+        let intents: u64 = (1 << 25) | (1 << 26) | (1 << 30);
         let identify = json!({
             "op": 2,
             "d": {
@@ -1635,6 +1794,11 @@ impl Channel for QqChannel {
                             let _ = tx.send(inbound);
                             // 发送 ACK
                             self.send_ack_text(&recipient, &content).await;
+                        }
+                        "INTERACTION_CREATE" => {
+                            if let Some(inbound) = self.handle_interaction_create(d).await {
+                                let _ = tx.send(inbound);
+                            }
                         }
                         _ => {}
                     }
@@ -2429,6 +2593,221 @@ mod tests {
         ch.set_token_for_test("fake_token").await;
         let result = ch.acknowledge_interaction("INTERACTION_BAD", 0).await;
         assert!(result.is_err());
+    }
+
+    // --- interaction event parsing tests ---
+
+    #[test]
+    fn parse_interaction_event_button_click() {
+        let event_data = serde_json::json!({
+            "id": "interaction_001",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "group_openid": "GROUP456",
+            "group_member_openid": "MEMBER789",
+            "data": {
+                "type": 2001,
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:allow",
+                    "button_id": "btn_allow",
+                    "message_id": "msg_001"
+                }
+            }
+        });
+        // 解析 button_data 中的 request_id:option_id
+        let button_data = event_data["data"]["resolved"]["button_data"]
+            .as_str()
+            .unwrap();
+        let (request_id_str, option_id) = button_data.split_once(':').unwrap();
+        assert_eq!(request_id_str, "01912345-6789-7abc-8def-0123456789ab");
+        assert_eq!(option_id, "allow");
+    }
+
+    #[tokio::test]
+    async fn interaction_create_allow_button_returns_confirmation() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        // mock acknowledge_interaction (PUT)
+        Mock::given(method("PUT"))
+            .and(path("/interactions/interaction_001"))
+            .and(body_partial_json(json!({ "code": 0 })))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        // mock send_text_markdown (POST)
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_ack"})))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
+        ch.record_pending_approval(
+            "user:USER123",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "allow".to_string(),
+                label: "允许".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = serde_json::json!({
+            "id": "interaction_001",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": {
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:allow"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        assert!(result.is_some());
+        let inbound = result.unwrap();
+        assert_eq!(inbound.sender_id, "USER123");
+        assert_eq!(inbound.chat_id, "user:USER123");
+        let confirmation = inbound.confirmation.unwrap();
+        assert_eq!(confirmation.option, "allow");
+        assert_eq!(confirmation.request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn interaction_create_group_routes_to_group_recipient() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/interaction_002"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/groups/GROUP456/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_grp"})))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
+        ch.record_pending_approval(
+            "group:GROUP456",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "allow".to_string(),
+                label: "允许".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = serde_json::json!({
+            "id": "interaction_002",
+            "type": 11,
+            "chat_type": 1,
+            "group_openid": "GROUP456",
+            "group_member_openid": "MEMBER789",
+            "data": {
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:allow"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        assert!(result.is_some());
+        let inbound = result.unwrap();
+        assert_eq!(inbound.sender_id, "MEMBER789");
+        assert_eq!(inbound.chat_id, "group:GROUP456");
+    }
+
+    #[tokio::test]
+    async fn interaction_create_reject_with_feedback_enters_two_step() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/interaction_003"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_fb"})))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
+        ch.record_pending_approval(
+            "user:USER123",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "reject_with_feedback".to_string(),
+                label: "拒绝并反馈".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = serde_json::json!({
+            "id": "interaction_003",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": {
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:reject_with_feedback"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        // reject_with_feedback 不直接返回 Confirmation，进入两步流程
+        assert!(result.is_none());
+        // 验证 pending_feedback 已插入
+        let feedback = ch
+            .pending_feedback
+            .read()
+            .await
+            .get("user:USER123")
+            .cloned();
+        assert!(feedback.is_some());
+        assert_eq!(feedback.unwrap().request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn interaction_create_invalid_button_data_returns_none() {
+        // 此测试不触发 HTTP 调用（提前返回 None），不需要 mock server
+        let ch = QqChannel::new(make_config());
+        ch.set_token_for_test("fake_token").await;
+
+        let event = serde_json::json!({
+            "id": "interaction_004",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": {
+                "resolved": {
+                    "button_data": "invalid_no_colon"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        assert!(result.is_none());
     }
 
     // --- render_buttons_as_numbered_list tests ---
