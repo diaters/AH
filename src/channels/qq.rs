@@ -3197,4 +3197,105 @@ allowed_users = ["existing_user"]
         let result = ch.send(&msg).await.expect("send should succeed");
         assert_eq!(result, Some("msg_abc123".to_string()));
     }
+
+    /// 端到端集成测试：QQ 通道滚动撤回流程。
+    ///
+    /// 验证流程：
+    /// 1. 发送 TaskStatus(Running) → 收到 msg_id
+    /// 2. 发送 Recall(msg_1) + TaskStatus(Waiting) → 收到 msg_id
+    /// 3. 发送 Recall(msg_2) + LLMReply → 收到 msg_id
+    ///
+    /// 使用 wiremock 模拟 QQ API，验证 DELETE 调用次数和顺序。
+    #[tokio::test]
+    async fn qq_channel_rolling_recall_end_to_end() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+
+        let mock_server = MockServer::start().await;
+        let msg_counter = Arc::new(AtomicU32::new(1));
+
+        // POST /v2/users/{openid}/messages → 返回递增的 msg_id
+        let post_counter = msg_counter.clone();
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER_END2END/messages"))
+            .respond_with(move |_request: &wiremock::Request| {
+                let n = post_counter.fetch_add(1, AtomicOrdering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": format!("msg_end2end_{n}"),
+                    "timestamp": "1234567890"
+                }))
+            })
+            .mount(&mock_server)
+            .await;
+
+        // DELETE /v2/users/{openid}/messages/{msg_id} → 200
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+
+        // 1. 发送 TaskStatus(Running) → 无撤回
+        let msg1 = ch.send(&ChannelOutboundMessage {
+            recipient: "user:USER_END2END".to_string(),
+            thread_id: None,
+            content: "[e2e]: 运行中".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::TaskStatus,
+        }).await.expect("send running");
+        assert_eq!(msg1, Some("msg_end2end_1".to_string()));
+
+        // 2. 发送 Recall(msg_1)
+        let recall1 = ch.send(&ChannelOutboundMessage {
+            recipient: "user:USER_END2END".to_string(),
+            thread_id: None,
+            content: "msg_end2end_1".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::Recall,
+        }).await.expect("recall running");
+        assert!(recall1.is_none());
+
+        // 3. 发送 TaskStatus(Waiting)
+        let msg2 = ch.send(&ChannelOutboundMessage {
+            recipient: "user:USER_END2END".to_string(),
+            thread_id: None,
+            content: "[e2e]: 等待中".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::TaskStatus,
+        }).await.expect("send waiting");
+        assert_eq!(msg2, Some("msg_end2end_2".to_string()));
+
+        // 4. 发送 Recall(msg_2)
+        let recall2 = ch.send(&ChannelOutboundMessage {
+            recipient: "user:USER_END2END".to_string(),
+            thread_id: None,
+            content: "msg_end2end_2".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::Recall,
+        }).await.expect("recall waiting");
+        assert!(recall2.is_none());
+
+        // 5. 发送 LLMReply
+        let msg3 = ch.send(&ChannelOutboundMessage {
+            recipient: "user:USER_END2END".to_string(),
+            thread_id: None,
+            content: "[e2e] 助手: done".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::LLMReply,
+        }).await.expect("send llm reply");
+        assert_eq!(msg3, Some("msg_end2end_3".to_string()));
+    }
 }
