@@ -1096,6 +1096,37 @@ impl QqChannel {
         Ok(())
     }
 
+    /// 回应交互回调（PUT /interactions/{interaction_id}）。
+    ///
+    /// QQ API 要求在收到 INTERACTION_CREATE 事件后回调此接口，
+    /// 否则用户端按钮会一直显示加载状态。
+    #[allow(dead_code)]
+    pub async fn acknowledge_interaction(
+        &self,
+        interaction_id: &str,
+        code: i32,
+    ) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        let url = format!("{}/interactions/{interaction_id}", self.api_base);
+        let body = json!({ "code": code });
+        let resp = self
+            .client
+            .put(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        Ok(())
+    }
+
     /// 上传媒体到 QQ API，返回 (file_info, ttl)。
     /// - url 模式：传 url=Some(...)，file_data=None
     /// - base64 模式：传 file_data=Some(...)，url=None
@@ -2354,6 +2385,50 @@ mod tests {
         ch.send_typing("group:GROUP456")
             .await
             .expect("should skip with Ok");
+    }
+
+    // --- acknowledge_interaction tests ---
+
+    #[tokio::test]
+    async fn acknowledge_interaction_puts_to_interactions_endpoint() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/INTERACTION_001"))
+            .and(body_partial_json(serde_json::json!({ "code": 0 })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.acknowledge_interaction("INTERACTION_001", 0)
+            .await
+            .expect("acknowledge_interaction");
+    }
+
+    #[tokio::test]
+    async fn acknowledge_interaction_returns_error_on_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/INTERACTION_BAD"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "code": 10016,
+                "message": "interaction not found"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let result = ch.acknowledge_interaction("INTERACTION_BAD", 0).await;
+        assert!(result.is_err());
     }
 
     // --- render_buttons_as_numbered_list tests ---
