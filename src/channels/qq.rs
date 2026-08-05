@@ -275,33 +275,6 @@ fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, Channe
     })
 }
 
-/// 将 ReplyMarkup::InlineKeyboard 转译为编号列表追加到 base_content 末尾。
-fn render_buttons_as_numbered_list(
-    markup: &crate::channels::traits::ReplyMarkup,
-    base_content: &str,
-) -> String {
-    use crate::channels::traits::ReplyMarkup;
-    match markup {
-        ReplyMarkup::InlineKeyboard(rows) => {
-            let mut numbered: Vec<String> = Vec::new();
-            let mut idx = 1;
-            for row in rows {
-                for button in row {
-                    numbered.push(format!("{idx}. {}", button.text));
-                    idx += 1;
-                }
-            }
-            if numbered.is_empty() {
-                return base_content.to_string();
-            }
-            format!(
-                "{base_content}\n\n{}\n\n请回复数字或选项名称。",
-                numbered.join("\n")
-            )
-        }
-    }
-}
-
 /// 从 ReplyMarkup::InlineKeyboard 的 callback_data 中提取 request_id 与选项列表。
 /// callback_data 格式：`<request_id>:<option_id>`，由 ChannelFrontend 生成。
 fn extract_approval_info(
@@ -991,6 +964,88 @@ impl QqChannel {
         Ok(QqMessageResponse { id: msg_id })
     }
 
+    /// 发送带 InlineKeyboard 按钮的 markdown 消息。
+    async fn send_text_with_keyboard(
+        &self,
+        recipient: &str,
+        content: &str,
+        keyboard: &crate::channels::traits::ReplyMarkup,
+    ) -> Result<QqMessageResponse, ChannelError> {
+        use crate::channels::traits::ReplyMarkup;
+        let token = self.get_token().await?;
+        let (scope, id) = Self::resolve_recipient(recipient);
+        let url = format!("{}/v2/{scope}/{id}/messages", self.api_base);
+
+        let qq_keyboard = match keyboard {
+            ReplyMarkup::InlineKeyboard(rows) => {
+                let qq_rows: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|row| {
+                        let buttons: Vec<serde_json::Value> = row
+                            .iter()
+                            .map(|btn| {
+                                // 从 callback_data 提取 option_id 作为按钮 id
+                                let option_id =
+                                    btn.callback_data.split(':').nth(1).unwrap_or("unknown");
+                                json!({
+                                    "id": format!("btn_{option_id}"),
+                                    "render_data": {
+                                        "label": btn.text,
+                                        "visited_label": format!("已{}", btn.text),
+                                        "style": 1
+                                    },
+                                    "action": {
+                                        "type": 1,
+                                        "data": btn.callback_data,
+                                        "permission": { "type": 0 },
+                                        "click_limit": 1
+                                    }
+                                })
+                            })
+                            .collect();
+                        json!({ "buttons": buttons })
+                    })
+                    .collect();
+                json!({
+                    "content": {
+                        "rows": qq_rows
+                    }
+                })
+            }
+        };
+
+        let body = json!({
+            "markdown": { "content": content },
+            "msg_type": 2,
+            "msg_seq": next_msg_seq(),
+            "keyboard": qq_keyboard,
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        let raw_body = resp.text().await.unwrap_or_default();
+        let root: serde_json::Value = serde_json::from_str(&raw_body).unwrap_or(json!({}));
+        let data = root.get("data").unwrap_or(&root);
+        let msg_id = data
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(QqMessageResponse { id: msg_id })
+    }
+
     /// 发送富媒体消息（msg_type=7），返回 QQ API 分配的 message_id。
     async fn send_media_message(
         &self,
@@ -1416,64 +1471,62 @@ impl Channel for QqChannel {
     ) -> Result<(), ChannelError> {
         use crate::channels::traits::{ChannelParseMode, extract_attachments};
 
-        let (text, inline_attachments) = if message.reply_markup.is_some() {
-            (message.content.clone(), vec![])
-        } else {
-            extract_attachments(&message.content)
-        };
-
-        let all_attachments: Vec<_> = message
-            .attachments
-            .iter()
-            .chain(inline_attachments.iter())
-            .filter(|a| !a.target.trim().is_empty())
-            .cloned()
-            .collect();
-
-        let final_text = if let Some(ref markup) = message.reply_markup {
-            // 从 buttons 提取 request_id 与 options
+        if let Some(ref markup) = message.reply_markup {
+            // === 有键盘路径：发送 QQ 原生 InlineKeyboard ===
             if let Some((request_id, options)) = extract_approval_info(markup) {
                 self.record_pending_approval(&message.recipient, request_id, options)
                     .await;
             }
-            render_buttons_as_numbered_list(markup, &text)
-        } else {
-            text.clone()
-        };
-
-        let content_to_send = match message.parse_mode {
-            // ChannelFrontend 用 Html 模式发送审批请求（含 <pre> 等标签）。
-            // QQ 不支持 HTML 渲染，将 HTML 转换为 markdown（代码块/粗体/斜体）后发送。
-            Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&final_text),
-            Some(ChannelParseMode::Markdown) | None => final_text,
-        };
-
-        if !content_to_send.trim().is_empty() {
-            self.send_text_markdown(&message.recipient, &content_to_send)
-                .await?;
-        }
-
-        for attachment in &all_attachments {
-            if let Err(e) = self.send_attachment(&message.recipient, attachment).await {
-                tracing::warn!(
-                    event = "QqSendAttachmentFailed",
-                    target = %attachment.target,
-                    error = %e,
-                    "QQ attachment send failed, degrading to text"
-                );
-                let fallback = format!(
-                    "{}: {}",
-                    match attachment.kind {
-                        crate::channels::traits::AttachmentKind::Image => "Image",
-                        crate::channels::traits::AttachmentKind::Document => "File",
-                        crate::channels::traits::AttachmentKind::Video => "Video",
-                        crate::channels::traits::AttachmentKind::Audio => "Audio",
-                        crate::channels::traits::AttachmentKind::Voice => "Voice",
-                    },
-                    attachment.target
-                );
-                self.send_text_markdown(&message.recipient, &fallback)
+            let content_to_send = match message.parse_mode {
+                Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&message.content),
+                Some(ChannelParseMode::Markdown) | None => message.content.clone(),
+            };
+            if !content_to_send.trim().is_empty() {
+                self.send_text_with_keyboard(&message.recipient, &content_to_send, markup)
                     .await?;
+            }
+        } else {
+            // === 无键盘路径：普通消息 + 附件 ===
+            let (text, inline_attachments) = extract_attachments(&message.content);
+            let all_attachments: Vec<_> = message
+                .attachments
+                .iter()
+                .chain(inline_attachments.iter())
+                .filter(|a| !a.target.trim().is_empty())
+                .cloned()
+                .collect();
+
+            let content_to_send = match message.parse_mode {
+                Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&text),
+                Some(ChannelParseMode::Markdown) | None => text,
+            };
+
+            if !content_to_send.trim().is_empty() {
+                self.send_text_markdown(&message.recipient, &content_to_send)
+                    .await?;
+            }
+
+            for attachment in &all_attachments {
+                if let Err(e) = self.send_attachment(&message.recipient, attachment).await {
+                    tracing::warn!(
+                        event = "QqSendAttachmentFailed",
+                        target = %attachment.target,
+                        error = %e,
+                        "QQ attachment send failed, degrading to text"
+                    );
+                    let fallback = format!(
+                        "{}: {}",
+                        match attachment.kind {
+                            crate::channels::traits::AttachmentKind::Image => "Image",
+                            crate::channels::traits::AttachmentKind::Document => "File",
+                            crate::channels::traits::AttachmentKind::Video => "Video",
+                            crate::channels::traits::AttachmentKind::Audio => "Audio",
+                            crate::channels::traits::AttachmentKind::Voice => "Voice",
+                        },
+                        attachment.target
+                    );
+                    let _ = self.send_text_markdown(&message.recipient, &fallback).await;
+                }
             }
         }
         Ok(())
@@ -1824,6 +1877,10 @@ impl Channel for QqChannel {
             AttachmentKind::Audio,
             AttachmentKind::Voice,
         ]
+    }
+
+    fn supports_inline_keyboard(&self) -> bool {
+        true
     }
 }
 
@@ -2408,6 +2465,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_with_keyboard_posts_keyboard_field() {
+        use crate::channels::traits::{
+            ChannelOutboundMessage, ChannelParseMode, InlineKeyboardButton, ReplyMarkup,
+        };
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .and(body_partial_json(serde_json::json!({
+                "keyboard": {
+                    "content": {
+                        "rows": [{
+                            "buttons": [{
+                                "id": "btn_allow",
+                                "render_data": { "label": "允许", "visited_label": "已允许", "style": 1 },
+                                "action": {
+                                    "type": 1,
+                                    "data": "01912345-6789-7abc-8def-0123456789ab:allow",
+                                    "permission": { "type": 0 },
+                                    "click_limit": 1
+                                }
+                            }]
+                        }]
+                    }
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_keyboard_1"
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let message = ChannelOutboundMessage {
+            recipient: "user:USER123".to_string(),
+            thread_id: None,
+            content: "🔒 需要你的确认".to_string(),
+            parse_mode: Some(ChannelParseMode::Html),
+            reply_markup: Some(ReplyMarkup::InlineKeyboard(vec![vec![
+                InlineKeyboardButton {
+                    text: "允许".to_string(),
+                    callback_data: "01912345-6789-7abc-8def-0123456789ab:allow".to_string(),
+                },
+            ]])),
+            attachments: vec![],
+        };
+        ch.send(&message).await.expect("send with keyboard");
+    }
+
+    #[tokio::test]
     async fn send_media_message_posts_msg_type_7() {
         use wiremock::matchers::{body_partial_json, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2807,47 +2918,6 @@ mod tests {
 
         let result = ch.handle_interaction_create(&event).await;
         assert!(result.is_none());
-    }
-
-    // --- render_buttons_as_numbered_list tests ---
-
-    #[test]
-    fn render_buttons_single_option() {
-        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
-        let markup = ReplyMarkup::InlineKeyboard(vec![vec![InlineKeyboardButton {
-            text: "允许".to_string(),
-            callback_data: "req:allow".to_string(),
-        }]]);
-        let result = render_buttons_as_numbered_list(&markup, "请确认");
-        assert!(result.contains("请确认"));
-        assert!(result.contains("1. 允许"));
-        assert!(result.contains("请回复数字"));
-    }
-
-    #[test]
-    fn render_buttons_multiple_rows() {
-        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
-        let markup = ReplyMarkup::InlineKeyboard(vec![
-            vec![InlineKeyboardButton {
-                text: "允许".to_string(),
-                callback_data: "req:allow".to_string(),
-            }],
-            vec![InlineKeyboardButton {
-                text: "拒绝".to_string(),
-                callback_data: "req:deny".to_string(),
-            }],
-        ]);
-        let result = render_buttons_as_numbered_list(&markup, "确认");
-        assert!(result.contains("1. 允许"));
-        assert!(result.contains("2. 拒绝"));
-    }
-
-    #[test]
-    fn render_buttons_empty_returns_base() {
-        use crate::channels::traits::ReplyMarkup;
-        let markup = ReplyMarkup::InlineKeyboard(vec![]);
-        let result = render_buttons_as_numbered_list(&markup, "base");
-        assert_eq!(result, "base");
     }
 
     // --- extract_approval_info tests ---
