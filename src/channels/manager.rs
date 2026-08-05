@@ -196,9 +196,9 @@ mod tests {
         async fn send(
             &self,
             _msg: &ChannelOutboundMessage,
-        ) -> Result<(), super::super::traits::ChannelError> {
+        ) -> Result<Option<String>, super::super::traits::ChannelError> {
             self.send_count.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok(None)
         }
         async fn listen(
             &self,
@@ -253,6 +253,7 @@ mod tests {
                     parse_mode: None,
                     reply_markup: None,
                     attachments: vec![],
+                    message_kind: super::super::traits::MessageKind::Other,
                 },
             )
             .expect("queue outbound");
@@ -282,6 +283,7 @@ mod tests {
                 parse_mode: None,
                 reply_markup: None,
                 attachments: vec![],
+                message_kind: super::super::traits::MessageKind::Other,
             },
         );
         assert!(result.is_err());

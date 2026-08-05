@@ -50,6 +50,7 @@ pub fn channel_send_dispatch_system(
                 parse_mode: None,
                 reply_markup: None,
                 attachments: send.attachments.clone(),
+                message_kind: crate::channels::traits::MessageKind::LLMReply,
             },
         );
 
@@ -133,12 +134,12 @@ mod tests {
             &self.name
         }
 
-        async fn send(&self, message: &ChannelOutboundMessage) -> Result<(), ChannelError> {
+        async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError> {
             self.recipients
                 .lock()
                 .unwrap()
                 .push(message.recipient.clone());
-            Ok(())
+            Ok(None)
         }
 
         async fn listen(&self, _tx: Sender<ChannelInboundMessage>) -> Result<(), ChannelError> {

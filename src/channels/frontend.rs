@@ -7,7 +7,7 @@ use crate::domain::{
 };
 
 use super::ChannelOutboundMessage;
-use super::traits::{ChannelParseMode, InlineKeyboardButton, ReplyMarkup};
+use super::traits::{ChannelParseMode, InlineKeyboardButton, MessageKind, ReplyMarkup};
 
 /// 将 EngineEvent 路由到对应 IM 通道出向发送队列的 Frontend 实现。
 pub struct ChannelFrontend {
@@ -124,6 +124,11 @@ impl Frontend for ChannelFrontend {
                         parse_mode: None,
                         reply_markup: None,
                         attachments: vec![],
+                        message_kind: match role {
+                            MessageRole::Agent => MessageKind::LLMReply,
+                            MessageRole::System => MessageKind::System,
+                            MessageRole::User => MessageKind::Other,
+                        },
                     };
                     self.send_message(msg);
                 }
@@ -176,6 +181,7 @@ impl Frontend for ChannelFrontend {
                         parse_mode: Some(ChannelParseMode::Html),
                         reply_markup: Some(ReplyMarkup::InlineKeyboard(buttons.clone())),
                         attachments: vec![],
+                        message_kind: MessageKind::ApprovalRequest,
                     };
                     self.send_message(msg);
                 }
@@ -222,6 +228,7 @@ impl Frontend for ChannelFrontend {
                         parse_mode: None,
                         reply_markup: None,
                         attachments: vec![],
+                        message_kind: MessageKind::TaskStatus,
                     };
                     self.send_message(msg);
                 }
