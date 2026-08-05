@@ -1483,7 +1483,6 @@ impl Channel for QqChannel {
         &self,
         tx: crossbeam_channel::Sender<crate::channels::traits::ChannelInboundMessage>,
     ) -> Result<(), ChannelError> {
-        use crate::channels::traits::ChannelInboundMessage;
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
 
