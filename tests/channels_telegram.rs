@@ -34,6 +34,7 @@ async fn telegram_send_message() {
             parse_mode: None,
             reply_markup: None,
             attachments: vec![],
+            message_kind: harness::channels::MessageKind::Other,
         })
         .await
         .expect("send");

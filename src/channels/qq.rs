@@ -1272,18 +1272,22 @@ impl QqChannel {
         }
 
         // 撤回审批请求消息（用户点击按钮后，审批请求消息已无存在意义）
-        let approval_msg_id = self.pending_approval_msg_ids.write().await.remove(request_id_str);
-        if let Some(msg_id) = approval_msg_id {
-            if let Err(e) = self.recall_message(&recipient, &msg_id).await {
-                tracing::warn!(
-                    event = "ChannelRecallFailed",
-                    channel = "qq",
-                    recipient = %recipient,
-                    msg_id = %msg_id,
-                    error = %e,
-                    "recall approval request failed"
-                );
-            }
+        let approval_msg_id = self
+            .pending_approval_msg_ids
+            .write()
+            .await
+            .remove(request_id_str);
+        if let Some(msg_id) = approval_msg_id
+            && let Err(e) = self.recall_message(&recipient, &msg_id).await
+        {
+            tracing::warn!(
+                event = "ChannelRecallFailed",
+                channel = "qq",
+                recipient = %recipient,
+                msg_id = %msg_id,
+                error = %e,
+                "recall approval request failed"
+            );
         }
 
         // 无锁区：reject_with_feedback 两步交互 或 普通 Confirmation
@@ -1457,7 +1461,10 @@ impl Channel for QqChannel {
 
         // 撤回指令：content 字段为目标 msg_id
         if message.message_kind == MessageKind::Recall {
-            if let Err(e) = self.recall_message(&message.recipient, &message.content).await {
+            if let Err(e) = self
+                .recall_message(&message.recipient, &message.content)
+                .await
+            {
                 tracing::warn!(
                     event = "ChannelRecallFailed",
                     channel = "qq",
@@ -1481,20 +1488,23 @@ impl Channel for QqChannel {
                 Some(ChannelParseMode::Markdown) | None => message.content.clone(),
             };
             let id = if !content_to_send.trim().is_empty() {
-                Some(self.send_text_with_keyboard(&message.recipient, &content_to_send, markup).await?.id)
+                Some(
+                    self.send_text_with_keyboard(&message.recipient, &content_to_send, markup)
+                        .await?
+                        .id,
+                )
             } else {
                 None
             };
             // 记录审批请求消息的 msg_id，用于用户点击按钮后撤回
-            if message.message_kind == MessageKind::ApprovalRequest {
-                if let Some(ref mid) = id {
-                    if let Some((request_id, _)) = extract_approval_info(markup) {
-                        self.pending_approval_msg_ids
-                            .write()
-                            .await
-                            .insert(request_id.to_string(), mid.clone());
-                    }
-                }
+            if message.message_kind == MessageKind::ApprovalRequest
+                && let Some(ref mid) = id
+                && let Some((request_id, _)) = extract_approval_info(markup)
+            {
+                self.pending_approval_msg_ids
+                    .write()
+                    .await
+                    .insert(request_id.to_string(), mid.clone());
             }
             id
         } else {
@@ -1515,7 +1525,11 @@ impl Channel for QqChannel {
 
             let mut id = None;
             if !content_to_send.trim().is_empty() {
-                id = Some(self.send_text_markdown(&message.recipient, &content_to_send).await?.id);
+                id = Some(
+                    self.send_text_markdown(&message.recipient, &content_to_send)
+                        .await?
+                        .id,
+                );
             }
 
             for attachment in &all_attachments {
@@ -3208,9 +3222,9 @@ allowed_users = ["existing_user"]
     /// 使用 wiremock 模拟 QQ API，验证 DELETE 调用次数和顺序。
     #[tokio::test]
     async fn qq_channel_rolling_recall_end_to_end() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
         let mock_server = MockServer::start().await;
         let msg_counter = Arc::new(AtomicU32::new(1));
@@ -3239,63 +3253,78 @@ allowed_users = ["existing_user"]
         ch.set_token_for_test("fake_token").await;
 
         // 1. 发送 TaskStatus(Running) → 无撤回
-        let msg1 = ch.send(&ChannelOutboundMessage {
-            recipient: "user:USER_END2END".to_string(),
-            thread_id: None,
-            content: "[e2e]: 运行中".to_string(),
-            parse_mode: None,
-            reply_markup: None,
-            attachments: vec![],
-            message_kind: MessageKind::TaskStatus,
-        }).await.expect("send running");
+        let msg1 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "[e2e]: 运行中".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::TaskStatus,
+            })
+            .await
+            .expect("send running");
         assert_eq!(msg1, Some("msg_end2end_1".to_string()));
 
         // 2. 发送 Recall(msg_1)
-        let recall1 = ch.send(&ChannelOutboundMessage {
-            recipient: "user:USER_END2END".to_string(),
-            thread_id: None,
-            content: "msg_end2end_1".to_string(),
-            parse_mode: None,
-            reply_markup: None,
-            attachments: vec![],
-            message_kind: MessageKind::Recall,
-        }).await.expect("recall running");
+        let recall1 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "msg_end2end_1".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::Recall,
+            })
+            .await
+            .expect("recall running");
         assert!(recall1.is_none());
 
         // 3. 发送 TaskStatus(Waiting)
-        let msg2 = ch.send(&ChannelOutboundMessage {
-            recipient: "user:USER_END2END".to_string(),
-            thread_id: None,
-            content: "[e2e]: 等待中".to_string(),
-            parse_mode: None,
-            reply_markup: None,
-            attachments: vec![],
-            message_kind: MessageKind::TaskStatus,
-        }).await.expect("send waiting");
+        let msg2 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "[e2e]: 等待中".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::TaskStatus,
+            })
+            .await
+            .expect("send waiting");
         assert_eq!(msg2, Some("msg_end2end_2".to_string()));
 
         // 4. 发送 Recall(msg_2)
-        let recall2 = ch.send(&ChannelOutboundMessage {
-            recipient: "user:USER_END2END".to_string(),
-            thread_id: None,
-            content: "msg_end2end_2".to_string(),
-            parse_mode: None,
-            reply_markup: None,
-            attachments: vec![],
-            message_kind: MessageKind::Recall,
-        }).await.expect("recall waiting");
+        let recall2 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "msg_end2end_2".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::Recall,
+            })
+            .await
+            .expect("recall waiting");
         assert!(recall2.is_none());
 
         // 5. 发送 LLMReply
-        let msg3 = ch.send(&ChannelOutboundMessage {
-            recipient: "user:USER_END2END".to_string(),
-            thread_id: None,
-            content: "[e2e] 助手: done".to_string(),
-            parse_mode: None,
-            reply_markup: None,
-            attachments: vec![],
-            message_kind: MessageKind::LLMReply,
-        }).await.expect("send llm reply");
+        let msg3 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "[e2e] 助手: done".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::LLMReply,
+            })
+            .await
+            .expect("send llm reply");
         assert_eq!(msg3, Some("msg_end2end_3".to_string()));
     }
 }

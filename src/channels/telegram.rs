@@ -551,7 +551,10 @@ impl Channel for TelegramChannel {
 
         // 撤回指令：content 字段为目标 msg_id
         if message.message_kind == MessageKind::Recall {
-            if let Err(e) = self.recall_message(&message.recipient, &message.content).await {
+            if let Err(e) = self
+                .recall_message(&message.recipient, &message.content)
+                .await
+            {
                 tracing::warn!(
                     event = "ChannelRecallFailed",
                     channel = "telegram",
@@ -2423,7 +2426,10 @@ allowed_users = ["qq_user"]
             .and(path("/botTOKEN/deleteMessage"))
             .and(body_string_contains("chat_id"))
             .and(body_string_contains("message_id"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": true})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "result": true})),
+            )
             .expect(1)
             .mount(&mock_server)
             .await;
@@ -2447,7 +2453,10 @@ allowed_users = ["qq_user"]
         Mock::given(method("POST"))
             .and(path("/botTOKEN/sendChatAction"))
             .and(body_string_contains("\"action\":\"typing\""))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": true})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "result": true})),
+            )
             .expect(1)
             .mount(&mock_server)
             .await;

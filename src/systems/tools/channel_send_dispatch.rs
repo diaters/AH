@@ -134,7 +134,10 @@ mod tests {
             &self.name
         }
 
-        async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError> {
+        async fn send(
+            &self,
+            message: &ChannelOutboundMessage,
+        ) -> Result<Option<String>, ChannelError> {
             self.recipients
                 .lock()
                 .unwrap()

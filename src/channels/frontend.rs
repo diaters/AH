@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{error, trace};
 
 use crate::domain::{
@@ -158,25 +158,25 @@ impl Frontend for ChannelFrontend {
                 };
                 for channel_id in recipients {
                     // LLM 回复到达时，撤回该 task+recipient 的最终态状态消息
-                    if message_kind == MessageKind::LLMReply {
-                        if let Some(tid) = task_id {
-                            let key = (tid.to_string(), channel_id.user_id.clone());
-                            if let Ok(map) = self.last_status_msg.try_read() {
-                                if let Some(msg_id) = map.get(&key).cloned() {
-                                    drop(map);
-                                    self.enqueue_recall(
-                                        channel_id.user_id.clone(),
-                                        channel_id.thread_id.clone(),
-                                        msg_id,
-                                    );
-                                    if let Ok(mut map) = self.last_status_msg.try_write() {
-                                        map.remove(&key);
-                                    }
-                                }
+                    if message_kind == MessageKind::LLMReply
+                        && let Some(tid) = task_id
+                    {
+                        let key = (tid.to_string(), channel_id.user_id.clone());
+                        if let Ok(map) = self.last_status_msg.try_read()
+                            && let Some(msg_id) = map.get(&key).cloned()
+                        {
+                            drop(map);
+                            self.enqueue_recall(
+                                channel_id.user_id.clone(),
+                                channel_id.thread_id.clone(),
+                                msg_id,
+                            );
+                            if let Ok(mut map) = self.last_status_msg.try_write() {
+                                map.remove(&key);
                             }
-                            if let Ok(mut set) = self.task_finalized.try_write() {
-                                set.insert(tid.to_string());
-                            }
+                        }
+                        if let Ok(mut set) = self.task_finalized.try_write() {
+                            set.insert(tid.to_string());
                         }
                     }
                     let msg = ChannelOutboundMessage {
@@ -283,19 +283,18 @@ impl Frontend for ChannelFrontend {
                     let key = (task_id.to_string(), channel_id.user_id.clone());
                     // 滚动撤回：发新状态消息前撤回上一条
                     // Failed 状态不撤回（保留错误信息作为最终态）
-                    if status != TaskStatusKind::Failed {
-                        if let Ok(map) = self.last_status_msg.try_read() {
-                            if let Some(old_msg_id) = map.get(&key).cloned() {
-                                drop(map);
-                                self.enqueue_recall(
-                                    channel_id.user_id.clone(),
-                                    channel_id.thread_id.clone(),
-                                    old_msg_id,
-                                );
-                                if let Ok(mut map) = self.last_status_msg.try_write() {
-                                    map.remove(&key);
-                                }
-                            }
+                    if status != TaskStatusKind::Failed
+                        && let Ok(map) = self.last_status_msg.try_read()
+                        && let Some(old_msg_id) = map.get(&key).cloned()
+                    {
+                        drop(map);
+                        self.enqueue_recall(
+                            channel_id.user_id.clone(),
+                            channel_id.thread_id.clone(),
+                            old_msg_id,
+                        );
+                        if let Ok(mut map) = self.last_status_msg.try_write() {
+                            map.remove(&key);
                         }
                     }
 
@@ -303,10 +302,10 @@ impl Frontend for ChannelFrontend {
                     let last_status_msg = self.last_status_msg.clone();
                     let on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>> =
                         Some(Box::new(move |msg_id: Option<String>| {
-                            if let Some(id) = msg_id {
-                                if let Ok(mut map) = last_status_msg.try_write() {
-                                    map.insert(key, id);
-                                }
+                            if let Some(id) = msg_id
+                                && let Ok(mut map) = last_status_msg.try_write()
+                            {
+                                map.insert(key, id);
                             }
                         }));
 
@@ -351,10 +350,7 @@ mod tests {
 
     fn make_frontend(
         kind: FrontendKind,
-    ) -> (
-        ChannelFrontend,
-        mpsc::UnboundedReceiver<OutboundEntry>,
-    ) {
+    ) -> (ChannelFrontend, mpsc::UnboundedReceiver<OutboundEntry>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (ChannelFrontend::new(kind, "test", tx), rx)
     }
@@ -523,7 +519,10 @@ mod tests {
         };
         fe.push_event(event);
         let entry = rx.try_recv().expect("one outbound message");
-        assert!(matches!(entry.message.parse_mode, Some(ChannelParseMode::Html)));
+        assert!(matches!(
+            entry.message.parse_mode,
+            Some(ChannelParseMode::Html)
+        ));
         assert!(
             entry.message.content.contains("&lt;script&gt; &amp; text"),
             "HTML special chars should be escaped: {}",
@@ -677,7 +676,10 @@ mod tests {
             waiting_reason: None,
         });
         let entry = rx.try_recv().expect("one outbound message");
-        assert_eq!(entry.message.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
+        assert_eq!(
+            entry.message.content,
+            "[a1b2c3d4]: 运行中 → 已完成 @TestAgent"
+        );
         assert!(rx.try_recv().is_err());
     }
 
@@ -705,7 +707,10 @@ mod tests {
         });
         let entry = rx.try_recv().expect("one outbound message");
         // IM 通道不渲染 task name（即使很长也不应出现在输出中），仅显示 id + 状态 + agent
-        assert_eq!(entry.message.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
+        assert_eq!(
+            entry.message.content,
+            "[a1b2c3d4]: 运行中 → 已完成 @TestAgent"
+        );
         assert!(
             !entry.message.content.contains('测'),
             "消息不应包含 task name 内容，实际: {}",
@@ -900,7 +905,10 @@ mod tests {
             }]),
             task_id,
         });
-        assert!(rx.try_recv().is_err(), "TaskCleared should not produce outbound");
+        assert!(
+            rx.try_recv().is_err(),
+            "TaskCleared should not produce outbound"
+        );
 
         // 再次发送同 task 的状态消息 —— 不应触发撤回（状态已清理）
         fe.push_event(EngineEvent::TaskStatusChanged {
