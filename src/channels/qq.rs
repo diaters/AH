@@ -232,6 +232,14 @@ struct QqUploadResponse {
     ttl: Option<u64>,
 }
 
+/// QQ 消息发送接口返回的消息 ID。
+#[derive(Debug, serde::Deserialize)]
+struct QqMessageResponse {
+    /// QQ API 返回的消息 ID（字段名为 "id"）
+    #[allow(dead_code)]
+    id: String,
+}
+
 /// 解析 QQ 上传类接口返回，兼容顶层或 data 包裹格式。
 fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, ChannelError> {
     let root: serde_json::Value =
@@ -942,8 +950,12 @@ impl QqChannel {
         ("users", user_id)
     }
 
-    /// 发送 markdown 文本消息（msg_type=2）。
-    async fn send_text_markdown(&self, recipient: &str, content: &str) -> Result<(), ChannelError> {
+    /// 发送 markdown 文本消息（msg_type=2），返回 QQ API 分配的 message_id。
+    async fn send_text_markdown(
+        &self,
+        recipient: &str,
+        content: &str,
+    ) -> Result<QqMessageResponse, ChannelError> {
         let token = self.get_token().await?;
         let (scope, id) = Self::resolve_recipient(recipient);
         let url = format!("{}/v2/{scope}/{id}/messages", self.api_base);
@@ -967,15 +979,24 @@ impl QqChannel {
                 message: text,
             });
         }
-        Ok(())
+        let raw_body = resp.text().await.unwrap_or_default();
+        // QQ API 返回 {"id":"msg_xxx",...} 或 {"data":{"id":"msg_xxx",...}}
+        let root: serde_json::Value = serde_json::from_str(&raw_body).unwrap_or_else(|_| json!({}));
+        let data = root.get("data").unwrap_or(&root);
+        let msg_id = data
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(QqMessageResponse { id: msg_id })
     }
 
-    /// 发送富媒体消息（msg_type=7）。
+    /// 发送富媒体消息（msg_type=7），返回 QQ API 分配的 message_id。
     async fn send_media_message(
         &self,
         recipient: &str,
         file_info: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<QqMessageResponse, ChannelError> {
         let token = self.get_token().await?;
         let (scope, id) = Self::resolve_recipient(recipient);
         let url = format!("{}/v2/{scope}/{id}/messages", self.api_base);
@@ -999,7 +1020,16 @@ impl QqChannel {
                 message: text,
             });
         }
-        Ok(())
+        let raw_body = resp.text().await.unwrap_or_default();
+        // QQ API 返回 {"id":"msg_xxx",...} 或 {"data":{"id":"msg_xxx",...}}
+        let root: serde_json::Value = serde_json::from_str(&raw_body).unwrap_or_else(|_| json!({}));
+        let data = root.get("data").unwrap_or(&root);
+        let msg_id = data
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(QqMessageResponse { id: msg_id })
     }
 
     /// 上传媒体到 QQ API，返回 (file_info, ttl)。
@@ -2112,9 +2142,11 @@ mod tests {
 
         let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
-        ch.send_text_markdown("user:USER123", "hello")
+        let resp = ch
+            .send_text_markdown("user:USER123", "hello")
             .await
             .expect("send_text_markdown");
+        assert_eq!(resp.id, "msg_1");
     }
 
     #[tokio::test]
@@ -2129,16 +2161,20 @@ mod tests {
                 "msg_type": 7,
                 "media": { "file_info": "fi_abc" },
             })))
-            .respond_with(ResponseTemplate::new(200))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_media_1",
+            })))
             .expect(1)
             .mount(&mock_server)
             .await;
 
         let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
-        ch.send_media_message("user:USER123", "fi_abc")
+        let resp = ch
+            .send_media_message("user:USER123", "fi_abc")
             .await
             .expect("send_media_message");
+        assert_eq!(resp.id, "msg_media_1");
     }
 
     #[tokio::test]
