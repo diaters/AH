@@ -138,6 +138,7 @@ fn allowed_tool_executes_directly() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -243,6 +244,7 @@ fn denied_tool_does_not_execute() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::from([("test_deny".to_string(), ToolPermission::Deny)]),
         },
     );
@@ -327,6 +329,7 @@ fn confirm_tool_requires_user_confirmation() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Confirm,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -427,6 +430,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -497,6 +501,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
 fn agent_tool_permissions_override_works() {
     let perms = AgentToolPermissions {
         default_permission: ToolPermission::Deny,
+        default_permission_explicit: true,
         overrides: HashMap::from([
             ("allowed_tool".to_string(), ToolPermission::Allow),
             ("confirm_tool".to_string(), ToolPermission::Confirm),
@@ -504,17 +509,17 @@ fn agent_tool_permissions_override_works() {
     };
 
     assert_eq!(
-        perms.get_permission("allowed_tool"),
+        perms.effective_permission("allowed_tool", None).0,
         ToolPermission::Allow,
         "Override should take precedence for allowed_tool"
     );
     assert_eq!(
-        perms.get_permission("confirm_tool"),
+        perms.effective_permission("confirm_tool", None).0,
         ToolPermission::Confirm,
         "Override should take precedence for confirm_tool"
     );
     assert_eq!(
-        perms.get_permission("unknown_tool"),
+        perms.effective_permission("unknown_tool", None).0,
         ToolPermission::Deny,
         "Default should be used for unknown tools"
     );
@@ -544,6 +549,7 @@ fn user_denies_tool_confirmation() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Confirm,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -650,6 +656,7 @@ fn user_allows_tool_once() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Confirm,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -771,6 +778,7 @@ fn child_agent_confirm_routes_to_parent() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Deny,
+            default_permission_explicit: true,
             overrides: {
                 let mut m = HashMap::new();
                 m.insert("shell_exec".to_string(), ToolPermission::Allow);
@@ -833,6 +841,7 @@ fn child_agent_confirm_routes_to_parent() {
         bound_task_id: Some(task_id),
         tool_permissions: AgentToolPermissions {
             default_permission: ToolPermission::Deny,
+            default_permission_explicit: true,
             overrides: {
                 let mut m = HashMap::new();
                 m.insert("shell_exec".to_string(), ToolPermission::Confirm);
@@ -919,6 +928,7 @@ fn confirmation_denied_rejects_tool() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Deny,
+            default_permission_explicit: true,
             overrides: {
                 let mut m = HashMap::new();
                 m.insert("shell_exec".to_string(), ToolPermission::Allow);
@@ -981,6 +991,7 @@ fn confirmation_denied_rejects_tool() {
         bound_task_id: Some(task_id),
         tool_permissions: AgentToolPermissions {
             default_permission: ToolPermission::Deny,
+            default_permission_explicit: true,
             overrides: {
                 let mut m = HashMap::new();
                 m.insert("shell_exec".to_string(), ToolPermission::Confirm);
@@ -1067,6 +1078,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Deny,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );
@@ -1103,6 +1115,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
             bound_task_id: Some(task_id),
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Deny,
+                default_permission_explicit: true,
                 overrides: {
                     let mut m = HashMap::new();
                     m.insert("shell_exec".to_string(), ToolPermission::Confirm);
@@ -1197,6 +1210,7 @@ fn user_allows_tool_always() {
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Confirm,
+            default_permission_explicit: true,
             overrides: HashMap::new(),
         },
     );

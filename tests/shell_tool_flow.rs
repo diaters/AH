@@ -153,6 +153,7 @@ fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: harness::ToolPermission::Allow,
+                default_permission_explicit: true,
                 overrides: Default::default(),
             },
             system_prompt: None,

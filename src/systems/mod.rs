@@ -42,7 +42,9 @@ pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
 pub(crate) use ingress_hook::on_message_received_hook_system;
 pub(crate) use knowledge_hook::on_shared_knowledge_write_hook_system;
-pub(crate) use maintenance::{agent_factory_system, load_agents_system};
+pub(crate) use maintenance::{
+    agent_factory_system, load_agents_system, validate_required_tags_system,
+};
 pub(crate) use memory::{
     init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
 };

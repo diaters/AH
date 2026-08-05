@@ -1984,6 +1984,7 @@ mod tests {
             bound_task_id: None,
             tool_permissions: crate::domain::AgentToolPermissions {
                 default_permission: crate::domain::ToolPermission::Allow,
+                default_permission_explicit: true,
                 overrides: std::collections::HashMap::new(),
             },
             system_prompt: None,

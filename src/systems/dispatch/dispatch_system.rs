@@ -276,7 +276,10 @@ pub fn dispatch_system(
                         .iter()
                         .filter(|tool_def| {
                             !matches!(
-                                agent.tool_permissions.get_permission(&tool_def.name),
+                                agent
+                                    .tool_permissions
+                                    .effective_permission(&tool_def.name, Some(&registry))
+                                    .0,
                                 ToolPermission::Deny
                             )
                         })

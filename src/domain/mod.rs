@@ -43,7 +43,7 @@ pub type ExecutorFuture =
 // agent
 pub use agent::{
     Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
-    AgentToolPermissions,
+    AgentToolPermissions, PermissionSource,
 };
 
 // chat_session
@@ -86,7 +86,8 @@ pub use execution::{
 // frontend
 pub use frontend::{
     AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
-    MessageRole, TaskStatusKind, UserAction, WaitingReasonKind, summarize_tool_input,
+    MessageRole, PermissionAction, PermissionAuditContext, TaskStatusKind, UserAction,
+    WaitingReasonKind, summarize_tool_input,
 };
 
 // memory
@@ -248,8 +249,14 @@ mod tests {
             system_prompt: None,
         };
 
-        assert!(agent.has_permission("test_tool"));
-        assert!(!agent.has_permission("other_tool"));
+        assert_eq!(
+            agent.effective_permission("test_tool", None).0,
+            ToolPermission::Allow
+        );
+        assert_eq!(
+            agent.effective_permission("other_tool", None).0,
+            ToolPermission::Confirm
+        );
     }
 
     #[test]
@@ -271,11 +278,17 @@ mod tests {
             system_prompt: None,
         };
 
-        assert!(!agent.has_permission("new_tool"));
+        assert_eq!(
+            agent.effective_permission("new_tool", None).0,
+            ToolPermission::Confirm
+        );
 
         agent.grant_permission("new_tool".to_string());
 
-        assert!(agent.has_permission("new_tool"));
+        assert_eq!(
+            agent.effective_permission("new_tool", None).0,
+            ToolPermission::Allow
+        );
     }
 
     #[test]

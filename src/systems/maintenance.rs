@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -334,16 +334,20 @@ fn handle_spawn_request(
         return;
     };
 
-    // 过滤 tools：保留父 Agent 有 Allow 或 Confirm 权限的工具
-    let allowed_tools: Vec<String> = request
+    // 过滤 tools：保留父 Agent 非 Deny 的工具，并继承父的 effective_permission
+    let parent_perms: Vec<(String, ToolPermission)> = request
         .tools
         .iter()
-        .filter(|tool| {
-            let perm = parent_agent.tool_permissions.get_permission(tool);
-            !matches!(perm, crate::domain::ToolPermission::Deny)
+        .filter_map(|tool| {
+            let (perm, _source) = parent_agent.effective_permission(tool, Some(registry));
+            if perm == ToolPermission::Deny {
+                return None;
+            }
+            Some((tool.clone(), perm))
         })
-        .cloned()
         .collect();
+
+    let allowed_tools: Vec<String> = parent_perms.iter().map(|(t, _)| t.clone()).collect();
 
     // 只在请求了工具但全部无效时才拒绝
     // 空工具列表是合法的，表示纯 LLM 对话任务
@@ -382,14 +386,27 @@ fn handle_spawn_request(
         "spawning task-scoped agent"
     );
 
-    // 构建 tool_permissions: 子 Agent 默认拒绝，仅显式允许的工具可用
+    // 构建 tool_permissions: 子 Agent 默认拒绝，按工具逐个继承父的 effective_permission
     let tool_permissions = AgentToolPermissions {
         default_permission: ToolPermission::Deny,
-        overrides: allowed_tools
-            .iter()
-            .map(|t| (t.clone(), ToolPermission::Allow))
-            .collect(),
+        default_permission_explicit: true,
+        overrides: parent_perms.into_iter().collect(),
     };
+
+    // 权限审计（tracing log）：子 Agent 继承父权限的每个 override。
+    // 不发 EngineEvent——spawn 路径无 frontend_registry 访问，且继承日志
+    // 仅供可观测性消费，无需推前端。grant_permission 的日志已在
+    // Agent::grant_permission 方法内（任务 2），此处仅记录继承映射。
+    for (tool, perm) in &tool_permissions.overrides {
+        info!(
+            event = "PermissionInherit",
+            agent_id = %id,
+            tool_name = %tool,
+            permission = ?perm,
+            context = "SpawnInherit",
+            "子 Agent 继承父权限"
+        );
+    }
 
     spawn_agent(
         commands,
@@ -499,5 +516,246 @@ fn mark_task_failed(
         task.last_error = Some(error_message.to_string());
         task.status = crate::domain::TaskStatus::Failed(FailureReason::AgentError);
         task.updated_at = clock.0;
+    }
+}
+
+/// O7 启动期 required_tag 孤儿扫描。
+///
+/// 遍历 `SpaceToolRegistry` 中所有工具的 `required_tag`，若某工具声明了
+/// `required_tag` 但当前所有 Agent 的 `capabilities.tags` 都不包含该 tag，
+/// 则发出 `RequiredTagOrphan` warn。
+///
+/// 语义：该工具在当前 Agent 集合下不可被路由（无人能满足 required_tag），
+/// 但不阻止启动——task-scoped Agent 可能在运行时被 spawn 并持有该 tag。
+pub fn validate_required_tags(registry: &SpaceToolRegistry, agents: &[Agent]) {
+    use std::collections::HashSet;
+    let all_tags: HashSet<&str> = agents
+        .iter()
+        .flat_map(|a| a.capabilities.tags.iter().map(|s| s.as_str()))
+        .collect();
+    for tool_def in registry.iter() {
+        if let Some(required) = &tool_def.required_tag
+            && !all_tags.contains(required.as_str())
+        {
+            warn!(
+                event = "RequiredTagOrphan",
+                tool_name = %tool_def.name,
+                required_tag = %required,
+                "no agent currently holds the required_tag; tool will be unusable until \
+                 an agent with this tag is loaded (e.g., task-scoped agent at runtime)"
+            );
+        }
+    }
+}
+
+/// O7 启动期 required_tag 孤儿扫描 system。
+///
+/// 通过 `Local<bool>` 保证只在第一次 update 时运行一次，扫描启动期已加载的
+/// 持久化 Agent 与 `SpaceToolRegistry` 中工具的 `required_tag` 匹配关系。
+/// task-scoped Agent 在运行时 spawn 不经此扫描（它们由父 Agent 显式授权）。
+pub(crate) fn validate_required_tags_system(
+    mut ran: Local<bool>,
+    agents: Query<&Agent>,
+    tool_registry: Res<SpaceToolRegistry>,
+) {
+    if *ran {
+        return;
+    }
+    *ran = true;
+    let agent_list: Vec<Agent> = agents.iter().cloned().collect();
+    validate_required_tags(&tool_registry, &agent_list);
+}
+
+#[cfg(test)]
+mod o2_inheritance_tests {
+    //! O2 子 Agent 权限继承单元测试
+    //!
+    //! 验证 `handle_spawn_request` 中 `parent_perms` 的 filter_map 逻辑：
+    //! 父 Confirm → 子 Confirm（不再降为 Allow）；父 Allow → 子 Allow；
+    //! 父 Deny → 工具不传入子 overrides。
+
+    use super::*;
+    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolSchema};
+    use std::collections::HashMap;
+
+    /// 构造父 Agent：default + explicit + overrides 完全可控
+    fn make_parent(
+        default: ToolPermission,
+        explicit: bool,
+        overrides: HashMap<String, ToolPermission>,
+    ) -> Agent {
+        Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "parent".to_string(),
+                model: "m".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![],
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: default,
+                default_permission_explicit: explicit,
+                overrides,
+            },
+            system_prompt: None,
+        }
+    }
+
+    /// 构造只含一个工具的 SpaceToolRegistry
+    fn make_registry_with(tool_name: &str, perm: ToolPermission) -> SpaceToolRegistry {
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(ToolDefinition {
+            name: tool_name.to_string(),
+            description: "test".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: perm,
+            executor: ToolExecutorKind::Builtin(tool_name.to_string()),
+            required_tag: None,
+        });
+        registry
+    }
+
+    /// 复刻 `handle_spawn_request` 中构造 `parent_perms` 的 filter_map 逻辑，
+    /// 让单元测试不依赖 Commands / World 即可验证权限继承语义。
+    fn collect_parent_perms(
+        parent: &Agent,
+        registry: &SpaceToolRegistry,
+        tools: &[String],
+    ) -> Vec<(String, ToolPermission)> {
+        tools
+            .iter()
+            .filter_map(|tool| {
+                let (perm, _source) = parent.effective_permission(tool, Some(registry));
+                if perm == ToolPermission::Deny {
+                    return None;
+                }
+                Some((tool.clone(), perm))
+            })
+            .collect()
+    }
+
+    /// 父 Confirm → 子 Confirm（不再降为 Allow）
+    #[test]
+    fn child_inherits_confirm_from_parent_confirm() {
+        let mut overrides = HashMap::new();
+        overrides.insert("shell_exec".to_string(), ToolPermission::Confirm);
+        let parent = make_parent(ToolPermission::Deny, true, overrides);
+        let registry = make_registry_with("shell_exec", ToolPermission::Allow);
+
+        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+
+        assert_eq!(parent_perms.len(), 1, "Confirm 工具应保留");
+        assert_eq!(parent_perms[0].0, "shell_exec");
+        assert_eq!(
+            parent_perms[0].1,
+            ToolPermission::Confirm,
+            "父 Confirm 必须原样继承为子 Confirm，不得降级为 Allow"
+        );
+    }
+
+    /// 父 Allow → 子 Allow
+    #[test]
+    fn child_inherits_allow_from_parent_allow() {
+        let mut overrides = HashMap::new();
+        overrides.insert("shell_exec".to_string(), ToolPermission::Allow);
+        let parent = make_parent(ToolPermission::Deny, true, overrides);
+        let registry = make_registry_with("shell_exec", ToolPermission::Confirm);
+
+        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+
+        assert_eq!(parent_perms.len(), 1, "Allow 工具应保留");
+        assert_eq!(
+            parent_perms[0].1,
+            ToolPermission::Allow,
+            "父 Allow 必须原样继承为子 Allow"
+        );
+    }
+
+    /// 父 Deny → 工具不传入子 overrides
+    #[test]
+    fn child_excludes_denied_tool() {
+        let mut overrides = HashMap::new();
+        overrides.insert("shell_exec".to_string(), ToolPermission::Deny);
+        let parent = make_parent(ToolPermission::Deny, true, overrides);
+        let registry = make_registry_with("shell_exec", ToolPermission::Allow);
+
+        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+
+        assert!(
+            parent_perms.is_empty(),
+            "父 Deny 的工具必须被排除，不得进入子 overrides"
+        );
+    }
+}
+
+#[cfg(test)]
+mod required_tag_tests {
+    //! O7 required_tag 启动期孤儿扫描测试
+    //!
+    //! 验证 `validate_required_tags` 在以下场景不 panic（warn 不 panic）：
+    //! - 工具声明 required_tag 且 agent 持有该 tag
+    //! - 工具无 required_tag 且 agents 列表为空
+
+    use super::*;
+    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolSchema};
+
+    fn make_tool_def_with_required_tag(name: &str, required_tag: Option<&str>) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: "test".to_string(),
+            parameters: ToolSchema::default(),
+            default_permission: ToolPermission::Allow,
+            executor: ToolExecutorKind::Builtin(name.to_string()),
+            required_tag: required_tag.map(|s| s.to_string()),
+        }
+    }
+
+    fn make_agent_with_tags(tags: Vec<String>) -> Agent {
+        Agent {
+            id: Uuid::nil(),
+            profile: AgentProfile {
+                name: "test".to_string(),
+                model: "m".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags,
+                description: String::new(),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions::default(),
+            system_prompt: None,
+        }
+    }
+
+    /// 工具声明 required_tag="profile"，agent 持有 tag="profile"，不 warn
+    #[test]
+    fn validate_required_tags_no_warn_when_tag_held() {
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(make_tool_def_with_required_tag(
+            "profile_tool",
+            Some("profile"),
+        ));
+        let agents = vec![make_agent_with_tags(vec!["profile".to_string()])];
+
+        // 不应 panic
+        validate_required_tags(&registry, &agents);
+    }
+
+    /// 工具无 required_tag，空 agents 列表，不 warn
+    #[test]
+    fn validate_required_tags_no_warn_when_no_required_tag() {
+        let mut registry = SpaceToolRegistry::default();
+        registry.register(make_tool_def_with_required_tag("plain_tool", None));
+        let agents: Vec<Agent> = vec![];
+
+        // 不应 panic
+        validate_required_tags(&registry, &agents);
     }
 }

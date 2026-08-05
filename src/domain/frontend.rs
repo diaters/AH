@@ -98,6 +98,26 @@ pub struct ApprovalOption {
     pub description: String,
 }
 
+/// 权限审计动作（表达"发生了什么"而非"决策状态是什么"，
+/// 与 ToolPermission 的 Allow/Confirm/Deny 状态区分）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PermissionAction {
+    Allow,
+    Confirm,
+    Deny,
+    Grant,
+}
+
+/// 权限审计上下文：标识事件来源的决策路径
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PermissionAuditContext {
+    Dispatch,
+    AsyncDispatch,
+    UserConfirmation,
+    ParentApproval,
+    TagDenied,
+}
+
 /// 引擎 → 前端事件
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
@@ -166,6 +186,17 @@ pub enum EngineEvent {
         agent_name: String,
         tool_name: String,
         tool_input_summary: String,
+    },
+    /// 权限审计：每次权限决策（Allow/Confirm/Deny/Grant）发出，
+    /// 前端可据此构建可观测性视图。target 由 task 的 output_channel 推导。
+    PermissionAudit {
+        target: EventTarget,
+        agent_id: AgentId,
+        agent_name: String,
+        tool_name: String,
+        action: PermissionAction,
+        source: crate::domain::PermissionSource,
+        context: PermissionAuditContext,
     },
 }
 
@@ -247,6 +278,7 @@ impl EngineEvent {
             Self::BatchProgress { target, .. } => target,
             Self::ToolCallStarted { target, .. } => target,
             Self::TaskCleared { target, .. } => target,
+            Self::PermissionAudit { target, .. } => target,
         }
     }
 }
@@ -377,5 +409,47 @@ mod tests {
     fn summarize_ask_user_missing_question_returns_empty() {
         let input = serde_json::json!({});
         assert_eq!(summarize_tool_input("ask_user", &input), "");
+    }
+
+    #[test]
+    fn permission_action_has_four_variants() {
+        let _allow = PermissionAction::Allow;
+        let _confirm = PermissionAction::Confirm;
+        let _deny = PermissionAction::Deny;
+        let _grant = PermissionAction::Grant;
+    }
+
+    #[test]
+    fn permission_audit_context_has_five_variants() {
+        let _dispatch = PermissionAuditContext::Dispatch;
+        let _async_dispatch = PermissionAuditContext::AsyncDispatch;
+        let _user_confirmation = PermissionAuditContext::UserConfirmation;
+        let _parent_approval = PermissionAuditContext::ParentApproval;
+        let _tag_denied = PermissionAuditContext::TagDenied;
+    }
+
+    #[test]
+    fn engine_event_permission_audit_target_returns_inner_target() {
+        use crate::domain::PermissionSource;
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let target = EventTarget::Directed(vec![channel]);
+        let event = EngineEvent::PermissionAudit {
+            target: target.clone(),
+            agent_id: Uuid::nil(),
+            agent_name: "test-agent".to_string(),
+            tool_name: "shell_exec".to_string(),
+            action: PermissionAction::Allow,
+            source: PermissionSource::AgentOverride,
+            context: PermissionAuditContext::Dispatch,
+        };
+        assert!(matches!(event.target(), EventTarget::Directed(_)));
+        if let EventTarget::Directed(channels) = event.target() {
+            assert_eq!(channels.len(), 1);
+            assert_eq!(channels[0].frontend, FrontendKind::Tui);
+        }
     }
 }
