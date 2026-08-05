@@ -353,7 +353,6 @@ impl QqChannel {
     }
 
     /// 白名单匹配：runtime_allowed_users 优先，然后按 allowed_users 通配符 `*` 或精确 openid 匹配。
-    #[allow(dead_code)]
     async fn is_user_allowed(&self, user_openid: &str) -> bool {
         if self
             .runtime_allowed_users
@@ -376,7 +375,6 @@ impl QqChannel {
     }
 
     /// 加入运行时白名单（/bind 配对通过时调用）。
-    #[allow(dead_code)]
     async fn runtime_allow(&self, user_openid: &str) {
         self.runtime_allowed_users
             .write()
@@ -386,7 +384,6 @@ impl QqChannel {
 
     /// 消息去重检查：msg_id 已存在返回 true，否则插入并返回 false。
     /// 容量达上限时淘汰一半旧条目。
-    #[allow(dead_code)]
     async fn is_duplicate(&self, msg_id: &str) -> bool {
         if msg_id.is_empty() {
             return false;
@@ -452,7 +449,6 @@ impl QqChannel {
     }
 
     /// 从 QQ 入向事件 payload 组装消息内容，处理附件下载与 marker 生成。
-    #[allow(dead_code)]
     async fn compose_message_content(&self, payload: &serde_json::Value) -> Option<String> {
         let text = payload
             .get("content")
@@ -723,7 +719,6 @@ impl QqChannel {
     /// 尝试将用户回复匹配到 pending approval。
     /// 匹配优先级：数字 → option id → option label。
     /// 支持 "N feedback" 格式：数字后跟反馈文本，仅对 reject_with_feedback 选项生效。
-    #[allow(dead_code)]
     async fn try_match_approval_reply(
         &self,
         recipient: &str,
@@ -886,7 +881,6 @@ impl QqChannel {
     }
 
     /// 获取有效 access_token，过期时重新获取。
-    #[allow(dead_code)]
     async fn get_token(&self) -> Result<String, ChannelError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

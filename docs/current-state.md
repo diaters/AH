@@ -114,6 +114,12 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram 通道接入（长轮询、白名单、文本分块发送）
 - QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 - QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
+- QQ 通道消息撤回 API（C2C / 群聊 DELETE 端点）
+- QQ 通道输入状态指示器（typing indicator, POST /v2/users/{openid}/typing）
+- QQ 通道交互回调（PUT /interactions/{id}）
+- QQ 通道交互事件监听（INTERACTION_CREATE）与按钮点击闭环
+- QQ 通道审批消息使用原生 InlineKeyboard 按钮交互（含 reject_with_feedback 两步流程）
+- QQ 通道 send 方法返回 message_id（QqMessageResponse）
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复、`SystemOutputMessage`、任务失败提示等按 `output_channel`
@@ -266,6 +272,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   阻塞式已退役（shell_exec），跨帧合规工具（wait_tasks / chat_with_agent /
   channel_send / Confirm）登记为后续候选收编项；静态路由（`triggers.toml`）的
   list/delete 工具另起一组命名
+- QQ 通道消息撤回的调用方集成（状态消息治理：撤回过多状态切换消息）尚未接入，recall_message 方法已就绪
 
 ### 已收敛或已废弃
 
