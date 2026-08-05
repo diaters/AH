@@ -83,6 +83,14 @@ pub struct ChannelOutboundMessage {
     pub message_kind: MessageKind,
 }
 
+/// 出向队列条目，携带发送完成后的回调。
+pub struct OutboundEntry {
+    pub channel_name: String,
+    pub message: ChannelOutboundMessage,
+    /// 发送完成后的回调，传入通道返回的 message_id。
+    pub on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub enum ChannelParseMode {
     Html,

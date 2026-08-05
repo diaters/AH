@@ -1,4 +1,7 @@
-use tokio::sync::mpsc::UnboundedSender;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use tokio::sync::{mpsc, RwLock};
 use tracing::{error, trace};
 
 use crate::domain::{
@@ -6,26 +9,35 @@ use crate::domain::{
     TaskStatusKind, UserAction,
 };
 
-use super::ChannelOutboundMessage;
-use super::traits::{ChannelParseMode, InlineKeyboardButton, MessageKind, ReplyMarkup};
+use super::traits::{ChannelOutboundMessage, MessageKind, OutboundEntry};
+use super::traits::{ChannelParseMode, InlineKeyboardButton, ReplyMarkup};
 
 /// 将 EngineEvent 路由到对应 IM 通道出向发送队列的 Frontend 实现。
+///
+/// 有状态化：维护 per-task 的状态消息 msg_id，实现滚动撤回策略。
 pub struct ChannelFrontend {
     kind: FrontendKind,
     channel_name: String,
-    outbound_tx: UnboundedSender<(String, ChannelOutboundMessage)>,
+    outbound_tx: mpsc::UnboundedSender<OutboundEntry>,
+    /// Per-task + per-recipient 的状态消息追踪。
+    /// key = (task_id, recipient)，value = 最近一条状态消息的 msg_id。
+    last_status_msg: Arc<RwLock<HashMap<(String, String), String>>>,
+    /// Per-task 的最终态决策缓存。
+    task_finalized: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ChannelFrontend {
     pub fn new(
         kind: FrontendKind,
         channel_name: impl Into<String>,
-        outbound_tx: UnboundedSender<(String, ChannelOutboundMessage)>,
+        outbound_tx: mpsc::UnboundedSender<OutboundEntry>,
     ) -> Self {
         Self {
             kind,
             channel_name: channel_name.into(),
             outbound_tx,
+            last_status_msg: Arc::new(RwLock::new(HashMap::new())),
+            task_finalized: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -33,10 +45,33 @@ impl ChannelFrontend {
         channel_id.frontend == self.kind
     }
 
-    fn send_message(&self, msg: ChannelOutboundMessage) {
-        if let Err(e) = self.outbound_tx.send((self.channel_name.clone(), msg)) {
+    fn enqueue(
+        &self,
+        msg: ChannelOutboundMessage,
+        on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>>,
+    ) {
+        let entry = OutboundEntry {
+            channel_name: self.channel_name.clone(),
+            message: msg,
+            on_sent,
+        };
+        if let Err(e) = self.outbound_tx.send(entry) {
             error!(event = "ChannelFrontendSendFailed", error = %e, channel = %self.channel_name);
         }
+    }
+
+    /// 发送 Recall 消息（撤回指定 msg_id）。
+    fn enqueue_recall(&self, recipient: String, thread_id: Option<String>, msg_id: String) {
+        let msg = ChannelOutboundMessage {
+            recipient,
+            thread_id,
+            content: msg_id,
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::Recall,
+        };
+        self.enqueue(msg, None);
     }
 }
 
@@ -116,7 +151,34 @@ impl Frontend for ChannelFrontend {
                 let prefixed_content = task_id
                     .map(|id| format!("[{}] {}: {}", task_short_id(id), role_label(role), content))
                     .unwrap_or(content);
+                let message_kind = match role {
+                    MessageRole::Agent => MessageKind::LLMReply,
+                    MessageRole::System => MessageKind::System,
+                    MessageRole::User => MessageKind::Other,
+                };
                 for channel_id in recipients {
+                    // LLM 回复到达时，撤回该 task+recipient 的最终态状态消息
+                    if message_kind == MessageKind::LLMReply {
+                        if let Some(tid) = task_id {
+                            let key = (tid.to_string(), channel_id.user_id.clone());
+                            if let Ok(map) = self.last_status_msg.try_read() {
+                                if let Some(msg_id) = map.get(&key).cloned() {
+                                    drop(map);
+                                    self.enqueue_recall(
+                                        channel_id.user_id.clone(),
+                                        channel_id.thread_id.clone(),
+                                        msg_id,
+                                    );
+                                    if let Ok(mut map) = self.last_status_msg.try_write() {
+                                        map.remove(&key);
+                                    }
+                                }
+                            }
+                            if let Ok(mut set) = self.task_finalized.try_write() {
+                                set.insert(tid.to_string());
+                            }
+                        }
+                    }
                     let msg = ChannelOutboundMessage {
                         recipient: channel_id.user_id,
                         thread_id: channel_id.thread_id,
@@ -124,13 +186,9 @@ impl Frontend for ChannelFrontend {
                         parse_mode: None,
                         reply_markup: None,
                         attachments: vec![],
-                        message_kind: match role {
-                            MessageRole::Agent => MessageKind::LLMReply,
-                            MessageRole::System => MessageKind::System,
-                            MessageRole::User => MessageKind::Other,
-                        },
+                        message_kind,
                     };
-                    self.send_message(msg);
+                    self.enqueue(msg, None);
                 }
             }
             EngineEvent::ApprovalRequest {
@@ -183,7 +241,7 @@ impl Frontend for ChannelFrontend {
                         attachments: vec![],
                         message_kind: MessageKind::ApprovalRequest,
                     };
-                    self.send_message(msg);
+                    self.enqueue(msg, None);
                 }
             }
             EngineEvent::TaskStatusChanged {
@@ -220,7 +278,38 @@ impl Frontend for ChannelFrontend {
                     }
                     None => format!("[{}]: {}", task_short_id(task_id), transition),
                 };
+
                 for channel_id in recipients {
+                    let key = (task_id.to_string(), channel_id.user_id.clone());
+                    // 滚动撤回：发新状态消息前撤回上一条
+                    // Failed 状态不撤回（保留错误信息作为最终态）
+                    if status != TaskStatusKind::Failed {
+                        if let Ok(map) = self.last_status_msg.try_read() {
+                            if let Some(old_msg_id) = map.get(&key).cloned() {
+                                drop(map);
+                                self.enqueue_recall(
+                                    channel_id.user_id.clone(),
+                                    channel_id.thread_id.clone(),
+                                    old_msg_id,
+                                );
+                                if let Ok(mut map) = self.last_status_msg.try_write() {
+                                    map.remove(&key);
+                                }
+                            }
+                        }
+                    }
+
+                    // 准备 on_sent 回调：更新 last_status_msg
+                    let last_status_msg = self.last_status_msg.clone();
+                    let on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>> =
+                        Some(Box::new(move |msg_id: Option<String>| {
+                            if let Some(id) = msg_id {
+                                if let Ok(mut map) = last_status_msg.try_write() {
+                                    map.insert(key, id);
+                                }
+                            }
+                        }));
+
                     let msg = ChannelOutboundMessage {
                         recipient: channel_id.user_id,
                         thread_id: channel_id.thread_id,
@@ -230,7 +319,16 @@ impl Frontend for ChannelFrontend {
                         attachments: vec![],
                         message_kind: MessageKind::TaskStatus,
                     };
-                    self.send_message(msg);
+                    self.enqueue(msg, on_sent);
+                }
+            }
+            EngineEvent::TaskCleared { task_id, .. } => {
+                let task_id_str = task_id.to_string();
+                if let Ok(mut map) = self.last_status_msg.try_write() {
+                    map.retain(|(tid, _), _| tid != &task_id_str);
+                }
+                if let Ok(mut set) = self.task_finalized.try_write() {
+                    set.remove(&task_id_str);
                 }
             }
             // ToolCallStarted 不推送到 IM 通道：
@@ -249,13 +347,13 @@ impl Frontend for ChannelFrontend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
+    use crate::domain::ApprovalOption;
 
     fn make_frontend(
         kind: FrontendKind,
     ) -> (
         ChannelFrontend,
-        mpsc::UnboundedReceiver<(String, ChannelOutboundMessage)>,
+        mpsc::UnboundedReceiver<OutboundEntry>,
     ) {
         let (tx, rx) = mpsc::unbounded_channel();
         (ChannelFrontend::new(kind, "test", tx), rx)
@@ -292,8 +390,8 @@ mod tests {
             }]),
             task_id,
         ));
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4] 助手: hello");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[a1b2c3d4] 助手: hello");
         assert!(rx.try_recv().is_err());
     }
 
@@ -310,8 +408,8 @@ mod tests {
             content: "hello".to_string(),
             task_id: None,
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "hello");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "hello");
         assert!(rx.try_recv().is_err());
     }
 
@@ -330,8 +428,8 @@ mod tests {
             content: "summary done".to_string(),
             task_id: Some(task_id),
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4] 系统: summary done");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[a1b2c3d4] 系统: summary done");
     }
 
     #[test]
@@ -355,8 +453,8 @@ mod tests {
             agent_name: None,
             waiting_reason: None,
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[a1b2c3d4]: 运行中 → 已完成");
         assert!(rx.try_recv().is_err());
     }
 
@@ -386,16 +484,15 @@ mod tests {
             user_id: "u1".to_string(),
             thread_id: None,
         }])));
-        let (name, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(name, "test");
-        assert_eq!(msg.recipient, "u1");
-        assert_eq!(msg.content, "hello");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.channel_name, "test");
+        assert_eq!(entry.message.recipient, "u1");
+        assert_eq!(entry.message.content, "hello");
         assert!(rx.try_recv().is_err());
     }
 
     #[test]
     fn approval_request_escapes_html_in_tool_input() {
-        use crate::domain::ApprovalOption;
         use uuid::Uuid;
 
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
@@ -425,12 +522,12 @@ mod tests {
             approval_context: None,
         };
         fe.push_event(event);
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert!(matches!(msg.parse_mode, Some(ChannelParseMode::Html)));
+        let entry = rx.try_recv().expect("one outbound message");
+        assert!(matches!(entry.message.parse_mode, Some(ChannelParseMode::Html)));
         assert!(
-            msg.content.contains("&lt;script&gt; &amp; text"),
+            entry.message.content.contains("&lt;script&gt; &amp; text"),
             "HTML special chars should be escaped: {}",
-            msg.content
+            entry.message.content
         );
         assert!(rx.try_recv().is_err());
     }
@@ -459,8 +556,8 @@ mod tests {
             content: "hello".to_string(),
             task_id: Some(task_id),
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000] 助手: hello");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[00000000] 助手: hello");
         assert!(rx.try_recv().is_err());
     }
 
@@ -486,8 +583,8 @@ mod tests {
             agent_name: None,
             waiting_reason: None,
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000]: 运行中 → 已完成");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[00000000]: 运行中 → 已完成");
         assert!(rx.try_recv().is_err());
     }
 
@@ -513,8 +610,8 @@ mod tests {
             agent_name: None,
             waiting_reason: None,
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[00000000]: 运行中");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[00000000]: 运行中");
         assert!(rx.try_recv().is_err());
     }
 
@@ -579,8 +676,8 @@ mod tests {
             agent_name: Some("TestAgent".to_string()),
             waiting_reason: None,
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
-        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
+        let entry = rx.try_recv().expect("one outbound message");
+        assert_eq!(entry.message.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
         assert!(rx.try_recv().is_err());
     }
 
@@ -606,14 +703,224 @@ mod tests {
             agent_name: Some("TestAgent".to_string()),
             waiting_reason: None,
         });
-        let (_, msg) = rx.try_recv().expect("one outbound message");
+        let entry = rx.try_recv().expect("one outbound message");
         // IM 通道不渲染 task name（即使很长也不应出现在输出中），仅显示 id + 状态 + agent
-        assert_eq!(msg.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
+        assert_eq!(entry.message.content, "[a1b2c3d4]: 运行中 → 已完成 @TestAgent");
         assert!(
-            !msg.content.contains('测'),
+            !entry.message.content.contains('测'),
             "消息不应包含 task name 内容，实际: {}",
-            msg.content
+            entry.message.content
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    // === 滚动撤回策略测试 ===
+
+    #[test]
+    fn task_status_rolling_recall() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+
+        // 第一条状态消息（Pending→Running）
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let entry1 = rx.try_recv().expect("first status msg");
+        assert_eq!(entry1.message.message_kind, MessageKind::TaskStatus);
+        assert!(rx.try_recv().is_err(), "no recall for first status");
+
+        // 模拟 on_sent 回调，更新 last_status_msg
+        (entry1.on_sent.unwrap())(Some("msg_1".to_string()));
+
+        // 第二条状态消息（Running→Waiting）—— 应先发 Recall，再发新状态
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let recall_entry = rx.try_recv().expect("recall msg");
+        assert_eq!(recall_entry.message.message_kind, MessageKind::Recall);
+        assert_eq!(recall_entry.message.content, "msg_1");
+        let status_entry = rx.try_recv().expect("new status msg");
+        assert_eq!(status_entry.message.message_kind, MessageKind::TaskStatus);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn llm_reply_recalls_last_status() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+
+        // 发送状态消息
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let status_entry = rx.try_recv().expect("status msg");
+        (status_entry.on_sent.unwrap())(Some("msg_final".to_string()));
+
+        // LLM 回复到达 —— 应先发 Recall，再发 LLMReply
+        fe.push_event(EngineEvent::Text {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            role: MessageRole::Agent,
+            content: "done".to_string(),
+            task_id: Some(task_id),
+        });
+        let recall_entry = rx.try_recv().expect("recall msg");
+        assert_eq!(recall_entry.message.message_kind, MessageKind::Recall);
+        assert_eq!(recall_entry.message.content, "msg_final");
+        let llm_entry = rx.try_recv().expect("llm reply");
+        assert_eq!(llm_entry.message.message_kind, MessageKind::LLMReply);
+    }
+
+    #[test]
+    fn task_failed_preserves_final_status() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+
+        // 发送 Running 状态消息
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let status_entry = rx.try_recv().expect("status msg");
+        (status_entry.on_sent.unwrap())(Some("msg_running".to_string()));
+
+        // Failed 状态 —— 不应撤回 Running
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Failed,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        // 只应有 Failed 状态消息，没有 Recall
+        let failed_entry = rx.try_recv().expect("failed status msg");
+        assert_eq!(failed_entry.message.message_kind, MessageKind::TaskStatus);
+        assert!(failed_entry.message.content.contains("已失败"));
+        assert!(rx.try_recv().is_err(), "no recall for Failed status");
+    }
+
+    #[test]
+    fn task_cleared_cleans_up_state() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+
+        // 发送状态消息
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let status_entry = rx.try_recv().expect("status msg");
+        (status_entry.on_sent.unwrap())(Some("msg_1".to_string()));
+
+        // TaskCleared
+        fe.push_event(EngineEvent::TaskCleared {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+        });
+        assert!(rx.try_recv().is_err(), "TaskCleared should not produce outbound");
+
+        // 再次发送同 task 的状态消息 —— 不应触发撤回（状态已清理）
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: EventTarget::Directed(vec![ChannelId {
+                frontend: FrontendKind::Telegram,
+                user_id: "u1".to_string(),
+                thread_id: None,
+            }]),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let new_status = rx.try_recv().expect("new status msg");
+        assert_eq!(new_status.message.message_kind, MessageKind::TaskStatus);
+        assert!(rx.try_recv().is_err(), "no recall after TaskCleared");
     }
 }
