@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::domain::{ExternalInput, Frontend, FrontendKind};
 
-use super::traits::{Channel, ChannelInboundMessage, ChannelOutboundMessage};
+use super::traits::{Channel, ChannelInboundMessage, ChannelOutboundMessage, OutboundEntry};
 
 fn frontend_kind_for_name(name: &str) -> FrontendKind {
     match name {
@@ -22,14 +22,14 @@ fn frontend_kind_for_name(name: &str) -> FrontendKind {
 #[derive(Clone, crate::prelude::Resource)]
 pub struct ChannelManager {
     channels: Vec<Arc<dyn Channel>>,
-    outbound_tx: mpsc::UnboundedSender<(String, ChannelOutboundMessage)>,
+    outbound_tx: mpsc::UnboundedSender<OutboundEntry>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
 impl ChannelManager {
     /// 创建空 ChannelManager（不启动任何通道），用于测试和未配置通道的场景。
     pub fn empty() -> (Self, Vec<Box<dyn Frontend>>) {
-        let (outbound_tx, _) = mpsc::unbounded_channel::<(String, ChannelOutboundMessage)>();
+        let (outbound_tx, _) = mpsc::unbounded_channel::<OutboundEntry>();
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         (
             Self {
@@ -45,8 +45,7 @@ impl ChannelManager {
         channels: Vec<Arc<dyn Channel>>,
         external_input_tx: Sender<ExternalInput>,
     ) -> (Self, tokio::task::JoinHandle<()>, Vec<Box<dyn Frontend>>) {
-        let (outbound_tx, mut outbound_rx) =
-            mpsc::unbounded_channel::<(String, ChannelOutboundMessage)>();
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<OutboundEntry>();
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
         let frontends: Vec<Box<dyn Frontend>> = channels
@@ -135,13 +134,20 @@ impl ChannelManager {
                 tokio::select! {
                     _ = send_shutdown.recv() => break,
                     msg = outbound_rx.recv() => {
-                        let Some((name, message)) = msg else { break };
-                        if let Some(channel) = send_channels.iter().find(|c| c.name() == name) {
-                            if let Err(e) = channel.send(&message).await {
-                                error!(event = "ChannelSendFailed", channel = %name, error = %e, "failed to send outbound message");
+                        let Some(entry) = msg else { break };
+                        if let Some(channel) = send_channels.iter().find(|c| c.name() == entry.channel_name) {
+                            match channel.send(&entry.message).await {
+                                Ok(msg_id) => {
+                                    if let Some(on_sent) = entry.on_sent {
+                                        on_sent(msg_id);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(event = "ChannelSendFailed", channel = %entry.channel_name, error = %e, "failed to send outbound message");
+                                }
                             }
                         } else {
-                            warn!(event = "ChannelNotFound", channel = %name, "no such channel for outbound message");
+                            warn!(event = "ChannelNotFound", channel = %entry.channel_name, "no such channel for outbound message");
                         }
                     }
                 }
@@ -164,8 +170,13 @@ impl ChannelManager {
         if !self.channels.iter().any(|c| c.name() == channel_name) {
             anyhow::bail!("channel not found: {channel_name}");
         }
+        let entry = OutboundEntry {
+            channel_name,
+            message,
+            on_sent: None,
+        };
         self.outbound_tx
-            .send((channel_name, message))
+            .send(entry)
             .map_err(|_| anyhow::anyhow!("channel manager outbound channel closed"))?;
         Ok(())
     }
@@ -196,9 +207,9 @@ mod tests {
         async fn send(
             &self,
             _msg: &ChannelOutboundMessage,
-        ) -> Result<(), super::super::traits::ChannelError> {
+        ) -> Result<Option<String>, super::super::traits::ChannelError> {
             self.send_count.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok(None)
         }
         async fn listen(
             &self,
@@ -253,6 +264,7 @@ mod tests {
                     parse_mode: None,
                     reply_markup: None,
                     attachments: vec![],
+                    message_kind: super::super::traits::MessageKind::Other,
                 },
             )
             .expect("queue outbound");
@@ -282,6 +294,7 @@ mod tests {
                 parse_mode: None,
                 reply_markup: None,
                 attachments: vec![],
+                message_kind: super::super::traits::MessageKind::Other,
             },
         );
         assert!(result.is_err());

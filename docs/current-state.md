@@ -111,9 +111,19 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 #### IM 通道
 
 - 统一 `Channel` 抽象与 `ChannelManager`（含 listen 重启退避与 shutdown）
+- Channel trait 统一抽象 `recall_message`/`send_typing`（QQ + Telegram 实现，默认 NotSupported/Ok）
+- `ChannelOutboundMessage` 携带 `MessageKind`（LLMReply/TaskStatus/ApprovalRequest/System/Recall/Other）
+- IM 通道状态消息治理：任务状态消息滚动撤回（发新撤旧，避免 2 分钟超时）、入向 ACK 用 typing 替代（C2C）、审批请求消息点击后撤回、LLM 回复到达时撤回最终态状态消息
 - Telegram 通道接入（长轮询、白名单、文本分块发送）
+- Telegram 通道消息撤回（`deleteMessage`）与输入状态指示器（`sendChatAction` with `typing`）
 - QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 - QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
+- QQ 通道消息撤回 API（C2C / 群聊 DELETE 端点）
+- QQ 通道输入状态指示器（typing indicator, POST /v2/users/{openid}/typing）
+- QQ 通道交互回调（PUT /interactions/{id}）
+- QQ 通道交互事件监听（INTERACTION_CREATE）与按钮点击闭环
+- QQ 通道审批消息使用原生 InlineKeyboard 按钮交互（含 reject_with_feedback 两步流程）
+- QQ 通道 send 方法返回 message_id（QqMessageResponse）
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复、`SystemOutputMessage`、任务失败提示等按 `output_channel`
@@ -260,12 +270,6 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
   `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
 - 异步工具桥双轨期待完善：`ToolContext<'a>` 借用上下文尚未完全退役；剩余 Sync 工具
-  按「声明式 / 阻塞式 / 跨帧合规」三类分流（详见
-  [async-tool-bridge.md](async-tool-bridge.md#sync-工具分类)），声明式 Sync 工具
-  （shell/{start,read,input,list,stop}、submit_*、skip_*、create_tasks）不上桥，
-  阻塞式已退役（shell_exec），跨帧合规工具（wait_tasks / chat_with_agent /
-  channel_send / Confirm）登记为后续候选收编项；静态路由（`triggers.toml`）的
-  list/delete 工具另起一组命名
 
 ### 已收敛或已废弃
 

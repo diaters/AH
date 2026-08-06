@@ -15,5 +15,5 @@ pub use send_tool::ChannelSendTool;
 pub use telegram::TelegramChannel;
 pub use traits::{
     AttachmentKind, Channel, ChannelAttachment, ChannelError, ChannelInboundMessage,
-    ChannelOutboundMessage,
+    ChannelOutboundMessage, MessageKind, OutboundEntry,
 };

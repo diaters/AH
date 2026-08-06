@@ -53,6 +53,23 @@ impl ChannelInboundMessage {
     }
 }
 
+/// 出向消息类型，用于通道决定撤回/typing 等策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    /// LLM 自然语言回复（UserOutputMessage role=Agent）
+    LLMReply,
+    /// 任务状态变更通知（如"运行中 → 等待中"）
+    TaskStatus,
+    /// 工具权限审批请求（带 InlineKeyboard）
+    ApprovalRequest,
+    /// 系统通知（SystemOutputMessage，如摘要完成、任务失败）
+    System,
+    /// 撤回目标消息。content 字段为目标 message_id。
+    Recall,
+    /// 其他用户可见文本（未分类）
+    Other,
+}
+
 /// 统一出向消息
 #[derive(Debug, Clone)]
 pub struct ChannelOutboundMessage {
@@ -62,6 +79,16 @@ pub struct ChannelOutboundMessage {
     pub parse_mode: Option<ChannelParseMode>,
     pub reply_markup: Option<ReplyMarkup>,
     pub attachments: Vec<ChannelAttachment>,
+    /// 消息类型，用于通道决定撤回/typing 策略。
+    pub message_kind: MessageKind,
+}
+
+/// 出向队列条目，携带发送完成后的回调。
+pub struct OutboundEntry {
+    pub channel_name: String,
+    pub message: ChannelOutboundMessage,
+    /// 发送完成后的回调，传入通道返回的 message_id。
+    pub on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -154,15 +181,29 @@ pub enum ChannelError {
     RateLimited,
     #[error("not configured")]
     NotConfigured,
+    #[error("channel does not support this operation")]
+    NotSupported,
 }
 
 #[async_trait]
 pub trait Channel: Send + Sync + 'static {
     fn name(&self) -> &str;
 
-    async fn send(&self, message: &ChannelOutboundMessage) -> Result<(), ChannelError>;
+    /// 发送消息，返回 message_id（如通道支持事后引用）。
+    /// 不支持撤回/编辑的通道返回 None。
+    async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError>;
 
     async fn listen(&self, tx: Sender<ChannelInboundMessage>) -> Result<(), ChannelError>;
+
+    /// 撤回消息。不支持撤回的通道返回 ChannelError::NotSupported。
+    async fn recall_message(&self, _recipient: &str, _msg_id: &str) -> Result<(), ChannelError> {
+        Err(ChannelError::NotSupported)
+    }
+
+    /// 发送输入状态指示器。不支持的通道静默跳过（默认 Ok(())）。
+    async fn send_typing(&self, _recipient: &str) -> Result<(), ChannelError> {
+        Ok(())
+    }
 
     async fn health_check(&self) -> bool {
         true

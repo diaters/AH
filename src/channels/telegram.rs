@@ -81,6 +81,26 @@ impl TelegramChannel {
         Ok(())
     }
 
+    /// 发送 Telegram API 请求并解析响应 JSON。
+    async fn post_json(
+        &self,
+        method: &str,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, ChannelError> {
+        let url = self.api_url(method);
+        let resp = self.client.post(&url).json(payload).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body)
+    }
+
     /// 白名单匹配：运行时白名单优先，然后按配置匹配 username（忽略大小写）、
     /// user_id，或通配符 `"*"`。空白名单表示拒绝所有用户（必须显式配置才放行）。
     /// 若列表中包含 `"*"`，则允许所有用户。
@@ -526,7 +546,27 @@ impl Channel for TelegramChannel {
         "telegram"
     }
 
-    async fn send(&self, message: &ChannelOutboundMessage) -> Result<(), ChannelError> {
+    async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError> {
+        use super::traits::MessageKind;
+
+        // 撤回指令：content 字段为目标 msg_id
+        if message.message_kind == MessageKind::Recall {
+            if let Err(e) = self
+                .recall_message(&message.recipient, &message.content)
+                .await
+            {
+                tracing::warn!(
+                    event = "ChannelRecallFailed",
+                    channel = "telegram",
+                    recipient = %message.recipient,
+                    msg_id = %message.content,
+                    error = %e,
+                    "recall failed, falling back to leaving old message"
+                );
+            }
+            return Ok(None);
+        }
+
         // 审批请求消息只展示文本与内联键盘，不应解析或发送附件标记。
         let (text_without_markers, all_attachments) = if message.reply_markup.is_some() {
             (message.content.clone(), vec![])
@@ -555,6 +595,7 @@ impl Channel for TelegramChannel {
             "telegram channel preparing outbound message"
         );
 
+        let mut last_msg_id = None;
         let part_count = text_parts.len();
         for (idx, part) in text_parts.into_iter().enumerate() {
             // reply_markup 只应附加到最后一条消息，避免一条长内容产生多个可交互仪表盘。
@@ -572,19 +613,30 @@ impl Channel for TelegramChannel {
                 reply_markup,
             );
 
-            let result = self.post("sendMessage", &payload).await;
-            if let Err(ref e) = result {
-                if is_parse_mode_error(e) {
+            let result = self.post_json("sendMessage", &payload).await;
+            match result {
+                Ok(body) => {
+                    last_msg_id = body
+                        .get("result")
+                        .and_then(|r| r.get("message_id"))
+                        .and_then(serde_json::Value::as_i64)
+                        .map(|id| id.to_string());
+                }
+                Err(ref e) if is_parse_mode_error(e) => {
                     let fallback = build_fallback_payload(
                         &message.recipient,
                         message.thread_id.as_deref(),
                         &part,
                         reply_markup,
                     );
-                    self.post("sendMessage", &fallback).await?;
-                } else {
-                    result?;
+                    let body = self.post_json("sendMessage", &fallback).await?;
+                    last_msg_id = body
+                        .get("result")
+                        .and_then(|r| r.get("message_id"))
+                        .and_then(serde_json::Value::as_i64)
+                        .map(|id| id.to_string());
                 }
+                Err(e) => return Err(e),
             }
         }
 
@@ -593,6 +645,24 @@ impl Channel for TelegramChannel {
             self.send_attachment(message, attachment).await?;
         }
 
+        Ok(last_msg_id)
+    }
+
+    async fn recall_message(&self, recipient: &str, msg_id: &str) -> Result<(), ChannelError> {
+        let payload = json!({
+            "chat_id": recipient,
+            "message_id": msg_id.parse::<i64>().unwrap_or(0),
+        });
+        self.post("deleteMessage", &payload).await?;
+        Ok(())
+    }
+
+    async fn send_typing(&self, recipient: &str) -> Result<(), ChannelError> {
+        let payload = json!({
+            "chat_id": recipient,
+            "action": "typing",
+        });
+        self.post("sendChatAction", &payload).await?;
         Ok(())
     }
 
@@ -1452,7 +1522,7 @@ struct TelegramChat {
 mod tests {
     use super::*;
     use crate::channels::config::ChannelConfigs;
-    use crate::channels::traits::InlineKeyboardButton;
+    use crate::channels::traits::{InlineKeyboardButton, MessageKind};
     use tempfile::NamedTempFile;
 
     fn cfg(users: Vec<String>) -> TelegramConfig {
@@ -2050,6 +2120,7 @@ allowed_users = ["qq_user"]
             parse_mode: None,
             reply_markup: None,
             attachments: vec![],
+            message_kind: MessageKind::Other,
         };
         let attachment = ChannelAttachment {
             kind: AttachmentKind::Image,
@@ -2100,6 +2171,7 @@ allowed_users = ["qq_user"]
                 parse_mode: None,
                 reply_markup: None,
                 attachments: vec![],
+                message_kind: MessageKind::Other,
             })
             .await
             .expect("send");
@@ -2152,6 +2224,7 @@ allowed_users = ["qq_user"]
                     },
                 ]])),
                 attachments: vec![],
+                message_kind: MessageKind::ApprovalRequest,
             })
             .await
             .expect("send approval request without attachments");
@@ -2341,5 +2414,95 @@ allowed_users = ["qq_user"]
 
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn recall_message_calls_delete_message() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/deleteMessage"))
+            .and(body_string_contains("chat_id"))
+            .and(body_string_contains("message_id"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "result": true})),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let ch = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        ch.recall_message("123456", "789").await.expect("recall");
+    }
+
+    #[tokio::test]
+    async fn send_typing_calls_send_chat_action() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendChatAction"))
+            .and(body_string_contains("\"action\":\"typing\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "result": true})),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let ch = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        ch.send_typing("123456").await.expect("typing");
+    }
+
+    #[tokio::test]
+    async fn send_returns_message_id() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/botTOKEN/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": 42, "chat": { "id": 123456 }, "text": "hello" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let cfg = TelegramConfig {
+            bot_token: "TOKEN".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        let ch = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
+        let msg = ChannelOutboundMessage {
+            recipient: "123456".to_string(),
+            thread_id: None,
+            content: "hello".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::LLMReply,
+        };
+        let result = ch.send(&msg).await.expect("send");
+        assert_eq!(result, Some("42".to_string()));
     }
 }

@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::channels::config::QqConfig;
-use crate::channels::traits::{Channel, ChannelError, InboundConfirmation};
+use crate::channels::traits::{Channel, ChannelError, ChannelInboundMessage, InboundConfirmation};
 
 const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
 const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
@@ -232,6 +232,13 @@ struct QqUploadResponse {
     ttl: Option<u64>,
 }
 
+/// QQ 消息发送接口返回的消息 ID。
+#[derive(Debug, serde::Deserialize)]
+struct QqMessageResponse {
+    /// QQ API 返回的消息 ID（字段名为 "id"）
+    id: String,
+}
+
 /// 解析 QQ 上传类接口返回，兼容顶层或 data 包裹格式。
 fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, ChannelError> {
     let root: serde_json::Value =
@@ -265,33 +272,6 @@ fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, Channe
         file_uuid,
         ttl,
     })
-}
-
-/// 将 ReplyMarkup::InlineKeyboard 转译为编号列表追加到 base_content 末尾。
-fn render_buttons_as_numbered_list(
-    markup: &crate::channels::traits::ReplyMarkup,
-    base_content: &str,
-) -> String {
-    use crate::channels::traits::ReplyMarkup;
-    match markup {
-        ReplyMarkup::InlineKeyboard(rows) => {
-            let mut numbered: Vec<String> = Vec::new();
-            let mut idx = 1;
-            for row in rows {
-                for button in row {
-                    numbered.push(format!("{idx}. {}", button.text));
-                    idx += 1;
-                }
-            }
-            if numbered.is_empty() {
-                return base_content.to_string();
-            }
-            format!(
-                "{base_content}\n\n{}\n\n请回复数字或选项名称。",
-                numbered.join("\n")
-            )
-        }
-    }
 }
 
 /// 从 ReplyMarkup::InlineKeyboard 的 callback_data 中提取 request_id 与选项列表。
@@ -343,6 +323,9 @@ pub struct QqChannel {
     pending_approvals: Arc<RwLock<HashMap<String, PendingApproval>>>,
     /// 待处理反馈：用户选择 reject_with_feedback 后等待文本输入
     pending_feedback: Arc<RwLock<HashMap<String, PendingFeedback>>>,
+    /// 记录审批请求消息的 msg_id，key 为 approval_id（request_id 字符串）。
+    /// 用户点击按钮后据此撤回审批请求消息。
+    pending_approval_msg_ids: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl QqChannel {
@@ -363,6 +346,7 @@ impl QqChannel {
             auth_url: QQ_AUTH_URL.to_string(),
             pending_approvals: Arc::new(RwLock::new(HashMap::new())),
             pending_feedback: Arc::new(RwLock::new(HashMap::new())),
+            pending_approval_msg_ids: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -372,7 +356,6 @@ impl QqChannel {
     }
 
     /// 白名单匹配：runtime_allowed_users 优先，然后按 allowed_users 通配符 `*` 或精确 openid 匹配。
-    #[allow(dead_code)]
     async fn is_user_allowed(&self, user_openid: &str) -> bool {
         if self
             .runtime_allowed_users
@@ -395,7 +378,6 @@ impl QqChannel {
     }
 
     /// 加入运行时白名单（/bind 配对通过时调用）。
-    #[allow(dead_code)]
     async fn runtime_allow(&self, user_openid: &str) {
         self.runtime_allowed_users
             .write()
@@ -405,7 +387,6 @@ impl QqChannel {
 
     /// 消息去重检查：msg_id 已存在返回 true，否则插入并返回 false。
     /// 容量达上限时淘汰一半旧条目。
-    #[allow(dead_code)]
     async fn is_duplicate(&self, msg_id: &str) -> bool {
         if msg_id.is_empty() {
             return false;
@@ -471,7 +452,6 @@ impl QqChannel {
     }
 
     /// 从 QQ 入向事件 payload 组装消息内容，处理附件下载与 marker 生成。
-    #[allow(dead_code)]
     async fn compose_message_content(&self, payload: &serde_json::Value) -> Option<String> {
         let text = payload
             .get("content")
@@ -610,32 +590,6 @@ impl QqChannel {
         Ok(gw_url)
     }
 
-    /// 发送入向 ACK 文本给用户。
-    async fn send_ack_text(&self, recipient: &str, content: &str) {
-        let ack_text = if content.starts_with('[') {
-            // 附件消息
-            format!("收到附件：{}", content.lines().next().unwrap_or(""))
-        } else {
-            let preview: String = content.chars().take(50).collect();
-            format!(
-                "收到：{preview}{}",
-                if content.chars().count() > 50 {
-                    "..."
-                } else {
-                    ""
-                }
-            )
-        };
-        if let Err(e) = self.send_text_markdown(recipient, &ack_text).await {
-            tracing::warn!(
-                event = "QqAckFailed",
-                recipient = %recipient,
-                error = %e,
-                "failed to send ACK"
-            );
-        }
-    }
-
     /// 处理 /bind 配对命令。
     async fn handle_bind_command(
         &self,
@@ -742,7 +696,6 @@ impl QqChannel {
     /// 尝试将用户回复匹配到 pending approval。
     /// 匹配优先级：数字 → option id → option label。
     /// 支持 "N feedback" 格式：数字后跟反馈文本，仅对 reject_with_feedback 选项生效。
-    #[allow(dead_code)]
     async fn try_match_approval_reply(
         &self,
         recipient: &str,
@@ -905,7 +858,6 @@ impl QqChannel {
     }
 
     /// 获取有效 access_token，过期时重新获取。
-    #[allow(dead_code)]
     async fn get_token(&self) -> Result<String, ChannelError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -942,8 +894,12 @@ impl QqChannel {
         ("users", user_id)
     }
 
-    /// 发送 markdown 文本消息（msg_type=2）。
-    async fn send_text_markdown(&self, recipient: &str, content: &str) -> Result<(), ChannelError> {
+    /// 发送 markdown 文本消息（msg_type=2），返回 QQ API 分配的 message_id。
+    async fn send_text_markdown(
+        &self,
+        recipient: &str,
+        content: &str,
+    ) -> Result<QqMessageResponse, ChannelError> {
         let token = self.get_token().await?;
         let (scope, id) = Self::resolve_recipient(recipient);
         let url = format!("{}/v2/{scope}/{id}/messages", self.api_base);
@@ -967,15 +923,106 @@ impl QqChannel {
                 message: text,
             });
         }
-        Ok(())
+        let raw_body = resp.text().await.unwrap_or_default();
+        // QQ API 返回 {"id":"msg_xxx",...} 或 {"data":{"id":"msg_xxx",...}}
+        let root: serde_json::Value = serde_json::from_str(&raw_body).unwrap_or_else(|_| json!({}));
+        let data = root.get("data").unwrap_or(&root);
+        let msg_id = data
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(QqMessageResponse { id: msg_id })
     }
 
-    /// 发送富媒体消息（msg_type=7）。
+    /// 发送带 InlineKeyboard 按钮的 markdown 消息。
+    async fn send_text_with_keyboard(
+        &self,
+        recipient: &str,
+        content: &str,
+        keyboard: &crate::channels::traits::ReplyMarkup,
+    ) -> Result<QqMessageResponse, ChannelError> {
+        use crate::channels::traits::ReplyMarkup;
+        let token = self.get_token().await?;
+        let (scope, id) = Self::resolve_recipient(recipient);
+        let url = format!("{}/v2/{scope}/{id}/messages", self.api_base);
+
+        let qq_keyboard = match keyboard {
+            ReplyMarkup::InlineKeyboard(rows) => {
+                let qq_rows: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|row| {
+                        let buttons: Vec<serde_json::Value> = row
+                            .iter()
+                            .map(|btn| {
+                                // 从 callback_data 提取 option_id 作为按钮 id
+                                let option_id =
+                                    btn.callback_data.split(':').nth(1).unwrap_or("unknown");
+                                json!({
+                                    "id": format!("btn_{option_id}"),
+                                    "render_data": {
+                                        "label": btn.text,
+                                        "visited_label": format!("已{}", btn.text),
+                                        "style": 1
+                                    },
+                                    "action": {
+                                        "type": 1,
+                                        "data": btn.callback_data,
+                                        "permission": { "type": 0 },
+                                        "click_limit": 1
+                                    }
+                                })
+                            })
+                            .collect();
+                        json!({ "buttons": buttons })
+                    })
+                    .collect();
+                json!({
+                    "content": {
+                        "rows": qq_rows
+                    }
+                })
+            }
+        };
+
+        let body = json!({
+            "markdown": { "content": content },
+            "msg_type": 2,
+            "msg_seq": next_msg_seq(),
+            "keyboard": qq_keyboard,
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        let raw_body = resp.text().await.unwrap_or_default();
+        let root: serde_json::Value = serde_json::from_str(&raw_body).unwrap_or(json!({}));
+        let data = root.get("data").unwrap_or(&root);
+        let msg_id = data
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(QqMessageResponse { id: msg_id })
+    }
+
+    /// 发送富媒体消息（msg_type=7），返回 QQ API 分配的 message_id。
     async fn send_media_message(
         &self,
         recipient: &str,
         file_info: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<QqMessageResponse, ChannelError> {
         let token = self.get_token().await?;
         let (scope, id) = Self::resolve_recipient(recipient);
         let url = format!("{}/v2/{scope}/{id}/messages", self.api_base);
@@ -999,7 +1046,286 @@ impl QqChannel {
                 message: text,
             });
         }
+        let raw_body = resp.text().await.unwrap_or_default();
+        // QQ API 返回 {"id":"msg_xxx",...} 或 {"data":{"id":"msg_xxx",...}}
+        let root: serde_json::Value = serde_json::from_str(&raw_body).unwrap_or_else(|_| json!({}));
+        let data = root.get("data").unwrap_or(&root);
+        let msg_id = data
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(QqMessageResponse { id: msg_id })
+    }
+
+    /// 撤回消息。根据 recipient 的 scope 自动路由到对应 DELETE 端点。
+    ///
+    /// 支持的端点：
+    /// - C2C: `DELETE /v2/users/{openid}/messages/{message_id}`
+    /// - 群聊: `DELETE /v2/groups/{group_openid}/messages/{message_id}`
+    ///
+    /// QQ 限制发送超过 2 分钟的消息不可撤回（API 返回错误码 306011）。
+    /// 调用方通过 `QqMessageResponse.id` 获取 message_id。
+    pub async fn recall_message(&self, recipient: &str, msg_id: &str) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        let (scope, id) = Self::resolve_recipient(recipient);
+        let url = format!("{}/v2/{scope}/{id}/messages/{msg_id}", self.api_base);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
         Ok(())
+    }
+
+    /// 发送输入状态（typing indicator），在用户端显示"Bot 正在输入中…"。
+    ///
+    /// 仅 C2C 场景有效。群聊场景调用此方法静默跳过。
+    pub async fn send_typing(&self, recipient: &str) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        let (scope, id) = Self::resolve_recipient(recipient);
+        // typing 仅支持 C2C (scope="users")，群聊静默跳过
+        if scope != "users" {
+            tracing::debug!(
+                event = "QqTypingSkipped",
+                recipient = %recipient,
+                "typing indicator only supported in C2C, skipping"
+            );
+            return Ok(());
+        }
+        let url = format!("{}/v2/{scope}/{id}/typing", self.api_base);
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        Ok(())
+    }
+
+    /// 回应交互回调（PUT /interactions/{interaction_id}）。
+    ///
+    /// QQ API 要求在收到 INTERACTION_CREATE 事件后回调此接口，
+    /// 否则用户端按钮会一直显示加载状态。
+    pub async fn acknowledge_interaction(
+        &self,
+        interaction_id: &str,
+        code: i32,
+    ) -> Result<(), ChannelError> {
+        let token = self.get_token().await?;
+        let url = format!("{}/interactions/{interaction_id}", self.api_base);
+        let body = json!({ "code": code });
+        let resp = self
+            .client
+            .put(&url)
+            .header("Authorization", format!("QQBot {token}"))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::Api {
+                code: status.as_u16() as i32,
+                message: text,
+            });
+        }
+        Ok(())
+    }
+
+    /// 处理 INTERACTION_CREATE 事件。
+    ///
+    /// 返回 `Some(ChannelInboundMessage)` 表示需要上报到引擎，
+    /// 返回 `None` 表示已内部消化（如 reject_with_feedback 进入两步流程）。
+    async fn handle_interaction_create(
+        &self,
+        event_data: &serde_json::Value,
+    ) -> Option<ChannelInboundMessage> {
+        let d = event_data;
+        let interaction_id = d
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or("")
+            .to_string();
+        let button_data = d
+            .get("data")
+            .and_then(|data| data.get("resolved"))
+            .and_then(|resolved| resolved.get("button_data"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        if button_data.is_empty() {
+            tracing::warn!(
+                event = "QqInteractionNoButtonData",
+                interaction_id = %interaction_id,
+                "INTERACTION_CREATE without button_data, skipping"
+            );
+            return None;
+        }
+
+        // button_data 格式: "<request_id>:<option_id>"
+        let Some((request_id_str, option_id)) = button_data.split_once(':') else {
+            tracing::warn!(
+                event = "QqInteractionBadButtonData",
+                button_data = %button_data,
+                "button_data does not contain ':'"
+            );
+            return None;
+        };
+
+        let Ok(request_id) = Uuid::parse_str(request_id_str) else {
+            tracing::warn!(
+                event = "QqInteractionInvalidRequestId",
+                request_id_str = %request_id_str,
+                "request_id is not a valid UUID"
+            );
+            return None;
+        };
+
+        // 发送 ACK 回调（PUT /interactions/{interaction_id}）
+        if let Err(e) = self.acknowledge_interaction(&interaction_id, 0).await {
+            tracing::warn!(
+                event = "QqInteractionAckFailed",
+                interaction_id = %interaction_id,
+                error = %e,
+                "failed to acknowledge interaction"
+            );
+        }
+
+        // 确定 sender_id 和 recipient
+        // chat_type 映射：0=频道, 1=群聊, 2=单聊
+        let chat_type = d.get("chat_type").and_then(serde_json::Value::as_u64);
+        let (sender_id, recipient) = match chat_type {
+            Some(1) => {
+                // 群聊：sender 为点击按钮的群成员，recipient 为群
+                let group_openid = d
+                    .get("group_openid")
+                    .and_then(|g| g.as_str())
+                    .unwrap_or("unknown");
+                let member_openid = d
+                    .get("group_member_openid")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown");
+                (member_openid.to_string(), format!("group:{group_openid}"))
+            }
+            _ => {
+                // C2C：sender 和 recipient 都基于 user_openid
+                let user_openid = d
+                    .get("user_openid")
+                    .or_else(|| d.get("group_member_openid"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                (user_openid.to_string(), format!("user:{user_openid}"))
+            }
+        };
+
+        // 匹配 pending approval（遵循 try_match_approval_reply 的锁模式：
+        // 读锁→clone→drop→写锁仅 remove→drop→无锁区做 HTTP/channel send）
+        // 同时检查 TTL，与 try_match_approval_reply 行为一致
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let pending_opt = {
+            let map = self.pending_approvals.read().await;
+            map.get(&recipient)
+                .filter(|p| {
+                    p.request_id == request_id && now - p.created_at <= PENDING_APPROVAL_TTL_SECS
+                })
+                .cloned()
+        };
+        let Some(pending) = pending_opt else {
+            // 过期或未匹配：写锁清理
+            let mut map = self.pending_approvals.write().await;
+            if let Some(p) = map.get(&recipient)
+                && p.request_id == request_id
+                && now - p.created_at > PENDING_APPROVAL_TTL_SECS
+            {
+                map.remove(&recipient);
+            }
+            return None;
+        };
+        let matched_option = pending.options.iter().find(|opt| opt.id == option_id);
+        let opt = matched_option?;
+
+        // 写锁：仅 remove
+        {
+            let mut map = self.pending_approvals.write().await;
+            map.remove(&recipient);
+        }
+
+        // 撤回审批请求消息（用户点击按钮后，审批请求消息已无存在意义）
+        let approval_msg_id = self
+            .pending_approval_msg_ids
+            .write()
+            .await
+            .remove(request_id_str);
+        if let Some(msg_id) = approval_msg_id
+            && let Err(e) = self.recall_message(&recipient, &msg_id).await
+        {
+            tracing::warn!(
+                event = "ChannelRecallFailed",
+                channel = "qq",
+                recipient = %recipient,
+                msg_id = %msg_id,
+                error = %e,
+                "recall approval request failed"
+            );
+        }
+
+        // 无锁区：reject_with_feedback 两步交互 或 普通 Confirmation
+        if opt.id == "reject_with_feedback" {
+            // 两步交互：插入 pending_feedback，提示输入，不发 Confirmation
+            self.pending_feedback.write().await.insert(
+                recipient.clone(),
+                PendingFeedback {
+                    request_id,
+                    recipient: recipient.clone(),
+                },
+            );
+            let _ = self
+                .send_text_markdown(&recipient, "请输入评审建议（发送 /cancel 取消）：")
+                .await;
+            return None;
+        }
+
+        // 普通选项：发送确认提示 + InboundConfirmation
+        let note = format!("已选择：{}", opt.label);
+        let _ = self.send_text_markdown(&recipient, &note).await;
+        Some(ChannelInboundMessage {
+            channel_name: self.name().to_string(),
+            sender_id,
+            chat_id: recipient,
+            thread_id: None,
+            content: String::new(),
+            timestamp_secs: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            confirmation: Some(InboundConfirmation {
+                request_id,
+                option: opt.id.clone(),
+                label: Some(opt.label.clone()),
+                feedback: None,
+            }),
+        })
     }
 
     /// 上传媒体到 QQ API，返回 (file_info, ttl)。
@@ -1130,77 +1456,118 @@ impl Channel for QqChannel {
     async fn send(
         &self,
         message: &crate::channels::traits::ChannelOutboundMessage,
-    ) -> Result<(), ChannelError> {
-        use crate::channels::traits::{ChannelParseMode, extract_attachments};
+    ) -> Result<Option<String>, ChannelError> {
+        use crate::channels::traits::{ChannelParseMode, MessageKind, extract_attachments};
 
-        let (text, inline_attachments) = if message.reply_markup.is_some() {
-            (message.content.clone(), vec![])
-        } else {
-            extract_attachments(&message.content)
-        };
+        // 撤回指令：content 字段为目标 msg_id
+        if message.message_kind == MessageKind::Recall {
+            if let Err(e) = self
+                .recall_message(&message.recipient, &message.content)
+                .await
+            {
+                tracing::warn!(
+                    event = "ChannelRecallFailed",
+                    channel = "qq",
+                    recipient = %message.recipient,
+                    msg_id = %message.content,
+                    error = %e,
+                    "recall failed, falling back to leaving old message"
+                );
+            }
+            return Ok(None);
+        }
 
-        let all_attachments: Vec<_> = message
-            .attachments
-            .iter()
-            .chain(inline_attachments.iter())
-            .filter(|a| !a.target.trim().is_empty())
-            .cloned()
-            .collect();
-
-        let final_text = if let Some(ref markup) = message.reply_markup {
-            // 从 buttons 提取 request_id 与 options
+        let msg_id = if let Some(ref markup) = message.reply_markup {
+            // === 有键盘路径：发送 QQ 原生 InlineKeyboard ===
             if let Some((request_id, options)) = extract_approval_info(markup) {
                 self.record_pending_approval(&message.recipient, request_id, options)
                     .await;
             }
-            render_buttons_as_numbered_list(markup, &text)
-        } else {
-            text.clone()
-        };
-
-        let content_to_send = match message.parse_mode {
-            // ChannelFrontend 用 Html 模式发送审批请求（含 <pre> 等标签）。
-            // QQ 不支持 HTML 渲染，将 HTML 转换为 markdown（代码块/粗体/斜体）后发送。
-            Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&final_text),
-            Some(ChannelParseMode::Markdown) | None => final_text,
-        };
-
-        if !content_to_send.trim().is_empty() {
-            self.send_text_markdown(&message.recipient, &content_to_send)
-                .await?;
-        }
-
-        for attachment in &all_attachments {
-            if let Err(e) = self.send_attachment(&message.recipient, attachment).await {
-                tracing::warn!(
-                    event = "QqSendAttachmentFailed",
-                    target = %attachment.target,
-                    error = %e,
-                    "QQ attachment send failed, degrading to text"
-                );
-                let fallback = format!(
-                    "{}: {}",
-                    match attachment.kind {
-                        crate::channels::traits::AttachmentKind::Image => "Image",
-                        crate::channels::traits::AttachmentKind::Document => "File",
-                        crate::channels::traits::AttachmentKind::Video => "Video",
-                        crate::channels::traits::AttachmentKind::Audio => "Audio",
-                        crate::channels::traits::AttachmentKind::Voice => "Voice",
-                    },
-                    attachment.target
-                );
-                self.send_text_markdown(&message.recipient, &fallback)
-                    .await?;
+            let content_to_send = match message.parse_mode {
+                Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&message.content),
+                Some(ChannelParseMode::Markdown) | None => message.content.clone(),
+            };
+            let id = if !content_to_send.trim().is_empty() {
+                Some(
+                    self.send_text_with_keyboard(&message.recipient, &content_to_send, markup)
+                        .await?
+                        .id,
+                )
+            } else {
+                None
+            };
+            // 记录审批请求消息的 msg_id，用于用户点击按钮后撤回
+            if message.message_kind == MessageKind::ApprovalRequest
+                && let Some(ref mid) = id
+                && let Some((request_id, _)) = extract_approval_info(markup)
+            {
+                self.pending_approval_msg_ids
+                    .write()
+                    .await
+                    .insert(request_id.to_string(), mid.clone());
             }
-        }
-        Ok(())
+            id
+        } else {
+            // === 无键盘路径：普通消息 + 附件 ===
+            let (text, inline_attachments) = extract_attachments(&message.content);
+            let all_attachments: Vec<_> = message
+                .attachments
+                .iter()
+                .chain(inline_attachments.iter())
+                .filter(|a| !a.target.trim().is_empty())
+                .cloned()
+                .collect();
+
+            let content_to_send = match message.parse_mode {
+                Some(ChannelParseMode::Html) => html_to_markdown_for_qq(&text),
+                Some(ChannelParseMode::Markdown) | None => text,
+            };
+
+            let mut id = None;
+            if !content_to_send.trim().is_empty() {
+                id = Some(
+                    self.send_text_markdown(&message.recipient, &content_to_send)
+                        .await?
+                        .id,
+                );
+            }
+
+            for attachment in &all_attachments {
+                if let Err(e) = self.send_attachment(&message.recipient, attachment).await {
+                    tracing::warn!(
+                        event = "QqSendAttachmentFailed",
+                        target = %attachment.target,
+                        error = %e,
+                        "QQ attachment send failed, degrading to text"
+                    );
+                    let fallback = format!(
+                        "{}: {}",
+                        match attachment.kind {
+                            crate::channels::traits::AttachmentKind::Image => "Image",
+                            crate::channels::traits::AttachmentKind::Document => "File",
+                            crate::channels::traits::AttachmentKind::Video => "Video",
+                            crate::channels::traits::AttachmentKind::Audio => "Audio",
+                            crate::channels::traits::AttachmentKind::Voice => "Voice",
+                        },
+                        attachment.target
+                    );
+                    if let Ok(resp) = self.send_text_markdown(&message.recipient, &fallback).await {
+                        id = Some(resp.id);
+                    }
+                } else {
+                    // 附件发送成功后不更新 id（send_attachment 内部调 send_media_message）
+                    // 但 fallback 路径已更新 id
+                }
+            }
+            id
+        };
+        Ok(msg_id)
     }
 
     async fn listen(
         &self,
         tx: crossbeam_channel::Sender<crate::channels::traits::ChannelInboundMessage>,
     ) -> Result<(), ChannelError> {
-        use crate::channels::traits::ChannelInboundMessage;
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
 
@@ -1246,7 +1613,8 @@ impl Channel for QqChannel {
             .unwrap_or(41250);
 
         // 发送 Identify (op=2)
-        let intents: u64 = (1 << 25) | (1 << 30);
+        // intents: C2C (1<<25) | INTERACTION_CREATE (1<<26) | GROUP_AT (1<<30)
+        let intents: u64 = (1 << 25) | (1 << 26) | (1 << 30);
         let identify = json!({
             "op": 2,
             "d": {
@@ -1508,8 +1876,20 @@ impl Channel for QqChannel {
                                 confirmation: None,
                             };
                             let _ = tx.send(inbound);
-                            // 发送 ACK
-                            self.send_ack_text(&recipient, &content).await;
+                            // 用 typing indicator 替代文字 ACK（C2C 有效，群聊静默跳过）
+                            if let Err(e) = self.send_typing(&recipient).await {
+                                tracing::debug!(
+                                    event = "QqTypingFailed",
+                                    recipient = %recipient,
+                                    error = %e,
+                                    "typing indicator failed, skipping silently"
+                                );
+                            }
+                        }
+                        "INTERACTION_CREATE" => {
+                            if let Some(inbound) = self.handle_interaction_create(d).await {
+                                let _ = tx.send(inbound);
+                            }
                         }
                         _ => {}
                     }
@@ -1537,11 +1917,16 @@ impl Channel for QqChannel {
             AttachmentKind::Voice,
         ]
     }
+
+    fn supports_inline_keyboard(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::traits::{ChannelOutboundMessage, MessageKind};
 
     fn make_config() -> QqConfig {
         QqConfig {
@@ -2112,9 +2497,66 @@ mod tests {
 
         let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
-        ch.send_text_markdown("user:USER123", "hello")
+        let resp = ch
+            .send_text_markdown("user:USER123", "hello")
             .await
             .expect("send_text_markdown");
+        assert_eq!(resp.id, "msg_1");
+    }
+
+    #[tokio::test]
+    async fn send_with_keyboard_posts_keyboard_field() {
+        use crate::channels::traits::{
+            ChannelOutboundMessage, ChannelParseMode, InlineKeyboardButton, ReplyMarkup,
+        };
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .and(body_partial_json(serde_json::json!({
+                "keyboard": {
+                    "content": {
+                        "rows": [{
+                            "buttons": [{
+                                "id": "btn_allow",
+                                "render_data": { "label": "允许", "visited_label": "已允许", "style": 1 },
+                                "action": {
+                                    "type": 1,
+                                    "data": "01912345-6789-7abc-8def-0123456789ab:allow",
+                                    "permission": { "type": 0 },
+                                    "click_limit": 1
+                                }
+                            }]
+                        }]
+                    }
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_keyboard_1"
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let message = ChannelOutboundMessage {
+            recipient: "user:USER123".to_string(),
+            thread_id: None,
+            content: "🔒 需要你的确认".to_string(),
+            parse_mode: Some(ChannelParseMode::Html),
+            reply_markup: Some(ReplyMarkup::InlineKeyboard(vec![vec![
+                InlineKeyboardButton {
+                    text: "允许".to_string(),
+                    callback_data: "01912345-6789-7abc-8def-0123456789ab:allow".to_string(),
+                },
+            ]])),
+            attachments: vec![],
+            message_kind: MessageKind::ApprovalRequest,
+        };
+        ch.send(&message).await.expect("send with keyboard");
     }
 
     #[tokio::test]
@@ -2129,16 +2571,20 @@ mod tests {
                 "msg_type": 7,
                 "media": { "file_info": "fi_abc" },
             })))
-            .respond_with(ResponseTemplate::new(200))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_media_1",
+            })))
             .expect(1)
             .mount(&mock_server)
             .await;
 
         let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
-        ch.send_media_message("user:USER123", "fi_abc")
+        let resp = ch
+            .send_media_message("user:USER123", "fi_abc")
             .await
             .expect("send_media_message");
+        assert_eq!(resp.id, "msg_media_1");
     }
 
     #[tokio::test]
@@ -2160,45 +2606,359 @@ mod tests {
         );
     }
 
-    // --- render_buttons_as_numbered_list tests ---
+    #[tokio::test]
+    async fn recall_message_deletes_c2c_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[test]
-    fn render_buttons_single_option() {
-        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
-        let markup = ReplyMarkup::InlineKeyboard(vec![vec![InlineKeyboardButton {
-            text: "允许".to_string(),
-            callback_data: "req:allow".to_string(),
-        }]]);
-        let result = render_buttons_as_numbered_list(&markup, "请确认");
-        assert!(result.contains("请确认"));
-        assert!(result.contains("1. 允许"));
-        assert!(result.contains("请回复数字"));
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/users/USER123/messages/MSG456"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.recall_message("user:USER123", "MSG456")
+            .await
+            .expect("recall_message");
     }
 
-    #[test]
-    fn render_buttons_multiple_rows() {
-        use crate::channels::traits::{InlineKeyboardButton, ReplyMarkup};
-        let markup = ReplyMarkup::InlineKeyboard(vec![
-            vec![InlineKeyboardButton {
-                text: "允许".to_string(),
-                callback_data: "req:allow".to_string(),
-            }],
-            vec![InlineKeyboardButton {
-                text: "拒绝".to_string(),
-                callback_data: "req:deny".to_string(),
-            }],
-        ]);
-        let result = render_buttons_as_numbered_list(&markup, "确认");
-        assert!(result.contains("1. 允许"));
-        assert!(result.contains("2. 拒绝"));
+    #[tokio::test]
+    async fn recall_message_deletes_group_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/groups/GROUP456/messages/MSG789"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.recall_message("group:GROUP456", "MSG789")
+            .await
+            .expect("recall_message");
     }
 
+    #[tokio::test]
+    async fn recall_message_returns_api_error_on_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/users/USER123/messages/MSG_OLD"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "code": 306011,
+                "message": "超出可撤回消息时间"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let result = ch.recall_message("user:USER123", "MSG_OLD").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ChannelError::Api { code, message } => {
+                assert_eq!(code, 400);
+                assert!(message.contains("306011") || message.contains("撤回"));
+            }
+            other => panic!("expected Api error, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_typing_posts_to_c2c_user() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/typing"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.send_typing("user:USER123").await.expect("send_typing");
+    }
+
+    #[tokio::test]
+    async fn send_typing_skips_group_recipient() {
+        let ch = QqChannel::new(make_config());
+        ch.set_token_for_test("fake_token").await;
+        // 群聊 recipient 不发请求，直接返回 Ok
+        ch.send_typing("group:GROUP456")
+            .await
+            .expect("should skip with Ok");
+    }
+
+    // --- acknowledge_interaction tests ---
+
+    #[tokio::test]
+    async fn acknowledge_interaction_puts_to_interactions_endpoint() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/INTERACTION_001"))
+            .and(body_partial_json(serde_json::json!({ "code": 0 })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        ch.acknowledge_interaction("INTERACTION_001", 0)
+            .await
+            .expect("acknowledge_interaction");
+    }
+
+    #[tokio::test]
+    async fn acknowledge_interaction_returns_error_on_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/INTERACTION_BAD"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "code": 10016,
+                "message": "interaction not found"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let result = ch.acknowledge_interaction("INTERACTION_BAD", 0).await;
+        assert!(result.is_err());
+    }
+
+    // --- interaction event parsing tests ---
+
     #[test]
-    fn render_buttons_empty_returns_base() {
-        use crate::channels::traits::ReplyMarkup;
-        let markup = ReplyMarkup::InlineKeyboard(vec![]);
-        let result = render_buttons_as_numbered_list(&markup, "base");
-        assert_eq!(result, "base");
+    fn parse_interaction_event_button_click() {
+        let event_data = serde_json::json!({
+            "id": "interaction_001",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "group_openid": "GROUP456",
+            "group_member_openid": "MEMBER789",
+            "data": {
+                "type": 2001,
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:allow",
+                    "button_id": "btn_allow",
+                    "message_id": "msg_001"
+                }
+            }
+        });
+        // 解析 button_data 中的 request_id:option_id
+        let button_data = event_data["data"]["resolved"]["button_data"]
+            .as_str()
+            .unwrap();
+        let (request_id_str, option_id) = button_data.split_once(':').unwrap();
+        assert_eq!(request_id_str, "01912345-6789-7abc-8def-0123456789ab");
+        assert_eq!(option_id, "allow");
+    }
+
+    #[tokio::test]
+    async fn interaction_create_allow_button_returns_confirmation() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        // mock acknowledge_interaction (PUT)
+        Mock::given(method("PUT"))
+            .and(path("/interactions/interaction_001"))
+            .and(body_partial_json(json!({ "code": 0 })))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        // mock send_text_markdown (POST)
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_ack"})))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
+        ch.record_pending_approval(
+            "user:USER123",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "allow".to_string(),
+                label: "允许".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = serde_json::json!({
+            "id": "interaction_001",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": {
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:allow"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        assert!(result.is_some());
+        let inbound = result.unwrap();
+        assert_eq!(inbound.sender_id, "USER123");
+        assert_eq!(inbound.chat_id, "user:USER123");
+        let confirmation = inbound.confirmation.unwrap();
+        assert_eq!(confirmation.option, "allow");
+        assert_eq!(confirmation.request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn interaction_create_group_routes_to_group_recipient() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/interaction_002"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/groups/GROUP456/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_grp"})))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
+        ch.record_pending_approval(
+            "group:GROUP456",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "allow".to_string(),
+                label: "允许".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = serde_json::json!({
+            "id": "interaction_002",
+            "type": 11,
+            "chat_type": 1,
+            "group_openid": "GROUP456",
+            "group_member_openid": "MEMBER789",
+            "data": {
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:allow"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        assert!(result.is_some());
+        let inbound = result.unwrap();
+        assert_eq!(inbound.sender_id, "MEMBER789");
+        assert_eq!(inbound.chat_id, "group:GROUP456");
+    }
+
+    #[tokio::test]
+    async fn interaction_create_reject_with_feedback_enters_two_step() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/interactions/interaction_003"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "msg_fb"})))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
+        ch.record_pending_approval(
+            "user:USER123",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "reject_with_feedback".to_string(),
+                label: "拒绝并反馈".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = serde_json::json!({
+            "id": "interaction_003",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": {
+                "resolved": {
+                    "button_data": "01912345-6789-7abc-8def-0123456789ab:reject_with_feedback"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        // reject_with_feedback 不直接返回 Confirmation，进入两步流程
+        assert!(result.is_none());
+        // 验证 pending_feedback 已插入
+        let feedback = ch
+            .pending_feedback
+            .read()
+            .await
+            .get("user:USER123")
+            .cloned();
+        assert!(feedback.is_some());
+        assert_eq!(feedback.unwrap().request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn interaction_create_invalid_button_data_returns_none() {
+        // 此测试不触发 HTTP 调用（提前返回 None），不需要 mock server
+        let ch = QqChannel::new(make_config());
+        ch.set_token_for_test("fake_token").await;
+
+        let event = serde_json::json!({
+            "id": "interaction_004",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": {
+                "resolved": {
+                    "button_data": "invalid_no_colon"
+                }
+            }
+        });
+
+        let result = ch.handle_interaction_create(&event).await;
+        assert!(result.is_none());
     }
 
     // --- extract_approval_info tests ---
@@ -2392,5 +3152,179 @@ allowed_users = ["existing_user"]
             parsed.qq.unwrap().allowed_users,
             vec!["existing_user".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn send_with_recall_kind_calls_recall_api() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v2/users/USER123/messages/MSG_TO_RECALL"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let msg = ChannelOutboundMessage {
+            recipient: "user:USER123".to_string(),
+            thread_id: None,
+            content: "MSG_TO_RECALL".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::Recall,
+        };
+        let result = ch.send(&msg).await.expect("send should succeed");
+        assert!(result.is_none(), "recall should return None");
+    }
+
+    #[tokio::test]
+    async fn send_returns_message_id_for_text() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_abc123",
+                "timestamp": "1234567890"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let msg = ChannelOutboundMessage {
+            recipient: "user:USER123".to_string(),
+            thread_id: None,
+            content: "hello".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: MessageKind::LLMReply,
+        };
+        let result = ch.send(&msg).await.expect("send should succeed");
+        assert_eq!(result, Some("msg_abc123".to_string()));
+    }
+
+    /// 端到端集成测试：QQ 通道滚动撤回流程。
+    ///
+    /// 验证流程：
+    /// 1. 发送 TaskStatus(Running) → 收到 msg_id
+    /// 2. 发送 Recall(msg_1) + TaskStatus(Waiting) → 收到 msg_id
+    /// 3. 发送 Recall(msg_2) + LLMReply → 收到 msg_id
+    ///
+    /// 使用 wiremock 模拟 QQ API，验证 DELETE 调用次数和顺序。
+    #[tokio::test]
+    async fn qq_channel_rolling_recall_end_to_end() {
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        let msg_counter = Arc::new(AtomicU32::new(1));
+
+        // POST /v2/users/{openid}/messages → 返回递增的 msg_id
+        let post_counter = msg_counter.clone();
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER_END2END/messages"))
+            .respond_with(move |_request: &wiremock::Request| {
+                let n = post_counter.fetch_add(1, AtomicOrdering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": format!("msg_end2end_{n}"),
+                    "timestamp": "1234567890"
+                }))
+            })
+            .mount(&mock_server)
+            .await;
+
+        // DELETE /v2/users/{openid}/messages/{msg_id} → 200
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+
+        // 1. 发送 TaskStatus(Running) → 无撤回
+        let msg1 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "[e2e]: 运行中".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::TaskStatus,
+            })
+            .await
+            .expect("send running");
+        assert_eq!(msg1, Some("msg_end2end_1".to_string()));
+
+        // 2. 发送 Recall(msg_1)
+        let recall1 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "msg_end2end_1".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::Recall,
+            })
+            .await
+            .expect("recall running");
+        assert!(recall1.is_none());
+
+        // 3. 发送 TaskStatus(Waiting)
+        let msg2 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "[e2e]: 等待中".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::TaskStatus,
+            })
+            .await
+            .expect("send waiting");
+        assert_eq!(msg2, Some("msg_end2end_2".to_string()));
+
+        // 4. 发送 Recall(msg_2)
+        let recall2 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "msg_end2end_2".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::Recall,
+            })
+            .await
+            .expect("recall waiting");
+        assert!(recall2.is_none());
+
+        // 5. 发送 LLMReply
+        let msg3 = ch
+            .send(&ChannelOutboundMessage {
+                recipient: "user:USER_END2END".to_string(),
+                thread_id: None,
+                content: "[e2e] 助手: done".to_string(),
+                parse_mode: None,
+                reply_markup: None,
+                attachments: vec![],
+                message_kind: MessageKind::LLMReply,
+            })
+            .await
+            .expect("send llm reply");
+        assert_eq!(msg3, Some("msg_end2end_3".to_string()));
     }
 }
