@@ -310,14 +310,45 @@ impl Frontend for ChannelFrontend {
                         }
                     }
 
-                    // 准备 on_sent 回调：更新 last_status_msg
+                    // 准备 on_sent 回调：更新 last_status_msg + 检查 pending_reply_recall
                     let last_status_msg = self.last_status_msg.clone();
+                    let pending_reply_recall = self.pending_reply_recall.clone();
+                    let outbound_tx = self.outbound_tx.clone();
+                    let channel_name = self.channel_name.clone();
+                    let recipient = channel_id.user_id.clone();
+                    let thread_id = channel_id.thread_id.clone();
                     let on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>> =
                         Some(Box::new(move |msg_id: Option<String>| {
-                            if let Some(id) = msg_id
+                            // 1. 保存新 msg_id（现行为）
+                            if let Some(ref id) = msg_id
                                 && let Ok(mut map) = last_status_msg.try_write()
                             {
-                                map.insert(key, id);
+                                map.insert(key.clone(), id.clone());
+                            }
+                            // 2. 检查 pending_reply_recall → 撤回刚发送的状态消息
+                            if let Ok(mut pending) = pending_reply_recall.try_write() {
+                                if pending.remove(&key) {
+                                    if let Some(id) = msg_id {
+                                        // 清理 last_status_msg，避免后续 LLMReply 重复 Recall
+                                        if let Ok(mut map) = last_status_msg.try_write() {
+                                            map.remove(&key);
+                                        }
+                                        let recall_entry = OutboundEntry {
+                                            channel_name,
+                                            message: ChannelOutboundMessage {
+                                                recipient,
+                                                thread_id,
+                                                content: id,
+                                                parse_mode: None,
+                                                reply_markup: None,
+                                                attachments: vec![],
+                                                message_kind: MessageKind::Recall,
+                                            },
+                                            on_sent: None,
+                                        };
+                                        let _ = outbound_tx.send(recall_entry);
+                                    }
+                                }
                             }
                         }));
 
