@@ -24,6 +24,10 @@ pub struct ChannelFrontend {
     last_status_msg: Arc<RwLock<HashMap<(String, String), String>>>,
     /// Per-task 的最终态决策缓存。
     task_finalized: Arc<RwLock<HashSet<String>>>,
+    /// (task_id, recipient) — 标记 LLMReply 已到达但 on_sent 尚未回写新 msg_id。
+    /// on_sent 回调在新 msg_id 确认后，若此集合中包含该 key，
+    /// 则立即发起 Recall 撤回刚发送的状态消息，并清理 last_status_msg。
+    pending_reply_recall: Arc<RwLock<HashSet<(String, String)>>>,
 }
 
 impl ChannelFrontend {
@@ -38,6 +42,7 @@ impl ChannelFrontend {
             outbound_tx,
             last_status_msg: Arc::new(RwLock::new(HashMap::new())),
             task_finalized: Arc::new(RwLock::new(HashSet::new())),
+            pending_reply_recall: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -165,6 +170,7 @@ impl Frontend for ChannelFrontend {
                         if let Ok(map) = self.last_status_msg.try_read()
                             && let Some(msg_id) = map.get(&key).cloned()
                         {
+                            // 正常路径：last_status_msg 有值 → 直接 Recall
                             drop(map);
                             self.enqueue_recall(
                                 channel_id.user_id.clone(),
@@ -173,6 +179,12 @@ impl Frontend for ChannelFrontend {
                             );
                             if let Ok(mut map) = self.last_status_msg.try_write() {
                                 map.remove(&key);
+                            }
+                        } else {
+                            // 竞态路径：last_status_msg 为空（on_sent 尚未回写）
+                            // → 设置标记，委托 on_sent 兜底 Recall
+                            if let Ok(mut pending) = self.pending_reply_recall.try_write() {
+                                pending.insert(key);
                             }
                         }
                         if let Ok(mut set) = self.task_finalized.try_write() {
@@ -298,14 +310,44 @@ impl Frontend for ChannelFrontend {
                         }
                     }
 
-                    // 准备 on_sent 回调：更新 last_status_msg
+                    // 准备 on_sent 回调：更新 last_status_msg + 检查 pending_reply_recall
                     let last_status_msg = self.last_status_msg.clone();
+                    let pending_reply_recall = self.pending_reply_recall.clone();
+                    let outbound_tx = self.outbound_tx.clone();
+                    let channel_name = self.channel_name.clone();
+                    let recipient = channel_id.user_id.clone();
+                    let thread_id = channel_id.thread_id.clone();
                     let on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>> =
                         Some(Box::new(move |msg_id: Option<String>| {
-                            if let Some(id) = msg_id
+                            // 1. 保存新 msg_id（现行为）
+                            if let Some(ref id) = msg_id
                                 && let Ok(mut map) = last_status_msg.try_write()
                             {
-                                map.insert(key, id);
+                                map.insert(key.clone(), id.clone());
+                            }
+                            // 2. 检查 pending_reply_recall → 撤回刚发送的状态消息
+                            if let Ok(mut pending) = pending_reply_recall.try_write()
+                                && pending.remove(&key)
+                                && let Some(id) = msg_id
+                            {
+                                // 清理 last_status_msg，避免后续 LLMReply 重复 Recall
+                                if let Ok(mut map) = last_status_msg.try_write() {
+                                    map.remove(&key);
+                                }
+                                let recall_entry = OutboundEntry {
+                                    channel_name,
+                                    message: ChannelOutboundMessage {
+                                        recipient,
+                                        thread_id,
+                                        content: id,
+                                        parse_mode: None,
+                                        reply_markup: None,
+                                        attachments: vec![],
+                                        message_kind: MessageKind::Recall,
+                                    },
+                                    on_sent: None,
+                                };
+                                let _ = outbound_tx.send(recall_entry);
                             }
                         }));
 
@@ -328,6 +370,9 @@ impl Frontend for ChannelFrontend {
                 }
                 if let Ok(mut set) = self.task_finalized.try_write() {
                     set.remove(&task_id_str);
+                }
+                if let Ok(mut set) = self.pending_reply_recall.try_write() {
+                    set.retain(|(tid, _)| tid != &task_id_str);
                 }
             }
             // ToolCallStarted 不推送到 IM 通道：
@@ -930,5 +975,272 @@ mod tests {
         let new_status = rx.try_recv().expect("new status msg");
         assert_eq!(new_status.message.message_kind, MessageKind::TaskStatus);
         assert!(rx.try_recv().is_err(), "no recall after TaskCleared");
+    }
+
+    // === pending_reply_recall 竞态修复测试 ===
+
+    #[test]
+    fn normal_status_transition_does_not_recall_new_msg() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        let cid = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let target = EventTarget::Directed(vec![cid]);
+
+        // Running 状态
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let running_entry = rx.try_recv().expect("running status");
+        assert_eq!(running_entry.message.message_kind, MessageKind::TaskStatus);
+        (running_entry.on_sent.unwrap())(Some("msg_1".to_string()));
+
+        // Waiting 状态 — 应 Recall msg_1，但不应对 msg_2 设 pending 标记
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let recall_entry = rx.try_recv().expect("recall msg_1");
+        assert_eq!(recall_entry.message.message_kind, MessageKind::Recall);
+        assert_eq!(recall_entry.message.content, "msg_1");
+        let waiting_entry = rx.try_recv().expect("waiting status");
+        assert_eq!(waiting_entry.message.message_kind, MessageKind::TaskStatus);
+        // 触发 on_sent — 不应产生 Recall（无 LLMReply 到达 → 无 pending 标记）
+        (waiting_entry.on_sent.unwrap())(Some("msg_2".to_string()));
+        assert!(
+            rx.try_recv().is_err(),
+            "no recall after normal on_sent without LLMReply"
+        );
+
+        // Done 状态 — 同理
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target,
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Done,
+            old_status: Some(TaskStatusKind::Waiting),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let recall_entry2 = rx.try_recv().expect("recall msg_2");
+        assert_eq!(recall_entry2.message.message_kind, MessageKind::Recall);
+        assert_eq!(recall_entry2.message.content, "msg_2");
+        let done_entry = rx.try_recv().expect("done status");
+        assert_eq!(done_entry.message.message_kind, MessageKind::TaskStatus);
+        (done_entry.on_sent.unwrap())(Some("msg_3".to_string()));
+        assert!(
+            rx.try_recv().is_err(),
+            "no recall after normal on_sent without LLMReply"
+        );
+    }
+
+    #[test]
+    fn llm_reply_recalls_pending_status() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        let cid = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let target = EventTarget::Directed(vec![cid]);
+
+        // Running 状态
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let entry1 = rx.try_recv().expect("running status");
+        (entry1.on_sent.unwrap())(Some("msg_1".to_string()));
+
+        // Waiting 状态 — Recall msg_1，发送 msg_2（on_sent 尚未执行）
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let _recall = rx.try_recv().expect("recall msg_1");
+        let status_entry = rx.try_recv().expect("waiting status");
+        // ⚠️ 故意不执行 on_sent
+
+        // LLMReply 到达 — last_status_msg 为空 → 应设置 pending 标记
+        fe.push_event(EngineEvent::Text {
+            target: target.clone(),
+            role: MessageRole::Agent,
+            content: "done".to_string(),
+            task_id: Some(task_id),
+        });
+        let llm_entry = rx.try_recv().expect("llm reply");
+        assert_eq!(llm_entry.message.message_kind, MessageKind::LLMReply);
+        // 无即时 Recall（last_status_msg 为空）
+
+        // on_sent 稍后执行 → 应入队 Recall(msg_2)
+        (status_entry.on_sent.unwrap())(Some("msg_2".to_string()));
+        let deferred_recall = rx.try_recv().expect("deferred recall from on_sent");
+        assert_eq!(deferred_recall.message.message_kind, MessageKind::Recall);
+        assert_eq!(deferred_recall.message.content, "msg_2");
+        assert!(rx.try_recv().is_err(), "no more messages");
+    }
+
+    #[test]
+    fn pending_recall_cleaned_on_task_cleared() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        let cid = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let target = EventTarget::Directed(vec![cid]);
+
+        // Running 状态
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let entry1 = rx.try_recv().expect("running status");
+        (entry1.on_sent.unwrap())(Some("msg_1".to_string()));
+
+        // Waiting 状态（on_sent 未执行）
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let _recall = rx.try_recv().expect("recall msg_1");
+        let status_entry = rx.try_recv().expect("waiting status");
+
+        // LLMReply 到达 → 设置 pending 标记
+        fe.push_event(EngineEvent::Text {
+            target: target.clone(),
+            role: MessageRole::Agent,
+            content: "done".to_string(),
+            task_id: Some(task_id),
+        });
+        let _llm = rx.try_recv().expect("llm reply");
+
+        // TaskCleared — 应清理 pending_reply_recall
+        fe.push_event(EngineEvent::TaskCleared { target, task_id });
+        assert!(rx.try_recv().is_err(), "TaskCleared produces no outbound");
+
+        // on_sent 执行 — 不应触发 Recall（标记已被清理）
+        (status_entry.on_sent.unwrap())(Some("msg_2".to_string()));
+        assert!(rx.try_recv().is_err(), "recall should not fire after clear");
+    }
+
+    #[test]
+    fn pending_recall_not_set_if_last_status_exists() {
+        use uuid::Uuid;
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id: TaskId = Uuid::nil();
+        let cid = ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        };
+        let target = EventTarget::Directed(vec![cid]);
+
+        // Running 状态 → on_sent 已执行
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Running,
+            old_status: Some(TaskStatusKind::Pending),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let entry1 = rx.try_recv().expect("running status");
+        (entry1.on_sent.unwrap())(Some("msg_1".to_string()));
+
+        // Waiting 状态 → on_sent 已执行
+        fe.push_event(EngineEvent::TaskStatusChanged {
+            target: target.clone(),
+            task_id,
+            name: "task".to_string(),
+            status: TaskStatusKind::Waiting,
+            old_status: Some(TaskStatusKind::Running),
+            result: None,
+            parent_id: None,
+            origin_channel: None,
+            agent_name: None,
+            waiting_reason: None,
+        });
+        let _recall = rx.try_recv().expect("recall msg_1");
+        let status_entry = rx.try_recv().expect("waiting status");
+        (status_entry.on_sent.unwrap())(Some("msg_2".to_string()));
+
+        // LLMReply 到达 — last_status_msg 有值 → 正常 Recall，不设 pending 标记
+        fe.push_event(EngineEvent::Text {
+            target,
+            role: MessageRole::Agent,
+            content: "done".to_string(),
+            task_id: Some(task_id),
+        });
+        let recall_entry = rx.try_recv().expect("recall msg_2");
+        assert_eq!(recall_entry.message.message_kind, MessageKind::Recall);
+        assert_eq!(recall_entry.message.content, "msg_2");
+        let llm_entry = rx.try_recv().expect("llm reply");
+        assert_eq!(llm_entry.message.message_kind, MessageKind::LLMReply);
+        assert!(rx.try_recv().is_err(), "no more messages");
     }
 }
