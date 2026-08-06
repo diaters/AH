@@ -24,6 +24,10 @@ pub struct ChannelFrontend {
     last_status_msg: Arc<RwLock<HashMap<(String, String), String>>>,
     /// Per-task 的最终态决策缓存。
     task_finalized: Arc<RwLock<HashSet<String>>>,
+    /// (task_id, recipient) — 标记 LLMReply 已到达但 on_sent 尚未回写新 msg_id。
+    /// on_sent 回调在新 msg_id 确认后，若此集合中包含该 key，
+    /// 则立即发起 Recall 撤回刚发送的状态消息，并清理 last_status_msg。
+    pending_reply_recall: Arc<RwLock<HashSet<(String, String)>>>,
 }
 
 impl ChannelFrontend {
@@ -38,6 +42,7 @@ impl ChannelFrontend {
             outbound_tx,
             last_status_msg: Arc::new(RwLock::new(HashMap::new())),
             task_finalized: Arc::new(RwLock::new(HashSet::new())),
+            pending_reply_recall: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -328,6 +333,9 @@ impl Frontend for ChannelFrontend {
                 }
                 if let Ok(mut set) = self.task_finalized.try_write() {
                     set.remove(&task_id_str);
+                }
+                if let Ok(mut set) = self.pending_reply_recall.try_write() {
+                    set.retain(|(tid, _)| tid != &task_id_str);
                 }
             }
             // ToolCallStarted 不推送到 IM 通道：
