@@ -170,6 +170,7 @@ impl Frontend for ChannelFrontend {
                         if let Ok(map) = self.last_status_msg.try_read()
                             && let Some(msg_id) = map.get(&key).cloned()
                         {
+                            // 正常路径：last_status_msg 有值 → 直接 Recall
                             drop(map);
                             self.enqueue_recall(
                                 channel_id.user_id.clone(),
@@ -178,6 +179,12 @@ impl Frontend for ChannelFrontend {
                             );
                             if let Ok(mut map) = self.last_status_msg.try_write() {
                                 map.remove(&key);
+                            }
+                        } else {
+                            // 竞态路径：last_status_msg 为空（on_sent 尚未回写）
+                            // → 设置标记，委托 on_sent 兜底 Recall
+                            if let Ok(mut pending) = self.pending_reply_recall.try_write() {
+                                pending.insert(key);
                             }
                         }
                         if let Ok(mut set) = self.task_finalized.try_write() {
