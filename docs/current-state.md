@@ -228,11 +228,26 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   （`SkillUpdateContext` + `SkillUpdateCompletedMessage`），不再用 `work_item_id` Uuid 反查
 - `skill_update_completion_system` 执行职责：
   - apply diff 到 SKILL.md（任一 section/subsection 未找到即整体失败）
-  - 备份旧版本到 `history/v{base}.md`，写入新版本 frontmatter `version: base + 1`
+  - 目录级快照备份到 `history/v{base}/`，写入新版本 frontmatter `version: base + 1`
   - 通过 `SkillLoader` 重建并替换 `SkillRegistry` Resource
   - 候选推进到 `Persisted`
 - 失败时保留 SKILL.md 原内容不变，候选保持 `GovernanceResolved` 状态；LLM 返回 text/Err 时
   正确清理 `WorkItem` + `SkillUpdateContext` 并标记 `OnWorkItemFailed`
+
+##### ADR-006：skill updater 多文件更新支持
+
+- 参考 `docs/adr/ADR-006-skill-updater-multi-file-support.md`
+- `SkillUpdateOperation` 扩展为 11 种 variant：8 种 section/subsection/frontmatter 操作新增
+  `path: Option<String>` 字段（`None` → SKILL.md，`Some(p)` → sibling 文件），新增 3 种文件级操作
+  `replace_file` / `create_file` / `delete_file`（禁止作用于 SKILL.md）
+- `read_skill_file` 只读工具（仅 skill-updater Agent 可用）：读取 skill 目录下 sibling 文件内容，
+  路径受 `validate_skill_file_path` 沙箱约束（词法 `..` 拒绝 + canonicalize 状态检查 + 后缀白名单）
+- skill-updater WorkItem 为 `multi_turn = true`，LLM 可先 `read_skill_file` 感知子文件再
+  `submit_skill_update`；prompt 注入 skill 目录文件树
+- `skill_update_completion_system` 按操作是否含文件级/带 path 操作分流：纯 SKILL.md 走单文件
+  apply（向后兼容），否则走 `apply_skill_operations_multi`（目录级顺序 apply）
+- 备份从单文件 `history/v{base}.md` 升级为目录级快照 `history/v{base}/`（`backup_skill_dir`）；
+  失败时 `restore_skill_dir` 整体回滚；`cleanup_skill_dir_history` 保留最新 3 代
 
 ##### v8 D19：update 端 / generation 端颗粒度对齐
 

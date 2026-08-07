@@ -971,10 +971,10 @@ __generation 端格式约束__（D19 扩展）：prompt 中追加 SKILL.md 格�
 3. brain LLM 选 skill 的 prompt 模板：需要单独设计，不在本 ADR 范围内
 4. skill-updater 自身 skill 的初始内容：需要在 `agents.toml` 中预配置
 5. skill 删除/退役机制：显式推迟，作为已知约束（§7）
-6. __file_refs 的 updater 支持__（v8 D19 显式推迟）：当前 generation 端支持 `file_refs`
+6. ~~__file_refs 的 updater 支持__（v8 D19 显式推迟）~~：已由 [ADR-006](ADR-006-skill-updater-multi-file-support.md) 接替
    （落盘到 `scripts/` / `references/` / `assets/` 子目录），update 端无对应 operation。
    若需更新 file_refs 引用的文件，由人工编辑或重新生成 skill。未来若有实际需求，
-   单独 ADR 推进 `add_file` / `remove_file` / `replace_file` operation
+   单独 ADR 推进 `add_file` / `remove_file` / `replace_file` operation → 已由 ADR-006 实现
 7. __plugin skill frontmatter 缺失__（v8 D19 调研发现）：`plugins/harness-demo/skills/demo-skill.md`
    无 frontmatter，`parse_skill_md` 会返回 None，无法被加载。作为独立任务修复，不在 v8 改造范围
 8. __skill-updater Agent kind 声明__（v8 D19 调研发现）：`agents.toml` 中 `skill-updater` 未显式声明
@@ -1062,7 +1062,7 @@ __generation 端格式约束__（D19 扩展）：prompt 中追加 SKILL.md 格�
    "至少 1 个 `##` 标题 + 首个 section 非空"
 5. __frontmatter 字段__：5.4 generation 端写 3 字段（`name + description + self_updatable`），
    不扩展 update 端白名单
-6. __file_refs updater 支持__：6.4 暂不实现，标记 future work
+6. __file_refs updater 支持__：6.4 暂不实现，标记 future work → 已由 [ADR-006](ADR-006-skill-updater-multi-file-support.md) 接替
 7. __candidate payload 传递__：7.1 保留扁平化文本，补充候选类型显式说明
 8. __dry-run 校验规则__：8.2 简化版（generation 端校验"至少 1 个 `##`"，update 端校验
    "apply 后至少 1 个 `##`"）
