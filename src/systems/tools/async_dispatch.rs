@@ -188,6 +188,7 @@ pub fn async_tool_dispatch_system(
             experience_candidates,
             current_task_id: Some(task_id),
             current_origin_channel,
+            current_skill_dir: None,
             cancel: cancel.clone(),
         };
 

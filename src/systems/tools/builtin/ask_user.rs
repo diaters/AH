@@ -48,6 +48,7 @@ mod tests {
             current_task_id: Uuid::new_v4(),
             current_agent_id: Uuid::new_v4(),
             current_origin_channel: None,
+            current_skill_dir: None,
         }
     }
 

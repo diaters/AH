@@ -79,6 +79,7 @@ fn test_wait_tasks_tool_parsing() {
         current_task_id: uuid::Uuid::new_v4(),
         current_agent_id: uuid::Uuid::new_v4(),
         current_origin_channel: None,
+        current_skill_dir: None,
     };
 
     // This test will need the WaitTasksTool to be accessible

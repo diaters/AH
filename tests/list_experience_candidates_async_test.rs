@@ -69,6 +69,7 @@ fn execute_returns_internal_state_error() {
         current_task_id: uuid::Uuid::nil(),
         current_agent_id: uuid::Uuid::nil(),
         current_origin_channel: None,
+        current_skill_dir: None,
     };
     let result = tool.execute(&serde_json::json!({}), &ctx);
     assert!(

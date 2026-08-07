@@ -268,6 +268,7 @@ pub fn tool_dispatch_system(
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
+                    current_skill_dir: None,
                 };
                 let action = executor.execute(&request.tool_input, &ctx);
 

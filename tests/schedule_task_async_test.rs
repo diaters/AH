@@ -64,6 +64,7 @@ fn schedule_task_execute_is_async_only_defense() {
             current_task_id: uuid::Uuid::new_v4(),
             current_agent_id: uuid::Uuid::new_v4(),
             current_origin_channel: None,
+            current_skill_dir: None,
         },
     );
     assert!(matches!(result, Err(ToolError::InternalState(_))));

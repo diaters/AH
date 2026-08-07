@@ -361,6 +361,7 @@ pub fn tool_confirmation_result_system(
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
+                    current_skill_dir: None,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 

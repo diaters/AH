@@ -384,6 +384,9 @@ pub struct ToolContext<'a> {
     pub current_agent_id: AgentId,
     /// 当前任务的 origin_channel，供 schedule_task 等工具继承输出通道
     pub current_origin_channel: Option<ChannelId>,
+    /// ADR-006：当前 skill 更新上下文中的 skill 目录路径。
+    /// 仅在 skill-updater WorkItem 执行时填充，供 read_skill_file 工具使用。
+    pub current_skill_dir: Option<std::path::PathBuf>,
 }
 
 /// 工具执行模式：双轨期 dispatch 分流依据。
