@@ -50,6 +50,7 @@
 | `adr/ADR-003-deprecate-spawn-agent-tool.md` | 废弃 `spawn_agent` Tool | 已决议（对应工具已退役，见 `current-state.md` 已废弃项） |
 | `adr/ADR-004-skill-first-class-and-experience-governance-reform.md` | Skill 一等公民与经验治理改造 | 已决议（进行中，见 superpowers 计划） |
 | `adr/ADR-005-ecs-relation-modeling.md` | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 已决议（最新） |
+| `adr/ADR-006-skill-updater-multi-file-support.md` | skill updater 多文件更新支持 | 已决议（最新） |
 
 ## 设计文档（design/）
 

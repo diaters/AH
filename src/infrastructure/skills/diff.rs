@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use tracing::warn;
@@ -155,7 +155,11 @@ pub fn apply_skill_operations(
 
     for op in operations {
         match op {
-            SkillUpdateOperation::ReplaceSection { section, content } => {
+            SkillUpdateOperation::ReplaceSection {
+                section,
+                content,
+                path: _,
+            } => {
                 let range = find_section_range(&body_lines.join("\n"), section)
                     .ok_or_else(|| ApplyError::SectionNotFound(section.clone()))?;
                 // 保留 `## {section}` 行，替换后续内容
@@ -165,6 +169,7 @@ pub fn apply_skill_operations(
                 after,
                 section,
                 content,
+                path: _,
             } => {
                 let body_str = body_lines.join("\n");
                 let range = find_section_range(&body_str, after)
@@ -174,7 +179,7 @@ pub fn apply_skill_operations(
                 new_lines.push(String::new()); // 空行分隔
                 body_lines.splice(range.1..range.1, new_lines);
             }
-            SkillUpdateOperation::RemoveSection { section } => {
+            SkillUpdateOperation::RemoveSection { section, path: _ } => {
                 let body_str = body_lines.join("\n");
                 let range = find_section_range(&body_str, section)
                     .ok_or_else(|| ApplyError::SectionNotFound(section.clone()))?;
@@ -198,6 +203,7 @@ pub fn apply_skill_operations(
                 section,
                 subsection,
                 content,
+                path: _,
             } => {
                 let body_str = body_lines.join("\n");
                 let range =
@@ -212,6 +218,7 @@ pub fn apply_skill_operations(
                 after,
                 subsection,
                 content,
+                path: _,
             } => {
                 let body_str = body_lines.join("\n");
                 let range = find_subsection_range(&body_str, section, after).ok_or_else(|| {
@@ -225,6 +232,7 @@ pub fn apply_skill_operations(
             SkillUpdateOperation::RemoveSubsection {
                 section,
                 subsection,
+                path: _,
             } => {
                 let body_str = body_lines.join("\n");
                 let range =
@@ -233,8 +241,14 @@ pub fn apply_skill_operations(
                     })?;
                 body_lines.drain(range.0..range.1);
             }
-            SkillUpdateOperation::ReplaceBody { content } => {
+            SkillUpdateOperation::ReplaceBody { content, path: _ } => {
                 body_lines = content.lines().map(|s| s.to_string()).collect();
+            }
+            // ADR-006 文件级操作在 apply_skill_operations_multi 中处理
+            SkillUpdateOperation::ReplaceFile { .. }
+            | SkillUpdateOperation::CreateFile { .. }
+            | SkillUpdateOperation::DeleteFile { .. } => {
+                return Err(ApplyError::MultiFileOperationInSingleFileContext);
             }
         }
     }
@@ -271,6 +285,440 @@ pub enum ApplyError {
     /// v8 D19：post-apply 结构校验失败（apply 后 body 无 `##` 标题或首个 section 空）
     #[error("post-apply structure invalid: {0}")]
     StructureInvalid(String),
+    /// ADR-006：文件级操作在单文件 apply_skill_operations 中不可用
+    #[error("multi-file operation not supported in single-file context")]
+    MultiFileOperationInSingleFileContext,
+    /// ADR-006：路径不在 skill 目录内或穿越了目录边界
+    #[error("path escapes skill directory: {0}")]
+    PathEscapesSkillDir(String),
+    /// ADR-006：文件后缀不在白名单内
+    #[error("file suffix not allowed: {0}")]
+    SuffixNotAllowed(String),
+    /// ADR-006：path 指向的 .md 文件不存在
+    #[error("sibling markdown file not found: {0}")]
+    SiblingFileNotFound(String),
+    /// ADR-006：replace_file / delete_file 不可作用于 SKILL.md
+    #[error("file operation not allowed on SKILL.md: {0}")]
+    SkillMdNotAllowed(String),
+    /// ADR-006：replace_file 要求文件已存在
+    #[error("file not found for replace_file: {0}")]
+    ReplaceFileNotFound(String),
+    /// ADR-006：create_file 要求文件不存在
+    #[error("file already exists for create_file: {0}")]
+    CreateFileAlreadyExists(String),
+    /// ADR-006：delete_file 要求文件已存在
+    #[error("file not found for delete_file: {0}")]
+    DeleteFileNotFound(String),
+    /// ADR-006：section 级操作的 path 必须是 .md 后缀
+    #[error("section operation path must be .md suffix: {0}")]
+    SectionPathNotMd(String),
+}
+
+/// ADR-006：文件操作允许的后缀白名单
+pub const ALLOWED_FILE_SUFFIXES: &[&str] = &["md", "py", "sh", "toml", "txt", "json"];
+
+/// ADR-006：校验路径是否在 skill 目录内、后缀是否在白名单内。
+///
+/// - `rel_path`：相对于 skill 目录的路径
+/// - `skill_dir`：skill 目录的绝对路径
+/// - `allowed_suffixes`：允许的文件后缀列表（不含点号，如 `["md", "py"]`）
+///
+/// 返回解析后的绝对路径。
+pub fn validate_skill_file_path(
+    rel_path: &str,
+    skill_dir: &Path,
+    allowed_suffixes: &[&str],
+) -> Result<PathBuf, ApplyError> {
+    // 词法检查：拒绝绝对路径与 `..` 逃逸。
+    // 依赖 canonicalize 的状态检查在中间目录不存在时会静默放行（canonicalize 失败），
+    // 因此这里先用词法检查兜底，确保 create_file 不会借由 `..` 写穿 skill 目录。
+    if std::path::Path::new(rel_path).is_absolute() {
+        return Err(ApplyError::PathEscapesSkillDir(rel_path.to_string()));
+    }
+    let mut depth: i32 = 0;
+    for comp in rel_path.split(['/', '\\']) {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(ApplyError::PathEscapesSkillDir(rel_path.to_string()));
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+
+    // 拒绝路径穿越（状态检查：捕获 symlink 逃逸）
+    let abs_path = skill_dir.join(rel_path);
+    let canonical_skill_dir = skill_dir
+        .canonicalize()
+        .unwrap_or_else(|_| skill_dir.to_path_buf());
+    // 对于不存在的文件，先检查父目录
+    let check_path = if abs_path.exists() {
+        abs_path.clone()
+    } else {
+        abs_path.parent().unwrap_or(skill_dir).to_path_buf()
+    };
+    if let Ok(canonical) = check_path.canonicalize()
+        && !canonical.starts_with(&canonical_skill_dir)
+    {
+        return Err(ApplyError::PathEscapesSkillDir(rel_path.to_string()));
+    }
+
+    // 检查后缀
+    let suffix = abs_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if !allowed_suffixes.contains(&suffix) {
+        return Err(ApplyError::SuffixNotAllowed(rel_path.to_string()));
+    }
+
+    Ok(abs_path)
+}
+
+/// ADR-006：对 sibling .md 文件执行 section 级操作。
+///
+/// 校验 path → 读取文件 → 构造 path:None 版本操作 → apply → 写回。
+fn apply_sibling_md_section_op(
+    skill_dir: &Path,
+    p: &str,
+    op: SkillUpdateOperation,
+) -> Result<(), ApplyError> {
+    // 校验 path：必须是 .md 后缀 + 文件已存在
+    if !p.ends_with(".md") {
+        return Err(ApplyError::SectionPathNotMd(p.to_string()));
+    }
+    let abs_path = validate_skill_file_path(p, skill_dir, &["md"])?;
+    if !abs_path.exists() {
+        return Err(ApplyError::SiblingFileNotFound(p.to_string()));
+    }
+
+    // 读取文件内容
+    let file_content = std::fs::read_to_string(&abs_path)
+        .map_err(|_| ApplyError::SiblingFileNotFound(p.to_string()))?;
+
+    // 构造 path:None 版本的操作用于 apply
+    let single_op = strip_path_from_op(&op);
+    let new_content = apply_skill_operations(&file_content, &[single_op])?;
+    std::fs::write(&abs_path, &new_content)
+        .map_err(|e| ApplyError::SiblingFileNotFound(format!("write failed: {}", e)))?;
+    Ok(())
+}
+
+/// 从 SkillUpdateOperation 中移除 path 字段，构造 path:None 版本。
+fn strip_path_from_op(op: &SkillUpdateOperation) -> SkillUpdateOperation {
+    match op {
+        SkillUpdateOperation::ReplaceSection {
+            section, content, ..
+        } => SkillUpdateOperation::ReplaceSection {
+            section: section.clone(),
+            content: content.clone(),
+            path: None,
+        },
+        SkillUpdateOperation::AddSection {
+            after,
+            section,
+            content,
+            ..
+        } => SkillUpdateOperation::AddSection {
+            after: after.clone(),
+            section: section.clone(),
+            content: content.clone(),
+            path: None,
+        },
+        SkillUpdateOperation::RemoveSection { section, .. } => {
+            SkillUpdateOperation::RemoveSection {
+                section: section.clone(),
+                path: None,
+            }
+        }
+        SkillUpdateOperation::ReplaceSubsection {
+            section,
+            subsection,
+            content,
+            ..
+        } => SkillUpdateOperation::ReplaceSubsection {
+            section: section.clone(),
+            subsection: subsection.clone(),
+            content: content.clone(),
+            path: None,
+        },
+        SkillUpdateOperation::AddSubsection {
+            section,
+            after,
+            subsection,
+            content,
+            ..
+        } => SkillUpdateOperation::AddSubsection {
+            section: section.clone(),
+            after: after.clone(),
+            subsection: subsection.clone(),
+            content: content.clone(),
+            path: None,
+        },
+        SkillUpdateOperation::RemoveSubsection {
+            section,
+            subsection,
+            ..
+        } => SkillUpdateOperation::RemoveSubsection {
+            section: section.clone(),
+            subsection: subsection.clone(),
+            path: None,
+        },
+        SkillUpdateOperation::ReplaceBody { content, .. } => SkillUpdateOperation::ReplaceBody {
+            content: content.clone(),
+            path: None,
+        },
+        // 以下操作不需要 strip path
+        SkillUpdateOperation::ReplaceFrontmatter { field, value } => {
+            SkillUpdateOperation::ReplaceFrontmatter {
+                field: field.clone(),
+                value: value.clone(),
+            }
+        }
+        SkillUpdateOperation::ReplaceFile { path, content } => SkillUpdateOperation::ReplaceFile {
+            path: path.clone(),
+            content: content.clone(),
+        },
+        SkillUpdateOperation::CreateFile { path, content } => SkillUpdateOperation::CreateFile {
+            path: path.clone(),
+            content: content.clone(),
+        },
+        SkillUpdateOperation::DeleteFile { path } => {
+            SkillUpdateOperation::DeleteFile { path: path.clone() }
+        }
+    }
+}
+
+/// ADR-006：多文件 skill 的 apply 操作。
+///
+/// 遍历 operations，根据 `path` 字段决定操作目标：
+/// - `path: None` → SKILL.md（复用 `apply_skill_operations`）
+/// - `path: Some(p)` → 校验后对 sibling `.md` 文件执行 section 级操作
+/// - `ReplaceFile` / `CreateFile` / `DeleteFile` → 文件级操作
+///
+/// **注意**：调用方负责在调用前做目录级快照备份，失败时回滚。
+/// 本函数只负责 apply，不负责备份/回滚。
+pub fn apply_skill_operations_multi(
+    skill_dir: &Path,
+    operations: &[SkillUpdateOperation],
+) -> Result<(), ApplyError> {
+    let skill_md_path = skill_dir.join("SKILL.md");
+
+    // 分离 SKILL.md 操作和文件级操作
+    let mut skill_md_ops: Vec<SkillUpdateOperation> = Vec::new();
+    for op in operations {
+        match op {
+            // path: None → SKILL.md 操作，收集后批量 apply
+            SkillUpdateOperation::ReplaceSection { path: None, .. }
+            | SkillUpdateOperation::AddSection { path: None, .. }
+            | SkillUpdateOperation::RemoveSection { path: None, .. }
+            | SkillUpdateOperation::ReplaceSubsection { path: None, .. }
+            | SkillUpdateOperation::AddSubsection { path: None, .. }
+            | SkillUpdateOperation::RemoveSubsection { path: None, .. }
+            | SkillUpdateOperation::ReplaceBody { path: None, .. }
+            | SkillUpdateOperation::ReplaceFrontmatter { .. } => {
+                skill_md_ops.push(op.clone());
+            }
+
+            // path: Some(p) → sibling .md 文件的 section 级操作
+            SkillUpdateOperation::ReplaceSection {
+                section: _,
+                content: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+            SkillUpdateOperation::AddSection {
+                after: _,
+                section: _,
+                content: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+            SkillUpdateOperation::RemoveSection {
+                section: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+            SkillUpdateOperation::ReplaceSubsection {
+                section: _,
+                subsection: _,
+                content: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+            SkillUpdateOperation::AddSubsection {
+                section: _,
+                after: _,
+                subsection: _,
+                content: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+            SkillUpdateOperation::RemoveSubsection {
+                section: _,
+                subsection: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+            SkillUpdateOperation::ReplaceBody {
+                content: _,
+                path: Some(p),
+            } => {
+                apply_sibling_md_section_op(skill_dir, p, op.clone())?;
+            }
+
+            // ADR-006 文件级操作
+            SkillUpdateOperation::ReplaceFile { path, content } => {
+                if path == "SKILL.md" {
+                    return Err(ApplyError::SkillMdNotAllowed(path.clone()));
+                }
+                let abs_path = validate_skill_file_path(path, skill_dir, ALLOWED_FILE_SUFFIXES)?;
+                if !abs_path.exists() {
+                    return Err(ApplyError::ReplaceFileNotFound(path.clone()));
+                }
+                std::fs::write(&abs_path, content)
+                    .map_err(|e| ApplyError::ReplaceFileNotFound(format!("write failed: {}", e)))?;
+            }
+            SkillUpdateOperation::CreateFile { path, content } => {
+                if path == "SKILL.md" {
+                    return Err(ApplyError::SkillMdNotAllowed(path.clone()));
+                }
+                let abs_path = validate_skill_file_path(path, skill_dir, ALLOWED_FILE_SUFFIXES)?;
+                if abs_path.exists() {
+                    return Err(ApplyError::CreateFileAlreadyExists(path.clone()));
+                }
+                // 确保父目录存在
+                if let Some(parent) = abs_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        ApplyError::CreateFileAlreadyExists(format!("mkdir failed: {}", e))
+                    })?;
+                }
+                std::fs::write(&abs_path, content).map_err(|e| {
+                    ApplyError::CreateFileAlreadyExists(format!("write failed: {}", e))
+                })?;
+            }
+            SkillUpdateOperation::DeleteFile { path } => {
+                if path == "SKILL.md" {
+                    return Err(ApplyError::SkillMdNotAllowed(path.clone()));
+                }
+                let abs_path = validate_skill_file_path(path, skill_dir, ALLOWED_FILE_SUFFIXES)?;
+                if !abs_path.exists() {
+                    return Err(ApplyError::DeleteFileNotFound(path.clone()));
+                }
+                std::fs::remove_file(&abs_path)
+                    .map_err(|e| ApplyError::DeleteFileNotFound(format!("remove failed: {}", e)))?;
+            }
+        }
+    }
+
+    // Apply SKILL.md 操作（如果有）
+    if !skill_md_ops.is_empty() {
+        let content = std::fs::read_to_string(&skill_md_path)
+            .map_err(|e| ApplyError::SectionNotFound(format!("read SKILL.md failed: {}", e)))?;
+        let new_content = apply_skill_operations(&content, &skill_md_ops)?;
+        std::fs::write(&skill_md_path, &new_content)
+            .map_err(|e| ApplyError::SectionNotFound(format!("write SKILL.md failed: {}", e)))?;
+    }
+
+    Ok(())
+}
+
+/// ADR-006：目录级快照备份。
+///
+/// 将整个 skill 目录复制到 `history/v{version}/`。
+/// 排除 `history/` 目录本身，避免递归复制。
+pub fn backup_skill_dir(skill_dir: &Path, version: u32) -> std::io::Result<PathBuf> {
+    let history_dir = skill_dir.join("history");
+    let backup_dir = history_dir.join(format!("v{}", version));
+    std::fs::create_dir_all(&backup_dir)?;
+
+    copy_dir_recursive(skill_dir, &backup_dir, &history_dir)?;
+    Ok(backup_dir)
+}
+
+/// ADR-006：从目录级快照恢复 skill 目录。
+///
+/// 清空 skill 目录（排除 `history/`），然后将备份目录内容复制回来。
+pub fn restore_skill_dir(skill_dir: &Path, backup_dir: &Path) -> std::io::Result<()> {
+    let history_dir = skill_dir.join("history");
+
+    // 清空当前 skill 目录（保留 history/）
+    for entry in std::fs::read_dir(skill_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == history_dir {
+            continue; // 保留 history 目录
+        }
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+    }
+
+    // 从备份恢复
+    copy_dir_recursive(backup_dir, skill_dir, &history_dir)?;
+    Ok(())
+}
+
+/// ADR-006：清理目录级 history，保留最新 `keep` 代。
+pub fn cleanup_skill_dir_history(history_dir: &Path, keep: usize) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(history_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    let mut versions: Vec<(u32, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if let Some(stripped) = file_name.strip_prefix('v')
+            && let Ok(v) = stripped.parse::<u32>()
+        {
+            versions.push((v, path));
+        }
+    }
+
+    versions.sort_by_key(|(v, _)| *v);
+    let excess = versions.len().saturating_sub(keep);
+    for (_, path) in versions.iter().take(excess) {
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)?;
+        }
+    }
+    Ok(())
+}
+
+/// 递归复制目录，排除 `exclude` 路径。
+fn copy_dir_recursive(src: &Path, dst: &Path, exclude: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        if src_path == exclude {
+            continue;
+        }
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path, &exclude.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// 在 SKILL.md 内容的 frontmatter 中设置 version 字段（upsert 语义）。
@@ -345,6 +793,7 @@ mod tests {
         let ops = vec![SkillUpdateOperation::ReplaceSection {
             section: "## Usage".to_string(),
             content: "New usage content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE, &ops).unwrap();
         assert!(result.contains("New usage content."));
@@ -356,6 +805,7 @@ mod tests {
         let ops = vec![SkillUpdateOperation::ReplaceSection {
             section: "## Missing".to_string(),
             content: "x".to_string(),
+            path: None,
         }];
         assert!(matches!(
             apply_skill_operations(SAMPLE, &ops),
@@ -369,6 +819,7 @@ mod tests {
             after: "## Usage".to_string(),
             section: "## Edge Cases".to_string(),
             content: "Edge case notes.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE, &ops).unwrap();
         assert!(result.contains("## Edge Cases"));
@@ -384,6 +835,7 @@ mod tests {
     fn remove_section_existing() {
         let ops = vec![SkillUpdateOperation::RemoveSection {
             section: "## Examples".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE, &ops).unwrap();
         assert!(!result.contains("## Examples"));
@@ -429,6 +881,7 @@ mod tests {
             section: "## Usage".to_string(),
             subsection: "### Advanced".to_string(),
             content: "Do step 2 with caution.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
         assert!(result.contains("Do step 2 with caution."));
@@ -443,6 +896,7 @@ mod tests {
             section: "## Missing".to_string(),
             subsection: "### Advanced".to_string(),
             content: "x".to_string(),
+            path: None,
         }];
         assert!(matches!(
             apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
@@ -456,6 +910,7 @@ mod tests {
             section: "## Usage".to_string(),
             subsection: "### Missing".to_string(),
             content: "x".to_string(),
+            path: None,
         }];
         assert!(matches!(
             apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
@@ -470,6 +925,7 @@ mod tests {
             after: "### Basic".to_string(),
             subsection: "### Edge Cases".to_string(),
             content: "Edge case content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
         assert!(result.contains("### Edge Cases"));
@@ -488,6 +944,7 @@ mod tests {
             after: "### Missing".to_string(),
             subsection: "### New".to_string(),
             content: "x".to_string(),
+            path: None,
         }];
         assert!(matches!(
             apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops),
@@ -500,6 +957,7 @@ mod tests {
         let ops = vec![SkillUpdateOperation::RemoveSubsection {
             section: "## Usage".to_string(),
             subsection: "### Advanced".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_WITH_SUBSECTIONS, &ops).unwrap();
         assert!(!result.contains("### Advanced"));
@@ -521,6 +979,7 @@ mod tests {
             section: "## Usage".to_string(),
             subsection: "### Common".to_string(),
             content: "New usage common content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
         // 目标 subsection 已更新
@@ -557,6 +1016,7 @@ mod tests {
             after: "### Common".to_string(),
             subsection: "### New".to_string(),
             content: "New subsection content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
         // 新 subsection 已添加
@@ -592,6 +1052,7 @@ mod tests {
         let ops = vec![SkillUpdateOperation::RemoveSubsection {
             section: "## Usage".to_string(),
             subsection: "### Common".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
         // 目标 subsection 已删除（连同其内容）
@@ -629,6 +1090,7 @@ mod tests {
             section: "## Examples".to_string(),
             subsection: "### Common".to_string(),
             content: "New examples common content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE_CROSS_SECTION_SAME_SUBSECTION, &ops).unwrap();
         // 目标 subsection 已更新
@@ -654,6 +1116,7 @@ mod tests {
     fn replace_body_replaces_body_keeps_frontmatter() {
         let ops = vec![SkillUpdateOperation::ReplaceBody {
             content: "## New Section\n\nNew body content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE, &ops).unwrap();
         // frontmatter 保留
@@ -705,6 +1168,7 @@ mod tests {
         // v8 D19：replace_body 后 body 仍有 ## 标题，应通过 post-apply 校验
         let ops = vec![SkillUpdateOperation::ReplaceBody {
             content: "## New Section\n\nNew content.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE, &ops);
         assert!(result.is_ok());
@@ -715,6 +1179,7 @@ mod tests {
         // v8 D19：replace_body 后 body 无 ## 标题，post-apply 校验应返回 StructureInvalid
         let ops = vec![SkillUpdateOperation::ReplaceBody {
             content: "Just plain text without heading.".to_string(),
+            path: None,
         }];
         let result = apply_skill_operations(SAMPLE, &ops);
         assert!(matches!(result, Err(ApplyError::StructureInvalid(_))));
@@ -726,9 +1191,11 @@ mod tests {
         let ops = vec![
             SkillUpdateOperation::RemoveSection {
                 section: "## Usage".to_string(),
+                path: None,
             },
             SkillUpdateOperation::RemoveSection {
                 section: "## Examples".to_string(),
+                path: None,
             },
         ];
         let result = apply_skill_operations(SAMPLE, &ops);
@@ -788,6 +1255,294 @@ mod cleanup_tests {
     #[test]
     fn cleanup_no_dir_is_noop() {
         let result = cleanup_skill_history(std::path::Path::new("/nonexistent"), 3);
+        assert!(result.is_ok());
+    }
+}
+
+/// ADR-006：多文件 apply、路径校验、目录级快照备份/回滚测试。
+#[cfg(test)]
+mod multi_file_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    const SKILL_MD: &str =
+        "---\nname: test\ndescription: A skill\nversion: 1\n---\n\n## Usage\n\nDo it.\n";
+
+    /// 构造一个含 SKILL.md + sibling download.md 的临时 skill 目录。
+    fn setup_skill_dir() -> (TempDir, PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(dir.join("SKILL.md"), SKILL_MD).unwrap();
+        fs::write(
+            dir.join("download.md"),
+            "# Download\n\n## Steps\n\nOld steps.\n",
+        )
+        .unwrap();
+        fs::write(dir.join("scripts/run.py"), "print('old')").unwrap();
+        (tmp, dir)
+    }
+
+    // ---- validate_skill_file_path ----
+
+    #[test]
+    fn validate_path_rejects_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::write(dir.join("SKILL.md"), SKILL_MD).unwrap();
+        assert!(matches!(
+            validate_skill_file_path("../outside.md", &dir, &["md"]),
+            Err(ApplyError::PathEscapesSkillDir(_))
+        ));
+        assert!(matches!(
+            validate_skill_file_path("../../etc/passwd", &dir, &["md"]),
+            Err(ApplyError::PathEscapesSkillDir(_))
+        ));
+    }
+
+    #[test]
+    fn validate_path_rejects_disallowed_suffix() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        assert!(matches!(
+            validate_skill_file_path("evil.rs", &dir, &["md"]),
+            Err(ApplyError::SuffixNotAllowed(_))
+        ));
+    }
+
+    #[test]
+    fn validate_path_accepts_allowed_suffix_in_subdir() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(dir.join("scripts/run.py"), "x").unwrap();
+        let abs = validate_skill_file_path("scripts/run.py", &dir, &["py"]).unwrap();
+        assert!(abs.ends_with("scripts/run.py"));
+    }
+
+    // ---- apply_skill_operations_multi ----
+
+    #[test]
+    fn multi_apply_skill_md_section_and_sibling_section() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![
+            SkillUpdateOperation::ReplaceSection {
+                section: "## Usage".to_string(),
+                content: "New usage.".to_string(),
+                path: None,
+            },
+            SkillUpdateOperation::ReplaceSection {
+                section: "## Steps".to_string(),
+                content: "New steps.".to_string(),
+                path: Some("download.md".to_string()),
+            },
+        ];
+        apply_skill_operations_multi(&dir, &ops).unwrap();
+
+        let skill_md = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert!(skill_md.contains("New usage."));
+        assert!(!skill_md.contains("Do it."));
+
+        let sibling = fs::read_to_string(dir.join("download.md")).unwrap();
+        assert!(sibling.contains("New steps."));
+        assert!(!sibling.contains("Old steps."));
+    }
+
+    #[test]
+    fn multi_apply_file_operations() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![
+            SkillUpdateOperation::ReplaceFile {
+                path: "scripts/run.py".to_string(),
+                content: "print('new')".to_string(),
+            },
+            SkillUpdateOperation::CreateFile {
+                path: "templates/note.md".to_string(),
+                content: "# Note".to_string(),
+            },
+            SkillUpdateOperation::DeleteFile {
+                path: "download.md".to_string(),
+            },
+        ];
+        apply_skill_operations_multi(&dir, &ops).unwrap();
+
+        let py = fs::read_to_string(dir.join("scripts/run.py")).unwrap();
+        assert_eq!(py, "print('new')");
+        assert!(dir.join("templates/note.md").exists());
+        assert!(!dir.join("download.md").exists());
+    }
+
+    #[test]
+    fn multi_apply_rejects_skill_md_file_operations() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![SkillUpdateOperation::ReplaceFile {
+            path: "SKILL.md".to_string(),
+            content: "nope".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::SkillMdNotAllowed(_))
+        ));
+        let ops = vec![SkillUpdateOperation::DeleteFile {
+            path: "SKILL.md".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::SkillMdNotAllowed(_))
+        ));
+    }
+
+    #[test]
+    fn multi_apply_rejects_replace_nonexistent_file() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![SkillUpdateOperation::ReplaceFile {
+            path: "missing.md".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::ReplaceFileNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn multi_apply_rejects_create_existing_file() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![SkillUpdateOperation::CreateFile {
+            path: "download.md".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::CreateFileAlreadyExists(_))
+        ));
+    }
+
+    #[test]
+    fn multi_apply_rejects_delete_nonexistent_file() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![SkillUpdateOperation::DeleteFile {
+            path: "ghost.md".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::DeleteFileNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn multi_apply_rejects_sibling_section_on_non_md_or_missing() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![SkillUpdateOperation::ReplaceSection {
+            section: "## Steps".to_string(),
+            content: "x".to_string(),
+            path: Some("run.py".to_string()),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::SectionPathNotMd(_))
+        ));
+
+        let ops = vec![SkillUpdateOperation::ReplaceSection {
+            section: "## Steps".to_string(),
+            content: "x".to_string(),
+            path: Some("missing.md".to_string()),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::SiblingFileNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn multi_apply_single_file_ops_path_escapes_rejected() {
+        let (_tmp, dir) = setup_skill_dir();
+        let ops = vec![SkillUpdateOperation::ReplaceFile {
+            path: "../evil.py".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations_multi(&dir, &ops),
+            Err(ApplyError::PathEscapesSkillDir(_))
+        ));
+    }
+
+    #[test]
+    fn single_file_apply_rejects_file_level_ops() {
+        // 向后兼容：文件级操作在 apply_skill_operations 中必须报错
+        let ops = vec![SkillUpdateOperation::ReplaceFile {
+            path: "x.md".to_string(),
+            content: "x".to_string(),
+        }];
+        assert!(matches!(
+            apply_skill_operations(SKILL_MD, &ops),
+            Err(ApplyError::MultiFileOperationInSingleFileContext)
+        ));
+    }
+
+    // ---- backup / restore / cleanup ----
+
+    #[test]
+    fn backup_captures_all_files_excluding_history() {
+        let (_tmp, dir) = setup_skill_dir();
+        let backup = backup_skill_dir(&dir, 1).unwrap();
+        assert!(backup.join("SKILL.md").exists());
+        assert!(backup.join("download.md").exists());
+        assert!(backup.join("scripts/run.py").exists());
+        // 备份内不含嵌套 history
+        assert!(!backup.join("history").exists());
+    }
+
+    #[test]
+    fn restore_reverts_directory_to_snapshot() {
+        let (_tmp, dir) = setup_skill_dir();
+        backup_skill_dir(&dir, 1).unwrap();
+        // 修改文件 + 新增文件 + 删除文件
+        fs::write(dir.join("SKILL.md"), "changed").unwrap();
+        fs::write(dir.join("new.md"), "new").unwrap();
+        fs::remove_file(dir.join("download.md")).unwrap();
+
+        let backup = dir.join("history").join("v1");
+        restore_skill_dir(&dir, &backup).unwrap();
+
+        let skill_md = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert!(skill_md.contains("Do it."));
+        assert!(dir.join("download.md").exists());
+        assert!(!dir.join("new.md").exists());
+    }
+
+    #[test]
+    fn restore_preserves_history_dir() {
+        let (_tmp, dir) = setup_skill_dir();
+        backup_skill_dir(&dir, 1).unwrap();
+        let backup = dir.join("history").join("v1");
+        restore_skill_dir(&dir, &backup).unwrap();
+        // 回滚后 history 目录仍保留
+        assert!(dir.join("history").join("v1").exists());
+    }
+
+    #[test]
+    fn cleanup_dir_history_keeps_latest_n() {
+        let (_tmp, dir) = setup_skill_dir();
+        for v in 1..=6 {
+            backup_skill_dir(&dir, v).unwrap();
+        }
+        let history = dir.join("history");
+        cleanup_skill_dir_history(&history, 3).unwrap();
+        let remaining: Vec<String> = fs::read_dir(&history)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.len(), 3);
+        assert!(remaining.contains(&"v4".to_string()));
+        assert!(remaining.contains(&"v5".to_string()));
+        assert!(remaining.contains(&"v6".to_string()));
+    }
+
+    #[test]
+    fn cleanup_dir_history_no_dir_is_noop() {
+        let result = cleanup_skill_dir_history(std::path::Path::new("/nonexistent"), 3);
         assert!(result.is_ok());
     }
 }

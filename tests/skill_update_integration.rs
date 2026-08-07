@@ -657,6 +657,7 @@ fn skill_update_increments_version_and_keeps_history() {
     let operations = vec![SkillUpdateOperation::ReplaceSection {
         section: "## Usage".to_string(),
         content: "New usage content.".to_string(),
+        path: None,
     }];
     app.world_mut()
         .entity_mut(work_item_entity)
@@ -681,12 +682,12 @@ fn skill_update_increments_version_and_keeps_history() {
         "SKILL.md should not contain old content"
     );
 
-    // 2. history v1.md 备份存在
+    // 2. ADR-006：history v1/ 目录级快照存在
     let history_dir = skill_path.parent().unwrap().join("history");
-    let backup = std::fs::read_to_string(history_dir.join("v1.md")).unwrap();
+    let backup = std::fs::read_to_string(history_dir.join("v1").join("SKILL.md")).unwrap();
     assert!(
         backup.contains("Do the thing."),
-        "history/v1.md should contain original content"
+        "history/v1/SKILL.md should contain original content"
     );
 
     // 3. SkillRegistry 已刷新（version=2）
@@ -734,6 +735,7 @@ fn skill_update_apply_failure_preserves_state() {
     let operations = vec![SkillUpdateOperation::ReplaceSection {
         section: "## NonExistent".to_string(),
         content: "x".to_string(),
+        path: None,
     }];
     app.world_mut()
         .entity_mut(work_item_entity)
@@ -1520,16 +1522,19 @@ fn skill_update_subsection_operations_apply_correctly() {
             section: "## Usage".to_string(),
             subsection: "### Setup".to_string(),
             content: "Run `make setup`.".to_string(),
+            path: None,
         },
         SkillUpdateOperation::AddSubsection {
             section: "## Usage".to_string(),
             after: "### Setup".to_string(),
             subsection: "### Testing".to_string(),
             content: "Run `make test`.".to_string(),
+            path: None,
         },
         SkillUpdateOperation::RemoveSubsection {
             section: "## Usage".to_string(),
             subsection: "### Execution".to_string(),
+            path: None,
         },
     ];
     app.world_mut()
@@ -1645,6 +1650,7 @@ fn skill_update_replace_body_keeps_frontmatter() {
     let new_body = "## Usage\n\nBrand new body content.\n";
     let operations = vec![SkillUpdateOperation::ReplaceBody {
         content: new_body.to_string(),
+        path: None,
     }];
     app.world_mut()
         .entity_mut(work_item_entity)
@@ -1740,6 +1746,7 @@ fn skill_update_invalid_structure_after_replace_body_rolls_back() {
     // 用 replace_body 写入没有任何 `##` 标题的纯文本，触发 StructureInvalid
     let operations = vec![SkillUpdateOperation::ReplaceBody {
         content: "no section heading here".to_string(),
+        path: None,
     }];
     app.world_mut()
         .entity_mut(work_item_entity)

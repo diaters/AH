@@ -78,6 +78,7 @@ mod tests {
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
             current_origin_channel: None,
+            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 
@@ -118,6 +119,7 @@ mod tests {
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
             current_origin_channel: None,
+            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 
@@ -152,6 +154,7 @@ mod tests {
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
             current_origin_channel: None,
+            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 
@@ -179,6 +182,7 @@ mod tests {
             current_task_id: uuid::Uuid::nil(),
             current_agent_id: uuid::Uuid::nil(),
             current_origin_channel: None,
+            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 

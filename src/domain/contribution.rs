@@ -651,15 +651,30 @@ pub struct SkillUpdateContext {
 #[serde(tag = "action")]
 pub enum SkillUpdateOperation {
     #[serde(rename = "replace_section")]
-    ReplaceSection { section: String, content: String },
+    ReplaceSection {
+        section: String,
+        content: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        /// 仅接受 .md 后缀，且文件必须已存在。
+        #[serde(default)]
+        path: Option<String>,
+    },
     #[serde(rename = "add_section")]
     AddSection {
         after: String,
         section: String,
         content: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        #[serde(default)]
+        path: Option<String>,
     },
     #[serde(rename = "remove_section")]
-    RemoveSection { section: String },
+    RemoveSection {
+        section: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        #[serde(default)]
+        path: Option<String>,
+    },
     #[serde(rename = "replace_frontmatter")]
     ReplaceFrontmatter { field: String, value: String },
     /// v8 D19：三级标题级 — 在 `## {section}` 范围内替换 `### {subsection}` 内容
@@ -668,6 +683,9 @@ pub enum SkillUpdateOperation {
         section: String,
         subsection: String,
         content: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        #[serde(default)]
+        path: Option<String>,
     },
     /// v8 D19：三级标题级 — 在 `## {section}` 范围内 `### {after}` 之后插入新 `### {subsection}`
     #[serde(rename = "add_subsection")]
@@ -676,13 +694,36 @@ pub enum SkillUpdateOperation {
         after: String,
         subsection: String,
         content: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        #[serde(default)]
+        path: Option<String>,
     },
     /// v8 D19：三级标题级 — 删除 `## {section}` 下的 `### {subsection}`
     #[serde(rename = "remove_subsection")]
-    RemoveSubsection { section: String, subsection: String },
+    RemoveSubsection {
+        section: String,
+        subsection: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        #[serde(default)]
+        path: Option<String>,
+    },
     /// v8 D19：兜底 — 整体替换 body，frontmatter 不变
     #[serde(rename = "replace_body")]
-    ReplaceBody { content: String },
+    ReplaceBody {
+        content: String,
+        /// 目标文件路径（相对于 skill 目录）。None → SKILL.md。
+        #[serde(default)]
+        path: Option<String>,
+    },
+    /// ADR-006：整体替换指定文件的内容。禁止作用于 SKILL.md。
+    #[serde(rename = "replace_file")]
+    ReplaceFile { path: String, content: String },
+    /// ADR-006：创建新文件并写入内容。文件必须不存在。
+    #[serde(rename = "create_file")]
+    CreateFile { path: String, content: String },
+    /// ADR-006：删除指定文件。禁止作用于 SKILL.md。
+    #[serde(rename = "delete_file")]
+    DeleteFile { path: String },
 }
 
 /// skill-updater workitem 完成后由 orchestrator spawn
@@ -942,6 +983,7 @@ mod skill_update_operation_tests {
         let op = SkillUpdateOperation::ReplaceSection {
             section: "## Steps".to_string(),
             content: "new content".to_string(),
+            path: None,
         };
         let json = serde_json::to_string(&op).expect("serialize ReplaceSection");
         assert!(
@@ -961,10 +1003,15 @@ mod skill_update_operation_tests {
                 after,
                 section,
                 content,
+                path,
             } => {
                 assert_eq!(after, "## Intro");
                 assert_eq!(section, "## Tips");
                 assert_eq!(content, "be careful");
+                assert_eq!(
+                    path, None,
+                    "path should default to None when not provided in JSON"
+                );
             }
             other => panic!("expected AddSection, got {other:?}"),
         }
@@ -986,6 +1033,96 @@ mod skill_update_operation_tests {
                 assert_eq!(value, "arbitrary_value");
             }
             other => panic!("expected ReplaceFrontmatter, got {other:?}"),
+        }
+    }
+
+    /// ADR-006：旧格式 JSON（无 `path` 字段）反序列化为 `path: None`。
+    #[test]
+    fn deserialize_legacy_section_op_without_path_defaults_to_none() {
+        for json in [
+            "{\"action\":\"replace_section\",\"section\":\"## Usage\",\"content\":\"x\"}",
+            "{\"action\":\"add_section\",\"after\":\"## A\",\"section\":\"## B\",\"content\":\"x\"}",
+            "{\"action\":\"remove_section\",\"section\":\"## Usage\"}",
+            "{\"action\":\"replace_subsection\",\"section\":\"## A\",\"subsection\":\"### B\",\"content\":\"x\"}",
+            "{\"action\":\"add_subsection\",\"section\":\"## A\",\"after\":\"### B\",\"subsection\":\"### C\",\"content\":\"x\"}",
+            "{\"action\":\"remove_subsection\",\"section\":\"## A\",\"subsection\":\"### B\"}",
+            "{\"action\":\"replace_body\",\"content\":\"x\"}",
+        ] {
+            let op: SkillUpdateOperation =
+                serde_json::from_str(json).unwrap_or_else(|e| panic!("JSON `{json}` failed: {e}"));
+            match &op {
+                SkillUpdateOperation::ReplaceSection { path, .. }
+                | SkillUpdateOperation::AddSection { path, .. }
+                | SkillUpdateOperation::RemoveSection { path, .. }
+                | SkillUpdateOperation::ReplaceSubsection { path, .. }
+                | SkillUpdateOperation::AddSubsection { path, .. }
+                | SkillUpdateOperation::RemoveSubsection { path, .. }
+                | SkillUpdateOperation::ReplaceBody { path, .. } => {
+                    assert_eq!(*path, None, "legacy JSON should default path to None");
+                }
+                _ => panic!("expected section-level op, got {op:?}"),
+            }
+        }
+    }
+
+    /// ADR-006：新格式 JSON（含 `path` 字段）反序列化保留路径。
+    #[test]
+    fn deserialize_section_op_with_path_keeps_path() {
+        let json = "{\"action\":\"replace_section\",\"section\":\"## Usage\",\"content\":\"x\",\"path\":\"download.md\"}";
+        let op: SkillUpdateOperation = serde_json::from_str(json).expect("deserialize with path");
+        match op {
+            SkillUpdateOperation::ReplaceSection { path, .. } => {
+                assert_eq!(path.as_deref(), Some("download.md"));
+            }
+            other => panic!("expected ReplaceSection, got {other:?}"),
+        }
+    }
+
+    /// ADR-006：3 种文件级操作序列化/反序列化 roundtrip。
+    #[test]
+    fn file_level_operations_serde_roundtrip() {
+        let ops = [
+            SkillUpdateOperation::ReplaceFile {
+                path: "scripts/run.py".to_string(),
+                content: "print('new')".to_string(),
+            },
+            SkillUpdateOperation::CreateFile {
+                path: "templates/note.md".to_string(),
+                content: "# Note".to_string(),
+            },
+            SkillUpdateOperation::DeleteFile {
+                path: "obsolete.md".to_string(),
+            },
+        ];
+        for op in ops {
+            let json = serde_json::to_string(&op).expect("serialize");
+            let de: SkillUpdateOperation = serde_json::from_str(&json).expect("deserialize");
+            match (op, de) {
+                (
+                    SkillUpdateOperation::ReplaceFile {
+                        path: p1,
+                        content: c1,
+                    },
+                    SkillUpdateOperation::ReplaceFile { path, content },
+                )
+                | (
+                    SkillUpdateOperation::CreateFile {
+                        path: p1,
+                        content: c1,
+                    },
+                    SkillUpdateOperation::CreateFile { path, content },
+                ) => {
+                    assert_eq!(path, p1);
+                    assert_eq!(content, c1);
+                }
+                (
+                    SkillUpdateOperation::DeleteFile { path: p1 },
+                    SkillUpdateOperation::DeleteFile { path },
+                ) => {
+                    assert_eq!(path, p1);
+                }
+                (op, other) => panic!("mismatched roundtrip: {op:?} vs {other:?}"),
+            }
         }
     }
 }

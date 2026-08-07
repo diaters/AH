@@ -18,11 +18,12 @@ use crate::domain::{
     AgentId, DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
     ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
-    PendingDispatch, SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateRequestMessage,
-    SpaceToolRegistry, Task, TaskId, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
+    PendingDispatch, SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation,
+    SkillUpdateRequestMessage, SpaceToolRegistry, Task, TaskId, WorkItem,
+    WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::infrastructure::skills::{
-    SkillEntry, SkillId, SkillLoader, SkillRegistry, apply_skill_operations, cleanup_skill_history,
+    SkillEntry, SkillId, SkillLoader, SkillRegistry, apply_skill_operations,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -205,38 +206,51 @@ pub(crate) fn skill_update_workitem_system(
             continue;
         };
 
-        // 4. 构造 prompt（含完整 SKILL.md + 候选原文 + 版本号 + 候选类型）
-        //    v8 D19：operation 列表扩展到 8 种（含 3 级标题级 + replace_body 兜底），
-        //    replace_body 加软约束警示（仅当其他 operation 无法表达时才使用）。
-        //    候选类型显式说明（Skill / Knowledge），帮助 LLM 理解候选语义。
+        // 4. 构造 prompt（含完整 SKILL.md + 目录文件树 + 候选原文 + 版本号 + 候选类型）
+        //    ADR-006：新增目录文件树 + read_skill_file 工具 + 11 种操作 + path 字段
         let candidate_kind_label = match candidate.kind_hint {
             ExperienceKindHint::Skill => "Skill（用于更新现有 skill 的指令/结构）",
             ExperienceKindHint::Knowledge => "Knowledge（用于补充 skill 的背景知识）",
         };
+
+        // ADR-006：扫描 skill 目录文件树
+        let skill_dir = skill_loader
+            .skill_md_path(&request.skill_id)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let file_tree = scan_skill_dir(&skill_dir);
+
         let prompt = format!(
             "## 任务\n\n根据以下经验候选（类型：{}），为现有 skill 提交结构化 diff 更新。\n\n\
              ## 原 SKILL.md 完整内容（version {}）\n\n```markdown\n{}\n```\n\n\
+             ## Skill 目录文件树\n\n{}\n\n\
              ## 经验候选\n\n### {}\n\n{}\n\n\
              ## 要求\n\n\
-             1. 调用 submit_skill_update 工具提交更新，只需提供 operations 和 rationale 两个字段，skill_id / base_version / new_version 由系统自动注入\n\
-             2. operations 必须是有效的 diff 操作，可选 8 种：\n\
-                - 二级标题级：replace_section / add_section / remove_section / replace_frontmatter\n\
+             1. 使用 read_skill_file 读取需要修改的子文件（仅当需要了解子文件内容时）\n\
+             2. 调用 submit_skill_update 工具提交更新，只需提供 operations 和 rationale 两个字段，skill_id / base_version / new_version 由系统自动注入\n\
+             3. operations 可选 11 种操作：\n\
+                - 二级标题级：replace_section / add_section / remove_section\n\
                 - 三级标题级：replace_subsection / add_subsection / remove_subsection\n\
                 - 兜底：replace_body（整体替换 body，frontmatter 不变）\n\
-             3. operations 中的 section / subsection 名必须与原 SKILL.md 中实际存在的标题一致（系统会做 dry-run 校验，section 不存在会立即拒绝）\n\
-             4. **重要**：replace_section / replace_subsection 的 content 字段**不得包含标题行本身**（系统会自动保留原 `## xxx` 或 `### xxx` 标题行），content 只需提供标题下方的正文内容。例如替换 `## Usage` 时，content 应以正文开头，而非以 `## Usage` 开头\n\
-             5. 优先使用颗粒度更细的 operation（subsection 级 > section 级 > replace_body）；replace_body 仅当其他 operation 都无法表达修改意图时才使用，滥用会被评审拒绝",
+                - frontmatter：replace_frontmatter（仅 name / description / self_updatable）\n\
+                - 文件级：replace_file / create_file / delete_file（不可作用于 SKILL.md）\n\
+             4. section 级操作默认作用于 SKILL.md；指定 path 字段可作用于其他 .md 文件（如 'download.md'）\n\
+             5. path 指定的文件必须已存在且后缀为 .md；新建文件使用 create_file\n\
+             6. replace_section / replace_subsection 的 content 字段不得包含标题行本身\n\
+             7. 优先使用颗粒度更细的 operation（subsection > section > replace_body / replace_file）",
             candidate_kind_label,
             skill_entry.version,
             skill_md_content,
+            file_tree,
             candidate.title,
             candidate_payload_text(candidate),
         );
 
-        // 5. 从 registry 过滤工具，仅保留 submit_skill_update
+        // 5. 从 registry 过滤工具，保留 submit_skill_update + read_skill_file
         let tools: Vec<crate::domain::ToolDefinition> = registry
             .iter()
-            .filter(|tool| tool.name == "submit_skill_update")
+            .filter(|tool| tool.name == "submit_skill_update" || tool.name == "read_skill_file")
             .cloned()
             .collect();
 
@@ -324,92 +338,139 @@ pub(crate) fn skill_update_completion_system(
             continue;
         };
 
-        // 2. 计算 SKILL.md 路径与 history 目录
+        // 2. 计算 SKILL.md 路径与 skill 目录
         let skill_path = skill_loader.skill_md_path(&msg.skill_id);
-        let history_dir = skill_path
+        let skill_dir = skill_path
             .parent()
-            .map(|p| p.join("history"))
-            .unwrap_or_else(|| PathBuf::from("history"));
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
 
-        // 3. 读取现有 SKILL.md（失败 → 候选状态保持不变）
-        let Ok(content) = std::fs::read_to_string(&skill_path) else {
+        // 3. ADR-006：目录级快照备份（失败 → 候选状态保持不变）
+        let backup_result =
+            crate::infrastructure::skills::backup_skill_dir(&skill_dir, context.base_version);
+        if let Err(e) = &backup_result {
             warn!(
-                event = "SkillMdReadFailed",
+                event = "SkillDirBackupFailed",
                 task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
-                skill_path = ?skill_path,
-                error = "failed to read SKILL.md",
-                error_type = "FileReadFailed",
-                "failed to read SKILL.md, candidate status unchanged"
+                skill_dir = ?skill_dir,
+                error = %e,
+                error_type = "BackupFailed",
+                "failed to backup skill directory, candidate status unchanged"
             );
             commands.entity(entity).despawn();
             continue;
+        }
+        let backup_dir = backup_result.unwrap();
+
+        // 4. ADR-006：多文件 apply 操作（含回滚）
+        //    检查是否有文件级操作或带 path 的 section 操作
+        let has_multi_file_ops = msg.operations.iter().any(|op| {
+            matches!(
+                op,
+                SkillUpdateOperation::ReplaceFile { .. }
+                    | SkillUpdateOperation::CreateFile { .. }
+                    | SkillUpdateOperation::DeleteFile { .. }
+            ) || matches!(
+                op,
+                SkillUpdateOperation::ReplaceSection { path: Some(_), .. }
+                    | SkillUpdateOperation::AddSection { path: Some(_), .. }
+                    | SkillUpdateOperation::RemoveSection { path: Some(_), .. }
+                    | SkillUpdateOperation::ReplaceSubsection { path: Some(_), .. }
+                    | SkillUpdateOperation::AddSubsection { path: Some(_), .. }
+                    | SkillUpdateOperation::RemoveSubsection { path: Some(_), .. }
+                    | SkillUpdateOperation::ReplaceBody { path: Some(_), .. }
+            )
+        });
+
+        let apply_result = if has_multi_file_ops {
+            // ADR-006：多文件 apply
+            crate::infrastructure::skills::apply_skill_operations_multi(&skill_dir, &msg.operations)
+        } else {
+            // 向后兼容：纯 SKILL.md 操作（无 path 字段）
+            let content = match std::fs::read_to_string(&skill_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(
+                        event = "SkillMdReadFailed",
+                        task_id = %msg.task_id,
+                        skill_id = %msg.skill_id.as_string(),
+                        error = %e,
+                        error_type = "FileReadFailed",
+                        "failed to read SKILL.md"
+                    );
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+            };
+            match apply_skill_operations(&content, &msg.operations) {
+                Ok(new_content) => {
+                    // 写入新版本 SKILL.md
+                    let new_content = crate::infrastructure::skills::diff::set_frontmatter_version(
+                        &new_content,
+                        msg.new_version,
+                    );
+                    match std::fs::write(&skill_path, &new_content) {
+                        Ok(()) => Ok(()),
+                        Err(e) => Err(crate::infrastructure::skills::ApplyError::SectionNotFound(
+                            format!("write SKILL.md failed: {}", e),
+                        )),
+                    }
+                }
+                Err(e) => Err(e),
+            }
         };
 
-        // 4. apply diff 操作（失败 → 候选状态保持不变）
-        let Ok(new_content) = apply_skill_operations(&content, &msg.operations) else {
+        if let Err(e) = &apply_result {
             warn!(
                 event = "SkillUpdateApplyFailed",
                 task_id = %msg.task_id,
                 skill_id = %msg.skill_id.as_string(),
                 base_version = context.base_version,
-                error = "apply_skill_operations returned Err",
+                error = %e,
                 error_type = "ApplyOperationsFailed",
-                "failed to apply skill operations, candidate status unchanged"
+                "failed to apply skill operations, attempting rollback"
             );
-            commands.entity(entity).despawn();
-            continue;
-        };
-
-        // 4.5 将 new_version 写入 frontmatter（系统管理，不依赖 LLM 操作）
-        // 确保版本号持久化到文件，避免重启后 parse_skill_md 默认回退到 1
-        let new_content = crate::infrastructure::skills::diff::set_frontmatter_version(
-            &new_content,
-            msg.new_version,
-        );
-
-        // 5. 备份原版本到 history 目录（失败不阻断后续写入）
-        if let Err(e) = std::fs::create_dir_all(&history_dir) {
-            warn!(
-                event = "SkillHistoryDirCreateFailed",
-                task_id = %msg.task_id,
-                skill_id = %msg.skill_id.as_string(),
-                history_dir = ?history_dir,
-                error = %e,
-                error_type = "HistoryDirCreateFailed",
-                "failed to create history dir, but proceeding with write"
-            );
-        }
-        let backup_path = history_dir.join(format!("v{}.md", context.base_version));
-        if let Err(e) = std::fs::write(&backup_path, &content) {
-            warn!(
-                event = "SkillHistoryBackupFailed",
-                task_id = %msg.task_id,
-                skill_id = %msg.skill_id.as_string(),
-                backup_path = ?backup_path,
-                error = %e,
-                error_type = "HistoryBackupFailed",
-                "failed to write history backup, but proceeding with write"
-            );
-        }
-
-        // 6. 写入新版本 SKILL.md（失败 → 候选状态保持不变）
-        if let Err(e) = std::fs::write(&skill_path, &new_content) {
-            warn!(
-                event = "SkillMdWriteFailed",
-                task_id = %msg.task_id,
-                skill_id = %msg.skill_id.as_string(),
-                skill_path = ?skill_path,
-                error = %e,
-                error_type = "FileWriteFailed",
-                "failed to write new SKILL.md, candidate status unchanged"
-            );
+            // ADR-006：回滚到备份目录
+            if let Err(re) =
+                crate::infrastructure::skills::restore_skill_dir(&skill_dir, &backup_dir)
+            {
+                warn!(
+                    event = "SkillDirRollbackFailed",
+                    task_id = %msg.task_id,
+                    skill_id = %msg.skill_id.as_string(),
+                    error = %re,
+                    error_type = "RollbackFailed",
+                    "CRITICAL: rollback failed, skill directory may be in inconsistent state"
+                );
+            }
             commands.entity(entity).despawn();
             continue;
         }
 
-        // 7. 清理 history（保留最新 3 代，失败不阻断）
-        if let Err(e) = cleanup_skill_history(&history_dir, 3) {
+        // 4.5 将 new_version 写入 SKILL.md frontmatter（多文件路径下系统管理版本号）
+        // 仅在多文件路径下需要（单文件路径已在上面 set_frontmatter_version 处理）
+        if has_multi_file_ops {
+            let skill_md_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
+            let updated = crate::infrastructure::skills::diff::set_frontmatter_version(
+                &skill_md_content,
+                msg.new_version,
+            );
+            if let Err(e) = std::fs::write(&skill_path, &updated) {
+                warn!(
+                    event = "SkillMdVersionWriteFailed",
+                    task_id = %msg.task_id,
+                    skill_id = %msg.skill_id.as_string(),
+                    error = %e,
+                    "failed to write version to SKILL.md frontmatter"
+                );
+            }
+        }
+
+        // 5. 清理 history（保留最新 3 代目录级快照，失败不阻断）
+        let history_dir = skill_dir.join("history");
+        // 清理旧的单文件 history 格式（向后兼容迁移）
+        if let Err(e) = crate::infrastructure::skills::cleanup_skill_history(&history_dir, 3) {
             warn!(
                 event = "SkillHistoryCleanupFailed",
                 task_id = %msg.task_id,
@@ -417,31 +478,39 @@ pub(crate) fn skill_update_completion_system(
                 history_dir = ?history_dir,
                 error = %e,
                 error_type = "HistoryCleanupFailed",
-                "failed to cleanup skill history, but proceeding"
+                "failed to cleanup old-format history, but proceeding"
+            );
+        }
+        // 清理新的目录级快照
+        if let Err(e) = crate::infrastructure::skills::cleanup_skill_dir_history(&history_dir, 3) {
+            warn!(
+                event = "SkillDirHistoryCleanupFailed",
+                task_id = %msg.task_id,
+                skill_id = %msg.skill_id.as_string(),
+                history_dir = ?history_dir,
+                error = %e,
+                error_type = "DirHistoryCleanupFailed",
+                "failed to cleanup directory history, but proceeding"
             );
         }
 
         // 8. 解析新内容并刷新 SkillRegistry；若解析失败，文件已写入，候选仍置 Persisted
-        // skill_dir 从 skill_id 重建路径，与 SkillLoader::skill_md_path 语义一致
-        let skill_dir = {
-            let base_dir = std::path::PathBuf::from(".harness/assets/agents");
-            base_dir
-                .join(&msg.skill_id.owner_agent_name)
-                .join("skills")
-                .join(&msg.skill_id.skill_name)
-        };
-        let parsed_entry =
-            crate::infrastructure::skills::loader::parse_skill_md(&new_content, skill_dir).map(
-                |parsed| SkillEntry {
-                    skill_id: msg.skill_id.clone(),
-                    name: parsed.name,
-                    description: parsed.description,
-                    instructions: parsed.instructions,
-                    version: msg.new_version,
-                    owner_agent_name: msg.skill_id.owner_agent_name.clone(),
-                    self_updatable: parsed.self_updatable,
-                },
-            );
+        // ADR-006：从磁盘重新读取 SKILL.md（apply 可能是多文件的）
+        let skill_dir_for_parse = skill_dir.clone();
+        let new_skill_md_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
+        let parsed_entry = crate::infrastructure::skills::loader::parse_skill_md(
+            &new_skill_md_content,
+            skill_dir_for_parse,
+        )
+        .map(|parsed| SkillEntry {
+            skill_id: msg.skill_id.clone(),
+            name: parsed.name,
+            description: parsed.description,
+            instructions: parsed.instructions,
+            version: msg.new_version,
+            owner_agent_name: msg.skill_id.owner_agent_name.clone(),
+            self_updatable: parsed.self_updatable,
+        });
         if let Some(entry) = parsed_entry {
             skill_registry.refresh(entry);
         } else {
@@ -496,6 +565,57 @@ fn candidate_payload_text(candidate: &ExperienceCandidate) -> String {
                 "[候选类型：Skill]\n\n技能名：{}\n描述：{}\n指令：{}",
                 name, description, instructions
             )
+        }
+    }
+}
+
+/// ADR-006：扫描 skill 目录，返回文件树文本。
+///
+/// 排除 `history/` 目录，列出相对路径和文件大小。
+fn scan_skill_dir(skill_dir: &std::path::Path) -> String {
+    let mut entries: Vec<(String, u64)> = Vec::new();
+    scan_dir_recursive(skill_dir, skill_dir, &mut entries);
+    if entries.is_empty() {
+        return "（空目录）".to_string();
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+        .iter()
+        .map(|(path, size)| {
+            if *size < 1024 {
+                format!("{} ({}B)", path, size)
+            } else {
+                format!("{} ({:.1}KB)", path, *size as f64 / 1024.0)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn scan_dir_recursive(
+    base: &std::path::Path,
+    current: &std::path::Path,
+    entries: &mut Vec<(String, u64)>,
+) {
+    let Ok(dir_entries) = std::fs::read_dir(current) else {
+        return;
+    };
+    for entry in dir_entries.flatten() {
+        let path = entry.path();
+        // 排除 history 目录
+        if path.file_name().map(|n| n == "history").unwrap_or(false) {
+            continue;
+        }
+        if path.is_dir() {
+            scan_dir_recursive(base, &path, entries);
+        } else {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            entries.push((rel, size));
         }
     }
 }
@@ -1064,6 +1184,7 @@ mod completion_system_tests {
         let operations = vec![SkillUpdateOperation::ReplaceSection {
             section: "## Usage".to_string(),
             content: "New usage content.".to_string(),
+            path: None,
         }];
         world
             .entity_mut(work_item_entity)
@@ -1088,9 +1209,9 @@ mod completion_system_tests {
             new_content
         );
 
-        // 2. history v1.md 备份存在
+        // 2. ADR-006：history v1/ 目录级快照存在
         let history_dir = skill_path.parent().unwrap().join("history");
-        let backup = fs::read_to_string(history_dir.join("v1.md")).unwrap();
+        let backup = fs::read_to_string(history_dir.join("v1").join("SKILL.md")).unwrap();
         assert!(backup.contains("Do the thing."));
 
         // 3. SkillRegistry 已刷新（version=2）
@@ -1194,6 +1315,7 @@ mod completion_system_tests {
         let operations = vec![SkillUpdateOperation::ReplaceSection {
             section: "## NonExistent".to_string(),
             content: "x".to_string(),
+            path: None,
         }];
         world
             .entity_mut(work_item_entity)
@@ -1260,6 +1382,187 @@ mod completion_system_tests {
             .iter(&world)
             .count();
         assert_eq!(msg_count, 0);
+    }
+
+    /// ADR-006：多文件 apply 成功路径。
+    /// 改 SKILL.md section + 改 sibling .md section + replace_file 脚本，全部生效。
+    #[test]
+    fn completion_system_applies_multi_file_operations() {
+        let skill_id = SkillId::new("agent-a", "multi-skill");
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+        let skill_dir = loader
+            .skill_md_path(&skill_id)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::create_dir_all(skill_dir.join("scripts")).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), SAMPLE_SKILL_MD).unwrap();
+        fs::write(
+            skill_dir.join("download.md"),
+            "# Download\n\n## Steps\n\nOld steps.\n",
+        )
+        .unwrap();
+        fs::write(skill_dir.join("scripts/run.py"), "print('old')").unwrap();
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let (work_item_id, context_candidate_id, work_item_entity) =
+            spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        // 对齐 candidate_id（与 completion_system_handles_apply_failure 相同模式）
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .get_mut(&candidate_id)
+            .unwrap()
+            .candidate_id = context_candidate_id;
+        let c = world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .remove(&candidate_id)
+            .unwrap();
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .insert(context_candidate_id, c);
+        let candidate_id = context_candidate_id;
+
+        let operations = vec![
+            SkillUpdateOperation::ReplaceSection {
+                section: "## Usage".to_string(),
+                content: "New usage.".to_string(),
+                path: None,
+            },
+            SkillUpdateOperation::ReplaceSection {
+                section: "## Steps".to_string(),
+                content: "New steps.".to_string(),
+                path: Some("download.md".to_string()),
+            },
+            SkillUpdateOperation::ReplaceFile {
+                path: "scripts/run.py".to_string(),
+                content: "print('new')".to_string(),
+            },
+        ];
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(
+                work_item_id,
+                skill_id.clone(),
+                1,
+                2,
+                operations,
+            ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // SKILL.md 更新 + version 写入
+        let skill_md = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        assert!(skill_md.contains("New usage."));
+        assert!(skill_md.contains("version: 2"));
+
+        // sibling .md 更新
+        let sibling = fs::read_to_string(skill_dir.join("download.md")).unwrap();
+        assert!(sibling.contains("New steps."));
+        assert!(!sibling.contains("Old steps."));
+
+        // 脚本替换
+        let py = fs::read_to_string(skill_dir.join("scripts/run.py")).unwrap();
+        assert_eq!(py, "print('new')");
+
+        // 候选 Persisted
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::Persisted);
+    }
+
+    /// ADR-006：多文件 apply 部分失败 → 目录级快照回滚。
+    /// 第一个操作（改 sibling）成功写入，第二个操作（delete 不存在的文件）失败，
+    /// 整个 skill 目录回滚到备份状态。
+    #[test]
+    fn completion_system_rolls_back_multi_file_on_failure() {
+        let skill_id = SkillId::new("agent-a", "multi-skill");
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+        let skill_dir = loader
+            .skill_md_path(&skill_id)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), SAMPLE_SKILL_MD).unwrap();
+        fs::write(
+            skill_dir.join("download.md"),
+            "# Download\n\n## Steps\n\nOld steps.\n",
+        )
+        .unwrap();
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let (work_item_id, context_candidate_id, work_item_entity) =
+            spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .get_mut(&candidate_id)
+            .unwrap()
+            .candidate_id = context_candidate_id;
+        let c = world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .remove(&candidate_id)
+            .unwrap();
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .insert(context_candidate_id, c);
+        let candidate_id = context_candidate_id;
+
+        // 第一个操作成功（改 sibling），第二个操作失败（delete 不存在的文件）
+        let operations = vec![
+            SkillUpdateOperation::ReplaceSection {
+                section: "## Steps".to_string(),
+                content: "Should be rolled back.".to_string(),
+                path: Some("download.md".to_string()),
+            },
+            SkillUpdateOperation::DeleteFile {
+                path: "ghost.md".to_string(),
+            },
+        ];
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(
+                work_item_id,
+                skill_id.clone(),
+                1,
+                2,
+                operations,
+            ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // sibling 文件已回滚（仍为原内容）
+        let sibling = fs::read_to_string(skill_dir.join("download.md")).unwrap();
+        assert!(sibling.contains("Old steps."));
+        assert!(!sibling.contains("Should be rolled back."));
+
+        // SKILL.md 未被改动
+        let skill_md = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
+        assert!(skill_md.contains("Do the thing."));
+
+        // 候选状态保持 GovernanceResolved（未 Persisted）
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::GovernanceResolved);
     }
 }
 

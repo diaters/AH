@@ -41,8 +41,8 @@ use crate::domain::{
 
 use self::builtin::{
     AskUserTool, ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool,
-    ListExperienceCandidatesTool, ListScheduledTasksTool, ScheduleTaskTool, ShellExecTool,
-    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
+    ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
+    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
     SubmitSkillUpdateTool, WaitTasksTool,
 };
@@ -492,7 +492,7 @@ pub fn register_builtin_tools(
     // Skill update tool (仅 skill-updater 可用)
     registry.register(ToolDefinition {
         name: "submit_skill_update".to_string(),
-        description: "提交 skill 更新的结构化 diff 操作。基于原 skill 内容和经验候选，提交 operations 数组。skill_id、base_version、new_version 由系统自动从当前 skill update 上下文注入，无需填写。operations 支持 replace_section/add_section/remove_section/replace_frontmatter 四种操作；frontmatter 字段仅允许更新 name/description/self_updatable。".to_string(),
+        description: "提交 skill 更新的结构化 diff 操作。基于原 skill 内容和经验候选，提交 operations 数组。skill_id、base_version、new_version 由系统自动从当前 skill update 上下文注入，无需填写。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -505,20 +505,29 @@ pub fn register_builtin_tools(
                             "properties": {
                                 "action": {
                                     "type": "string",
-                                    "enum": ["replace_section", "add_section", "remove_section", "replace_frontmatter"],
+                                    "enum": [
+                                        "replace_section", "add_section", "remove_section",
+                                        "replace_subsection", "add_subsection", "remove_subsection",
+                                        "replace_body", "replace_frontmatter",
+                                        "replace_file", "create_file", "delete_file"
+                                    ],
                                     "description": "操作类型"
                                 },
                                 "section": {
                                     "type": "string",
-                                    "description": "目标章节标题（完整匹配，如 '## Usage'）。replace_section/add_section/remove_section 必填"
+                                    "description": "目标章节标题（完整匹配，如 '## Usage'）。section 级操作必填"
+                                },
+                                "subsection": {
+                                    "type": "string",
+                                    "description": "目标子章节标题（如 '### Advanced'）。subsection 级操作必填"
                                 },
                                 "after": {
                                     "type": "string",
-                                    "description": "新增章节插入位置（在某章节之后）。add_section 必填"
+                                    "description": "新增章节/子章节插入位置（在某章节之后）。add_section/add_subsection 必填"
                                 },
                                 "content": {
                                     "type": "string",
-                                    "description": "新章节或替换内容（markdown 文本）。replace_section/add_section 必填"
+                                    "description": "新内容（markdown 文本）。替换/新增操作必填"
                                 },
                                 "field": {
                                     "type": "string",
@@ -528,6 +537,10 @@ pub fn register_builtin_tools(
                                 "value": {
                                     "type": "string",
                                     "description": "frontmatter 字段新值（self_updatable 接受 'true'/'false'）。replace_frontmatter 必填"
+                                },
+                                "path": {
+                                    "type": "string",
+                                    "description": "目标文件路径（相对于 skill 目录，如 'download.md'）。section 级操作默认作用于 SKILL.md；指定 path 可作用于其他 .md 文件（必须已存在且后缀为 .md）。replace_file/create_file/delete_file 的 path 必填且不可为 SKILL.md"
                                 }
                             },
                             "required": ["action"]
@@ -543,6 +556,28 @@ pub fn register_builtin_tools(
         required_tag: Some("skill-updater".to_string()),
     });
     executors.register(Box::new(SubmitSkillUpdateTool));
+
+    // ADR-006：read_skill_file tool (仅 skill-updater 可用)
+    registry.register(ToolDefinition {
+        name: "read_skill_file".to_string(),
+        description: "读取当前 skill 目录下的子文件内容。SKILL.md 的内容已在 prompt 中提供，无需再读取。用于了解子流程文档、脚本、模板等内容，以便提交精确的 diff 更新。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "相对于 skill 目录的文件路径（如 'download.md'、'scripts/redmine_download.py'）"
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("read_skill_file".to_string()),
+        required_tag: Some("skill-updater".to_string()),
+    });
+    executors.register(Box::new(ReadSkillFileTool));
 }
 
 /// 注册插件贡献的 Tool

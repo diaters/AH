@@ -208,6 +208,9 @@ pub struct OwnedToolContext {
     /// 由 dispatch 从 `Task.origin_channel` 读取并注入。未显式指定 `output_channel`
     /// 时用作 fallback；不需要继承通道的工具保持 `None`。
     pub current_origin_channel: Option<ChannelId>,
+    /// ADR-006：当前 skill 更新上下文中的 skill 目录路径。
+    /// 仅在 skill-updater WorkItem 执行时填充。
+    pub current_skill_dir: Option<std::path::PathBuf>,
     /// 取消令牌。dispatch 创建并 clone 一份挂到 `InFlightToolCall.cancel`，
     /// 另一份放进本字段供 worker 在 `run_async` 内 `select!` 监听。
     pub cancel: CancellationToken,
@@ -224,6 +227,7 @@ impl Default for OwnedToolContext {
             experience_candidates: None,
             current_task_id: None,
             current_origin_channel: None,
+            current_skill_dir: None,
             cancel: CancellationToken::new(),
         }
     }
@@ -243,6 +247,7 @@ impl OwnedToolContext {
             experience_candidates: None,
             current_task_id: None,
             current_origin_channel: None,
+            current_skill_dir: None,
             cancel: CancellationToken::new(),
         }
     }
