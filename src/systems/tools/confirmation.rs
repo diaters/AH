@@ -170,7 +170,11 @@ pub fn tool_confirmation_result_system(
                     &index_clock_loader_frontends.0,
                     tool_request.request.task_id,
                 );
-                clear_task_pending_confirmation_id(&mut tasks, &index_clock_loader_frontends.0, tool_request.request.task_id);
+                clear_task_pending_confirmation_id(
+                    &mut tasks,
+                    &index_clock_loader_frontends.0,
+                    tool_request.request.task_id,
+                );
                 commands.entity(request_entity).despawn();
             }
             Some(option) => {
@@ -207,12 +211,14 @@ pub fn tool_confirmation_result_system(
                 // 权限审计：Permanent grant（用户确认路径写入永久权限）。
                 // 仅在 Permanent 模式下发出；Once 模式未改 overrides，不发 Grant 审计。
                 if option.mode == GrantMode::Permanent {
-                    let agent_name = (&index_clock_loader_frontends.0)
+                    let agent_name = index_clock_loader_frontends
+                        .0
                         .get_agent(&tool_request.request.agent_id)
                         .and_then(|e| agents.get(e).ok())
                         .map(|a| a.profile.name.clone())
                         .unwrap_or_else(|| "unknown".to_string());
-                    let output_channel = (&index_clock_loader_frontends.0)
+                    let output_channel = index_clock_loader_frontends
+                        .0
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
                         .and_then(|(_, t)| t.routing_policy.output_channel.clone());
@@ -294,7 +300,8 @@ pub fn tool_confirmation_result_system(
                     );
                     // 恢复 task.status 为 Waiting(ToolExecution)，语义正确 + 防 reset 竞态
                     // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                    if let Some((_, mut task)) = (&index_clock_loader_frontends.0)
+                    if let Some((_, mut task)) = index_clock_loader_frontends
+                        .0
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get_mut(e).ok())
                         && task.status == TaskStatus::Waiting(WaitingReason::User)
@@ -313,12 +320,14 @@ pub fn tool_confirmation_result_system(
                     &tool_request.tool_name,
                     &tool_request.tool_input,
                 );
-                let agent_name = (&index_clock_loader_frontends.0)
+                let agent_name = index_clock_loader_frontends
+                    .0
                     .get_agent(&tool_request.request.agent_id)
                     .and_then(|e| agents.get(e).ok())
                     .map(|a| a.profile.name.clone())
                     .unwrap_or_else(|| "unknown".to_string());
-                if let Some(target) = (&index_clock_loader_frontends.0)
+                if let Some(target) = index_clock_loader_frontends
+                    .0
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .and_then(|(_, t)| t.routing_policy.output_channel.clone())
@@ -355,7 +364,8 @@ pub fn tool_confirmation_result_system(
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,
                     // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                    current_origin_channel: (&index_clock_loader_frontends.0)
+                    current_origin_channel: index_clock_loader_frontends
+                        .0
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
@@ -365,7 +375,8 @@ pub fn tool_confirmation_result_system(
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
                 // 预缓存 task_entity，避免 &mut index 与 &index 借用冲突
-                let task_entity_opt = (&index_clock_loader_frontends.0)
+                let task_entity_opt = index_clock_loader_frontends
+                    .0
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get_mut(e).ok())
                     .map(|(e, _)| e);
@@ -393,7 +404,11 @@ pub fn tool_confirmation_result_system(
                     );
                 }
 
-                clear_task_pending_confirmation_id(&mut tasks, &index_clock_loader_frontends.0, tool_request.request.task_id);
+                clear_task_pending_confirmation_id(
+                    &mut tasks,
+                    &index_clock_loader_frontends.0,
+                    tool_request.request.task_id,
+                );
                 restore_task_after_tool(
                     &mut tasks,
                     &calling_states,
@@ -439,7 +454,11 @@ pub fn tool_confirmation_result_system(
                     ToolReturnedHookPending,
                 ));
 
-                clear_task_pending_confirmation_id(&mut tasks, &index_clock_loader_frontends.0, tool_request.request.task_id);
+                clear_task_pending_confirmation_id(
+                    &mut tasks,
+                    &index_clock_loader_frontends.0,
+                    tool_request.request.task_id,
+                );
                 restore_task_after_tool(
                     &mut tasks,
                     &calling_states,

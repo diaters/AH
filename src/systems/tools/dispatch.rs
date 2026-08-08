@@ -92,7 +92,8 @@ pub fn tool_dispatch_system(
 
         // 获取 Agent 权限
         // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
-        let Some(agent) = (&index_clock_loader.0)
+        let Some(agent) = index_clock_loader
+            .0
             .get_agent(&request.request.agent_id)
             .and_then(|e| agents.get(e).ok())
         else {
@@ -124,7 +125,8 @@ pub fn tool_dispatch_system(
                 "agent lacks required tag for tool"
             );
             // 权限审计：tag 拒绝路径。source 取 ToolDefault（tag 要求来自 ToolDefinition）。
-            let output_channel = (&index_clock_loader.0)
+            let output_channel = index_clock_loader
+                .0
                 .get_task(&request.request.task_id)
                 .and_then(|e| tasks.get(e).ok())
                 .and_then(|(_, t)| t.routing_policy.output_channel.clone());
@@ -154,7 +156,8 @@ pub fn tool_dispatch_system(
 
         // 预先提取 output_channel 供 PermissionAudit 使用（避免在三个 match 分支
         // 中各做一次 task 查询）。clone 后是 owned 值，无 borrow 约束。
-        let output_channel = (&index_clock_loader.0)
+        let output_channel = index_clock_loader
+            .0
             .get_task(&request.request.task_id)
             .and_then(|e| tasks.get(e).ok())
             .and_then(|(_, t)| t.routing_policy.output_channel.clone());
@@ -207,7 +210,8 @@ pub fn tool_dispatch_system(
                 // 无 output_channel 时不推送，避免向无关 IM 通道广播）
                 let tool_input_summary =
                     crate::domain::summarize_tool_input(&tool_name, &request.tool_input);
-                if let Some(target) = (&index_clock_loader.0)
+                if let Some(target) = index_clock_loader
+                    .0
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .and_then(|(_, t)| t.routing_policy.output_channel.clone())
@@ -262,7 +266,8 @@ pub fn tool_dispatch_system(
                     current_task_id: request.request.task_id,
                     current_agent_id: request.request.agent_id,
                     // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                    current_origin_channel: (&index_clock_loader.0)
+                    current_origin_channel: index_clock_loader
+                        .0
                         .get_task(&request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
@@ -272,7 +277,8 @@ pub fn tool_dispatch_system(
                 let action = executor.execute(&request.tool_input, &ctx);
 
                 // 预缓存 task_entity，避免 &mut index 与 &index 借用冲突
-                let task_entity_opt = (&index_clock_loader.0)
+                let task_entity_opt = index_clock_loader
+                    .0
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .map(|(e, _)| e);
@@ -311,7 +317,8 @@ pub fn tool_dispatch_system(
             ToolPermission::Confirm => {
                 // 顺序审批：同一任务同一时间仅允许一个待确认请求
                 // UUID+条件复合查询拆为 UUID 解析 + 调用方断言两步
-                let already_pending = (&index_clock_loader.0)
+                let already_pending = index_clock_loader
+                    .0
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .map(|(_, t)| t.pending_confirmation_id.is_some())
@@ -341,7 +348,8 @@ pub fn tool_dispatch_system(
 
                 // Find the task to check parent_task_id
                 // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                let task_for_approval = (&index_clock_loader.0)
+                let task_for_approval = index_clock_loader
+                    .0
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .map(|(_, t)| t.clone());
@@ -352,12 +360,14 @@ pub fn tool_dispatch_system(
                     .as_ref()
                     .and_then(|task| task.parent_task_id)
                     .and_then(|parent_task_id| {
-                        (&index_clock_loader.0)
+                        index_clock_loader
+                            .0
                             .get_task(&parent_task_id)
                             .and_then(|e| tasks.get(e).ok())
                             .and_then(|(_, parent_task)| parent_task.delegate)
                             .and_then(|parent_agent_id| {
-                                (&index_clock_loader.0)
+                                index_clock_loader
+                                    .0
                                     .get_agent(&parent_agent_id)
                                     .and_then(|e| agents.get(e).ok())
                             })

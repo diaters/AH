@@ -1539,7 +1539,11 @@ mod tests {
     /// 测试系统：从世界中的父 Task 读取 origin_channel，调用 spawn_create_tasks_messages。
     ///
     /// 通过系统而非直接调用 `world.commands()`，确保 `app.update()` 能正确刷新 Commands。
-    fn spawn_subtasks_for_inheritance_test(mut commands: Commands, mut index: ResMut<EntityIndex>, tasks: Query<&Task>) {
+    fn spawn_subtasks_for_inheritance_test(
+        mut commands: Commands,
+        mut index: ResMut<EntityIndex>,
+        tasks: Query<&Task>,
+    ) {
         let parent_task = tasks
             .iter()
             .find(|t| t.content == "parent")
@@ -1692,7 +1696,8 @@ mod tests {
             }),
             last_evaluated_turn: None,
         };
-        app.world_mut().spawn((parent_task, ShortTermMemory::default()));
+        app.world_mut()
+            .spawn((parent_task, ShortTermMemory::default()));
 
         app.add_systems(Update, spawn_subtasks_for_index_test);
         app.update();
