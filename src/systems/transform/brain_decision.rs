@@ -66,6 +66,11 @@ pub fn brain_decision_system(
             .get_task(&result.task_id)
             .and_then(|e| tasks.get_mut(e).ok())
         else {
+            warn!(
+                event = "BrainDecisionDroppedTaskNotFound",
+                task_id = %result.task_id,
+                "brain decision result dropped: task not found in EntityIndex"
+            );
             commands.entity(entity).despawn();
             continue;
         };
