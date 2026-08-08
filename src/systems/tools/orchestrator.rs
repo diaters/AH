@@ -14,11 +14,11 @@ use crate::domain::{
     BatchTaskState, ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind,
     DispatchStrategy, EngineEvent, EntryRole, EventTarget, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
-    FrontendKind, MessageRole, OutputContent, PendingDispatch, PendingExperienceHooks,
-    ProfileGenerationContext, SessionSummary, ShellSessionResult, ShortTermMemory,
-    SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
-    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    FrontendKind, MessageRole, NewlyCreatedTask, OutputContent, PendingDispatch,
+    PendingExperienceHooks, ProfileGenerationContext, SessionSummary, ShellSessionResult,
+    ShortTermMemory, SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
     WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::ecs::EntityIndex;
@@ -49,6 +49,7 @@ pub struct TaskWaitResult {
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_create_tasks_messages(
     commands: &mut Commands,
+    index: &mut EntityIndex,
     request_entity: Entity,
     agent_id: AgentId,
     task_id: TaskId,
@@ -115,7 +116,26 @@ pub fn spawn_create_tasks_messages(
             depended_by,
         };
 
-        commands.spawn((child_task, sub_task_config, ShortTermMemory::default()));
+        let child_entity = crate::ecs::spawn_task(
+            commands,
+            index,
+            child_task,
+            ShortTermMemory::default(),
+            NewlyCreatedTask,
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::BrainLlm,
+                    preferred_agent_name: None,
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
+            },
+        );
+        // 移除 spawn_task 附加的占位 PendingDispatch，由 subtask_dispatch_preparation_system
+        // 在 DAG 依赖检查通过后重新附加（含 AgentSpawnSpec 和兄弟任务结果注入）。
+        commands.entity(child_entity).remove::<PendingDispatch>();
+        commands.entity(child_entity).insert(sub_task_config);
 
         batch_tasks.insert(
             def.name.clone(),
@@ -353,6 +373,7 @@ pub fn spawn_wait_result_message(
 #[allow(clippy::too_many_arguments)]
 pub fn handle_tool_action<B: SessionBackend>(
     commands: &mut Commands,
+    index: &mut EntityIndex,
     request_entity: Entity,
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
@@ -420,6 +441,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 });
             spawn_create_tasks_messages(
                 commands,
+                index,
                 request_entity,
                 request.request.agent_id,
                 request.request.task_id,
@@ -1517,7 +1539,7 @@ mod tests {
     /// 测试系统：从世界中的父 Task 读取 origin_channel，调用 spawn_create_tasks_messages。
     ///
     /// 通过系统而非直接调用 `world.commands()`，确保 `app.update()` 能正确刷新 Commands。
-    fn spawn_subtasks_for_inheritance_test(mut commands: Commands, tasks: Query<&Task>) {
+    fn spawn_subtasks_for_inheritance_test(mut commands: Commands, mut index: ResMut<EntityIndex>, tasks: Query<&Task>) {
         let parent_task = tasks
             .iter()
             .find(|t| t.content == "parent")
@@ -1531,6 +1553,7 @@ mod tests {
 
         spawn_create_tasks_messages(
             &mut commands,
+            &mut index,
             request_entity,
             uuid::Uuid::nil(),
             parent_task_id,
@@ -1555,6 +1578,7 @@ mod tests {
     #[test]
     fn create_tasks_subtask_inherits_parent_origin_channel() {
         let mut app = App::new();
+        app.init_resource::<EntityIndex>();
 
         let telegram_channel = ChannelId {
             frontend: FrontendKind::Telegram,
@@ -1626,6 +1650,110 @@ mod tests {
         );
     }
 
+    /// 验证 spawn_create_tasks_messages 将子任务登记进 EntityIndex。
+    ///
+    /// 回归保护：子任务曾因直接 commands.spawn 绕过中心封装，
+    /// 导致 EntityIndex.tasks 中查无子任务，brain_decision_system 静默丢弃决策结果。
+    #[test]
+    fn create_tasks_subtask_registered_in_entity_index() {
+        let mut app = App::new();
+        app.init_resource::<EntityIndex>();
+
+        let parent_task_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let parent_task = Task {
+            id: parent_task_id,
+            content: "parent".to_string(),
+            creator: uuid::Uuid::nil(),
+            delegate: None,
+            status: TaskStatus::Pending,
+            pending_confirmation_id: None,
+            input_summary: String::new(),
+            result_summary: String::new(),
+            priority: 0,
+            created_at: now,
+            updated_at: now,
+            retry_count: 0,
+            max_retries: 3,
+            next_retry_at: None,
+            last_error: None,
+            multi_turn: false,
+            parent_task_id: None,
+            batch_id: None,
+            origin_channel: Some(ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+                thread_id: None,
+            }),
+            routing_policy: crate::domain::TaskRoutingPolicy::conversational(ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+                thread_id: None,
+            }),
+            last_evaluated_turn: None,
+        };
+        app.world_mut().spawn((parent_task, ShortTermMemory::default()));
+
+        app.add_systems(Update, spawn_subtasks_for_index_test);
+        app.update();
+
+        // 验证子任务在 EntityIndex 中：先收集子任务 ID，再查询索引（避免 &app / &mut app 借用冲突）
+        let child_tasks: Vec<_> = app
+            .world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .filter(|t| t.parent_task_id == Some(parent_task_id))
+            .collect();
+
+        assert_eq!(
+            child_tasks.len(),
+            1,
+            "exactly one child task should be spawned"
+        );
+
+        let child_task_id = child_tasks[0].id;
+        let index = app.world().resource::<EntityIndex>();
+        assert!(
+            index.get_task(&child_task_id).is_some(),
+            "child task {} must be registered in EntityIndex.tasks",
+            child_task_id
+        );
+    }
+
+    /// 测试用系统：调用 spawn_create_tasks_messages 并传入 EntityIndex。
+    fn spawn_subtasks_for_index_test(
+        mut commands: Commands,
+        mut index: ResMut<EntityIndex>,
+        tasks: Query<&Task>,
+    ) {
+        let parent_task = tasks
+            .iter()
+            .find(|t| t.content == "parent")
+            .expect("parent task should exist");
+        let parent_task_id = parent_task.id;
+        let parent_origin_channel = parent_task.origin_channel.clone();
+
+        let request_entity = commands.spawn(()).id();
+
+        spawn_create_tasks_messages(
+            &mut commands,
+            &mut index,
+            request_entity,
+            uuid::Uuid::nil(),
+            parent_task_id,
+            AgentRequestKind::LlmCompletion,
+            vec![SubTaskDefinition {
+                name: "child-agent".to_string(),
+                content: "do something".to_string(),
+                tools: vec![],
+                depends_on: vec![],
+                model: None,
+            }],
+            None,
+            parent_origin_channel,
+        );
+    }
+
     // ============ AskUser arm 测试 ============
     //
     // 通过 test system wrapper 调用 `handle_tool_action`，验证：
@@ -1662,6 +1790,7 @@ mod tests {
     #[allow(clippy::too_many_arguments)]
     fn ask_user_test_system(
         mut commands: Commands,
+        mut index: ResMut<EntityIndex>,
         mut tasks: Query<(Entity, &mut Task)>,
         agents: Query<&mut Agent>,
         chat_sessions: Query<&ChatSession>,
@@ -1692,6 +1821,7 @@ mod tests {
 
         handle_tool_action(
             &mut commands,
+            &mut index,
             request_entity,
             task_entity,
             request,
@@ -1773,6 +1903,7 @@ mod tests {
         world.init_resource::<SharedKnowledgeBase>();
         world.init_resource::<ExperienceStore>();
         world.init_resource::<PendingExperienceHooks>();
+        world.init_resource::<EntityIndex>();
         world.insert_resource(crate::systems::NativeProcessBackend::default());
         world.insert_resource(Clock::default());
         world.insert_resource(SkillLoader::new(std::path::PathBuf::from(

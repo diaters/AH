@@ -128,14 +128,13 @@ pub fn approval_result_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在 Approved 路径推送 ToolCallStarted 事件。
-    index_clock_loader_frontends: (
-        Res<EntityIndex>,
+    mut index_clock_loader_frontends: (
+        ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
     ),
 ) {
-    let index = &index_clock_loader_frontends.0;
     let frontend_registry = &index_clock_loader_frontends.3;
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -193,8 +192,8 @@ pub fn approval_result_system(
                     ToolReturnedHookPending,
                 ));
 
-                restore_task_after_tool(&mut tasks, &calling_states, index, result.source_task_id);
-                clear_task_pending_confirmation_id(&mut tasks, index, tool_request.request.task_id);
+                restore_task_after_tool(&mut tasks, &calling_states, &index_clock_loader_frontends.0, result.source_task_id);
+                clear_task_pending_confirmation_id(&mut tasks, &index_clock_loader_frontends.0, tool_request.request.task_id);
                 commands.entity(request_entity).despawn();
             }
             ApprovalDecision::Approved => {
@@ -209,7 +208,7 @@ pub fn approval_result_system(
 
                 // Permanent 模式：更新 Agent 权限
                 if result.grant_mode == GrantMode::Permanent
-                    && let Some(mut agent) = index
+                    && let Some(mut agent) = (&index_clock_loader_frontends.0)
                         .get_agent(&tool_request.request.agent_id)
                         .and_then(|e| agents.get_mut(e).ok())
                 {
@@ -225,12 +224,12 @@ pub fn approval_result_system(
                 // 权限审计：Permanent grant（父 Agent 审批路径写入永久权限）。
                 // 仅在 Permanent 模式下发出；Once 模式未改 overrides，不发 Grant 审计。
                 if result.grant_mode == GrantMode::Permanent {
-                    let agent_name = index
+                    let agent_name = (&index_clock_loader_frontends.0)
                         .get_agent(&tool_request.request.agent_id)
                         .and_then(|e| agents.get(e).ok())
                         .map(|a| a.profile.name.clone())
                         .unwrap_or_else(|| "unknown".to_string());
-                    let output_channel = index
+                    let output_channel = (&index_clock_loader_frontends.0)
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
                         .and_then(|(_, t)| t.routing_policy.output_channel.clone());
@@ -273,13 +272,13 @@ pub fn approval_result_system(
                     );
                     clear_task_pending_confirmation_id(
                         &mut tasks,
-                        index,
+                        &index_clock_loader_frontends.0,
                         tool_request.request.task_id,
                     );
                     restore_task_after_tool(
                         &mut tasks,
                         &calling_states,
-                        index,
+                        &index_clock_loader_frontends.0,
                         result.source_task_id,
                     );
                     commands.entity(entity).despawn();
@@ -292,12 +291,12 @@ pub fn approval_result_system(
                     &tool_request.tool_name,
                     &tool_request.tool_input,
                 );
-                let agent_name = index
+                let agent_name = (&index_clock_loader_frontends.0)
                     .get_agent(&tool_request.request.agent_id)
                     .and_then(|e| agents.get(e).ok())
                     .map(|a| a.profile.name.clone())
                     .unwrap_or_else(|| "unknown".to_string());
-                if let Some(target) = index
+                if let Some(target) = (&index_clock_loader_frontends.0)
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .and_then(|(_, t)| t.routing_policy.output_channel.clone())
@@ -334,7 +333,7 @@ pub fn approval_result_system(
                     current_task_id: tool_request.request.task_id,
                     current_agent_id: tool_request.request.agent_id,
                     // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                    current_origin_channel: index
+                    current_origin_channel: (&index_clock_loader_frontends.0)
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
@@ -343,14 +342,15 @@ pub fn approval_result_system(
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
-                // Find the task entity
-                // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                if let Some((task_entity, _)) = index
+                // 预缓存 task_entity，避免 &mut index 与 &index 借用冲突
+                let task_entity_opt = (&index_clock_loader_frontends.0)
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get_mut(e).ok())
-                {
+                    .map(|(e, _)| e);
+                if let Some(task_entity) = task_entity_opt {
                     handle_tool_action(
                         &mut commands,
+                        &mut index_clock_loader_frontends.0,
                         request_entity,
                         task_entity,
                         tool_request,
@@ -371,8 +371,8 @@ pub fn approval_result_system(
                     );
                 }
 
-                clear_task_pending_confirmation_id(&mut tasks, index, tool_request.request.task_id);
-                restore_task_after_tool(&mut tasks, &calling_states, index, result.source_task_id);
+                clear_task_pending_confirmation_id(&mut tasks, &index_clock_loader_frontends.0, tool_request.request.task_id);
+                restore_task_after_tool(&mut tasks, &calling_states, &index_clock_loader_frontends.0, result.source_task_id);
             }
         }
 
