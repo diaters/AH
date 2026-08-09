@@ -206,6 +206,31 @@ mod tests {
             tokens_before,
         );
     }
+
+    #[test]
+    fn render_tool_calls_summary_format() {
+        let tool_calls = vec![
+            ToolCall {
+                id: Some("call_1".to_string()),
+                tool_name: "shell_exec".to_string(),
+                input: "ls".to_string(),
+                output: "file1.txt\nfile2.txt".to_string(),
+                timestamp: chrono::Utc::now(),
+            },
+            ToolCall {
+                id: Some("call_2".to_string()),
+                tool_name: "shell_exec".to_string(),
+                input: "cat x".to_string(),
+                output: "content of x".to_string(),
+                timestamp: chrono::Utc::now(),
+            },
+        ];
+
+        let summary = render_tool_calls_summary(&tool_calls);
+        assert!(summary.contains("shell_exec(\"ls\")"), "should contain tool call summary");
+        assert!(summary.contains("file1.txt"), "should contain truncated output");
+        assert!(summary.contains("shell_exec(\"cat x\")"), "should contain second tool call");
+    }
 }
 
 /// 估算文本的 token 数
@@ -387,6 +412,29 @@ impl ShortTermMemory {
             "STM tokens recalculated"
         );
     }
+}
+
+/// 渲染工具调用摘要，用于 compress_text、prompt_builder 和还原逻辑。
+///
+/// 格式：`[Tool calls: tool_name("input") → output_preview; ...]`
+/// 输出截断至 200 字符避免膨胀。
+pub fn render_tool_calls_summary(tool_calls: &[ToolCall]) -> String {
+    if tool_calls.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = tool_calls
+        .iter()
+        .map(|tc| {
+            let output_preview = if tc.output.chars().count() > 200 {
+                let truncated: String = tc.output.chars().take(200).collect();
+                format!("{}...[truncated]", truncated)
+            } else {
+                tc.output.clone()
+            };
+            format!("{}(\"{}\") → {}", tc.tool_name, tc.input, output_preview)
+        })
+        .collect();
+    format!("[Tool calls: {}]", parts.join("; "))
 }
 
 /// 长期记忆持久化快照。
