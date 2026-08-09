@@ -701,6 +701,7 @@ fn spawn_synthetic_limit_result(
         tools: vec![],
         reasoning_content: None,
         work_item_id: None,
+        conversation: None,
     };
 
     commands.spawn((
@@ -1263,20 +1264,34 @@ pub fn llm_response_system(
                         });
                     } else {
                         // First iteration: create new ToolCallingState
-                        let mut conversation = Vec::new();
-                        if let Some(sp) = &result.system_prompt {
-                            conversation.push(ConversationMessage::System {
-                                content: sp.clone(),
+                        // 优先使用 request.conversation（结构化路径），仅在为空时构造纯文本路径
+                        let conversation = if result.conversation.as_ref().is_some_and(|c| !c.is_empty()) {
+                            // 结构化路径：使用已有的 conversation（从 STM 还原），追加本轮 Assistant
+                            let mut conv = result.conversation.clone().unwrap();
+                            conv.push(ConversationMessage::Assistant {
+                                content: None,
+                                tool_calls: calls.clone(),
+                                reasoning_content: reasoning_content.clone(),
                             });
-                        }
-                        conversation.push(ConversationMessage::User {
-                            content: result.prompt.clone(),
-                        });
-                        conversation.push(ConversationMessage::Assistant {
-                            content: None,
-                            tool_calls: calls.clone(),
-                            reasoning_content: reasoning_content.clone(),
-                        });
+                            conv
+                        } else {
+                            // 纯文本路径：现有逻辑
+                            let mut conversation = Vec::new();
+                            if let Some(sp) = &result.system_prompt {
+                                conversation.push(ConversationMessage::System {
+                                    content: sp.clone(),
+                                });
+                            }
+                            conversation.push(ConversationMessage::User {
+                                content: result.prompt.clone(),
+                            });
+                            conversation.push(ConversationMessage::Assistant {
+                                content: None,
+                                tool_calls: calls.clone(),
+                                reasoning_content: reasoning_content.clone(),
+                            });
+                            conversation
+                        };
 
                         let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
                         let max_iterations = settings.0.max_tool_iterations;

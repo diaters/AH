@@ -97,6 +97,7 @@ pub fn on_tool_called_hook_system(world: &mut World) {
                         tools: vec![],
                         reasoning_content: None,
                         work_item_id: None,
+                conversation: None,
                     };
 
                     world.spawn((
@@ -212,6 +213,7 @@ mod tests {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                conversation: None,
                 model_override: None,
             },
             tool_name: "shell_exec".to_string(),

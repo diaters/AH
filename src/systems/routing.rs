@@ -110,6 +110,7 @@ pub(crate) fn user_input_routing_system(
                             tools: vec![],
                             reasoning_content: None,
                             work_item_id: None,
+                conversation: None,
                         },
                         tool_name: "ask_user".to_string(),
                         tool_output: Ok(serde_json::json!({"answer": input.content})),
