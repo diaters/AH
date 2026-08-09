@@ -3,7 +3,7 @@
 //! 提供带历史对话、长期记忆与通道上下文的 prompt 构建，
 //! 供 `dispatch_system` 的 DirectDelegate 分支使用。
 
-use crate::domain::{ChannelId, LongTermMemory, ShortTermMemory};
+use crate::domain::{ChannelId, LongTermMemory, ShortTermMemory, render_tool_calls_summary};
 
 use super::memory_selection::{MemorySelectionBudget, select_long_term_memories};
 
@@ -60,7 +60,13 @@ pub(crate) fn build_prompt_with_context(
                 crate::domain::EntryRole::Summary => "System note",
                 crate::domain::EntryRole::Archive => continue,
             };
-            history.push_str(&format!("{}: {}\n", role, entry.content));
+            let mut line = format!("{}: {}", role, entry.content);
+            // 防御性渲染 tool_calls（结构化路径不可用时的降级）
+            if !entry.metadata.tool_calls.is_empty() {
+                line.push_str(&format!("\n  {}", render_tool_calls_summary(&entry.metadata.tool_calls)));
+            }
+            history.push_str(&line);
+            history.push('\n');
         }
 
         parts.push(history.trim_end().to_string());
