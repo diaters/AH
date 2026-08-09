@@ -331,11 +331,7 @@ mod tests {
 
     /// 检查指定 task 是否仍有 AwaitingBrainDecision 组件。
     fn has_awaiting_brain_decision(app: &mut App, task_id: Uuid) -> bool {
-        let Some(entity) = app
-            .world()
-            .resource::<EntityIndex>()
-            .get_task(&task_id)
-        else {
+        let Some(entity) = app.world().resource::<EntityIndex>().get_task(&task_id) else {
             return false;
         };
         app.world_mut()
@@ -373,7 +369,9 @@ mod tests {
         // last_error should be set
         let last_error = get_task_last_error(&mut app, task_id);
         assert!(
-            last_error.as_ref().is_some_and(|e| e.contains("parse failed")),
+            last_error
+                .as_ref()
+                .is_some_and(|e| e.contains("parse failed")),
             "last_error should mention parse failure, got {:?}",
             last_error
         );
@@ -412,7 +410,9 @@ mod tests {
         // last_error should mention the agent name
         let last_error = get_task_last_error(&mut app, task_id);
         assert!(
-            last_error.as_ref().is_some_and(|e| e.contains("nonexistent-agent")),
+            last_error
+                .as_ref()
+                .is_some_and(|e| e.contains("nonexistent-agent")),
             "last_error should mention the non-existent agent, got {:?}",
             last_error
         );
@@ -455,9 +455,7 @@ mod tests {
             .get_task(&task_id)
             .expect("task entity should exist");
         assert!(
-            app.world_mut()
-                .entity(entity)
-                .contains::<PendingDispatch>(),
+            app.world_mut().entity(entity).contains::<PendingDispatch>(),
             "PendingDispatch should be attached after successful brain decision"
         );
     }
@@ -503,10 +501,8 @@ mod tests {
             .insert(task_id, entity);
 
         // Spawn a result that would cause parse failure
-        app.world_mut().spawn(make_brain_text_result(
-            task_id,
-            "not json",
-        ));
+        app.world_mut()
+            .spawn(make_brain_text_result(task_id, "not json"));
 
         app.update();
 
