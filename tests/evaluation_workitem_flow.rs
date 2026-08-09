@@ -447,7 +447,7 @@ fn offtrack_autocorrect_injects_governance_context() {
         tools: vec![],
         reasoning_content: None,
         work_item_id: Some(work_item_id),
-                conversation: None,
+        conversation: None,
     };
     app.world_mut()
         .spawn(AgentExecutionResultMessage { result });
@@ -509,7 +509,7 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
         tools: vec![],
         reasoning_content: None,
         work_item_id: Some(work_item_id),
-                conversation: None,
+        conversation: None,
     };
     app.world_mut()
         .spawn(AgentExecutionResultMessage { result });
@@ -561,7 +561,7 @@ fn offtrack_fail_sets_error_and_status() {
         tools: vec![],
         reasoning_content: None,
         work_item_id: Some(work_item_id),
-                conversation: None,
+        conversation: None,
     };
     app.world_mut()
         .spawn(AgentExecutionResultMessage { result });
@@ -652,7 +652,7 @@ fn offtrack_askuser_injects_stm_context() {
         tools: vec![],
         reasoning_content: None,
         work_item_id: Some(work_item_id),
-                conversation: None,
+        conversation: None,
     };
     app.world_mut()
         .spawn(AgentExecutionResultMessage { result });
