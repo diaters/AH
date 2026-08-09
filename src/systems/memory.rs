@@ -4,9 +4,10 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        render_tool_calls_summary, Agent, EntryRole, LongTermMemory, LongTermMemoryEntry,
-        LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, ShortTermMemory,
+        Agent, EntryRole, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
+        LtmWriteHookPending, MemoryEntry, MemoryImportance, ShortTermMemory,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
+        render_tool_calls_summary,
     },
     infrastructure::memory::LongTermMemoryService,
 };
@@ -84,12 +85,19 @@ pub(crate) fn memory_compression_system(
             }
 
             // 收集需要压缩的条目内容（含 tool_calls 渲染）
-            let to_compress: Vec<_> = short_term.entries.iter().take(compress_entry_count).collect();
+            let to_compress: Vec<_> = short_term
+                .entries
+                .iter()
+                .take(compress_entry_count)
+                .collect();
             let mut compress_text = String::new();
             for entry in &to_compress {
                 let mut line = format!("{:?}: {}", entry.role, entry.content);
                 if !entry.metadata.tool_calls.is_empty() {
-                    line.push_str(&format!("\n  {}", render_tool_calls_summary(&entry.metadata.tool_calls)));
+                    line.push_str(&format!(
+                        "\n  {}",
+                        render_tool_calls_summary(&entry.metadata.tool_calls)
+                    ));
                 }
                 compress_text.push_str(&line);
                 compress_text.push('\n');
@@ -414,21 +422,34 @@ mod tests {
         {
             let mut stm = world.get_mut::<ShortTermMemory>(entity).unwrap();
             // Entry 1: User (对话配对组)
-            stm.add_entry(EntryRole::User, "hello world this is a long enough message to contribute tokens", Default::default());
+            stm.add_entry(
+                EntryRole::User,
+                "hello world this is a long enough message to contribute tokens",
+                Default::default(),
+            );
             // Entry 2: Assistant with tool_calls (工具配对组——不可拆散)
             let mut metadata = EntryMetadata::default();
             metadata.tool_calls.push(ToolCall {
                 id: Some("call_1".to_string()),
                 tool_name: "shell_exec".to_string(),
                 input: "ls -la /very/long/path/with/many/segments/to/contribute/tokens".to_string(),
-                output: "file1.txt\nfile2.txt\nfile3.txt\nfile4.txt\nfile5.txt\nfile6.txt".to_string(),
+                output: "file1.txt\nfile2.txt\nfile3.txt\nfile4.txt\nfile5.txt\nfile6.txt"
+                    .to_string(),
                 timestamp: chrono::Utc::now(),
             });
             stm.add_entry(EntryRole::Assistant, "done with tools", metadata);
             // Entry 3: User (最近的对话配对组——应保留)
-            stm.add_entry(EntryRole::User, "next question with enough tokens to push over threshold when combined", Default::default());
+            stm.add_entry(
+                EntryRole::User,
+                "next question with enough tokens to push over threshold when combined",
+                Default::default(),
+            );
             // Entry 4: Assistant (最近的对话配对组——应保留)
-            stm.add_entry(EntryRole::Assistant, "final answer with enough text to be meaningful", Default::default());
+            stm.add_entry(
+                EntryRole::Assistant,
+                "final answer with enough text to be meaningful",
+                Default::default(),
+            );
         }
 
         let stm = world.get::<ShortTermMemory>(entity).unwrap();

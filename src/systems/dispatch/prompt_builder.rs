@@ -63,7 +63,10 @@ pub(crate) fn build_prompt_with_context(
             let mut line = format!("{}: {}", role, entry.content);
             // 防御性渲染 tool_calls（结构化路径不可用时的降级）
             if !entry.metadata.tool_calls.is_empty() {
-                line.push_str(&format!("\n  {}", render_tool_calls_summary(&entry.metadata.tool_calls)));
+                line.push_str(&format!(
+                    "\n  {}",
+                    render_tool_calls_summary(&entry.metadata.tool_calls)
+                ));
             }
             history.push_str(&line);
             history.push('\n');

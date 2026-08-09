@@ -1,0 +1,51 @@
+- generic [ref=f7e3]:
+  - banner [ref=f7e5]:
+    - link [ref=f7e6] [cursor=pointer]:
+      - /url: /explore?channel_type=web_search_result_notes
+    - generic [ref=f7e7]:
+      - textbox "登录探索更多内容" [ref=f7e8]
+      - generic [ref=f7e10] [cursor=pointer]
+    - generic [ref=f7e15]:
+      - button "创作中心" [ref=f7e17] [cursor=pointer]
+      - button "业务合作" [ref=f7e21] [cursor=pointer]
+  - generic [ref=f7e24]:
+    - generic [ref=f7e25]:
+      - list [ref=f7e26]:
+        - generic [ref=f7e27]:
+          - listitem [ref=f7e28] [cursor=pointer]:
+            - link "发现" [ref=f7e29]:
+              - /url: /explore?channel_id=homefeed_recommend
+          - listitem [ref=f7e33] [cursor=pointer]:
+            - link "RED" [ref=f7e34]:
+              - /url: /red_video
+          - listitem [ref=f7e38] [cursor=pointer]:
+            - link "直播" [ref=f7e39]:
+              - /url: /livelist?channel_id=0&channel_type=web_live_list
+          - listitem [ref=f7e43] [cursor=pointer]:
+            - link "发布" [ref=f7e44]:
+              - /url: https://creator.xiaohongshu.com/publish/publish?source=official
+          - listitem [ref=f7e48] [cursor=pointer]:
+            - link "通知" [ref=f7e49]:
+              - /url: "#"
+        - generic [ref=f7e54]:
+          - paragraph
+          - generic [ref=f7e55]:
+            - paragraph [ref=f7e56]: © 2014-2026
+            - paragraph [ref=f7e57]: 行吟信息科技（上海）有限公司
+            - paragraph [ref=f7e58]: 地址：上海市黄浦区马当路388号C座
+            - paragraph [ref=f7e59]: 电话：9501-3888
+      - generic [ref=f7e61]:
+        - generic [ref=f7e62] [cursor=pointer]: 更多
+        - generic [ref=f7e65]: 关于我们
+        - generic [ref=f7e69]:
+          - paragraph
+          - generic [ref=f7e70]:
+            - paragraph [ref=f7e71]: © 2014-2026
+            - paragraph [ref=f7e72]: 行吟信息科技（上海）有限公司
+            - paragraph [ref=f7e73]: 地址：上海市黄浦区马当路388号C座
+            - paragraph [ref=f7e74]: 电话：9501-3888
+    - generic [ref=f7e80]:
+      - generic [ref=f7e81] [cursor=pointer]: 全部
+      - generic [ref=f7e82] [cursor=pointer]: 图文
+      - generic [ref=f7e83] [cursor=pointer]: 视频
+      - generic [ref=f7e84] [cursor=pointer]: 用户

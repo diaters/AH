@@ -63,3 +63,4 @@ agents.toml
 providers.toml
 
 plugins/bug-workflow
+.playwright-cli
