@@ -98,7 +98,7 @@ pub fn channel_send_dispatch_system(
                     tools: vec![],
                     reasoning_content: None,
                     work_item_id: None,
-                conversation: None,
+                    conversation: None,
                 },
                 tool_name: "channel_send".to_string(),
                 tool_output: Ok(tool_output),

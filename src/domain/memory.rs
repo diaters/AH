@@ -227,9 +227,18 @@ mod tests {
         ];
 
         let summary = render_tool_calls_summary(&tool_calls);
-        assert!(summary.contains("shell_exec(\"ls\")"), "should contain tool call summary");
-        assert!(summary.contains("file1.txt"), "should contain truncated output");
-        assert!(summary.contains("shell_exec(\"cat x\")"), "should contain second tool call");
+        assert!(
+            summary.contains("shell_exec(\"ls\")"),
+            "should contain tool call summary"
+        );
+        assert!(
+            summary.contains("file1.txt"),
+            "should contain truncated output"
+        );
+        assert!(
+            summary.contains("shell_exec(\"cat x\")"),
+            "should contain second tool call"
+        );
     }
 }
 

@@ -114,22 +114,19 @@ fn build_structured_conversation(stm: &ShortTermMemory) -> Option<Vec<Conversati
 /// 配对组定义与 `memory_compression_system` 一致：
 /// - `Assistant { tool_calls: non-empty }` + 后续 `Tool` 消息为一个配对组
 /// - 其他消息各自成组
-fn truncate_conversation_by_budget(
-    messages: &mut Vec<ConversationMessage>,
-    budget_tokens: u32,
-) {
+fn truncate_conversation_by_budget(messages: &mut Vec<ConversationMessage>, budget_tokens: u32) {
     let total_tokens: u32 = messages
         .iter()
         .map(|msg| match msg {
-            ConversationMessage::System { content }
-            | ConversationMessage::User { content } => estimate_tokens(content),
+            ConversationMessage::System { content } | ConversationMessage::User { content } => {
+                estimate_tokens(content)
+            }
             ConversationMessage::Assistant {
-                content, tool_calls, ..
+                content,
+                tool_calls,
+                ..
             } => {
-                let mut t = content
-                    .as_deref()
-                    .map(|c| estimate_tokens(c))
-                    .unwrap_or(0);
+                let mut t = content.as_deref().map(estimate_tokens).unwrap_or(0);
                 for tc in tool_calls {
                     t += estimate_tokens(&tc.arguments);
                 }
@@ -149,15 +146,15 @@ fn truncate_conversation_by_budget(
         let current_tokens: u32 = messages
             .iter()
             .map(|msg| match msg {
-                ConversationMessage::System { content }
-                | ConversationMessage::User { content } => estimate_tokens(content),
+                ConversationMessage::System { content } | ConversationMessage::User { content } => {
+                    estimate_tokens(content)
+                }
                 ConversationMessage::Assistant {
-                    content, tool_calls, ..
+                    content,
+                    tool_calls,
+                    ..
                 } => {
-                    let mut t = content
-                        .as_deref()
-                        .map(|c| estimate_tokens(c))
-                        .unwrap_or(0);
+                    let mut t = content.as_deref().map(estimate_tokens).unwrap_or(0);
                     for tc in tool_calls {
                         t += estimate_tokens(&tc.arguments);
                     }

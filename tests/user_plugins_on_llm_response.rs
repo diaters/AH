@@ -97,6 +97,7 @@ fn on_llm_response_removes_marker() {
             tools: vec![],
             reasoning_content: None,
             work_item_id: None,
+                conversation: None,
         },
     };
     let entity = app.world_mut().spawn((msg, LlmResponseHookPending)).id();
