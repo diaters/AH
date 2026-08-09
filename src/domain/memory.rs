@@ -132,6 +132,80 @@ mod tests {
 
         assert_eq!(memory.entries.len(), 1);
     }
+
+    #[test]
+    fn add_entry_includes_tool_calls_tokens() {
+        let mut stm = ShortTermMemory::default();
+        let mut metadata = EntryMetadata::default();
+        metadata.tool_calls.push(ToolCall {
+            id: Some("call_1".to_string()),
+            tool_name: "shell_exec".to_string(),
+            input: "ls -la /very/long/path/that/should/contribute/tokens".to_string(),
+            output: "file1.txt\nfile2.txt\nfile3.txt\nfile4.txt\nfile5.txt".to_string(),
+            timestamp: chrono::Utc::now(),
+        });
+
+        let tokens_before = stm.estimated_tokens;
+        stm.add_entry(EntryRole::Assistant, "done", metadata);
+
+        // estimated_tokens should be strictly greater than just "done" tokens
+        let content_only_tokens = estimate_tokens("done");
+        assert!(
+            stm.estimated_tokens > tokens_before + content_only_tokens,
+            "add_entry should include tool_calls tokens, got {} but expected > {}",
+            stm.estimated_tokens,
+            tokens_before + content_only_tokens,
+        );
+    }
+
+    #[test]
+    fn recalculate_tokens_includes_tool_calls() {
+        let mut stm = ShortTermMemory::default();
+        let mut metadata = EntryMetadata::default();
+        metadata.tool_calls.push(ToolCall {
+            id: Some("call_1".to_string()),
+            tool_name: "shell_exec".to_string(),
+            input: "ls -la /very/long/path".to_string(),
+            output: "file1.txt\nfile2.txt\nfile3.txt".to_string(),
+            timestamp: chrono::Utc::now(),
+        });
+        stm.add_entry(EntryRole::Assistant, "result text", metadata);
+
+        // Corrupt estimated_tokens manually, then recalculate
+        stm.estimated_tokens = 0;
+        stm.recalculate_tokens();
+
+        let content_tokens = estimate_tokens("result text");
+        let tool_tokens = estimate_tokens("ls -la /very/long/path")
+            + estimate_tokens("file1.txt\nfile2.txt\nfile3.txt");
+        assert!(
+            stm.estimated_tokens >= content_tokens + tool_tokens,
+            "recalculate_tokens should include tool_calls, got {}",
+            stm.estimated_tokens,
+        );
+    }
+
+    #[test]
+    fn record_tool_call_updates_estimated_tokens() {
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(EntryRole::User, "hello", EntryMetadata::default());
+
+        let tokens_before = stm.estimated_tokens;
+        stm.record_tool_call(
+            Some("call_1".to_string()),
+            "shell_exec".to_string(),
+            "ls -la /some/path".to_string(),
+            "file1.txt\nfile2.txt\nfile3.txt".to_string(),
+            chrono::Utc::now(),
+        );
+
+        assert!(
+            stm.estimated_tokens > tokens_before,
+            "record_tool_call should update estimated_tokens, got {} but was {}",
+            stm.estimated_tokens,
+            tokens_before,
+        );
+    }
 }
 
 /// 估算文本的 token 数
@@ -232,6 +306,7 @@ impl ShortTermMemory {
         output: String,
         timestamp: DateTime<Utc>,
     ) {
+        let tokens_added = estimate_tokens(&input) + estimate_tokens(&output);
         let tool_call = ToolCall {
             id,
             tool_name,
@@ -245,6 +320,7 @@ impl ShortTermMemory {
             && last_entry.role == EntryRole::Assistant
         {
             last_entry.metadata.tool_calls.push(tool_call);
+            self.estimated_tokens += tokens_added;
             return;
         }
 
@@ -256,6 +332,7 @@ impl ShortTermMemory {
             content: String::new(),
             metadata,
         });
+        self.estimated_tokens += tokens_added;
     }
 
     /// 添加新条目
@@ -266,8 +343,11 @@ impl ShortTermMemory {
         metadata: EntryMetadata,
     ) {
         let content = content.into();
-        let tokens_added = estimate_tokens(&content);
-        // 更新 token 估算
+        let mut tokens_added = estimate_tokens(&content);
+        for tc in &metadata.tool_calls {
+            tokens_added += estimate_tokens(&tc.input);
+            tokens_added += estimate_tokens(&tc.output);
+        }
         self.estimated_tokens += tokens_added;
         let entry = MemoryEntry::new(role, content.clone()).with_metadata(metadata);
         self.entries.push(entry);
@@ -292,6 +372,10 @@ impl ShortTermMemory {
         }
         for entry in &self.entries {
             total += estimate_tokens(&entry.content);
+            for tc in &entry.metadata.tool_calls {
+                total += estimate_tokens(&tc.input);
+                total += estimate_tokens(&tc.output);
+            }
         }
         self.estimated_tokens = total;
         debug!(
