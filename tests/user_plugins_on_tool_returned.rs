@@ -136,6 +136,7 @@ fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> En
         tools: vec![],
         reasoning_content: None,
         work_item_id: None,
+        conversation: None,
     };
 
     world

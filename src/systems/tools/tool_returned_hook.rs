@@ -191,6 +191,7 @@ mod tests {
                 tools: vec![],
                 reasoning_content: None,
                 work_item_id: None,
+                conversation: None,
             },
             tool_name: "shell_exec".to_string(),
             tool_output: Ok(serde_json::json!({"count": 1})),

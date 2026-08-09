@@ -114,6 +114,9 @@ pub struct AgentExecutionResult {
     pub reasoning_content: Option<String>,
     /// 回传请求关联的 WorkItem ID。
     pub work_item_id: Option<Uuid>,
+    /// 结构化对话历史（从 AgentExecutionRequest 传递，用于 First iteration 还原）
+    #[serde(default)]
+    pub conversation: Option<Vec<ConversationMessage>>,
 }
 
 #[cfg(test)]

@@ -176,6 +176,7 @@ pub fn approval_result_system(
                     tools: vec![],
                     reasoning_content: None,
                     work_item_id: None,
+                    conversation: None,
                 };
 
                 commands.spawn((
