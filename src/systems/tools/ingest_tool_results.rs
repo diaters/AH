@@ -91,6 +91,7 @@ pub(crate) fn spawn_tool_result_message(
         tools: req.tools.clone(),
         reasoning_content: None,
         work_item_id: req.work_item_id,
+                conversation: None,
     };
 
     commands.spawn((

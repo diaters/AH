@@ -208,6 +208,7 @@ pub fn spawn_create_tasks_messages(
                 tools: vec![],
                 reasoning_content: None,
                 work_item_id: None,
+                conversation: None,
             },
             tool_name: "create_tasks".to_string(),
             tool_output: Ok(serde_json::json!({
@@ -358,6 +359,7 @@ pub fn spawn_wait_result_message(
                 tools: vec![],
                 reasoning_content: None,
                 work_item_id: None,
+                conversation: None,
             },
             tool_name: "wait_tasks".to_string(),
             tool_output: Ok(output),
@@ -928,6 +930,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 tools: vec![],
                 reasoning_content: None,
                 work_item_id: None,
+                conversation: None,
             };
 
             commands.spawn((
@@ -1008,6 +1011,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 tools: vec![],
                 reasoning_content: None,
                 work_item_id: None,
+                conversation: None,
             };
 
             commands.spawn((
@@ -1259,6 +1263,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 tools: vec![],
                 reasoning_content: None,
                 work_item_id: None,
+                conversation: None,
             };
 
             commands.spawn((
@@ -1414,6 +1419,7 @@ fn spawn_experience_candidate_result(
         tools: vec![],
         reasoning_content: None,
         work_item_id: None,
+                conversation: None,
     };
 
     commands.spawn((
@@ -1476,6 +1482,7 @@ pub fn spawn_tool_error(
         tools: vec![],
         reasoning_content: None,
         work_item_id: None,
+                conversation: None,
     };
 
     commands.spawn((
@@ -1514,6 +1521,7 @@ pub fn spawn_shell_result(
         tools: vec![],
         reasoning_content: None,
         work_item_id: None,
+                conversation: None,
     };
 
     commands.spawn((
@@ -1891,6 +1899,7 @@ mod tests {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                conversation: None,
                 model_override: None,
             },
             tool_name: "ask_user".to_string(),

@@ -175,6 +175,7 @@ pub fn approval_result_system(
                     tools: vec![],
                     reasoning_content: None,
                     work_item_id: None,
+                conversation: None,
                 };
 
                 commands.spawn((
@@ -484,6 +485,7 @@ mod tests {
                 tools: vec![],
                 conversation: None,
                 work_item_id: None,
+                conversation: None,
                 model_override: None,
             },
             tool_name: "shell_exec".to_string(),

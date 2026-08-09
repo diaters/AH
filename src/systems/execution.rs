@@ -101,6 +101,7 @@ pub(crate) fn agent_execution_system(
                 tools: request.tools.clone(),
                 reasoning_content,
                 work_item_id: request.work_item_id,
+                conversation: request.conversation.clone(),
             });
         });
 
