@@ -51,6 +51,16 @@ RUST_LOG=harness=trace,harness::channels=info cargo run
 
 事件名遵循 PascalCase，详见「事件命名规范」。
 
+### 异常事件（`warn!`）
+
+以下 `warn!` 事件标识异常但可恢复的路径，不构成审计轨迹但具有运维可观测价值：
+
+| 领域 | 事件 | 字段 | 触发条件 |
+|------|------|------|----------|
+| Brain 决策 | BrainDecisionParseFailed | task_id, error, raw_len, raw_preview, from_status, to_status | Brain LLM 返回非 JSON 文本，无法解析为 `{agent_name, skill_name?}` |
+| Brain 决策 | BrainDecisionAgentNotFound | task_id, selected_agent, from_status, to_status | Brain LLM 选择的 agent 不存在或非 Persistent |
+| Brain 决策 | BrainSelectedSkillNotOwned | task_id, agent_name, skill_name | Brain LLM 选择的 skill 不属于目标 agent，降级为 None |
+
 ## 日志级别使用
 
 | 级别 | 用途 | 示例场景 |

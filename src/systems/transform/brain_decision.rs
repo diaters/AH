@@ -83,12 +83,21 @@ pub fn brain_decision_system(
 
                     if !agent_exists {
                         // Brain 选了不存在的 Agent，直接 Failed（不 fallback）
+                        let old_status = task.status.clone();
                         task.last_error = Some(format!(
                             "brain selected agent '{}' but no such persistent agent",
                             agent_name
                         ));
                         task.status = TaskStatus::Failed(FailureReason::AgentError);
                         task.updated_at = clock.0;
+                        warn!(
+                            event = "BrainDecisionAgentNotFound",
+                            task_id = %task.id,
+                            selected_agent = %agent_name,
+                            from_status = ?old_status,
+                            to_status = ?TaskStatus::Failed(FailureReason::AgentError),
+                            "brain selected non-existent agent, marking task as failed"
+                        );
                         commands
                             .entity(task_entity)
                             .remove::<AwaitingBrainDecision>();
@@ -153,9 +162,20 @@ pub fn brain_decision_system(
                 }
                 Err(e) => {
                     // JSON 解析失败，直接 Failed
+                    let old_status = task.status.clone();
                     task.last_error = Some(format!("brain skill selection parse failed: {:?}", e));
                     task.status = TaskStatus::Failed(FailureReason::AgentError);
                     task.updated_at = clock.0;
+                    warn!(
+                        event = "BrainDecisionParseFailed",
+                        task_id = %task.id,
+                        error = ?e,
+                        raw_len = content.len(),
+                        raw_preview = %content.chars().take(200).collect::<String>(),
+                        from_status = ?old_status,
+                        to_status = ?TaskStatus::Failed(FailureReason::AgentError),
+                        "brain skill selection JSON parse failed, marking task as failed"
+                    );
                     commands
                         .entity(task_entity)
                         .remove::<AwaitingBrainDecision>();
@@ -180,5 +200,322 @@ pub fn brain_decision_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{BrainConfig, HarnessConfig, HarnessSettings};
+    use crate::domain::{
+        AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, FrontendKind,
+        ToolPermission, WaitingReason,
+    };
+    use crate::ecs::EntityIndex;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    /// 构造最小 Bevy App，注册 brain_decision_system 及其所需资源。
+    fn make_brain_decision_test_app() -> App {
+        let mut app = App::new();
+        let config = HarnessConfig {
+            brain: Some(BrainConfig { enabled: true }),
+            ..HarnessConfig::default()
+        };
+        app.insert_resource(Clock::default());
+        app.insert_resource(HarnessSettings(config));
+        app.init_resource::<EntityIndex>();
+        app.init_resource::<SkillRegistry>();
+        app.add_systems(Update, brain_decision_system);
+        app
+    }
+
+    /// 在 app world 中 spawn 一个 task（Waiting(Agent)）+ AwaitingBrainDecision，
+    /// 返回 task_id。
+    fn spawn_brain_awaiting_task(app: &mut App) -> Uuid {
+        let task = Task::from_user_input(
+            "test subtask".to_string(),
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        let task_id = task.id;
+        let entity = app
+            .world_mut()
+            .spawn((
+                task,
+                AwaitingBrainDecision {
+                    task_id,
+                    spawn_spec: None,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+        task_id
+    }
+
+    /// 在 app world 中 spawn 一个 Persistent Agent，返回其 entity。
+    fn spawn_persistent_agent(app: &mut App, name: &str) -> Entity {
+        let agent = Agent {
+            id: Uuid::new_v4(),
+            profile: AgentProfile {
+                name: name.to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![name.to_string()],
+                description: format!("{} agent", name),
+            },
+            kind: AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Confirm,
+                default_permission_explicit: true,
+                overrides: HashMap::new(),
+            },
+            system_prompt: None,
+        };
+        let entity = app.world_mut().spawn(agent).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .agents
+            .insert(Uuid::new_v4(), entity);
+        entity
+    }
+
+    /// 构造一个 BrainDecision 类型的 AgentExecutionResultMessage（Text 内容）。
+    fn make_brain_text_result(task_id: Uuid, content: &str) -> AgentExecutionResultMessage {
+        AgentExecutionResultMessage {
+            result: crate::domain::AgentExecutionResult {
+                task_id,
+                agent_id: Uuid::nil(),
+                request_kind: AgentRequestKind::BrainDecision,
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(content.to_string()),
+                    reasoning_content: None,
+                }),
+                prompt: "test".to_string(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+                conversation: None,
+            },
+        }
+    }
+
+    /// 获取指定 task 的当前状态。
+    fn get_task_status(app: &mut App, task_id: Uuid) -> Option<TaskStatus> {
+        app.world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .find(|t| t.id == task_id)
+            .map(|t| t.status.clone())
+    }
+
+    /// 获取指定 task 的 last_error。
+    fn get_task_last_error(app: &mut App, task_id: Uuid) -> Option<String> {
+        app.world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .find(|t| t.id == task_id)
+            .and_then(|t| t.last_error.clone())
+    }
+
+    /// 检查指定 task 是否仍有 AwaitingBrainDecision 组件。
+    fn has_awaiting_brain_decision(app: &mut App, task_id: Uuid) -> bool {
+        let Some(entity) = app
+            .world()
+            .resource::<EntityIndex>()
+            .get_task(&task_id)
+        else {
+            return false;
+        };
+        app.world_mut()
+            .entity(entity)
+            .contains::<AwaitingBrainDecision>()
+    }
+
+    #[test]
+    fn parse_failure_marks_task_failed() {
+        let mut app = make_brain_decision_test_app();
+        let task_id = spawn_brain_awaiting_task(&mut app);
+
+        // Spawn result with non-JSON text (simulates LLM returning only reasoning)
+        app.world_mut().spawn(make_brain_text_result(
+            task_id,
+            "I think the best agent for this task would be...",
+        ));
+
+        app.update();
+
+        // Task should be Failed
+        let status = get_task_status(&mut app, task_id).expect("task should exist");
+        assert!(
+            matches!(status, TaskStatus::Failed(FailureReason::AgentError)),
+            "expected Failed(AgentError), got {:?}",
+            status
+        );
+
+        // AwaitingBrainDecision should be removed
+        assert!(
+            !has_awaiting_brain_decision(&mut app, task_id),
+            "AwaitingBrainDecision should be removed on parse failure"
+        );
+
+        // last_error should be set
+        let last_error = get_task_last_error(&mut app, task_id);
+        assert!(
+            last_error.as_ref().is_some_and(|e| e.contains("parse failed")),
+            "last_error should mention parse failure, got {:?}",
+            last_error
+        );
+    }
+
+    #[test]
+    fn agent_not_found_marks_task_failed() {
+        let mut app = make_brain_decision_test_app();
+        let task_id = spawn_brain_awaiting_task(&mut app);
+
+        // Spawn a persistent agent, but the LLM output references a different one
+        spawn_persistent_agent(&mut app, "coder");
+
+        // LLM output selects a non-existent agent
+        app.world_mut().spawn(make_brain_text_result(
+            task_id,
+            r#"{"agent_name": "nonexistent-agent"}"#,
+        ));
+
+        app.update();
+
+        // Task should be Failed
+        let status = get_task_status(&mut app, task_id).expect("task should exist");
+        assert!(
+            matches!(status, TaskStatus::Failed(FailureReason::AgentError)),
+            "expected Failed(AgentError), got {:?}",
+            status
+        );
+
+        // AwaitingBrainDecision should be removed
+        assert!(
+            !has_awaiting_brain_decision(&mut app, task_id),
+            "AwaitingBrainDecision should be removed on agent not found"
+        );
+
+        // last_error should mention the agent name
+        let last_error = get_task_last_error(&mut app, task_id);
+        assert!(
+            last_error.as_ref().is_some_and(|e| e.contains("nonexistent-agent")),
+            "last_error should mention the non-existent agent, got {:?}",
+            last_error
+        );
+    }
+
+    #[test]
+    fn valid_brain_decision_resolves_successfully() {
+        let mut app = make_brain_decision_test_app();
+        let task_id = spawn_brain_awaiting_task(&mut app);
+
+        // Spawn the agent that Brain will select
+        spawn_persistent_agent(&mut app, "coder");
+
+        // LLM output selects the existing agent
+        app.world_mut().spawn(make_brain_text_result(
+            task_id,
+            r#"{"agent_name": "coder"}"#,
+        ));
+
+        app.update();
+
+        // Task should NOT be Failed — it should have PendingDispatch
+        let status = get_task_status(&mut app, task_id).expect("task should exist");
+        assert!(
+            !status.is_terminal(),
+            "task should not be terminal after successful brain decision, got {:?}",
+            status
+        );
+
+        // AwaitingBrainDecision should be removed
+        assert!(
+            !has_awaiting_brain_decision(&mut app, task_id),
+            "AwaitingBrainDecision should be removed on successful resolution"
+        );
+
+        // PendingDispatch should be attached
+        let entity = app
+            .world()
+            .resource::<EntityIndex>()
+            .get_task(&task_id)
+            .expect("task entity should exist");
+        assert!(
+            app.world_mut()
+                .entity(entity)
+                .contains::<PendingDispatch>(),
+            "PendingDispatch should be attached after successful brain decision"
+        );
+    }
+
+    #[test]
+    fn brain_disabled_skips_processing() {
+        let mut app = App::new();
+        let config = HarnessConfig {
+            brain: None,
+            ..HarnessConfig::default()
+        };
+        app.insert_resource(Clock::default());
+        app.insert_resource(HarnessSettings(config));
+        app.init_resource::<EntityIndex>();
+        app.init_resource::<SkillRegistry>();
+        app.add_systems(Update, brain_decision_system);
+
+        let mut task = Task::from_user_input(
+            "test".to_string(),
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        // Simulate a task that is waiting for brain decision
+        task.status = TaskStatus::Waiting(WaitingReason::Agent);
+        let task_id = task.id;
+        let entity = app
+            .world_mut()
+            .spawn((
+                task,
+                AwaitingBrainDecision {
+                    task_id,
+                    spawn_spec: None,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        // Spawn a result that would cause parse failure
+        app.world_mut().spawn(make_brain_text_result(
+            task_id,
+            "not json",
+        ));
+
+        app.update();
+
+        // Task should still be Waiting(Agent) — brain disabled, system no-ops
+        let status = get_task_status(&mut app, task_id).expect("task should exist");
+        assert!(
+            matches!(status, TaskStatus::Waiting(_)),
+            "task should remain Waiting when brain is disabled, got {:?}",
+            status
+        );
     }
 }
