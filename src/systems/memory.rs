@@ -4,12 +4,47 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
-        MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
-        TaskStatus, WaitingReason,
+        render_tool_calls_summary, Agent, EntryRole, LongTermMemory, LongTermMemoryEntry,
+        LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, ShortTermMemory,
+        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
     },
     infrastructure::memory::LongTermMemoryService,
 };
+
+/// 将 STM entries 按配对组切分。
+///
+/// 配对组定义：
+/// - User 开启新的对话配对组
+/// - Assistant（无 tool_calls）归入当前对话配对组
+/// - Assistant（有 tool_calls）开启新的工具配对组（原子性锚点）
+/// - Summary / Archive 归入最近的配对组
+fn split_into_groups(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut current_group: Vec<usize> = Vec::new();
+
+    for (i, entry) in entries.iter().enumerate() {
+        let starts_new_group = match entry.role {
+            EntryRole::User => true,
+            EntryRole::Assistant if !entry.metadata.tool_calls.is_empty() => true,
+            EntryRole::Assistant => false,
+            EntryRole::Summary | EntryRole::Archive => false,
+        };
+
+        if starts_new_group && !current_group.is_empty() {
+            groups.push(std::mem::take(&mut current_group));
+        }
+        current_group.push(i);
+    }
+
+    if !current_group.is_empty() {
+        groups.push(current_group);
+    }
+
+    groups
+}
 
 /// 记忆压缩系统：检测 token 阈值并触发摘要请求
 pub(crate) fn memory_compression_system(
@@ -31,24 +66,33 @@ pub(crate) fn memory_compression_system(
 
         // 检查是否需要压缩
         if short_term.estimated_tokens > config.compression_threshold_tokens {
-            let entries_count = short_term.entries.len();
-
-            // 保留最近 N 轮（每轮 = User + Assistant，所以乘 2）
-            let preserve_count = (config.preserve_recent_turns * 2) as usize;
-            if entries_count <= preserve_count {
+            // 替换原有的 preserve_count / compress_count 逻辑
+            let groups = split_into_groups(&short_term.entries);
+            if groups.len() <= config.preserve_recent_turns as usize {
                 continue;
             }
 
-            let compress_count = entries_count - preserve_count;
-            if compress_count == 0 {
+            let preserve_group_count = config.preserve_recent_turns as usize;
+            let compress_entry_count = groups
+                .iter()
+                .take(groups.len() - preserve_group_count)
+                .map(|g| g.len())
+                .sum();
+
+            if compress_entry_count == 0 {
                 continue;
             }
 
-            // 收集需要压缩的条目内容
-            let to_compress: Vec<_> = short_term.entries.iter().take(compress_count).collect();
+            // 收集需要压缩的条目内容（含 tool_calls 渲染）
+            let to_compress: Vec<_> = short_term.entries.iter().take(compress_entry_count).collect();
             let mut compress_text = String::new();
             for entry in &to_compress {
-                compress_text.push_str(&format!("{:?}: {}\n", entry.role, entry.content));
+                let mut line = format!("{:?}: {}", entry.role, entry.content);
+                if !entry.metadata.tool_calls.is_empty() {
+                    line.push_str(&format!("\n  {}", render_tool_calls_summary(&entry.metadata.tool_calls)));
+                }
+                compress_text.push_str(&line);
+                compress_text.push('\n');
             }
 
             // 发送摘要请求而非直接拼接
@@ -57,9 +101,9 @@ pub(crate) fn memory_compression_system(
                 task_id = %task.id,
                 current_tokens = short_term.estimated_tokens,
                 threshold = config.compression_threshold_tokens,
-                entries_total = entries_count,
-                entries_to_compress = compress_count,
-                entries_to_preserve = preserve_count,
+                groups_total = groups.len(),
+                groups_to_compress = groups.len() - preserve_group_count,
+                entries_to_compress = compress_entry_count,
                 compress_text_len = compress_text.len(),
                 "triggering summarization request"
             );
@@ -192,7 +236,8 @@ pub(crate) fn long_term_memory_decay_system(
 mod tests {
     use super::*;
     use crate::domain::{
-        ChannelId, EntryRole, FrontendKind, LongTermMemoryEntry, MemoryImportance, Task,
+        ChannelId, EntryMetadata, EntryRole, FrontendKind, LongTermMemoryEntry, MemoryImportance,
+        Task, ToolCall,
     };
 
     #[test]
@@ -344,5 +389,53 @@ mod tests {
 
         assert!(evicted.is_empty());
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn compression_preserves_tool_call_group_atomicity() {
+        let mut world = World::new();
+        world.insert_resource(MemoryConfig {
+            compression_threshold_tokens: 50,
+            preserve_recent_turns: 1,
+            summary_target_tokens: 25,
+        });
+
+        let task = Task::from_user_input(
+            "test",
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+                thread_id: None,
+            },
+        );
+        let entity = world.spawn((task, ShortTermMemory::default())).id();
+
+        {
+            let mut stm = world.get_mut::<ShortTermMemory>(entity).unwrap();
+            // Entry 1: User (对话配对组)
+            stm.add_entry(EntryRole::User, "hello world this is a long enough message to contribute tokens", Default::default());
+            // Entry 2: Assistant with tool_calls (工具配对组——不可拆散)
+            let mut metadata = EntryMetadata::default();
+            metadata.tool_calls.push(ToolCall {
+                id: Some("call_1".to_string()),
+                tool_name: "shell_exec".to_string(),
+                input: "ls -la /very/long/path/with/many/segments/to/contribute/tokens".to_string(),
+                output: "file1.txt\nfile2.txt\nfile3.txt\nfile4.txt\nfile5.txt\nfile6.txt".to_string(),
+                timestamp: chrono::Utc::now(),
+            });
+            stm.add_entry(EntryRole::Assistant, "done with tools", metadata);
+            // Entry 3: User (最近的对话配对组——应保留)
+            stm.add_entry(EntryRole::User, "next question with enough tokens to push over threshold when combined", Default::default());
+            // Entry 4: Assistant (最近的对话配对组——应保留)
+            stm.add_entry(EntryRole::Assistant, "final answer with enough text to be meaningful", Default::default());
+        }
+
+        let stm = world.get::<ShortTermMemory>(entity).unwrap();
+        assert!(
+            stm.estimated_tokens > 50,
+            "should exceed threshold, got {}",
+            stm.estimated_tokens,
+        );
     }
 }
