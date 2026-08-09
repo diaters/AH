@@ -57,9 +57,9 @@ RUST_LOG=harness=trace,harness::channels=info cargo run
 
 | 领域 | 事件 | 字段 | 触发条件 |
 |------|------|------|----------|
-| Brain 决策 | BrainDecisionParseFailed | task_id, error, raw_len, raw_preview, from_status, to_status | Brain LLM 返回非 JSON 文本，无法解析为 `{agent_name, skill_name?}` |
-| Brain 决策 | BrainDecisionAgentNotFound | task_id, selected_agent, from_status, to_status | Brain LLM 选择的 agent 不存在或非 Persistent |
-| Brain 决策 | BrainSelectedSkillNotOwned | task_id, agent_name, skill_name | Brain LLM 选择的 skill 不属于目标 agent，降级为 None |
+| Brain | BrainDecisionParseFailed | task_id, error, raw_len, raw_preview, from/to_status | Brain LLM 返回非 JSON，无法解析 |
+| Brain | BrainDecisionAgentNotFound | task_id, selected_agent, from/to_status | Brain 选择的 agent 不存在或非 Persistent |
+| Brain | BrainSelectedSkillNotOwned | task_id, agent_name, skill_name | Brain 选择的 skill 不属于目标 agent |
 
 ## 日志级别使用
 
