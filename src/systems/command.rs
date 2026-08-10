@@ -295,6 +295,17 @@ pub(crate) fn command_parse_system(
                 }
                 commands.entity(entity).despawn();
             }
+            UserCommand::CreateSkill { intent } => {
+                // /skill - 为当前任务的 Agent 创建新 skill
+                debug!(
+                    event = "CreateSkillCommandReceived",
+                    intent = %intent,
+                    "skill creation command parsed (stub)"
+                );
+                // TODO(skill-creation): spawn skill creation work item
+                eprintln!("[skill] /skill command received — skill creation not yet implemented");
+                commands.entity(entity).despawn();
+            }
         }
     }
 }

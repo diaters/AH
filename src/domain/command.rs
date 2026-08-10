@@ -15,6 +15,8 @@ pub enum UserCommand {
     Summarize,
     /// /remember - 添加知识到 SharedKnowledgeBase
     Remember { content: String },
+    /// /skill - 为当前任务的 Agent 创建新 skill
+    CreateSkill { intent: String },
     /// /plugins - 列出已加载的插件
     ListPlugins,
     /// /reload-plugins - 重新加载所有插件
@@ -56,6 +58,14 @@ impl UserCommand {
         } else if trimmed == "/remember" {
             Self::Remember {
                 content: String::new(),
+            }
+        } else if let Some(stripped) = trimmed.strip_prefix("/skill ") {
+            Self::CreateSkill {
+                intent: stripped.trim().to_string(),
+            }
+        } else if trimmed == "/skill" {
+            Self::CreateSkill {
+                intent: String::new(),
             }
         } else if trimmed == "/plugins" {
             Self::ListPlugins

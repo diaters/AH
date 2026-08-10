@@ -265,6 +265,7 @@ mod tests {
                 description: "run smoke test".to_string(),
                 instructions: "1. Run test".to_string(),
                 file_refs: vec![],
+                is_new: false,
             },
             dependency_refs: vec![],
             status: ExperienceCandidateStatus::NeedsUserApproval,

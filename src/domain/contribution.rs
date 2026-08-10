@@ -60,6 +60,8 @@ pub enum ExperienceWritebackDestination {
     Rejected,
     /// skill-updater 自我迭代：由任务 20 的 skill_update_workitem_system 处理。
     SkillUpdate,
+    /// skill-creator 新建 skill：由 skill_creation_writeback_system 处理 rename 写回。
+    SkillCreation,
 }
 
 /// 经验治理决议：顶层治理对单个候选给出的最终判定。
@@ -83,6 +85,8 @@ pub enum ExperienceCandidatePayload {
         description: String,
         instructions: String,
         file_refs: Vec<SkillFileRef>,
+        #[serde(default)]
+        is_new: bool,
     },
 }
 
@@ -159,12 +163,50 @@ impl ExperienceCandidate {
                 description,
                 instructions,
                 file_refs,
+                is_new: false,
             },
             dependency_refs: Vec::new(),
             status: ExperienceCandidateStatus::Submitted,
             governing_agent_id: None,
             derived_from_candidate_ids: Vec::new(),
         }
+    }
+
+    /// 创建 Skill 类候选（新建 skill，is_new = true）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn skill_new(
+        candidate_id: uuid::Uuid,
+        producer_task_id: TaskId,
+        producer_agent_id: AgentId,
+        title: String,
+        name: String,
+        description: String,
+        instructions: String,
+        file_refs: Vec<SkillFileRef>,
+    ) -> Self {
+        Self {
+            candidate_id,
+            producer_task_id,
+            producer_agent_id,
+            title,
+            kind_hint: ExperienceKindHint::Skill,
+            payload: ExperienceCandidatePayload::Skill {
+                name,
+                description,
+                instructions,
+                file_refs,
+                is_new: true,
+            },
+            dependency_refs: Vec::new(),
+            status: ExperienceCandidateStatus::Submitted,
+            governing_agent_id: None,
+            derived_from_candidate_ids: Vec::new(),
+        }
+    }
+
+    /// 判断 Skill 载荷是否为新建 skill（is_new = true）。
+    pub fn is_skill_new(payload: &ExperienceCandidatePayload) -> bool {
+        matches!(payload, ExperienceCandidatePayload::Skill { is_new: true, .. })
     }
 
     /// 判断候选是否需要用户确认。
@@ -971,6 +1013,57 @@ mod tests {
         assert!(result.contains(&"calculation".to_string()));
         assert!(!result.contains(&"incubated".to_string()));
         // incubated 由写回逻辑注入，不在 sanitize_tags 中
+    }
+
+    #[test]
+    fn skill_constructor_sets_is_new_false() {
+        let candidate = ExperienceCandidate::skill(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            "test skill".to_string(),
+            "test-skill".to_string(),
+            "description".to_string(),
+            "instructions".to_string(),
+            vec![],
+        );
+        assert!(
+            matches!(candidate.payload, ExperienceCandidatePayload::Skill { is_new: false, .. }),
+            "skill() should set is_new = false"
+        );
+        assert!(!ExperienceCandidate::is_skill_new(&candidate.payload));
+    }
+
+    #[test]
+    fn skill_new_constructor_sets_is_new_true() {
+        let candidate = ExperienceCandidate::skill_new(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            "new skill".to_string(),
+            "new-skill".to_string(),
+            "description".to_string(),
+            "instructions".to_string(),
+            vec![],
+        );
+        assert!(
+            matches!(candidate.payload, ExperienceCandidatePayload::Skill { is_new: true, .. }),
+            "skill_new() should set is_new = true"
+        );
+        assert!(ExperienceCandidate::is_skill_new(&candidate.payload));
+    }
+
+    #[test]
+    fn serde_default_for_is_new() {
+        // JSON without is_new field should deserialize with is_new = false (serde default)
+        let json = r#"{"Skill":{"name":"test","description":"d","instructions":"i","file_refs":[]}}"#;
+        let payload: ExperienceCandidatePayload = serde_json::from_str(json).unwrap();
+        match payload {
+            ExperienceCandidatePayload::Skill { is_new, .. } => {
+                assert!(!is_new, "is_new should default to false when absent in JSON");
+            }
+            _ => panic!("expected Skill payload"),
+        }
     }
 }
 

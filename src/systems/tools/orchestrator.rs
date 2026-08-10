@@ -1350,6 +1350,7 @@ fn submission_to_candidate(
                 description,
                 instructions,
                 file_refs,
+                is_new: false,
             }
         }
     };

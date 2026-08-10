@@ -141,6 +141,16 @@ pub(crate) fn experience_writeback_system(
                 );
                 Ok(())
             }
+            ExperienceWritebackDestination::SkillCreation => {
+                // TODO(skill-creation): 由 skill_creation_writeback_system 处理 rename 写回。
+                debug!(
+                    event = "SkillCreationWritebackPlaceholder",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    "skill creation writeback placeholder, awaiting skill_creation_writeback_system"
+                );
+                Ok(())
+            }
         };
 
         match result {
@@ -233,6 +243,7 @@ fn writeback_to_skill_package(
         description,
         instructions,
         file_refs,
+        ..
     } = &candidate.payload
     else {
         return Err("candidate payload is not skill".to_string());
@@ -358,6 +369,7 @@ fn writeback_incubation_proposal(
                 description,
                 instructions,
                 file_refs,
+                ..
             } = &candidate.payload
         {
             let draft = crate::infrastructure::assets::SkillPackageDraft {
