@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -685,6 +687,20 @@ pub struct SkillUpdateContext {
     pub base_version: u32,
     pub experience_candidate_id: uuid::Uuid,
     pub governing_agent_id: AgentId,
+}
+
+/// skill-creator workitem 的上下文 Component
+///
+/// 由 skill_creation_workitem_system 在 spawn `WorkItemType::SkillCreation` workitem 时
+/// 一并注入到同一 entity，供 orchestrator（工具执行）和 writeback_system 通过 Query 读取。
+#[allow(dead_code)] // 由后续 orchestrator/skill-creator 链路使用
+#[derive(Component, Debug, Clone)]
+pub struct SkillCreationContext {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub agent_name: String,
+    pub sandbox_dir: PathBuf,
+    pub skill_name: String,
 }
 
 /// skill 更新的结构化 diff 操作

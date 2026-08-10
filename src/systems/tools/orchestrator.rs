@@ -1269,6 +1269,24 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::SubmitSkillCandidate { name, description: _ }) => {
+            // stub: 完整逻辑由后续任务实现
+            warn!(
+                event = "SkillCandidateSubmitStub",
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                %name,
+                "submit_skill_candidate not yet implemented, returning error"
+            );
+            spawn_tool_error(
+                commands,
+                request_entity,
+                request,
+                ToolError::InternalState(
+                    "submit_skill_candidate not yet implemented".to_string(),
+                ),
+            );
+        }
         Ok(ToolAction::AskUser { question }) => {
             let task_id = request.request.task_id;
             let agent_id = request.request.agent_id;
