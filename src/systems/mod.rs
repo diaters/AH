@@ -34,8 +34,10 @@ pub(crate) use experience::{
     experience_collection_workitem_system, experience_consolidation_trigger_system,
     experience_governance_system, experience_writeback_system, on_experience_hook_system,
     profile_generation_completion_system, profile_generation_workitem_system,
-    profile_update_trigger_system, profile_update_writeback_system, skill_update_completion_system,
-    skill_update_workitem_system, task_terminated_experience_trigger_system,
+    profile_update_trigger_system, profile_update_writeback_system,
+    skill_creation_workitem_system, skill_creation_writeback_system,
+    skill_update_completion_system, skill_update_workitem_system,
+    task_terminated_experience_trigger_system,
 };
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;

@@ -44,6 +44,11 @@ impl SkillLoader {
         }
     }
 
+    /// 返回 base_dir 路径引用。
+    pub fn base_dir(&self) -> &std::path::Path {
+        &self.base_dir
+    }
+
     /// 用指定 base_dir 构造 SkillLoader。
     ///
     /// `base_dir` 语义与 `default_path()` 一致：直接指向 `agents/` 目录本身，
