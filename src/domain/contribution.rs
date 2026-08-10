@@ -208,7 +208,10 @@ impl ExperienceCandidate {
 
     /// 判断 Skill 载荷是否为新建 skill（is_new = true）。
     pub fn is_skill_new(payload: &ExperienceCandidatePayload) -> bool {
-        matches!(payload, ExperienceCandidatePayload::Skill { is_new: true, .. })
+        matches!(
+            payload,
+            ExperienceCandidatePayload::Skill { is_new: true, .. }
+        )
     }
 
     /// 判断候选是否需要用户确认。
@@ -1044,7 +1047,10 @@ mod tests {
             vec![],
         );
         assert!(
-            matches!(candidate.payload, ExperienceCandidatePayload::Skill { is_new: false, .. }),
+            matches!(
+                candidate.payload,
+                ExperienceCandidatePayload::Skill { is_new: false, .. }
+            ),
             "skill() should set is_new = false"
         );
         assert!(!ExperienceCandidate::is_skill_new(&candidate.payload));
@@ -1063,7 +1069,10 @@ mod tests {
             vec![],
         );
         assert!(
-            matches!(candidate.payload, ExperienceCandidatePayload::Skill { is_new: true, .. }),
+            matches!(
+                candidate.payload,
+                ExperienceCandidatePayload::Skill { is_new: true, .. }
+            ),
             "skill_new() should set is_new = true"
         );
         assert!(ExperienceCandidate::is_skill_new(&candidate.payload));
@@ -1072,11 +1081,15 @@ mod tests {
     #[test]
     fn serde_default_for_is_new() {
         // JSON without is_new field should deserialize with is_new = false (serde default)
-        let json = r#"{"Skill":{"name":"test","description":"d","instructions":"i","file_refs":[]}}"#;
+        let json =
+            r#"{"Skill":{"name":"test","description":"d","instructions":"i","file_refs":[]}}"#;
         let payload: ExperienceCandidatePayload = serde_json::from_str(json).unwrap();
         match payload {
             ExperienceCandidatePayload::Skill { is_new, .. } => {
-                assert!(!is_new, "is_new should default to false when absent in JSON");
+                assert!(
+                    !is_new,
+                    "is_new should default to false when absent in JSON"
+                );
             }
             _ => panic!("expected Skill payload"),
         }
