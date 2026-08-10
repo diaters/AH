@@ -12,7 +12,7 @@ use bevy_ecs::prelude::*;
 use chrono::Utc;
 use tracing::warn;
 
-use crate::domain::{ToolAsyncResult, ToolEffect, ToolEffectPending, ToolError, ToolResultSender};
+use crate::domain::{SkillCreationContext, ToolAsyncResult, ToolEffect, ToolEffectPending, ToolError, ToolResultSender};
 use crate::triggers::scheduled_task::{compute_next_trigger, update_scheduler_state};
 use crate::triggers::{DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo};
 
@@ -103,6 +103,43 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                 "kind": kind,
                 "next_trigger": next_trigger,
             }))
+        }
+        ToolEffect::WriteSkillFile { path, content } => {
+            // 从 WorkItem 的 SkillCreationContext 获取沙盒目录
+            let sandbox_dir = {
+                let mut q = world.query::<&SkillCreationContext>();
+                q.iter(world).next().map(|c| c.sandbox_dir.clone())
+            };
+
+            match sandbox_dir {
+                Some(dir) => {
+                    let full_path = dir.join(path);
+                    if let Some(parent) = full_path.parent()
+                        && let Err(e) = std::fs::create_dir_all(parent)
+                    {
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "failed to create directory {}: {}",
+                            parent.display(),
+                            e
+                        )));
+                    }
+                    let bytes = content.len();
+                    match std::fs::write(&full_path, content) {
+                        Ok(()) => Ok(serde_json::json!({
+                            "path": path,
+                            "bytes_written": bytes,
+                        })),
+                        Err(e) => Err(ToolError::ExecutionFailed(format!(
+                            "failed to write file {}: {}",
+                            full_path.display(),
+                            e
+                        ))),
+                    }
+                }
+                None => Err(ToolError::InternalState(
+                    "no SkillCreationContext found for WriteSkillFile effect".to_string(),
+                )),
+            }
         }
     }
 }

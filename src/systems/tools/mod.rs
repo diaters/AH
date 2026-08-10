@@ -44,7 +44,7 @@ use self::builtin::{
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
-    SubmitSkillUpdateTool, WaitTasksTool,
+    SubmitSkillTool, SubmitSkillUpdateTool, WaitTasksTool, WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -578,6 +578,57 @@ pub fn register_builtin_tools(
         required_tag: Some("skill-updater".to_string()),
     });
     executors.register(Box::new(ReadSkillFileTool));
+
+    // Skill creation tools (仅 skill-creator 可用)
+    registry.register(ToolDefinition {
+        name: "submit_skill".to_string(),
+        description: "提交 skill 创建候选。提供 skill 名称与描述，由 skill-creator Agent 调用。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "skill 名称，简洁唯一标识"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "skill 描述，说明这个技能做什么以及何时触发"
+                    }
+                },
+                "required": ["name", "description"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("submit_skill".to_string()),
+        required_tag: Some("skill-creator".to_string()),
+    });
+    executors.register(Box::new(SubmitSkillTool));
+
+    registry.register(ToolDefinition {
+        name: "write_skill_file".to_string(),
+        description: "在 skill 沙盒目录下写入文件。用于创建 SKILL.md 或辅助文件（脚本、模板等）。路径必须相对沙盒目录，禁止 .. 遍历，文件后缀必须在白名单内。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "相对于 skill 沙盒目录的文件路径（如 'SKILL.md'、'scripts/run.py'）"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "文件内容"
+                    }
+                },
+                "required": ["path", "content"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("write_skill_file".to_string()),
+        required_tag: Some("skill-creator".to_string()),
+    });
+    executors.register(Box::new(WriteSkillFileTool));
 }
 
 /// 注册插件贡献的 Tool
