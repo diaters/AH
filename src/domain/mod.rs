@@ -66,7 +66,7 @@ pub use contribution::{
     PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
     ProfileGenerationKind, ProfileGenerationRequestMessage, SkillCreationContext, SkillFileRef,
     SkillFileRole, SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation,
-    sanitize_tags,
+    is_skill_new, sanitize_tags,
 };
 
 // error

@@ -208,10 +208,7 @@ impl ExperienceCandidate {
 
     /// 判断 Skill 载荷是否为新建 skill（is_new = true）。
     pub fn is_skill_new(payload: &ExperienceCandidatePayload) -> bool {
-        matches!(
-            payload,
-            ExperienceCandidatePayload::Skill { is_new: true, .. }
-        )
+        is_skill_new(payload)
     }
 
     /// 判断候选是否需要用户确认。
@@ -232,6 +229,16 @@ impl ExperienceCandidate {
             ExperienceCandidatePayload::Skill { .. } => None,
         }
     }
+}
+
+/// 判断 Skill 载荷是否为新建 skill（is_new = true）。
+///
+/// 独立函数，供治理系统等外部模块直接使用。
+pub fn is_skill_new(payload: &ExperienceCandidatePayload) -> bool {
+    matches!(
+        payload,
+        ExperienceCandidatePayload::Skill { is_new: true, .. }
+    )
 }
 
 /// 待派发经验候选相关 hook 的事件队列。

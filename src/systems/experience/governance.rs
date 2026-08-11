@@ -7,7 +7,7 @@ use crate::domain::{
     ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, SkillUpdateRequestMessage,
     Task, TaskInjectedSkill, ToolCalledHookPending, ToolConfirmationRequestMessage,
-    ToolExecutionRequestMessage,
+    ToolExecutionRequestMessage, is_skill_new,
 };
 use crate::ecs::EntityIndex;
 use crate::infrastructure::skills::SkillRegistry;
@@ -93,7 +93,17 @@ pub(crate) fn experience_governance_system(
                     Some(d)
                 }
                 ExperienceKindHint::Skill => {
-                    if is_default {
+                    // 优先检查 is_new：/skill 命令创建的新 skill 候选
+                    if is_skill_new(&candidate.payload) {
+                        Some(ExperienceGovernanceDecision {
+                            candidate_id: *candidate_id,
+                            destination: ExperienceWritebackDestination::SkillCreation,
+                            requires_user_confirmation: true,
+                            decision_rationale: "new skill creation -> rename writeback"
+                                .to_string(),
+                            source_task_id: request.task_id,
+                        })
+                    } else if is_default {
                         // 保留原 default agent skill → incubation 语义（修正 plan 疏漏）
                         Some(ExperienceGovernanceDecision {
                             candidate_id: *candidate_id,
@@ -400,8 +410,8 @@ mod tests {
     use super::*;
     use crate::domain::{
         AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-        ExperienceCandidate, ExperienceKindHint, FrontendKind, ProfileGenerationRequestMessage,
-        TaskRoutingPolicy, TaskStatus,
+        ExperienceCandidate, ExperienceCandidatePayload, ExperienceKindHint, FrontendKind,
+        ProfileGenerationRequestMessage, TaskRoutingPolicy, TaskStatus,
     };
     use crate::ecs::EntityIndex;
     use crate::infrastructure::skills::{SkillEntry, SkillId};
@@ -824,5 +834,42 @@ mod tests {
             vec![ExperienceWritebackDestination::SkillPackage],
         );
         assert!(destinations.is_empty());
+    }
+
+    /// 6. is_new=true 的 Skill 候选 → SkillCreation destination（需要用户确认）。
+    #[test]
+    fn governance_routes_is_new_skill_to_skill_creation() {
+        let mut app = make_governance_app();
+
+        let agent_id = uuid::Uuid::new_v4();
+        let task_id = uuid::Uuid::new_v4();
+        let candidate_id = uuid::Uuid::new_v4();
+
+        register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
+        register_task(&mut app, task_id, make_task(task_id), None);
+
+        // Skill candidate with is_new = true
+        let mut candidate = make_skill_candidate(candidate_id, task_id, agent_id);
+        candidate.payload = ExperienceCandidatePayload::Skill {
+            name: "new-skill".to_string(),
+            description: "a new skill".to_string(),
+            instructions: "do something".to_string(),
+            file_refs: vec![],
+            is_new: true,
+        };
+        candidate.status = ExperienceCandidateStatus::GovernancePending;
+        stage_candidate(&mut app, candidate);
+
+        app.world_mut()
+            .spawn(ExperienceGovernanceRequestMessage { task_id, agent_id });
+
+        app.update();
+
+        let decisions = governance_decision_destinations(&mut app);
+        assert_eq!(
+            decisions,
+            vec![ExperienceWritebackDestination::SkillCreation],
+            "is_new=true Skill should route to SkillCreation"
+        );
     }
 }
