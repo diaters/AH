@@ -158,6 +158,8 @@ pub enum ToolEffect {
     },
     /// 写入 skill 沙盒文件：由 write_skill_file 工具声明，commit_tool_effects_system 在主线程落账。
     WriteSkillFile {
+        /// skill 沙盒目录（由 worker 在构造时嵌入，commit 直接使用）
+        sandbox_dir: std::path::PathBuf,
         /// 相对沙盒路径
         path: String,
         /// 文件内容

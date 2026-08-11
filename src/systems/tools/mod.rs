@@ -43,8 +43,8 @@ use self::builtin::{
     AskUserTool, ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool,
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool,
-    SubmitSkillTool, SubmitSkillUpdateTool, WaitTasksTool, WriteSkillFileTool,
+    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillTool,
+    SubmitSkillUpdateTool, WaitTasksTool, WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -582,7 +582,8 @@ pub fn register_builtin_tools(
     // Skill creation tools (仅 skill-creator 可用)
     registry.register(ToolDefinition {
         name: "submit_skill".to_string(),
-        description: "提交 skill 创建候选。提供 skill 名称与描述，由 skill-creator Agent 调用。".to_string(),
+        description: "提交 skill 创建候选。提供 skill 名称与描述，由 skill-creator Agent 调用。"
+            .to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",

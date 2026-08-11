@@ -11,10 +11,10 @@ use crate::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, EngineEvent, EventTarget,
         ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
         PermissionAuditContext, PermissionSource, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillUpdateContext, Task, TaskStatus, ToolActionKind, ToolCallingState,
-        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolPermission, ToolReturnedHookPending, WaitingReason,
-        WorkItem,
+        ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task, TaskStatus,
+        ToolActionKind, ToolCallingState, ToolConfirmationResponseMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+        ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -31,7 +31,7 @@ use super::orchestrator::{
 /// Tool 确认响应处理 System
 ///
 /// 处理用户的确认响应
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tool_confirmation_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
@@ -52,6 +52,7 @@ pub fn tool_confirmation_result_system(
         Entity,
         Option<&ProfileGenerationContext>,
         Option<&SkillUpdateContext>,
+        Option<&SkillCreationContext>,
         &WorkItem,
     )>,
     settings: Res<HarnessSettings>,

@@ -7,7 +7,7 @@ use crate::domain::{
     BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolContext, ToolEffect, ToolError,
     ToolFuture, ToolWorkerOutput,
 };
-use crate::infrastructure::skills::diff::ALLOWED_FILE_SUFFIXES;
+use crate::infrastructure::skills::diff::{ALLOWED_FILE_SUFFIXES, validate_skill_file_path};
 
 /// 写入 skill 沙盒文件
 ///
@@ -43,51 +43,31 @@ impl BuiltinTool for WriteSkillFileTool {
             let content = match input.get("content").and_then(|v| v.as_str()) {
                 Some(c) => c.to_string(),
                 None => {
-                    return Err(ToolError::InvalidInput(
-                        "content is required".to_string(),
-                    ));
+                    return Err(ToolError::InvalidInput("content is required".to_string()));
                 }
             };
 
             // 确认 skill 目录存在
-            if ctx.current_skill_dir.is_none() {
-                return Err(ToolError::InvalidInput(
-                    "no skill directory in current context".to_string(),
-                ));
+            let skill_dir = match ctx.current_skill_dir {
+                Some(ref d) => d.clone(),
+                None => {
+                    return Err(ToolError::InvalidInput(
+                        "no skill directory in current context".to_string(),
+                    ));
+                }
+            };
+
+            // 路径校验：复用 validate_skill_file_path（与 read_skill_file 一致）
+            if let Err(e) = validate_skill_file_path(&path, &skill_dir, ALLOWED_FILE_SUFFIXES) {
+                return Err(ToolError::InvalidInput(format!("invalid path: {}", e)));
             }
 
-            // 路径安全：禁止 .. 遍历
-            if path.contains("..") {
-                return Err(ToolError::InvalidInput(format!(
-                    "path must not contain '..': {}",
-                    path
-                )));
-            }
-
-            // 后缀白名单校验（与 read_skill_file 一致）
-            let file_name = std::path::Path::new(&path)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            if !file_name.contains('.') {
-                return Err(ToolError::InvalidInput(format!(
-                    "file without extension not allowed: {}",
-                    path
-                )));
-            }
-            let suffix = std::path::Path::new(&path)
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            if !suffix.is_empty() && !ALLOWED_FILE_SUFFIXES.contains(&suffix) {
-                return Err(ToolError::InvalidInput(format!(
-                    "file suffix '.{}' not allowed; allowed: {:?}",
-                    suffix, ALLOWED_FILE_SUFFIXES
-                )));
-            }
-
-            // 声明式写效果：commit_tool_effects_system 将在主线程落账
-            Ok(ToolWorkerOutput::Effect(ToolEffect::WriteSkillFile { path, content }))
+            // 声明式写效果：sandbox_dir 在此嵌入，commit_tool_effects_system 直接使用
+            Ok(ToolWorkerOutput::Effect(ToolEffect::WriteSkillFile {
+                sandbox_dir: skill_dir,
+                path,
+                content,
+            }))
         })
     }
 }
@@ -163,11 +143,37 @@ mod tests {
         );
         let output = result.unwrap();
         match output {
-            ToolWorkerOutput::Effect(ToolEffect::WriteSkillFile { path, content }) => {
+            ToolWorkerOutput::Effect(ToolEffect::WriteSkillFile {
+                sandbox_dir,
+                path,
+                content,
+            }) => {
+                assert_eq!(sandbox_dir, PathBuf::from("/tmp/skill"));
                 assert_eq!(path, "download.md");
                 assert!(content.contains("Download"));
             }
             other => panic!("expected WriteSkillFile effect, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn write_skill_file_rejects_disallowed_suffix() {
+        let ctx = test_ctx(Some(PathBuf::from("/tmp/skill")));
+        let result = run_async_blocking(
+            serde_json::json!({
+                "path": "evil.rs",
+                "content": "fn main() {}"
+            }),
+            ctx,
+        );
+        assert!(result.is_err(), ".rs suffix should be rejected");
+        match result.unwrap_err() {
+            ToolError::InvalidInput(msg) => assert!(
+                msg.contains("suffix"),
+                "expected suffix error, got: {}",
+                msg
+            ),
+            other => panic!("expected InvalidInput, got {:?}", other),
         }
     }
 }

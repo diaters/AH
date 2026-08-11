@@ -506,10 +506,22 @@ mod registry_build_tests {
     fn build_registry_skips_hidden_directories() {
         let tmp = TempDir::new().unwrap();
         let agents_dir = tmp.path().join(".harness").join("assets").join("agents");
-        write_skill(&agents_dir, "agent-a", "coding", "---\nname: coding\ndescription: coding skill\n---\n\n## Usage\n\nDo it.\n");
-        write_skill(&agents_dir, "agent-a", ".sandbox", "---\nname: draft\ndescription: draft\n---\n\n## Usage\n\nDraft.\n");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "coding",
+            "---\nname: coding\ndescription: coding skill\n---\n\n## Usage\n\nDo it.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            ".sandbox",
+            "---\nname: draft\ndescription: draft\n---\n\n## Usage\n\nDraft.\n",
+        );
 
-        let loader = SkillLoader { base_dir: agents_dir.clone() };
+        let loader = SkillLoader {
+            base_dir: agents_dir.clone(),
+        };
         let registry = loader.build_registry();
         assert_eq!(registry.skills.len(), 1, "should skip .sandbox directory");
         assert!(registry.get(&SkillId::new("agent-a", "coding")).is_some());
@@ -520,10 +532,22 @@ mod registry_build_tests {
     fn load_skills_skips_hidden_directories() {
         let tmp = TempDir::new().unwrap();
         let agents_dir = tmp.path().join(".harness").join("assets").join("agents");
-        write_skill(&agents_dir, "agent-a", "coding", "---\nname: coding\ndescription: coding skill\n---\n\n## Usage\n\nDo it.\n");
-        write_skill(&agents_dir, "agent-a", ".sandbox", "---\nname: draft\ndescription: draft\n---\n\n## Usage\n\nDraft.\n");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "coding",
+            "---\nname: coding\ndescription: coding skill\n---\n\n## Usage\n\nDo it.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            ".sandbox",
+            "---\nname: draft\ndescription: draft\n---\n\n## Usage\n\nDraft.\n",
+        );
 
-        let loader = SkillLoader { base_dir: agents_dir };
+        let loader = SkillLoader {
+            base_dir: agents_dir,
+        };
         let skills = loader.load_skills("agent-a");
         assert_eq!(skills.len(), 1, "should skip .sandbox directory");
         assert_eq!(skills[0].name, "coding");
