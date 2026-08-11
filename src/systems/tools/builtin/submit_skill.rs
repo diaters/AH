@@ -35,6 +35,13 @@ impl BuiltinTool for SubmitSkillTool {
                 "name is required and must not be empty".to_string(),
             ));
         }
+        // Sanitize skill name: reject path separators and traversal sequences
+        // to prevent path traversal in writeback (skill_name flows into fs::rename target).
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(ToolError::InvalidInput(
+                "skill name must not contain path separators or '..'".to_string(),
+            ));
+        }
         if description.is_empty() {
             return Err(ToolError::InvalidInput(
                 "description is required and must not be empty".to_string(),
@@ -161,5 +168,27 @@ mod tests {
             result,
             Err(ToolError::InvalidInput(msg)) if msg.contains("description")
         ));
+    }
+
+    #[test]
+    fn submit_skill_rejects_path_traversal_name() {
+        let ctx = test_ctx();
+        let tool = SubmitSkillTool;
+
+        for evil_name in &["../../evil", "sub/evil", "sub\\evil", ".."] {
+            let result = tool.execute(
+                &serde_json::json!({
+                    "name": *evil_name,
+                    "description": "test"
+                }),
+                &ctx,
+            );
+            assert!(
+                matches!(result, Err(ToolError::InvalidInput(ref msg)) if msg.contains("path separator") || msg.contains("'..'")),
+                "expected rejection for name '{}', got {:?}",
+                evil_name,
+                result
+            );
+        }
     }
 }

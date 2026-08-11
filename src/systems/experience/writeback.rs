@@ -142,14 +142,20 @@ pub(crate) fn experience_writeback_system(
                 Ok(())
             }
             ExperienceWritebackDestination::SkillCreation => {
-                // TODO(skill-creation): 由 skill_creation_writeback_system 处理 rename 写回。
-                debug!(
-                    event = "SkillCreationWritebackPlaceholder",
+                // SkillCreation writeback 由 skill_creation_writeback_system 处理。
+                // 到达此分支说明路由错误——approval 应将 SkillCreation 目标
+                // 插入 SkillCreationWritebackMessage 而非 spawn ExperienceWritebackRequestMessage。
+                warn!(
+                    event = "SkillCreationWritebackRoutedIncorrectly",
                     candidate_id = %candidate_id,
                     destination = ?decision.destination,
-                    "skill creation writeback placeholder, awaiting skill_creation_writeback_system"
+                    "SkillCreation writeback should not reach experience_writeback_system; \
+                     this indicates a routing error"
                 );
-                Ok(())
+                Err(
+                    "SkillCreation writeback must go through skill_creation_writeback_system"
+                        .to_string(),
+                )
             }
         };
 

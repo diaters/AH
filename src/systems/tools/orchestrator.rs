@@ -1271,6 +1271,19 @@ pub fn handle_tool_action<B: SessionBackend>(
             commands.entity(request_entity).despawn();
         }
         Ok(ToolAction::SubmitSkillCandidate { name, description }) => {
+            // Sanitize skill name: reject path separators and traversal sequences
+            if name.contains('/') || name.contains('\\') || name.contains("..") {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "skill name must not contain path separators or '..'".to_string(),
+                    ),
+                );
+                return;
+            }
+
             // 通过 Query 查找匹配 task_id 的 SkillCreationContext Component
             // （与 WorkItem 同 Entity）。
             let wi_info = context_queries
@@ -1398,18 +1411,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 }
             };
             let mut path_safe = true;
-            if let Ok(entries) = std::fs::read_dir(sandbox_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file()
-                        && let Ok(canonical) = path.canonicalize()
-                        && !canonical.starts_with(&sandbox_canonical)
-                    {
-                        path_safe = false;
-                        break;
-                    }
-                }
-            }
+            check_path_safety_recursive(sandbox_dir, &sandbox_canonical, &mut path_safe);
             if !path_safe {
                 spawn_tool_error(
                     commands,
@@ -1753,18 +1755,58 @@ pub fn spawn_shell_result(
 ///
 /// Skips SKILL.md (handled separately via frontmatter parsing).
 /// For MVP, only top-level files are scanned since `write_skill_file` creates flat files.
-fn scan_sandbox_files(sandbox_dir: &std::path::Path) -> Vec<crate::domain::SkillFileRef> {
-    let mut refs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(sandbox_dir) {
+/// Recursively check that all files in the sandbox resolve to paths under the sandbox directory.
+fn check_path_safety_recursive(
+    current_dir: &std::path::Path,
+    sandbox_canonical: &std::path::Path,
+    path_safe: &mut bool,
+) {
+    if !*path_safe {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(current_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
+            if path.is_dir() {
+                check_path_safety_recursive(&path, sandbox_canonical, path_safe);
+                if !*path_safe {
+                    return;
+                }
+            } else if path.is_file()
+                && let Ok(canonical) = path.canonicalize()
+                && !canonical.starts_with(sandbox_canonical)
+            {
+                *path_safe = false;
+                return;
+            }
+        }
+    }
+}
+
+fn scan_sandbox_files(sandbox_dir: &std::path::Path) -> Vec<crate::domain::SkillFileRef> {
+    let mut refs = Vec::new();
+    scan_sandbox_files_recursive(sandbox_dir, sandbox_dir, &mut refs);
+    refs
+}
+
+/// Recursive helper for scan_sandbox_files.
+fn scan_sandbox_files_recursive(
+    base_dir: &std::path::Path,
+    current_dir: &std::path::Path,
+    refs: &mut Vec<crate::domain::SkillFileRef>,
+) {
+    if let Ok(entries) = std::fs::read_dir(current_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_sandbox_files_recursive(base_dir, &path, refs);
+            } else if path.is_file() {
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy();
                 if file_name == "SKILL.md" {
                     continue;
                 }
                 let relative = path
-                    .strip_prefix(sandbox_dir)
+                    .strip_prefix(base_dir)
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
@@ -1775,7 +1817,6 @@ fn scan_sandbox_files(sandbox_dir: &std::path::Path) -> Vec<crate::domain::Skill
             }
         }
     }
-    refs
 }
 
 /// Infer file role from file extension.

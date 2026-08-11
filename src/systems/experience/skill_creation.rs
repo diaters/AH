@@ -241,6 +241,31 @@ pub(crate) fn skill_creation_writeback_system(
             .join("skills")
             .join(&context.skill_name);
 
+        // 防御性路径安全检查：target_dir 必须在 skills/ 目录下
+        if let (Ok(target_canonical), Ok(skills_canonical)) = (
+            target_dir.canonicalize(),
+            skill_loader
+                .base_dir()
+                .join(&context.agent_name)
+                .join("skills")
+                .canonicalize(),
+        ) && !target_canonical.starts_with(&skills_canonical)
+        {
+            warn!(
+                event = "SkillCreationPathEscape",
+                task_id = %msg.task_id,
+                candidate_id = %msg.candidate_id,
+                skill_name = %context.skill_name,
+                target_dir = ?target_dir,
+                "target directory escapes skills directory, skipping writeback"
+            );
+            if let Some(c) = store.candidates.get_mut(&msg.candidate_id) {
+                c.status = ExperienceCandidateStatus::WritebackFailed;
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         if target_dir.exists() {
             warn!(
                 event = "SkillCreationTargetDirExists",
