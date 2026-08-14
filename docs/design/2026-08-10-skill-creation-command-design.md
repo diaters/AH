@@ -1,12 +1,16 @@
 # `/skill` Slash Command 设计文档
 
-> **状态：当前有效**
+> __状态：当前有效__
 
 ## 1. 背景
 
-AI Harness 已有 skill 体系支持 Agent 的能力注入：Agent 通过 `.harness/assets/agents/<agent>/skills/<skill>/SKILL.md` 加载静态 skill，skill-updater Agent 可在任务结束后根据经验候选更新已有 skill。
+AI Harness 已有 skill 体系支持 Agent 的能力注入：Agent 通过
+`.harness/assets/agents/<agent>/skills/<skill>/SKILL.md` 加载静态 skill，skill-updater Agent
+可在任务结束后根据经验候选更新已有 skill。
 
-但当前缺少**用户主动创建新 skill** 的入口。用户若想为某个 Agent 添加新 skill，只能手动创建 SKILL.md 文件。本设计增加 `/skill <意图描述>` slash command，让用户通过自然语言意图驱动 LLM 为当前任务的 Agent 无中生有生成新 skill。
+但当前缺少__用户主动创建新 skill__ 的入口。用户若想为某个 Agent 添加新 skill，只能手动创建
+SKILL.md 文件。本设计增加 `/skill <意图描述>` slash command，让用户通过自然语言意图驱动
+LLM 为当前任务的 Agent 无中生有生成新 skill。
 
 ## 2. 设计决策汇总
 
@@ -34,7 +38,7 @@ AI Harness 已有 skill 体系支持 Agent 的能力注入：Agent 通过 `.harn
 
 ## 3. 核心数据流
 
-```
+```text
 用户输入: /skill <intent>
     │
     ▼
@@ -100,13 +104,14 @@ skill_creation_writeback_system（新建专用写回）
 #### `src/domain/command.rs`
 
 - `UserCommand` 枚举新增 `CreateSkill { intent: String }` 变体
-- `parse()` 新增 `/skill ` 前缀匹配逻辑
+- `parse()` 新增 `/skill` 前缀匹配逻辑
 
 #### `src/domain/contribution.rs`
 
 - `ExperienceCandidatePayload::Skill` 新增 `is_new: bool` 字段，默认 `false`
 - `ExperienceCandidate::skill()` 构造函数新增 `is_new` 参数（向后兼容：所有现有调用传 `false`）
 - 新增 `SkillCreationContext` Component：
+
   ```rust
   #[derive(Component, Debug, Clone)]
   pub struct SkillCreationContext {
@@ -121,6 +126,7 @@ skill_creation_writeback_system（新建专用写回）
 #### `src/domain/message.rs`
 
 - 新增 `SkillCreationRequestMessage`：
+
   ```rust
   #[derive(Debug, Clone, Component)]
   pub struct SkillCreationRequestMessage {
@@ -136,7 +142,9 @@ skill_creation_writeback_system（新建专用写回）
 - `WorkItemType` 枚举新增 `SkillCreation` 变体
 - `required_tag()` 新增 `SkillCreation => "skill-creator"` 映射
 - `WorkItem` 新增 `skill_creation()` 工厂方法
-  - `multi_turn = true`（C4 修复）：skill-creator 需要多轮工具调用（`read_skill_file` 读已有 skill → `write_skill_file` 写沙盒 → `submit_skill` 提交），与 `skill_update` WorkItem 的 `multi_turn = true` 一致
+  - `multi_turn = true`（C4 修复）：skill-creator 需要多轮工具调用（`read_skill_file` 读已有
+    skill → `write_skill_file` 写沙盒 → `submit_skill` 提交），与 `skill_update` WorkItem 的
+    `multi_turn = true` 一致
 
 ### 4.2 系统层变更
 
@@ -171,17 +179,23 @@ skill_creation_writeback_system（新建专用写回）
 - `SubmitSkillTool`：skill-creator 专用提交工具（S7 修复：Sync 工具，只解析参数返回 `ToolAction`，不执行 I/O——与 `submit_skill_update` 完全对齐）
   - 参数：`name: String`（skill 名称）、`description: String`（skill 描述）
   - 参数校验：`name` 非空、`description` 非空，否则返回 `ToolError::InvalidInput`
-  - 返回 `ToolAction::SubmitSkillCandidate { name, description }`——验证（SKILL.md 存在、frontmatter 合规、路径安全、扫描 file_refs）和 `ExperienceCandidate` 构造由 orchestrator 在主线程执行（与 `submit_skill_update` 的 dry-run 验证同模式）
-  - **依赖 4.10 节**：orchestrator 验证时通过 `SkillCreationContext.sandbox_dir` 获取沙盒路径，该字段由 4.10 节的 dispatch 路径填充。4.10 节修复必须优先于或同步于本工具实施（S3 修复）
+  - 返回 `ToolAction::SubmitSkillCandidate { name, description }`——验证（SKILL.md 存在、
+    frontmatter 合规、路径安全、扫描 file_refs）和 `ExperienceCandidate` 构造由 orchestrator
+    在主线程执行（与 `submit_skill_update` 的 dry-run 验证同模式）
+  - __依赖 4.10 节__：orchestrator 验证时通过 `SkillCreationContext.sandbox_dir` 获取沙盒
+    路径，该字段由 4.10 节的 dispatch 路径填充。4.10 节修复必须优先于或同步于本工具实施
+    （S3 修复）
 
 #### 新增 `src/systems/tools/builtin/write_skill_file.rs`
 
 - `WriteSkillFileTool`：skill-creator 专用文件写入工具（S7 修复：Async 工具，符合"禁止新增 Sync 工具"约束）
   - 参数：`path: String`（相对沙盒路径）、`content: String`
-  - **依赖 4.10 节**：沙盒根路径通过 `ToolContext.current_skill_dir` 获取，该字段由 4.10 节的 dispatch 路径填充。4.10 节修复必须优先于或同步于本工具实施（S3 修复）
+  - __依赖 4.10 节__：沙盒根路径通过 `ToolContext.current_skill_dir` 获取，该字段由 4.10 节的 dispatch 路径填充。4.10 节修复必须优先于或同步于本工具实施（S3 修复）
   - `kind()` override 为 `ToolActionKind::Async`
   - Worker 中执行：从 `ToolContext.current_skill_dir` 获取沙盒根路径 → 路径安全验证（不允许 `../` 逃逸）→ 创建必要的父目录 → 写入文件 → 返回成功/失败
-  - 新增 `ToolEffect::WriteSkillFile { path: String, content: String }` 变体（`src/domain/tool_async.rs`），由 `commit_tool_effects_system` 在主线程落账（文件 I/O 量小，可在 commit 中同步执行）
+  - 新增 `ToolEffect::WriteSkillFile { path: String, content: String }` 变体
+    （`src/domain/tool_async.rs`），由 `commit_tool_effects_system` 在主线程落账（文件 I/O
+    量小，可在 commit 中同步执行）
   - 路径安全验证与后缀白名单一致性：遵循 `ALLOWED_FILE_SUFFIXES`（与 5.8 节一致）
 
 ### 4.4 基础设施层变更
@@ -203,7 +217,7 @@ skill_creation_writeback_system（新建专用写回）
 
 新增 `skill-creator` Agent 声明，并同步修复 skill-updater 的 `read_skill_file` 权限 gap（N2 修复）：
 
-```toml
+````toml
 [[agent]]
 name = "skill-creator"
 tags = ["skill-creator"]
@@ -261,11 +275,13 @@ default_permission = "Deny"
 submit_skill = "Allow"
 write_skill_file = "Allow"
 read_skill_file = "Allow"
-```
+````
 
 #### skill-updater 权限修复（N2）
 
-现有 skill-updater 的 `agents.toml` 配置中未声明 `read_skill_file = "Allow"`，虽然 `skill_update_workitem_system` 将 `read_skill_file` 过滤到了 WorkItem 工具集中，但 Agent 的 `effective_permission` 会在运行时拒绝。此为已有 bug，在本次变更中一并修复：
+现有 skill-updater 的 `agents.toml` 配置中未声明 `read_skill_file = "Allow"`，虽然
+`skill_update_workitem_system` 将 `read_skill_file` 过滤到了 WorkItem 工具集中，但 Agent 的
+`effective_permission` 会在运行时拒绝。此为已有 bug，在本次变更中一并修复：
 
 ```toml
 # skill-updater 现有配置
@@ -281,19 +297,28 @@ read_skill_file = "Allow"   # 新增：修复已有 gap，使 ADR-006 描述的�
 
 #### `src/systems/transform/task_lifecycle.rs`
 
-- **`task_termination_system`** 中增加沙盒清理逻辑（S6 修复：需检查候选状态，避免竞态）：
+- __`task_termination_system`__ 中增加沙盒清理逻辑（S6 修复：需检查候选状态，避免竞态）：
   - 任务从非终态转入终态（Completed/Failed）时，查询带 `SkillCreationContext` 的 WorkItem entity
   - 通过 `SkillCreationContext.task_id` 关联终态 task
   - 从 `ExperienceStore` 查询关联候选的状态，按状态决定清理策略：
-    - 候选已 `Persisted` / `Rejected` / `Discarded` → 删除沙盒目录 + despawn WorkItem entity（writeback 已完成或已拒绝）
-    - 候选仍在 `NeedsUserApproval` → **不清理沙盒、不 despawn WorkItem**（用户确认后 `skill_creation_writeback_system` rename 沙盒到正式目录，rename 成功后沙盒目录已移走，无需额外清理）
-    - 候选仍在 `Submitted` / `GovernancePending` 等（skill-creator 还在执行或候选未到确认环节）→ 删除沙盒目录 + despawn WorkItem entity + 候选置 `Discarded`
-  - **不新增"despawn WorkItem entity"的默认行为**（与现有模式一致：`task_termination_system` 当前不 despawn WorkItem，WorkItem 由各自 completion_system despawn）。仅在上述安全条件下 despawn
+    - 候选已 `Persisted` / `Rejected` / `Discarded` → 删除沙盒目录 + despawn WorkItem
+      entity（writeback 已完成或已拒绝）
+    - 候选仍在 `NeedsUserApproval` → __不清理沙盒、不 despawn WorkItem__（用户确认后
+      `skill_creation_writeback_system` rename 沙盒到正式目录，rename 成功后沙盒目录已移走，
+      无需额外清理）
+    - 候选仍在 `Submitted` / `GovernancePending` 等（skill-creator 还在执行或候选未到确认
+      环节）→ 删除沙盒目录 + despawn WorkItem entity + 候选置 `Discarded`
+  - __不新增"despawn WorkItem entity"的默认行为__（与现有模式一致：`task_termination_system`
+    当前不 despawn WorkItem，WorkItem 由各自 completion_system despawn）。仅在上述安全条件
+    下 despawn
 
-- **`clear_task_system`** 中同样增加沙盒清理逻辑（S4 修复）：
+- __`clear_task_system`__ 中同样增加沙盒清理逻辑（S4 修复）：
   - `/clear` 命令跳过终态处理链路，如果只在 `task_termination_system` 清理，`/clear` 后沙盒会残留
-  - `/clear` 是用户主动取消，语义上更激进：候选无论处于何种状态，都应清理沙盒 + 候选置 `Discarded` + despawn WorkItem
-  - 复用同一候选状态检查逻辑 `cleanup_skill_creation_sandbox(commands, store, sandbox_dir, candidate_status, force_cleanup)`，`clear_task_system` 传入 `force_cleanup = true`
+  - `/clear` 是用户主动取消，语义上更激进：候选无论处于何种状态，都应清理沙盒 + 候选置
+    `Discarded` + despawn WorkItem
+  - 复用同一候选状态检查逻辑
+    `cleanup_skill_creation_sandbox(commands, store, sandbox_dir, candidate_status, force_cleanup)`，
+    `clear_task_system` 传入 `force_cleanup = true`
 
 ### 4.7 ToolAction 扩展
 
@@ -301,9 +326,15 @@ read_skill_file = "Allow"   # 新增：修复已有 gap，使 ADR-006 描述的�
 
 - `ToolAction` 枚举新增 `SubmitSkillCandidate { name: String, description: String }` 变体（S7 修复）
   - 注意：`ToolAction` 定义在 `src/domain/space.rs`，不是 `src/domain/execution.rs`
-  - 变体只携带 LLM 提交的 `name` 和 `description`，不含完整 `ExperienceCandidate`——与 `submit_skill_update` 模式完全对齐（工具只解析参数，验证和候选构造由 orchestrator 执行）
-  - orchestrator 处理此 ToolAction 时：从 `SkillCreationContext.sandbox_dir` 获取沙盒路径 → 执行验证（SKILL.md 存在、frontmatter 合规、路径安全）→ 验证通过后构造完整 `ExperienceCandidate::skill_new(...)` → 扫描沙盒生成 `file_refs` → 更新 `SkillCreationContext.skill_name` → 入队 `ExperienceStore`
-  - 这与 `ToolAction::SubmitSkillUpdate { operations, rationale }` 模式一致：工具只提供 LLM 意图参数，服务端权威数据（skill_id、base_version、sandbox 路径等）由 orchestrator 从 Context 注入
+  - 变体只携带 LLM 提交的 `name` 和 `description`，不含完整 `ExperienceCandidate`——与
+    `submit_skill_update` 模式完全对齐（工具只解析参数，验证和候选构造由 orchestrator 执行）
+  - orchestrator 处理此 ToolAction 时：从 `SkillCreationContext.sandbox_dir` 获取沙盒路径 →
+    执行验证（SKILL.md 存在、frontmatter 合规、路径安全）→ 验证通过后构造完整
+    `ExperienceCandidate::skill_new(...)` → 扫描沙盒生成 `file_refs` → 更新
+    `SkillCreationContext.skill_name` → 入队 `ExperienceStore`
+  - 这与 `ToolAction::SubmitSkillUpdate { operations, rationale }` 模式一致：工具只提供
+    LLM 意图参数，服务端权威数据（skill_id、base_version、sandbox 路径等）由 orchestrator
+    从 Context 注入
 
 ### 4.8 写回路径集成
 
@@ -316,9 +347,13 @@ read_skill_file = "Allow"   # 新增：修复已有 gap，使 ADR-006 描述的�
 #### `src/systems/experience/governance.rs`
 
 - `experience_governance_system` 对 `is_new == true` 的候选：
-  - **插入位置**（N3 修复）：在 `ExperienceKindHint::Skill` 分支入口处、`if is_default` 之前，加 `if is_new` 早返回
-  - `/skill` 命令创建的 WorkItem 任务**没有注入 skill**（创建新 skill，不是执行已有 skill），如果不在此处拦截，`is_new == true` 的候选会走到 `else` 分支（未注入 skill），被路由到 `SkillPackage` 而非 `SkillCreation`
+  - __插入位置__（N3 修复）：在 `ExperienceKindHint::Skill` 分支入口处、`if is_default`
+    之前，加 `if is_new` 早返回
+  - `/skill` 命令创建的 WorkItem 任务__没有注入 skill__（创建新 skill，不是执行已有 skill），
+    如果不在此处拦截，`is_new == true` 的候选会走到 `else` 分支（未注入 skill），被路由到
+    `SkillPackage` 而非 `SkillCreation`
   - 具体代码：
+
     ```rust
     ExperienceKindHint::Skill => {
         // 优先检查 is_new：/skill 命令创建的新 skill 候选
@@ -335,16 +370,22 @@ read_skill_file = "Allow"   # 新增：修复已有 gap，使 ADR-006 描述的�
         }
     }
     ```
+
   - `requires_user_confirmation: true`（与 D5 一致，复用确认流程）
   - 不经过 skill-updater 路由
 
 #### `src/systems/experience/approval.rs`
 
 - `experience_approval_result_system` 处理确认后：
-  - `ExperienceWritebackDestination::SkillCreation` → 将 `SkillCreationWritebackMessage` **insert 到已有 WorkItem entity**（S1/S5 修复），而非 spawn 独立 entity
+  - `ExperienceWritebackDestination::SkillCreation` → 将 `SkillCreationWritebackMessage`
+    __insert 到已有 WorkItem entity__（S1/S5 修复），而非 spawn 独立 entity
   - 而非走 `ExperienceWritebackRequestMessage`（那是 `SkillPackage`/`SkillUpdate` 路径）
-  - insert 到 WorkItem entity 的方式与 `skill_update_completion_system` 消费 `SkillUpdateCompletedMessage` 完全对齐：消息与 `SkillCreationContext` 在同一 entity，可直接通过同 entity 查询 Context
-  - approval system 通过 `task_id` → 遍历 `Query<(Entity, &WorkItem, &SkillCreationContext)>` 找到 WorkItem entity，然后 `commands.entity(wi_entity).insert(SkillCreationWritebackMessage { ... })`
+  - insert 到 WorkItem entity 的方式与 `skill_update_completion_system` 消费
+    `SkillUpdateCompletedMessage` 完全对齐：消息与 `SkillCreationContext` 在同一 entity，
+    可直接通过同 entity 查询 Context
+  - approval system 通过 `task_id` → 遍历 `Query<(Entity, &WorkItem, &SkillCreationContext)>`
+    找到 WorkItem entity，然后 `commands.entity(wi_entity).insert(SkillCreationWritebackMessage
+    { ... })`
 
 #### `src/domain/message.rs`
 
@@ -358,13 +399,16 @@ pub struct SkillCreationWritebackMessage {
 }
 ```
 
-`skill_creation_writeback_system` 消费此消息，通过同 entity 查询 `SkillCreationContext`（与 `skill_update_completion_system` 消费 `SkillUpdateCompletedMessage` 同模式：消息由 approval system insert 到 WorkItem entity 上，该 entity 已有 `SkillCreationContext + WorkItem`）。
+`skill_creation_writeback_system` 消费此消息，通过同 entity 查询 `SkillCreationContext`
+（与 `skill_update_completion_system` 消费 `SkillUpdateCompletedMessage` 同模式：消息由
+approval system insert 到 WorkItem entity 上，该 entity 已有 `SkillCreationContext + WorkItem`）。
 
 ### 4.9 Orchestrator 集成
 
 #### `src/systems/tools/orchestrator.rs`
 
-- `handle_tool_action` 新增 `ToolAction::SubmitSkillCandidate` 匹配臂（S7 修复：与 `SubmitSkillUpdate` 完全对齐，工具只提供参数，验证和候选构造由 orchestrator 执行）：
+- `handle_tool_action` 新增 `ToolAction::SubmitSkillCandidate` 匹配臂（S7 修复：与
+  `SubmitSkillUpdate` 完全对齐，工具只提供参数，验证和候选构造由 orchestrator 执行）：
   1. 从 `SkillCreationContext` 读取 `sandbox_dir`
   2. 验证 `SKILL.md` 存在
   3. 解析 frontmatter 验证 `name` 非空、`description` 非空、`version == 1`
@@ -375,14 +419,18 @@ pub struct SkillCreationWritebackMessage {
   8. 构造完整 `ExperienceCandidate::skill_new(...)`（`is_new: true`）
   9. 将候选入队到 `ExperienceStore`
   10. 推入 `PendingExperienceHooks`
-  11. 更新 `SkillCreationContext.skill_name`：`commands.entity(wi_entity).insert(SkillCreationContext { skill_name: action.name.clone(), ..context.clone() })`（C5 修复）
+  11. 更新 `SkillCreationContext.skill_name`：
+      `commands.entity(wi_entity).insert(SkillCreationContext { skill_name: action.name.clone(),
+      ..context.clone() })`（C5 修复）
   12. spawn `ToolExecutionResultMessage`（成功信息）
   13. despawn 工具调用请求实体
 
 - `context_queries` 参数类型扩展：
   - 现有：`Query<(Entity, Option<&ProfileGenerationContext>, Option<&SkillUpdateContext>, &WorkItem)>`
   - 新增：`Query<(Entity, Option<&ProfileGenerationContext>, Option<&SkillUpdateContext>, Option<&SkillCreationContext>, &WorkItem)>`
-  - `submit_skill` 工具不需要从 `SkillCreationContext` 读取服务端权威字段（name/description 由 LLM 直接传入），但 orchestrator 需要确认 WorkItem entity 上存在 `SkillCreationContext` 作为前置条件
+  - `submit_skill` 工具不需要从 `SkillCreationContext` 读取服务端权威字段（name/description
+    由 LLM 直接传入），但 orchestrator 需要确认 WorkItem entity 上存在 `SkillCreationContext`
+    作为前置条件
 
 ### 4.10 ToolContext.current_skill_dir 填充
 
@@ -421,6 +469,7 @@ pub struct SkillCreationWritebackMessage {
 #### `src/systems/tools/mod.rs`
 
 - 在工具注册函数中新增：
+
   ```rust
   executors.register(Box::new(SubmitSkillTool));
   executors.register(Box::new(WriteSkillFileTool));
@@ -435,7 +484,13 @@ pub struct SkillCreationWritebackMessage {
 - `.sandbox` 前缀确保 `SkillLoader::load_skills()` 不误加载未完成的 skill
 - `SkillLoader` 在 `load_skills()` 的 `filter_map` 中增加 `.starts_with(".")` 过滤
 
-**沙盒目录命名**：`skill_creation_workitem_system` 创建沙盒时使用临时目录名（如 `_draft_<timestamp>`），因为此时 LLM 尚未确定 skill 名称。LLM 通过 `submit_skill(name, description)` 提交时传入最终 `name`。orchestrator 在处理 `ToolAction::SubmitSkillCandidate` 验证通过后，通过 `commands.entity(wi_entity).insert()` 将 `SkillCreationContext.skill_name` 更新为 LLM 提交的名称（C5 修复）。`sandbox_dir` 保持不变（临时名）。最终 rename 时以 `SkillCreationContext.skill_name` 为准，与沙盒目录名无关。
+__沙盒目录命名__：`skill_creation_workitem_system` 创建沙盒时使用临时目录名（如
+`_draft_<timestamp>`），因为此时 LLM 尚未确定 skill 名称。LLM 通过
+`submit_skill(name, description)` 提交时传入最终 `name`。orchestrator 在处理
+`ToolAction::SubmitSkillCandidate` 验证通过后，通过 `commands.entity(wi_entity).insert()`
+将 `SkillCreationContext.skill_name` 更新为 LLM 提交的名称（C5 修复）。`sandbox_dir`
+保持不变（临时名）。最终 rename 时以 `SkillCreationContext.skill_name` 为准，与沙盒目录名
+无关。
 
 ### 5.2 ExperienceCandidate 的 is_new 字段
 
@@ -456,7 +511,7 @@ pub enum ExperienceCandidatePayload {
 
 所有现有调用点传入 `false`，`submit_skill` 工具传入 `true`。
 
-**Serde 兼容性**：`is_new` 字段必须加 `#[serde(default)]`，否则反序列化已有数据（不含此字段）会失败：
+__Serde 兼容性__：`is_new` 字段必须加 `#[serde(default)]`，否则反序列化已有数据（不含此字段）会失败：
 
 ```rust
 Skill {
@@ -469,21 +524,30 @@ Skill {
 }
 ```
 
-**模式匹配兼容**：`ExperienceCandidatePayload::Skill` 现有约 8+ 处解构模式（`writeback.rs`、`consolidation.rs`、`skill_update.rs`、`profile_generation.rs`、`approval.rs`、`orchestrator.rs`、`list_experience_candidates.rs`、`contribution.rs`）。新增 `is_new` 字段后，所有 `Skill { name, description, ... }` 解构必须使用 `..` 忽略或显式添加 `is_new`。推荐统一使用 `..` 忽略，减少后续变更影响面。
+__模式匹配兼容__：`ExperienceCandidatePayload::Skill` 现有约 8+ 处解构模式（`writeback.rs`、
+`consolidation.rs`、`skill_update.rs`、`profile_generation.rs`、`approval.rs`、
+`orchestrator.rs`、`list_experience_candidates.rs`、`contribution.rs`）。新增 `is_new` 字段后，
+所有 `Skill { name, description, ... }` 解构必须使用 `..` 忽略或显式添加 `is_new`。推荐
+统一使用 `..` 忽略，减少后续变更影响面。
 
-**构造函数策略**：保留现有 `ExperienceCandidate::skill()` 签名不变（`is_new` 默认 `false`），新增 `ExperienceCandidate::skill_new()` 构造函数（`is_new` 为 `true`）。避免修改所有现有调用点。
+__构造函数策略__：保留现有 `ExperienceCandidate::skill()` 签名不变（`is_new` 默认 `false`），
+新增 `ExperienceCandidate::skill_new()` 构造函数（`is_new` 为 `true`）。避免修改所有现有
+调用点。
 
 确认后的治理系统根据 `is_new` 分支：
+
 - `is_new == false` → 走现有 skill-updater 写回路径
 - `is_new == true` → 走新建 skill rename 写回路径
 
 ### 5.3 格式验证规则
 
-验证由 orchestrator 在处理 `ToolAction::SubmitSkillCandidate` 时执行（S7 修复：与 `submit_skill_update` 的 dry-run 验证同模式），不在 `submit_skill` 工具中执行：
+验证由 orchestrator 在处理 `ToolAction::SubmitSkillCandidate` 时执行（S7 修复：与
+`submit_skill_update` 的 dry-run 验证同模式），不在 `submit_skill` 工具中执行：
 
-1. **SKILL.md 存在**：`sandbox_dir/SKILL.md` 必须存在
-2. **Frontmatter 合规**：解析 frontmatter，`name` 非空、`description` 非空、`version == 1`（新建 skill 版本固定为 1，避免 LLM 误传 `version: 2`；C3 修复）
-3. **路径安全**：扫描沙盒目录下所有文件，验证 canonical path 在沙盒目录内
+1. __SKILL.md 存在__：`sandbox_dir/SKILL.md` 必须存在
+2. __Frontmatter 合规__：解析 frontmatter，`name` 非空、`description` 非空、`version == 1`
+   （新建 skill 版本固定为 1，避免 LLM 误传 `version: 2`；C3 修复）
+3. __路径安全__：扫描沙盒目录下所有文件，验证 canonical path 在沙盒目录内
 
 验证失败时 orchestrator spawn `ToolExecutionResultMessage`（含 `ToolError` 信息），LLM 可据此修复后重新调用 `submit_skill`。
 
@@ -564,11 +628,15 @@ let current_skill_dir = if let Some(wi_entity) = request.work_item_entity {
 
 ### 5.8 read_skill_file 与 write_skill_file 的后缀白名单一致性
 
-`ReadSkillFileTool` 使用 `ALLOWED_FILE_SUFFIXES`（`.md`, `.py`, `.sh`, `.toml`, `.txt`, `.json`）限制可读文件后缀。`WriteSkillFileTool` 设计为无后缀限制（D10 决策：不加后缀白名单）。
+`ReadSkillFileTool` 使用 `ALLOWED_FILE_SUFFIXES`（`.md`, `.py`, `.sh`, `.toml`, `.txt`,
+`.json`）限制可读文件后缀。`WriteSkillFileTool` 设计为无后缀限制（D10 决策：不加后缀白名单）。
 
 潜在问题：skill-creator 写入 `.yaml` 文件后，无法用 `read_skill_file` 读回。
 
-解决方案：`WriteSkillFileTool` 的路径验证使用与 `ReadSkillFileTool` 相同的 `ALLOWED_FILE_SUFFIXES` 白名单。虽然 D10 决策格式验证不加后缀白名单，但工具级限制是合理的——写入和读取应保持一致。如果 `.yaml` 不在白名单中，skill-creator 既不能写也不能读，语义一致。若后续需要支持更多后缀，在 `ALLOWED_FILE_SUFFIXES` 中统一添加即可。
+解决方案：`WriteSkillFileTool` 的路径验证使用与 `ReadSkillFileTool` 相同的
+`ALLOWED_FILE_SUFFIXES` 白名单。虽然 D10 决策格式验证不加后缀白名单，但工具级限制是
+合理的——写入和读取应保持一致。如果 `.yaml` 不在白名单中，skill-creator 既不能写也不能读，
+语义一致。若后续需要支持更多后缀，在 `ALLOWED_FILE_SUFFIXES` 中统一添加即可。
 
 ## 6. 文件变更清单
 
@@ -581,16 +649,16 @@ let current_skill_dir = if let Some(wi_entity) = request.work_item_entity {
 | `src/domain/space.rs` | 修改 | `ToolAction` 新增 `SubmitSkillCandidate { name, description }`（非 `execution.rs`） |
 | `src/domain/tool_async.rs` | 修改 | `ToolEffect` 新增 `WriteSkillFile` 变体（S7 修复） |
 | `src/systems/command.rs` | 修改 | 新增 `CreateSkill` 分支处理 |
-| `src/systems/experience/skill_creation.rs` | **新增** | `skill_creation_workitem_system` + `skill_creation_writeback_system` |
-| `src/systems/tools/builtin/submit_skill.rs` | **新增** | `SubmitSkillTool` |
-| `src/systems/tools/builtin/write_skill_file.rs` | **新增** | `WriteSkillFileTool` |
+| `src/systems/experience/skill_creation.rs` | __新增__ | workitem 创建与 writeback 写回系统 |
+| `src/systems/tools/builtin/submit_skill.rs` | __新增__ | `SubmitSkillTool` |
+| `src/systems/tools/builtin/write_skill_file.rs` | __新增__ | `WriteSkillFileTool` |
 | `src/systems/tools/builtin/mod.rs` | 修改 | 注册新工具 |
 | `src/systems/tools/orchestrator.rs` | 修改 | `SubmitSkillCandidate` 匹配臂 + `context_queries` 扩展 |
 | `src/systems/tools/dispatch.rs` | 修改 | 从 `SkillCreationContext` 填充 `current_skill_dir` |
 | `src/systems/tools/async_dispatch.rs` | 修改 | 同步填充 `current_skill_dir` |
 | `src/systems/transform/task_lifecycle.rs` | 修改 | 终态清理沙盒 |
 | `src/systems/experience/governance.rs` | 修改 | `is_new == true` 路由到 `SkillCreation` |
-| `src/systems/experience/approval.rs` | 修改 | `SkillCreation` 目标 insert `SkillCreationWritebackMessage` 到 WorkItem entity |
+| `src/systems/experience/approval.rs` | 修改 | SkillCreation 目标 insert 写回消息到 WorkItem entity |
 | `src/infrastructure/skills/loader.rs` | 修改 | `load_skills()` 和 `build_registry()` 均跳过 `.sandbox` |
 | `agents.toml` | 修改 | 新增 `skill-creator` Agent 声明 + skill-updater `read_skill_file` 权限修复 |
 | `src/plugins/execution.rs` | 修改 | 注册新系统到 `HarnessSet::Execution` |
@@ -606,20 +674,23 @@ let current_skill_dir = if let Some(wi_entity) = request.work_item_entity {
 - `SkillLoader::load_skills()` 和 `SkillLoader::build_registry()` 均跳过 `.sandbox` 目录
 - `is_new == true` 的 Skill 候选在 governance system 中路由到 `ExperienceWritebackDestination::SkillCreation`（N3 验证）
 - `current_skill_dir` 在 dispatch/async_dispatch 路径从 `SkillCreationContext`/`SkillUpdateContext` 正确填充（4.10 节验证）
-- orchestrator 处理 `SubmitSkillCandidate` 时的验证逻辑：缺少 SKILL.md → 错误；frontmatter 不合规 → 错误；`version != 1` → 错误；路径逃逸 → 错误；验证通过 → 构造完整 `ExperienceCandidate`（S7 验证）
+- orchestrator 处理 `SubmitSkillCandidate` 时的验证逻辑：缺少 SKILL.md → 错误；frontmatter
+  不合规 → 错误；`version != 1` → 错误；路径逃逸 → 错误；验证通过 → 构造完整
+  `ExperienceCandidate`（S7 验证）
 - `SkillRegistry::upsert()` 后新 skill 可被 `SkillRegistry::get()` 查到（D17 验证）
 
 ### 7.2 集成测试
 
-- **完整创建流程**：`/skill intent` → WorkItem 创建 → skill-creator 执行 → ExperienceCandidate 生成 → 用户确认 → rename 写回 → SkillRegistry 注册
-- **无活跃任务**：`/skill intent` → 报错提示
-- **空意图**：`/skill` → 报错提示
-- **同名冲突**：已有 skill 同名 → 写回拒绝
-- **验证失败重试**：submit_skill 缺少 SKILL.md → 错误反馈 → LLM 修复后重新提交
-- **沙盒清理（终态）**：任务完成/失败 → 沙盒目录被删除
-- **沙盒清理与候选确认竞态**（S6）：候选在 `NeedsUserApproval` 状态时任务终态 → 沙盒不被清理，用户确认后 writeback 仍可成功
-- **沙盒清理（/clear）**：任务 `/clear` → 沙盒目录被删除，候选置 `Discarded`（S4 验证）
-- **skill-updater read_skill_file**：skill-updater 调用 `read_skill_file` 成功读取子文件（N2 修复后验证）
+- __完整创建流程__：`/skill intent` → WorkItem 创建 → skill-creator 执行 →
+  ExperienceCandidate 生成 → 用户确认 → rename 写回 → SkillRegistry 注册
+- __无活跃任务__：`/skill intent` → 报错提示
+- __空意图__：`/skill` → 报错提示
+- __同名冲突__：已有 skill 同名 → 写回拒绝
+- __验证失败重试__：submit_skill 缺少 SKILL.md → 错误反馈 → LLM 修复后重新提交
+- __沙盒清理（终态）__：任务完成/失败 → 沙盒目录被删除
+- __沙盒清理与候选确认竞态__（S6）：候选在 `NeedsUserApproval` 状态时任务终态 → 沙盒不被清理，用户确认后 writeback 仍可成功
+- __沙盒清理（/clear）__：任务 `/clear` → 沙盒目录被删除，候选置 `Discarded`（S4 验证）
+- __skill-updater read_skill_file__：skill-updater 调用 `read_skill_file` 成功读取子文件（N2 修复后验证）
 
 ### 7.3 手动验证
 
