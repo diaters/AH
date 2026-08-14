@@ -25,7 +25,9 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   持久 Agent 直接吸收子任务经验（Skill → skill-updater WorkItem / Knowledge → 长期记忆）；
   skill-updater Agent 通过 `submit_skill_update` 工具提交结构化 diff（8 种 operation：
   二级/三级标题级 + `replace_body` 兜底，post-apply `validate_skill_structure` 校验），
-  `skill_update_completion_system` apply 到 SKILL.md 并备份历史版本
+  `skill_update_completion_system` apply 到 SKILL.md 并备份历史版本；
+  `/skill <意图描述>` 命令由 skill-creator Agent 在沙盒中生成新 skill，用户确认后
+  rename 原子写回 Agent 的 Skill Package
 - 插件系统：Rhai 脚本扩展，20 个 hook 点，支持贡献工具、技能和 Agent
 - IM 通道：Telegram（长轮询、白名单、媒体附件）+ QQ（WebSocket Gateway、OAuth2、
   富媒体），跨通道隔离，出向-自动回执

@@ -272,6 +272,18 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `candidate_payload_text` 输出显式 `[候选类型：Knowledge/Skill]` 前缀，与 prompt 中
   `candidate_kind_label` 一致，避免 LLM 在长候选中丢失类型语义
 
+##### `/skill` 命令：Skill 创建
+
+- `/skill <意图描述>` slash command：为活跃任务的 Agent 无中生有创建新 skill
+  （`UserCommand::CreateSkill`）；空意图或无活跃任务时拒绝并提示 usage
+- 执行由专用 `skill-creator` Agent 承担（声明在 `agents.toml.example`，tags `skill-creator`，
+  工具白名单：`submit_skill` / `write_skill_file` / `read_skill_file`）
+- 创作过程在沙盒目录 `.harness/assets/agents/<agent>/skills/.sandbox/<skill_name>/` 内进行，
+  随任务终态或 `/clear` 自动清理；`SkillLoader` 扫描时过滤 `.sandbox` 目录
+- `submit_skill` 提交后构造 `ExperienceCandidatePayload::Skill { is_new: true }`，经
+  `SkillCreation` 目的地 + 用户确认流程，确认后由 `skill_creation_writeback_system`
+  rename 原子写回正式 skill 目录并重建 `SkillRegistry`（同名冲突拒绝）
+
 ### 待完善
 
 - 父 Agent 审批仍是 MVP 自动通过实现，需要替换为真实 LLM 审查
