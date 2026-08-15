@@ -366,3 +366,32 @@ fn build_registry_snapshot(registry: &ScheduledTaskRegistry) -> ScheduledTaskReg
             .collect(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// 防止硬编码 None 回归：本次 bug 根因是 current_skill_dir 硬编码为 None。
+    /// 此测试不验证行为（行为由 skill_dir_resolver 单元测试覆盖），
+    /// 仅作为"防止硬编码回归"的额外防线。
+    #[test]
+    fn async_dispatch_does_not_hardcode_current_skill_dir_none() {
+        let src = include_str!("async_dispatch.rs");
+        // 只检查 OwnedToolContext 初始化块中的赋值
+        // 查找 current_skill_dir 后面紧跟冒号(字段初始化语法)
+        for (i, line) in src.lines().enumerate() {
+            if line.contains("current_skill_dir:")
+                && !line.trim().starts_with("//")
+                && !line.contains("此测试")
+            {
+                // 允许字段名出现在注释或测试说明中,但不允许字段初始化为 None
+                if line.contains(": None,") || line.contains(": None }") {
+                    panic!(
+                        "Line {}: current_skill_dir must be resolved via resolve_skill_dir_from_context, \
+                         not hardcoded None. Found: {}",
+                        i + 1,
+                        line.trim()
+                    );
+                }
+            }
+        }
+    }
+}
