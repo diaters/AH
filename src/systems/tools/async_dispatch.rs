@@ -30,12 +30,14 @@ use crate::{
     contracts::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
-        PermissionAction, PermissionAuditContext, PermissionSource, ScheduledTaskInfoSnapshot,
-        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
+        PermissionAction, PermissionAuditContext, PermissionSource, ProfileGenerationContext,
+        ScheduledTaskInfoSnapshot, ScheduledTaskRegistrySnapshot, SkillCreationContext,
+        SkillUpdateContext, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
         ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
-        ToolWorkerOutput, ToolWorkerPayload,
+        ToolWorkerOutput, ToolWorkerPayload, WorkItem,
     },
     ecs::EntityIndex,
+    infrastructure::skills::SkillLoader,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
 };
 
@@ -72,9 +74,24 @@ pub fn async_tool_dispatch_system(
     scheduler_state: Option<Res<SchedulerState>>,
     scheduled_registry: Option<Res<ScheduledTaskRegistry>>,
     experience_store: Option<Res<crate::domain::ExperienceStore>>,
-    frontend_registry: Option<Res<FrontendRegistry>>,
+    // 合并 frontend_registry / skill_loader / context_queries 为单 SystemParam，
+    // 规避 Bevy 单 system 16 参数上限；三者都是 async 路径新增的依赖。
+    skill_context: (
+        Option<Res<FrontendRegistry>>,
+        Option<Res<SkillLoader>>,
+        Query<(
+            Entity,
+            Option<&ProfileGenerationContext>,
+            Option<&SkillUpdateContext>,
+            Option<&SkillCreationContext>,
+            &WorkItem,
+        )>,
+    ),
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
+    let frontend_registry = skill_context.0;
+    let skill_loader = skill_context.1;
+    let context_queries = skill_context.2;
     for (entity, request) in &requests {
         // 等待确认的请求不归这里管（Confirm 路径先行）
         if request.pending_confirmation_id.is_some() {
@@ -173,6 +190,20 @@ pub fn async_tool_dispatch_system(
             .get_task(&task_id)
             .and_then(|e| tasks.get(e).ok())
             .and_then(|t| t.origin_channel.clone());
+
+        // 从 WorkItem entity 解析当前 skill 目录
+        let (creation_ctx, update_ctx) = request
+            .work_item_entity
+            .and_then(|wi_entity| context_queries.get(wi_entity).ok())
+            .map(|(_, _, update_ctx, creation_ctx, _)| (creation_ctx, update_ctx))
+            .unwrap_or((None, None));
+
+        let current_skill_dir = super::skill_dir_resolver::resolve_skill_dir_from_context(
+            creation_ctx,
+            update_ctx,
+            skill_loader.as_deref(),
+        );
+
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state
                 .as_deref()
@@ -188,7 +219,7 @@ pub fn async_tool_dispatch_system(
             experience_candidates,
             current_task_id: Some(task_id),
             current_origin_channel,
-            current_skill_dir: None,
+            current_skill_dir,
             cancel: cancel.clone(),
         };
 
