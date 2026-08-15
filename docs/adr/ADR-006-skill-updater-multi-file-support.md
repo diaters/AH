@@ -173,6 +173,29 @@ templates/triage_report.md (0.5KB)
 - __路径穿越__：通过 `validate_skill_file_path` 沙箱校验 + 后缀白名单缓解
 - __LLM 误用 replace_file__：通过 prompt 约束 + apply 阶段拒绝 `replace_file("SKILL.md")` 双重防护
 - __部分 apply 后回滚延迟__：目录级回滚是 O(文件数) 的复制操作，但 skill 目录通常 < 20 个文件
+- __三源工具真相（已知约束，2026-08-15 发现）__：skill-creator 工具能力声明存在
+  三个独立真相源，任一不一致即产生腐化：
+
+  1. `WorkItem.input.context.tools`（由各 workitem_system 手动构造，决定 LLM
+     看到的工具列表）
+  2. 全局 `SpaceToolRegistry.required_tag`（决定运行时 tag 校验是否通过）
+  3. `agents.toml` 的 `[agent.tools]` 权限声明（决定 `effective_permission`，
+     但被 `required_tag` 检查前置覆盖）
+
+  典型 manifestation：workitem_system 在 prompt 工具列表中加入了全局 registry
+  限制 tag 的工具 → LLM 被广告引导调用 → 运行时被 `ToolTagDenied` 拒绝；
+  或 `[agent.tools]` 声明了 `Allow` 但因 `required_tag` 不匹配而永不生效（死配置）。
+
+  当前缓解：各 workitem_system 构造 prompt 工具列表时，需人工核对工具的
+  `required_tag` 与目标 Agent 的 tags 是否匹配；`[agent.tools]` 不应为受限 tag
+  工具声明权限。skill-creator 已在本次修复中从三处移除 `read_skill_file` 暴露
+  （prompt 工具列表 / system_prompt 注释 / `[agent.tools]` 权限）。
+
+  根治方向（单独立项）：workitem_system 应从全局 `SpaceToolRegistry` 按
+  Agent tags 自动筛选可用工具，而非手动构造工具列表；`[agent.tools]` 应仅
+  对无 `required_tag` 限制的工具声明权限，受限 tag 工具的权限由 tag 校验统一
+  决定。此改造影响所有 WorkItem 类型（SkillCreation / SkillUpdate /
+  ProfileGeneration / ExperienceCollection），需单独立项设计。
 
 ## 关联文件
 
