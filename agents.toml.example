@@ -184,4 +184,5 @@ model = "deepseek-chat"
 default_permission = "Deny"
 submit_skill = "Allow"
 write_skill_file = "Allow"
-read_skill_file = "Allow"
+# read_skill_file 已移除：required_tag = "skill-updater" 会让此声明永不生效，
+# 且 skill-creator 不应具备 sibling 文件读取能力。参见 ADR-006 "三源工具真相"。
