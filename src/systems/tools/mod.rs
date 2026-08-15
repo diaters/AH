@@ -34,7 +34,7 @@ pub use result::tool_result_system;
 pub use tool_called_hook::on_tool_called_hook_system;
 pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
-pub use skill_dir_resolver::resolve_current_skill_dir;
+pub use skill_dir_resolver::resolve_skill_dir_from_context;
 
 use crate::domain::{
     BuiltinToolExecutors, SpaceToolRegistry, ToolDefinition, ToolExecutorKind, ToolPermission,
