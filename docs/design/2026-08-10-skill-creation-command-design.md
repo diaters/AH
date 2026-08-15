@@ -57,7 +57,7 @@ skill_creation_workitem_system（消费 request）
     │ 2. 从 SkillRegistry 获取已有 skill 列表
     │ 3. 从 Agent 组件获取 profile
     │ 4. 构造 prompt（意图 + 已有 skill 列表 + SKILL.md 模板 + agent profile）
-    │ 5. 从 SpaceToolRegistry 过滤工具（submit_skill + write_skill_file + read_skill_file）
+    │ 5. 从 SpaceToolRegistry 过滤工具（submit_skill + write_skill_file）
     │ 6. 创建 WorkItem::skill_creation(...)
     │ 7. 附加 SkillCreationContext + PendingDispatch
     │
@@ -70,7 +70,6 @@ dispatch_system
     ▼
 skill-creator Agent 执行
     │ LLM 自由创建文件（调用 write_skill_file 写入沙盒）
-    │ LLM 调用 read_skill_file 读取已有 skill
     │ LLM 调用 submit_skill(name, description) 提交
     │
     ▼

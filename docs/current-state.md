@@ -277,7 +277,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `/skill <意图描述>` slash command：为活跃任务的 Agent 无中生有创建新 skill
   （`UserCommand::CreateSkill`）；空意图或无活跃任务时拒绝并提示 usage
 - 执行由专用 `skill-creator` Agent 承担（声明在 `agents.toml.example`，tags `skill-creator`，
-  工具白名单：`submit_skill` / `write_skill_file` / `read_skill_file`）
+  工具白名单：`submit_skill` / `write_skill_file`）
 - 创作过程在沙盒目录 `.harness/assets/agents/<agent>/skills/.sandbox/<skill_name>/` 内进行，
   随任务终态或 `/clear` 自动清理；`SkillLoader` 扫描时过滤 `.sandbox` 目录
 - `submit_skill` 提交后构造 `ExperienceCandidatePayload::Skill { is_new: true }`，经
