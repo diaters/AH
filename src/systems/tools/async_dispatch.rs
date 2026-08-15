@@ -58,7 +58,7 @@ use super::ingest_tool_results::build_scheduler_snapshot;
 /// **权限检查条件性**：`registry` / `agents` 为 `Option`/`Query`——测试世界可能
 /// 不装 `SpaceToolRegistry` 或不 spawn `Agent`，此时跳过权限检查直接认领
 /// （测试工具通常用 `Allow` 权限，生产世界始终装齐两资源）。
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn async_tool_dispatch_system(
     mut commands: Commands,
     runtime: Res<AsyncRuntime>,

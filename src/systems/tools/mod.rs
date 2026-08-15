@@ -13,9 +13,9 @@ mod confirmation;
 mod dispatch;
 mod effect_commit;
 mod ingest_tool_results;
-mod skill_dir_resolver;
 mod orchestrator;
 mod result;
+mod skill_dir_resolver;
 mod tool_called_hook;
 mod tool_returned_hook;
 mod waiting;
@@ -31,10 +31,10 @@ pub use dispatch::tool_dispatch_system;
 pub use effect_commit::commit_tool_effects_system;
 pub use ingest_tool_results::ingest_tool_results_system;
 pub use result::tool_result_system;
+pub use skill_dir_resolver::resolve_skill_dir_from_context;
 pub use tool_called_hook::on_tool_called_hook_system;
 pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
-pub use skill_dir_resolver::resolve_skill_dir_from_context;
 
 use crate::domain::{
     BuiltinToolExecutors, SpaceToolRegistry, ToolDefinition, ToolExecutorKind, ToolPermission,

@@ -253,10 +253,9 @@ pub fn tool_dispatch_system(
                 );
 
                 // 从 Query 提取 context 数据,再调用共享函数解析 skill 目录
-                let (creation_ctx, update_ctx) = request.work_item_entity
-                    .and_then(|wi_entity| {
-                        context_queries.get(wi_entity).ok()
-                    })
+                let (creation_ctx, update_ctx) = request
+                    .work_item_entity
+                    .and_then(|wi_entity| context_queries.get(wi_entity).ok())
                     .map(|(_, _, update_ctx, creation_ctx, _)| (creation_ctx, update_ctx))
                     .unwrap_or((None, None));
 

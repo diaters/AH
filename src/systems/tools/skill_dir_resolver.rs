@@ -75,7 +75,10 @@ mod tests {
         // 预创建 skill 目录结构，确保 parent() 有意义
         let skill_id = SkillId::new("test-agent", "test-skill");
         std::fs::create_dir_all(
-            tmp.path().join("test-agent").join("skills").join("test-skill"),
+            tmp.path()
+                .join("test-agent")
+                .join("skills")
+                .join("test-skill"),
         )
         .unwrap();
         let update_ctx = SkillUpdateContext {
@@ -94,7 +97,10 @@ mod tests {
         assert_eq!(result, Some(expected));
         // S1 回归防护：显式断言非空 PathBuf（旧 unwrap_or_default 会返回空路径）
         assert!(
-            result.as_ref().map(|p| !p.as_os_str().is_empty()).unwrap_or(false),
+            result
+                .as_ref()
+                .map(|p| !p.as_os_str().is_empty())
+                .unwrap_or(false),
             "returned path must be non-empty, got {:?}",
             result
         );
@@ -131,7 +137,8 @@ mod tests {
         };
         let tmp = TempDir::new().unwrap();
         let loader = SkillLoader::new(tmp.path().to_path_buf());
-        let result = resolve_skill_dir_from_context(Some(&creation_ctx), Some(&update_ctx), Some(&loader));
+        let result =
+            resolve_skill_dir_from_context(Some(&creation_ctx), Some(&update_ctx), Some(&loader));
         // 两个 context 同时存在（防御性测试，正常流程不应发生）
         // 优先返回 SkillCreationContext 的 sandbox_dir
         assert_eq!(result, Some(sandbox));
