@@ -136,6 +136,12 @@ read_skill_file = "Allow"
 name = "skill-creator"
 tags = ["skill-creator"]
 description = "技能创建专家，根据用户意图为指定 Agent 设计并生成新 skill"
+# NOTE: system_prompt 中提到的 read_skill_file 在当前实现中对 skill-creator 不可用
+# （required_tag = "skill-updater"）。skill-creator 的 prompt 工具列表由
+# skill_creation_workitem_system 动态构造，不含 read_skill_file。
+# 此 system_prompt 表述为历史遗留，未来 skill-creator 若需读取 sibling 文件能力，
+# 应新增 skill-creator 专用的 read 工具变体，而非复用 skill-updater 的工具。
+# 参见 ADR-006 "三源工具真相" 约束记录。
 system_prompt = """\
 你是一名技能创建专家。根据用户的意图描述，为指定 Agent 创建新 skill。
 
