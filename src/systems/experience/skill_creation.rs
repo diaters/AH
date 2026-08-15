@@ -68,7 +68,7 @@ pub(crate) fn skill_creation_workitem_system(
         let prompt = format!(
             "## 任务\n\n根据以下意图创建新的 skill。\n\n\
              ## 用户意图\n\n{}\n\n\
-             ## 现有 skill 列表\n\n{}\n\n\
+             ## 现有 skill 列表（仅用于避免重名，无需读取完整内容）\n\n{}\n\n\
              ## SKILL.md 模板规范\n\n\
              SKILL.md 使用 YAML frontmatter + Markdown body 格式：\n\n\
              ```markdown\n\
@@ -91,9 +91,10 @@ pub(crate) fn skill_creation_workitem_system(
              - 可包含其他 section（如 ## Examples、## Constraints）\n\
              - 指令应清晰、可操作、避免歧义\n\n\
              ## 工作流程\n\n\
-             1. 使用 read_skill_file 读取现有 skill 文件（如需参考格式）\n\
-             2. 使用 write_skill_file 创建 SKILL.md 文件\n\
-             3. 调用 submit_skill 提交创建结果\n\n\
+             1. 参考下方\"SKILL.md 模板规范\"和\"现有 skill 列表\"，构思新 skill 的结构\n\
+             2. 使用 write_skill_file 创建 SKILL.md 文件（path 参数填 \"SKILL.md\"）\n\
+             3. 如需辅助文件（脚本、模板等），继续使用 write_skill_file 创建\n\
+             4. 调用 submit_skill 提交创建结果（name + description）\n\n\
              ## 注意事项\n\n\
              - skill name 不能与现有 skill 重复\n\
              - 文件路径相对于当前 sandbox 目录\n\
