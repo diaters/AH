@@ -286,6 +286,42 @@ mod tests {
         // 空分组
         assert_eq!(compressible_entry_count(&[], 2), 0);
     }
+
+    #[test]
+    fn drain_compressed_groups_removes_only_leading_groups() {
+        let mut stm = log_scenario_stm();
+        let tokens_before = stm.estimated_tokens;
+
+        // 摘要完成后 drain（preserve=2 默认配置）：仅移除组 0 的 1 个 entry。
+        // 与完成端流程一致：drain 后由 recalculate_tokens 反映 token 下降
+        let removed = stm.drain_compressed_groups(2);
+        stm.recalculate_tokens();
+        assert_eq!(removed, 1);
+        assert_eq!(stm.entries.len(), 3);
+        assert!(stm.estimated_tokens < tokens_before);
+
+        // 二次 drain：保护窗口已满，无进展 → 触发端将停止，循环终止
+        assert_eq!(stm.drain_compressed_groups(2), 0);
+        assert_eq!(stm.entries.len(), 3);
+    }
+
+    #[test]
+    fn drain_compressed_groups_then_next_turn_exposes_tool_group() {
+        // 终止后用户追加一轮对话，工具组落出保护窗口，可被后续压缩
+        let mut stm = log_scenario_stm();
+        stm.drain_compressed_groups(2);
+
+        stm.add_entry(EntryRole::User, "新的问题", EntryMetadata::default());
+        stm.add_entry(EntryRole::Assistant, "新的回答", EntryMetadata::default());
+
+        // 此时分组 [[工具组], [对话组], [新对话组]]：工具组成为可压缩区
+        let removed = stm.drain_compressed_groups(2);
+        assert_eq!(removed, 1);
+        assert!(stm
+            .entries
+            .iter()
+            .all(|e| e.metadata.tool_calls.is_empty()));
+    }
 }
 
 /// 估算文本的 token 数
@@ -523,6 +559,21 @@ impl ShortTermMemory {
             has_summary_prefix = self.summary_prefix.is_some(),
             "STM tokens recalculated"
         );
+    }
+
+    /// 摘要完成后移除已压缩的 entries。
+    ///
+    /// 与触发端 `memory_compression_system` 使用同一份
+    /// `split_into_groups` + `compressible_entry_count` 选择逻辑：
+    /// 移除的是被压缩组的前置 entries，保留最后 `preserve_recent_turns`
+    /// 个配对组。返回实际移除的 entry 数。
+    pub fn drain_compressed_groups(&mut self, preserve_recent_turns: u32) -> usize {
+        let groups = split_into_groups(&self.entries);
+        let count = compressible_entry_count(&groups, preserve_recent_turns);
+        if count > 0 {
+            self.entries.drain(0..count);
+        }
+        count
     }
 }
 

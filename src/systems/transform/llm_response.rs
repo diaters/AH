@@ -533,15 +533,11 @@ fn handle_summarization_work_item_result(
                 if let Some(mut memory) = short_term {
                     memory.summary_prefix = Some(summary.clone());
 
-                    // 移除已压缩的 entries（保留最近 N 轮）
-                    let preserve_count = (config.preserve_recent_turns * 2) as usize;
-                    let removed = if memory.entries.len() > preserve_count {
-                        let removed = memory.entries.len() - preserve_count;
-                        memory.entries.drain(0..removed);
-                        removed
-                    } else {
-                        0
-                    };
+                    // 移除已压缩的 entries：与触发端 memory_compression_system
+                    // 共用配对组选择逻辑（见 domain::memory 的
+                    // split_into_groups / compressible_entry_count），
+                    // 保证压缩循环每轮必有进展、必然收敛
+                    let removed = memory.drain_compressed_groups(config.preserve_recent_turns);
 
                     // 重新计算 token
                     memory.recalculate_tokens();
