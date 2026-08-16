@@ -1150,6 +1150,56 @@ fn scenario_tool_call_loop_reaches_done() {
     );
 }
 
+/// Mock 模式多轮注入回归：守护 runner 的 follow-up 注入走生产 routing 续轮链路
+/// （Waiting(User) → ContinueTaskMessage → 同 Task STM 追加）与 /finish 收尾。
+/// 回归锚点：若续轮被 routing 判为"无等待任务"而开新 Task，新 Task STM 为空，
+/// 最终输出不含 Falcon，本测试失败。
+#[test]
+fn scenario_framework_mock_smoke_multi_turn() {
+    let file = load_scenario("multi_turn_context");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    // 每轮一次 LlmCompletion：首轮确认、第 2 轮回答代号；多余项为保险
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CannedExecutor::new(vec![
+        text_output("好的，已记住：项目代号 Falcon。"),
+        text_output("本次会话的项目代号是 Falcon。"),
+        text_output("（多余保险项）Falcon。"),
+    ]));
+    // Judge 走独立 selfcheck executor（Evaluation kind → canned 高置信 verdict）
+    let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
+        final_text: "unused",
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor,
+        judge,
+        runtime,
+        "mock（多轮回归）",
+        tmp.path(),
+    );
+
+    // /finish 收尾后任务 Done；最终输出取 input_summary（最后一轮真实回复）
+    assert_eq!(
+        report.trace.task_status.as_deref(),
+        Some("Done"),
+        "多轮任务应经 /finish 到达 Done: {:?}",
+        report.trace.task_status
+    );
+    assert!(
+        report
+            .trace
+            .final_output
+            .as_deref()
+            .unwrap_or("")
+            .contains("Falcon"),
+        "最终输出应包含最后一轮回复内容: {:?}",
+        report.trace.final_output
+    );
+    assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
+    assert!(!report.needs_human, "不应有待审: {:?}", report.results);
+}
+
 /// Mock 模式断言引擎单元验证：tool_called 失败、human_review 待审、正则不匹配失败。
 #[test]
 fn scenario_assertion_engine_branches() {
