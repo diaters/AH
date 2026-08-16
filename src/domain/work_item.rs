@@ -23,6 +23,8 @@ pub enum WorkItemType {
     ProfileGeneration,
     /// skill 更新工作项：由 skill-updater Agent 消费，产出 SkillUpdateOperation 列表
     SkillUpdate,
+    /// skill 创建工作项：由 skill-creator Agent 消费，根据用户意图生成新 skill
+    SkillCreation,
 }
 
 impl WorkItemType {
@@ -36,6 +38,7 @@ impl WorkItemType {
             WorkItemType::Summarization => "summarization",
             WorkItemType::ExperienceCollection => "collect",
             WorkItemType::SkillUpdate => "skill-updater",
+            WorkItemType::SkillCreation => "skill-creator",
             WorkItemType::ProfileGeneration => "profile",
             WorkItemType::Execution => "execution",
         }
@@ -319,6 +322,34 @@ impl WorkItem {
         wi
     }
 
+    /// 创建 skill 创建工作项
+    ///
+    /// 具体的 `SkillCreationContext` 由调用方作为独立 Component 注入到同一 entity，
+    /// 不存储在 WorkItem 中。multi_turn = true：skill-creator 需要多轮工具调用。
+    pub fn skill_creation(
+        task_id: TaskId,
+        prompt: String,
+        conversation: Vec<ConversationMessage>,
+        tools: Vec<ToolDefinition>,
+        governing_agent_id: AgentId,
+    ) -> Self {
+        let context = WorkItemContext {
+            conversation: Some(conversation),
+            tools,
+            system_prompt: None,
+        };
+        let input = WorkItemInput { prompt, context };
+        let mut wi = Self::new(
+            task_id,
+            WorkItemType::SkillCreation,
+            input,
+            WorkItemOrigin::ExperienceCollection,
+            WorkItemWritebackTarget::ExperienceInbox,
+        );
+        wi.governing_agent_id = Some(governing_agent_id);
+        wi
+    }
+
     /// 标记为已分配
     pub fn assign(&mut self, agent_id: AgentId) {
         self.assigned_agent = Some(agent_id);
@@ -538,5 +569,10 @@ mod tests {
     #[test]
     fn required_tag_execution() {
         assert_eq!(WorkItemType::Execution.required_tag(), "execution");
+    }
+
+    #[test]
+    fn required_tag_skill_creation() {
+        assert_eq!(WorkItemType::SkillCreation.required_tag(), "skill-creator");
     }
 }

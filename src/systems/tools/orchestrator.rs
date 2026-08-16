@@ -16,9 +16,9 @@ use crate::domain::{
     ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
     FrontendKind, MessageRole, OutputContent, PendingDispatch, PendingExperienceHooks,
     ProfileGenerationContext, SessionSummary, ShellSessionResult, ShortTermMemory,
-    SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
-    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    SkillCreationContext, SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
     WaitingForTasksInfo, WaitingReason, WorkItem,
 };
 use crate::ecs::EntityIndex;
@@ -352,7 +352,7 @@ pub fn spawn_wait_result_message(
 }
 
 /// 统一处理 Tool 执行动作
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn handle_tool_action<B: SessionBackend>(
     commands: &mut Commands,
     request_entity: Entity,
@@ -368,13 +368,14 @@ pub fn handle_tool_action<B: SessionBackend>(
     pending_experience_hooks: &mut PendingExperienceHooks,
     parent_agent_id: Option<AgentId>,
     clock: &Clock,
-    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询：
-    // 两者都是与 WorkItem 同 entity 的 Component，任一 WorkItem entity 至多只有其中之一。
+    // 合并 ProfileGenerationContext / SkillUpdateContext / SkillCreationContext 查询：
+    // 三者都是与 WorkItem 同 entity 的 Component，任一 WorkItem entity 至多只有其中之一。
     // 通过 Option<&...> 在单 SystemParam 中表达"存在与否"，避免触发 Bevy 16 参数上限。
-    context_queries: &Query<(
+    #[allow(clippy::type_complexity)] context_queries: &Query<(
         Entity,
         Option<&ProfileGenerationContext>,
         Option<&SkillUpdateContext>,
+        Option<&SkillCreationContext>,
         &WorkItem,
     )>,
     skill_loader: &SkillLoader,
@@ -864,9 +865,9 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
             // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
             let mut resolved_kind = crate::domain::ProfileGenerationKind::Incubation;
-            if let Some((wi_entity, Some(ctx), _, _wi)) = context_queries
+            if let Some((wi_entity, Some(ctx), _, _, _wi)) = context_queries
                 .iter()
-                .find(|(_, prof, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
+                .find(|(_, prof, _, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
             {
                 resolved_kind = ctx.kind.clone();
                 // 重置 exception_count：clone + modify + insert（不可变 Query + Commands 写回）
@@ -956,9 +957,9 @@ pub fn handle_tool_action<B: SessionBackend>(
             // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
             // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
             let mut resolved_kind = crate::domain::ProfileGenerationKind::Update;
-            if let Some((wi_entity, Some(ctx), _, _wi)) = context_queries
+            if let Some((wi_entity, Some(ctx), _, _, _wi)) = context_queries
                 .iter()
-                .find(|(_, prof, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
+                .find(|(_, prof, _, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
             {
                 resolved_kind = ctx.kind.clone();
                 let mut new_ctx = ctx.clone();
@@ -1094,7 +1095,7 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             // [重要-2] 修复：用 work_item_entity 做 O(1) 直接查询，替代 O(n) Uuid 反查。
             // 三层错误分支覆盖所有失败情况，每条路径都 spawn_tool_error 直接拒绝。
-            let Some((_, _, context_opt, _)) = context_queries.get(work_item_entity).ok() else {
+            let Some((_, _, context_opt, _, _)) = context_queries.get(work_item_entity).ok() else {
                 warn!(
                     event = "SkillUpdateWorkItemNotInContextQueries",
                     task_id = %request.request.task_id,
@@ -1269,6 +1270,238 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::SubmitSkillCandidate { name, description }) => {
+            // Sanitize skill name: reject path separators and traversal sequences
+            if name.contains('/') || name.contains('\\') || name.contains("..") {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "skill name must not contain path separators or '..'".to_string(),
+                    ),
+                );
+                return;
+            }
+
+            // 通过 Query 查找匹配 task_id 的 SkillCreationContext Component
+            // （与 WorkItem 同 Entity）。
+            let wi_info = context_queries
+                .iter()
+                .find_map(|(e, _, _, creation_ctx, wi)| {
+                    if wi.task_id == request.request.task_id {
+                        Some((e, creation_ctx.cloned()))
+                    } else {
+                        None
+                    }
+                });
+
+            let Some((wi_entity, creation_ctx)) = wi_info else {
+                warn!(
+                    event = "SkillCandidateSubmitWithoutContext",
+                    task_id = %request.request.task_id,
+                    agent_id = %request.request.agent_id,
+                    %name,
+                    "SubmitSkillCandidate without SkillCreationContext"
+                );
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InternalState(
+                        "SubmitSkillCandidate without SkillCreationContext".to_string(),
+                    ),
+                );
+                return;
+            };
+
+            let sandbox_dir = &creation_ctx.as_ref().unwrap().sandbox_dir;
+
+            // 1. Validate SKILL.md exists
+            let skill_md_path = sandbox_dir.join("SKILL.md");
+            if !skill_md_path.exists() {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput("SKILL.md not found in sandbox directory".to_string()),
+                );
+                return;
+            }
+
+            // 2. Parse and validate frontmatter
+            let skill_md_content = match std::fs::read_to_string(&skill_md_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(format!("failed to read SKILL.md: {}", e)),
+                    );
+                    return;
+                }
+            };
+
+            let parsed = crate::infrastructure::skills::loader::parse_skill_md(
+                &skill_md_content,
+                sandbox_dir.clone(),
+            );
+            let Some(parsed) = parsed else {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "SKILL.md frontmatter is invalid or missing".to_string(),
+                    ),
+                );
+                return;
+            };
+
+            if parsed.name.is_empty() {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "SKILL.md frontmatter 'name' must not be empty".to_string(),
+                    ),
+                );
+                return;
+            }
+            if parsed.description.is_empty() {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "SKILL.md frontmatter 'description' must not be empty".to_string(),
+                    ),
+                );
+                return;
+            }
+            if parsed.version != 1 {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(format!(
+                        "new skill must have version 1, got {}",
+                        parsed.version
+                    )),
+                );
+                return;
+            }
+
+            // 3. Path safety: verify all sandbox files reside under sandbox_dir
+            let sandbox_canonical = match sandbox_dir.canonicalize() {
+                Ok(c) => c,
+                Err(e) => {
+                    spawn_tool_error(
+                        commands,
+                        request_entity,
+                        request,
+                        ToolError::InternalState(format!(
+                            "failed to canonicalize sandbox dir: {}",
+                            e
+                        )),
+                    );
+                    return;
+                }
+            };
+            let mut path_safe = true;
+            check_path_safety_recursive(sandbox_dir, &sandbox_canonical, &mut path_safe);
+            if !path_safe {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput(
+                        "sandbox contains files outside sandbox directory".to_string(),
+                    ),
+                );
+                return;
+            }
+
+            // 4. Scan sandbox for file_refs
+            let file_refs = scan_sandbox_files(sandbox_dir);
+
+            // 5. Construct ExperienceCandidate
+            let candidate_id = uuid::Uuid::new_v4();
+            let candidate = ExperienceCandidate::skill_new(
+                candidate_id,
+                request.request.task_id,
+                request.request.agent_id,
+                format!("新建 skill: {}", name),
+                name.clone(),
+                description.clone(),
+                parsed.instructions,
+                file_refs,
+            );
+
+            // 6. Enqueue in ExperienceStore
+            experience_store.stage_root_candidate(candidate);
+
+            // 7. Push PendingExperienceHooks
+            pending_experience_hooks.0.push((
+                crate::user_plugins::hook_point::HookPoint::OnExperienceCandidateSubmitted,
+                candidate_id,
+            ));
+
+            // 8. Update SkillCreationContext.skill_name
+            let ctx_inner = creation_ctx.unwrap();
+            commands.entity(wi_entity).insert(SkillCreationContext {
+                skill_name: name.clone(),
+                ..ctx_inner.clone()
+            });
+
+            // 9. Spawn success result
+            let output = serde_json::json!({
+                "status": "submitted",
+                "candidate_id": candidate_id.to_string(),
+                "skill_name": name,
+            });
+
+            let execution_result = AgentExecutionResult {
+                task_id: request.request.task_id,
+                agent_id: request.request.agent_id,
+                request_kind: request.request.request_kind.clone(),
+                result: Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(format!("skill candidate submitted: {}", name)),
+                    reasoning_content: None,
+                }),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+                conversation: None,
+            };
+
+            commands.spawn((
+                ToolExecutionResultMessage {
+                    result: execution_result,
+                    tool_name: "submit_skill_candidate".to_string(),
+                    tool_output: Ok(output),
+                    tool_call_id: request.tool_call_id.clone(),
+                    processed: false,
+                    original_tool_output: None,
+                },
+                ToolReturnedHookPending,
+            ));
+
+            debug!(
+                event = "SkillCandidateSubmitted",
+                task_id = %request.request.task_id,
+                agent_id = %request.request.agent_id,
+                %name,
+                %candidate_id,
+                "skill candidate submitted by LLM"
+            );
+
+            commands.entity(request_entity).despawn();
+        }
         Ok(ToolAction::AskUser { question }) => {
             let task_id = request.request.task_id;
             let agent_id = request.request.agent_id;
@@ -1350,6 +1583,7 @@ fn submission_to_candidate(
                 description,
                 instructions,
                 file_refs,
+                is_new: false,
             }
         }
     };
@@ -1517,6 +1751,85 @@ pub fn spawn_shell_result(
     commands.entity(request_entity).despawn();
 }
 
+/// Scan sandbox directory for skill file references (top-level files only).
+///
+/// Skips SKILL.md (handled separately via frontmatter parsing).
+/// For MVP, only top-level files are scanned since `write_skill_file` creates flat files.
+/// Recursively check that all files in the sandbox resolve to paths under the sandbox directory.
+fn check_path_safety_recursive(
+    current_dir: &std::path::Path,
+    sandbox_canonical: &std::path::Path,
+    path_safe: &mut bool,
+) {
+    if !*path_safe {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(current_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                check_path_safety_recursive(&path, sandbox_canonical, path_safe);
+                if !*path_safe {
+                    return;
+                }
+            } else if path.is_file()
+                && let Ok(canonical) = path.canonicalize()
+                && !canonical.starts_with(sandbox_canonical)
+            {
+                *path_safe = false;
+                return;
+            }
+        }
+    }
+}
+
+fn scan_sandbox_files(sandbox_dir: &std::path::Path) -> Vec<crate::domain::SkillFileRef> {
+    let mut refs = Vec::new();
+    scan_sandbox_files_recursive(sandbox_dir, sandbox_dir, &mut refs);
+    refs
+}
+
+/// Recursive helper for scan_sandbox_files.
+fn scan_sandbox_files_recursive(
+    base_dir: &std::path::Path,
+    current_dir: &std::path::Path,
+    refs: &mut Vec<crate::domain::SkillFileRef>,
+) {
+    if let Ok(entries) = std::fs::read_dir(current_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_sandbox_files_recursive(base_dir, &path, refs);
+            } else if path.is_file() {
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                if file_name == "SKILL.md" {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(base_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                refs.push(crate::domain::SkillFileRef {
+                    path: relative,
+                    role: infer_file_role(&path.to_string_lossy()),
+                });
+            }
+        }
+    }
+}
+
+/// Infer file role from file extension.
+fn infer_file_role(path: &str) -> crate::domain::SkillFileRole {
+    if path.ends_with(".sh") || path.ends_with(".py") {
+        crate::domain::SkillFileRole::Script
+    } else if path.ends_with(".md") {
+        crate::domain::SkillFileRole::Reference
+    } else {
+        crate::domain::SkillFileRole::Asset
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1667,7 +1980,7 @@ mod tests {
 
     /// 测试 system：从 world 中取第一个 ToolExecutionRequestMessage，
     /// 调用 handle_tool_action 处理 AskUser action。
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn ask_user_test_system(
         mut commands: Commands,
         mut tasks: Query<(Entity, &mut Task)>,
@@ -1682,6 +1995,7 @@ mod tests {
             Entity,
             Option<&ProfileGenerationContext>,
             Option<&SkillUpdateContext>,
+            Option<&SkillCreationContext>,
             &WorkItem,
         )>,
         skill_loader: Res<SkillLoader>,

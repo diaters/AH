@@ -156,6 +156,15 @@ pub enum ToolEffect {
         /// 输出通道（显式指定或从当前任务继承）
         output_channel: Option<ChannelId>,
     },
+    /// 写入 skill 沙盒文件：由 write_skill_file 工具声明，commit_tool_effects_system 在主线程落账。
+    WriteSkillFile {
+        /// skill 沙盒目录（由 worker 在构造时嵌入，commit 直接使用）
+        sandbox_dir: std::path::PathBuf,
+        /// 相对沙盒路径
+        path: String,
+        /// 文件内容
+        content: String,
+    },
 }
 
 /// 效果待应用实体。ingest 收到 `Effect` payload 时 spawn，

@@ -11,9 +11,9 @@ use crate::systems::{
     experience_writeback_system, ingest_execution_results_system, llm_response_system,
     model_chain_state_update_system, on_experience_hook_system, on_llm_response_hook_system,
     profile_generation_completion_system, profile_generation_workitem_system,
-    profile_update_trigger_system, profile_update_writeback_system, skill_update_completion_system,
-    skill_update_workitem_system, task_terminated_experience_trigger_system,
-    tool_calling_orchestrator_system,
+    profile_update_trigger_system, profile_update_writeback_system, skill_creation_workitem_system,
+    skill_creation_writeback_system, skill_update_completion_system, skill_update_workitem_system,
+    task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -67,6 +67,10 @@ impl Plugin for ExecutionPlugin {
                 skill_update_workitem_system
                     .in_set(HarnessSet::Execution)
                     .after(experience_governance_system),
+                // skill 创建 workitem：消费 SkillCreationRequestMessage，构造 skill-creator WorkItem
+                skill_creation_workitem_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_governance_system),
                 // profile 生成：消费治理产出的 ProfileGenerationRequestMessage，创建 WorkItem
                 profile_generation_workitem_system
                     .in_set(HarnessSet::Execution)
@@ -85,6 +89,11 @@ impl Plugin for ExecutionPlugin {
                 experience_writeback_system
                     .in_set(HarnessSet::Execution)
                     .after(experience_governance_system),
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
                 // 经验确认结果：处理用户对经验候选的确认
                 experience_approval_result_system
                     .in_set(HarnessSet::Execution)
@@ -97,6 +106,10 @@ impl Plugin for ExecutionPlugin {
                     .after(experience_writeback_system),
                 // profile 更新写回：审批通过后更新 agents.toml 和 ECS Agent.capabilities
                 profile_update_writeback_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_approval_result_system),
+                // skill 创建写回：消费 SkillCreationWritebackMessage，执行 rename 写回与 SkillRegistry 注册
+                skill_creation_writeback_system
                     .in_set(HarnessSet::Execution)
                     .after(experience_approval_result_system),
                 // 经验候选相关 hook companion 系统

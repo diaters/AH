@@ -64,8 +64,9 @@ pub use contribution::{
     ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
     GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_EXCEPTIONS,
     PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
-    ProfileGenerationKind, ProfileGenerationRequestMessage, SkillFileRef, SkillFileRole,
-    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, sanitize_tags,
+    ProfileGenerationKind, ProfileGenerationRequestMessage, SkillCreationContext, SkillFileRef,
+    SkillFileRole, SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation,
+    is_skill_new, sanitize_tags,
 };
 
 // error
@@ -108,7 +109,8 @@ pub use message::{
     MessageReceivedHookPending, ModelChainStateUpdate, OutputKind, OutputMessage,
     PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
     SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SkillUpdateRequestMessage, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
+    SkillUpdateRequestMessage, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage, UserOutputMessage,
