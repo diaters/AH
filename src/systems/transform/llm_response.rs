@@ -11,10 +11,11 @@ use crate::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
         ChatRoundReadyMessage, ChatSession, ConversationMessage, EntryMetadata, EntryRole,
-        ExperienceCollectionCompletedMessage, ExperienceStore, FailureReason,
-        MessageDispatchedHookPending, OffTrackPolicy, OutputContent, ProfileGenerationContext,
-        ShortTermMemory, SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending,
-        ToolCallingState, ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage,
+        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy,
+        OutputContent, ProfileGenerationContext, ShortTermMemory, SkillCreationContext,
+        SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState,
+        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
         WorkItemLifecycleHookPending, WorkItemType,
     },
@@ -737,8 +738,9 @@ pub fn llm_response_system(
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     mut work_items: Query<(Entity, &mut WorkItem)>,
-    experience_store: Res<ExperienceStore>,
+    mut experience_store: ResMut<ExperienceStore>,
     profile_contexts: Query<&ProfileGenerationContext>,
+    skill_creation_contexts: Query<&SkillCreationContext>,
 ) {
     // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
     let state_info: Vec<CallingStateInfo> = calling_states
@@ -976,6 +978,110 @@ pub fn llm_response_system(
                                 commands.entity(work_item_entity).insert(
                                     WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
                                 );
+                                commands.entity(work_item_entity).despawn();
+                                commands.entity(entity).despawn();
+                                continue;
+                            }
+                        }
+                    }
+                    WorkItemType::SkillCreation => {
+                        // - ToolCalls（write_skill_file / submit_skill）：fall through，
+                        //   由下方 tool calling loop 处理后续迭代。
+                        // - text：skill-creator 结束。有候选提交则推进治理
+                        //   （Submitted → GovernancePending + spawn 治理请求，
+                        //   复用统一收束入口 collect_top_level_governance_candidates）；
+                        //   无候选提交则 fail。最终文本继续走通用路径，
+                        //   用户仍能收到创建结果回复。
+                        // - error：对齐 SkillUpdate 错误路径。
+                        match &result.result {
+                            Ok(AgentExecutionOutput {
+                                content: OutputContent::ToolCalls(_),
+                                ..
+                            }) => {
+                                // 不 continue，让下面的 tool calling loop 处理 tool calls
+                            }
+                            Ok(_) => {
+                                let had_submission = has_experience_submission(
+                                    &experience_store,
+                                    work_item.task_id,
+                                );
+
+                                if had_submission {
+                                    // 统一收束入口：root 候选 Submitted → GovernancePending
+                                    let advanced = experience_store
+                                        .collect_top_level_governance_candidates(
+                                            work_item.task_id,
+                                        );
+                                    if !advanced.is_empty() {
+                                        let agent_id = skill_creation_contexts
+                                            .get(work_item_entity)
+                                            .ok()
+                                            .map(|c| c.agent_id)
+                                            .unwrap_or(
+                                                work_item
+                                                    .governing_agent_id
+                                                    .unwrap_or(uuid::Uuid::nil()),
+                                            );
+                                        commands.spawn(ExperienceGovernanceRequestMessage {
+                                            task_id: work_item.task_id,
+                                            agent_id,
+                                        });
+                                        debug!(
+                                            event = "SkillCreationGovernanceRequested",
+                                            task_id = %work_item.task_id,
+                                            candidate_count = advanced.len(),
+                                            "skill creation candidate promoted to governance"
+                                        );
+                                    }
+
+                                    if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                        wi.1.complete();
+                                        commands.entity(work_item_entity).insert(
+                                            WorkItemLifecycleHookPending(
+                                                HookPoint::OnWorkItemCompleted,
+                                            ),
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        event = "SkillCreationWorkItemNoSubmission",
+                                        work_item_id = %work_item.id,
+                                        task_id = %work_item.task_id,
+                                        error = "LLM finished without successful submit_skill",
+                                        error_type = "NoCandidateSubmission",
+                                        "skill creation LLM finished without candidate, \
+                                         cleaning up work item"
+                                    );
+                                    if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                        wi.1.fail();
+                                        commands.entity(work_item_entity).insert(
+                                            WorkItemLifecycleHookPending(
+                                                HookPoint::OnWorkItemFailed,
+                                            ),
+                                        );
+                                    }
+                                }
+
+                                // despawn WorkItem；不 despawn result entity、不 continue：
+                                // 最终文本继续走通用路径（result entity 由通用路径收尾
+                                // despawn，见下方 commands.entity(entity).despawn()）
+                                commands.entity(work_item_entity).despawn();
+                            }
+                            Err(_) => {
+                                warn!(
+                                    event = "SkillCreationWorkItemLlmFailed",
+                                    work_item_id = %work_item.id,
+                                    task_id = %work_item.task_id,
+                                    error = "LLM execution returned Err",
+                                    error_type = "LlmExecutionFailed",
+                                    "skill creation LLM failed, cleaning up work item"
+                                );
+                                if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                    wi.1.fail();
+                                    commands.entity(work_item_entity).insert(
+                                        WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed),
+                                    );
+                                }
                                 commands.entity(work_item_entity).despawn();
                                 commands.entity(entity).despawn();
                                 continue;
