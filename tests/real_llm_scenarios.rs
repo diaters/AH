@@ -35,10 +35,10 @@ use harness::{
 };
 use harness::{
     AgentExecutionRequest, AgentRequestKind, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, FrontendKind, HarnessConfig, JudgeOutcome, JudgePromptData, JudgeRubric,
-    JudgeVerdict, JudgeVote, LongTermMemory, PendingDispatch, ShortTermMemory, Task, WorkItem,
-    build_harness_app, build_judge_user_prompt, judge_system_prompt, llm::ExecutorRegistry,
-    parse_judge_verdict,
+    DispatchStrategy, ExternalInput, FrontendKind, HarnessConfig, JudgeOutcome, JudgePromptData,
+    JudgeRubric, JudgeVerdict, JudgeVote, LongTermMemory, MemoryConfig, PendingDispatch,
+    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType, build_harness_app,
+    build_judge_user_prompt, judge_system_prompt, llm::ExecutorRegistry, parse_judge_verdict,
 };
 use serde::Deserialize;
 use tokio::runtime::Runtime;
@@ -59,6 +59,14 @@ struct ScenarioSpec {
     name: String,
     description: String,
     input: String,
+    /// 后续轮次输入（多轮场景）：每条经生产 ingress → routing 续轮链路注入，
+    /// 挂回同一 Task（STM 保留）；空列表 = 单轮场景（现有行为不变）。
+    #[serde(default)]
+    follow_ups: Vec<String>,
+    /// 场景级压缩阈值覆写：Some 时 runner 覆写 MemoryConfig，
+    /// 让多轮长文本稳定触发 memory_compression_system。
+    #[serde(default)]
+    compression_threshold_tokens: Option<u32>,
     #[serde(default = "default_max_cost_usd")]
     max_cost_usd: f32,
     #[serde(default = "default_timeout_secs")]
@@ -105,6 +113,12 @@ enum AssertionSpec {
         #[serde(default = "default_one")]
         samples: usize,
     },
+    /// 压缩触发次数 >= min_times（代码断言，设计 §3.4）
+    #[serde(rename = "summarization_triggered")]
+    SummarizationTriggered {
+        #[serde(default = "default_one")]
+        min_times: usize,
+    },
     /// 强制人工复核（人工断言）
     #[serde(rename = "human_review")]
     HumanReview {
@@ -140,6 +154,9 @@ impl AssertionSpec {
             } => {
                 format!("llm_judge (×{samples}, threshold {threshold}): {rubric}")
             }
+            Self::SummarizationTriggered { min_times } => {
+                format!("summarization_triggered: × >= {min_times}")
+            }
             Self::HumanReview { note } => {
                 format!("human_review: {}", note.clone().unwrap_or_default())
             }
@@ -152,6 +169,7 @@ impl AssertionSpec {
             Self::StateReached { .. } => "state_reached",
             Self::ResponseMatches { .. } => "response_matches",
             Self::LlmJudge { .. } => "llm_judge",
+            Self::SummarizationTriggered { .. } => "summarization_triggered",
             Self::HumanReview { .. } => "human_review",
         }
     }
@@ -170,6 +188,12 @@ struct RunTrace {
     tool_calls: Vec<(String, String)>,
     /// WorkItem 终态集合（DirectDelegate 路径为空）
     workitem_statuses: Vec<String>,
+    /// 压缩触发次数（summarization_triggered 断言依据）。
+    ///
+    /// 语义：Summarization WorkItem 创建计数（压缩被触发）。
+    /// 生产 Summarization WorkItem 完成即 despawn 且从不置 Completed，无法从终态
+    /// 集合统计；mock 自检触发必成功，计数与"压缩被触发"一一对应。
+    summarization_triggers: usize,
     /// LLM 请求次数（被测链路，不含 Judge）
     llm_calls: usize,
     /// Judge 采样次数
@@ -239,6 +263,34 @@ impl AgentExecutor for ScenarioSelfcheckExecutor {
     }
 }
 
+/// 压缩场景自检 executor（本文件专用）：
+/// - `Summarization`（压缩摘要请求）→ canned 摘要文本
+/// - 其他（各轮对话）→ 长文本回复，多轮累积远超低压缩阈值
+struct CompressionSelfcheckExecutor;
+
+impl AgentExecutor for CompressionSelfcheckExecutor {
+    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        match request.request_kind {
+            AgentRequestKind::Summarization => Box::pin(async {
+                Ok(text_output(
+                    "压缩摘要：Aurora 为内部数据平台重构项目，2026 Q1 立项，\
+                     目标离线批处理降至分钟级；里程碑为 3 月 Iceberg 存储迁移、\
+                     6 月 Flink 计算引擎切换、9 月全量灰度；团队 12 人。",
+                ))
+            }),
+            _ => Box::pin(async {
+                Ok(text_output(
+                    "Aurora 项目详述：存储迁移采用 Iceberg 表格式，按天分区，\
+                     配合小文件合并任务治理；计算引擎切换使用 Flink SQL 双跑验证，\
+                     状态后端 RocksDB，通过两阶段提交保证 Exactly-Once；灰度按\
+                     1%、5%、20%、50%、100% 五层放量，每层观察核心延迟与丢失率\
+                     指标，异常即回滚至旧链路。团队构成与预算维持既定规划。",
+                ))
+            }),
+        }
+    }
+}
+
 // ============ Runner：构建 ECS app 并运行场景 ============
 
 fn scenario_config() -> HarnessConfig {
@@ -285,7 +337,16 @@ fn spawn_scenario_agent(app: &mut bevy_app::App) {
             model: "gpt-4.1-mini".to_string(),
         },
         capabilities: AgentCapabilities {
-            tags: vec!["llm".to_string(), "default".to_string()],
+            // 含 "summarization" tag：dispatch_system 按 required_tag（Summarization →
+            // "summarization"）查找 Persistent Agent，缺失会导致 Summarization WorkItem
+            // 一派发即 fail（memory_compression 场景的根因，见
+            // scenario_framework_mock_smoke_compression）。生产环境中该 tag 由独立的
+            // summarizer agent 承担，测试单 agent 需补该 tag。
+            tags: vec![
+                "llm".to_string(),
+                "default".to_string(),
+                "summarization".to_string(),
+            ],
             description: "Scenario runner default agent".to_string(),
         },
         kind: AgentKind::Persistent,
@@ -330,6 +391,75 @@ fn count_llm_requests_system(
     count.0 += requests.iter().count();
 }
 
+/// Summarization 压缩触发计数。
+///
+/// 为什么不用 World 终态集合统计"Summarization WorkItem 完成次数"：
+/// 生产链路 `handle_summarization_work_item_result` 完成即 despawn Summarization
+/// WorkItem，且从不将其置为 Completed（保持 Running 到 despawn），因此 runner 在
+/// 最终收集时无法从 `workitem_statuses` 看到任何 Summarization 状态。
+///
+/// 为什么不用 `Added<SummarizationRequestMessage>` 计数：压缩请求实体为帧内瞬态
+/// （memory_compression_system spawn 后同帧被 summarization_dispatch_system 消费并
+/// despawn），Added 过滤器的捕获依赖系统运行顺序，不可靠。
+/// 改用 `Added<WorkItem>` + `work_type == Summarization`：计数系统注册在所有生产
+/// 系统之后，确定性晚于生成 Summarization WorkItem 的系统同帧运行，Added 可靠命中
+/// "压缩触发"。mock 自检 executor 对 Summarization 请求必返回文本摘要（触发必成功），
+/// 该计数与 `summarization_triggered` 断言语义（压缩被触发）一致，是可靠代理。
+#[derive(Resource, Default)]
+struct SummarizationTriggerCount(usize);
+
+fn count_summarization_triggers_system(
+    work_items: Query<&WorkItem, Added<WorkItem>>,
+    mut count: ResMut<SummarizationTriggerCount>,
+) {
+    count.0 += work_items
+        .iter()
+        .filter(|wi| wi.work_type == WorkItemType::Summarization)
+        .count();
+}
+
+/// 场景稳定态：所有 Task 处于终态或 Waiting(User)（多轮等待续轮），
+/// 且所有 WorkItem 到达终态（无 in-flight Summarization 等）。
+///
+/// 注意：若未来实现中 Summarization 完成后任务停留态导致本条件永不满足，
+/// 可按实际状态机放宽 Task 侧条件；但 WorkItem 侧"全部终态"必须保留——
+/// 否则 follow-up 会在压缩 in-flight 时注入，被 routing 判为无 Waiting(User)
+/// 任务而开新 Task，丢失原任务上下文。
+fn scenario_settled(app: &mut bevy_app::App) -> bool {
+    let world = app.world_mut();
+    let mut task_query = world.query::<&Task>();
+    let tasks_settled = task_query.iter(world).all(|t| {
+        t.status.is_terminal() || matches!(t.status, TaskStatus::Waiting(WaitingReason::User))
+    });
+    if !tasks_settled {
+        return false;
+    }
+    let mut wi_query = world.query::<&WorkItem>();
+    wi_query.iter(world).all(|wi| wi.is_terminal())
+}
+
+/// 轮询至稳定态；返回是否在整体超时前到达。
+///
+/// 注意：每次循环调用 `app.update()` 会推进 ECS 一帧（运行所有 system，
+/// 可能产生副作用），调用方需知悉。
+fn wait_until_settled(
+    app: &mut bevy_app::App,
+    start: &Instant,
+    timeout: Duration,
+    poll_ms: u64,
+) -> bool {
+    loop {
+        app.update();
+        if scenario_settled(app) {
+            return true;
+        }
+        if start.elapsed() > timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(poll_ms));
+    }
+}
+
 /// 运行场景：构建完整 ECS app + 注入 executor，轮询至 Task 终态或超时，收集运行事实。
 fn execute_scenario(
     spec: &ScenarioSpec,
@@ -338,7 +468,7 @@ fn execute_scenario(
 ) -> RunTrace {
     let start = Instant::now();
     let registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let (_input_tx, input_rx) = unbounded();
+    let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         scenario_config(),
         runtime,
@@ -348,18 +478,34 @@ fn execute_scenario(
         harness::channels::ChannelManager::empty().0,
     );
 
+    // 场景级压缩阈值覆写（仅测试侧注入，不触生产代码）
+    if let Some(threshold) = spec.compression_threshold_tokens {
+        app.insert_resource(MemoryConfig {
+            compression_threshold_tokens: threshold,
+            ..Default::default()
+        });
+    }
+
     app.insert_resource(LlmRequestCount::default());
+    app.insert_resource(SummarizationTriggerCount::default());
     // 注意：请求实体为帧内瞬态（Dispatch/Transform spawn、Execution 的
     // agent_execution_system 同帧 despawn），从测试侧无法用 `Added` 可靠计数，
     // 报告中的 "LLM 调用" 仅作参考，可能为 0（已知诊断限制，不影响断言）。
     app.add_systems(bevy_app::Update, count_llm_requests_system);
+    // Summarization WorkItem 计数系统注册于所有生产系统之后，确定性晚于生成
+    // Summarization WorkItem 的系统同帧运行，Added 可靠命中（见计数系统注释）。
+    app.add_systems(bevy_app::Update, count_summarization_triggers_system);
 
     app.update();
     spawn_scenario_agent(&mut app);
 
     // DirectDelegate 直派 default-llm-agent：场景聚焦"单轮输入 → 完整工具循环 → 完成"
     // 链路；Brain 调度策略属 Layer 0 既有覆盖（brain_dispatch_flow.rs）。
-    let task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
+    let mut task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
+    // 多轮场景置 multi_turn：LLM 文本回复后任务转 Waiting(User) 等续轮，
+    // follow-up 才能经 routing continue_existing 挂回同一 Task（STM 保留）；
+    // 单轮场景保持 false，文本回复后直接 Done（现有行为不变）。
+    task.multi_turn = !spec.follow_ups.is_empty();
     let task_id = task.id;
     let task_entity = app
         .world_mut()
@@ -392,15 +538,48 @@ fn execute_scenario(
         .and_then(|v| v.parse().ok())
         .unwrap_or(50);
     let timeout = Duration::from_secs(spec.timeout_secs);
+    let channel = scenario_channel();
 
-    // 轮询至所有 Task 终态（场景只有一个顶层 Task）或超时
+    // 多轮场景：逐条 follow-up 经生产 ingress → routing 续轮链路注入。
+    // 每条前置等待稳定态，确保上一轮回复完成且无 in-flight Summarization。
+    for follow_up in &spec.follow_ups {
+        if !wait_until_settled(&mut app, &start, timeout, poll_ms) {
+            break; // 超时，交由终态轮询统一判定
+        }
+        if input_tx
+            .send(ExternalInput::TextWithChannel {
+                channel: channel.clone(),
+                content: follow_up.clone(),
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // 多轮任务停在 Waiting(User) 不会自行 Done：
+    // 注入 /finish 命令走生产命令链路收尾（command → FinishTaskMessage → Done）。
+    // 边界：若此前 wait_until_settled 超时（WorkItem 未终态），/finish 不会注入，
+    // 场景会卡在 Waiting(User) 直到整体超时（mock 测试不会触发，真实场景属预期超时风险）。
+    if !spec.follow_ups.is_empty()
+        && wait_until_settled(&mut app, &start, timeout, poll_ms)
+        && input_tx
+            .send(ExternalInput::TextWithChannel {
+                channel: channel.clone(),
+                content: "/finish".to_string(),
+            })
+            .is_err()
+    {
+        // 发送失败（receiver 已关闭），交由终态轮询统一判定超时
+    }
+
+    // 终态等待：所有 Task 到达 terminal 或整体超时
     loop {
         app.update();
         let all_terminal = {
             let world = app.world_mut();
             let mut query = world.query::<&Task>();
-            let mut iter = query.iter(world);
-            !iter.any(|t| !t.status.is_terminal())
+            !query.iter(world).any(|t| !t.status.is_terminal())
         };
         if all_terminal {
             break;
@@ -413,9 +592,14 @@ fn execute_scenario(
 
     // 收集运行事实
     let llm_calls = app.world().resource::<LlmRequestCount>().0;
+    // 压缩触发计数：生产 Summarization WorkItem 完成即 despawn 且从不置
+    // Completed（见 count_summarization_triggers_system 注释），无法从终态集合
+    // 统计，以触发计数为代理；mock 自检触发必成功，计数可靠。
+    let summarization_triggers = app.world().resource::<SummarizationTriggerCount>().0;
     let mut trace = RunTrace {
         elapsed_ms: start.elapsed().as_millis(),
         llm_calls,
+        summarization_triggers,
         ..Default::default()
     };
     let world = app.world_mut();
@@ -423,7 +607,14 @@ fn execute_scenario(
     for task in task_query.iter(world) {
         if trace.task_status.is_none() {
             trace.task_status = Some(format!("{:?}", task.status));
-            trace.final_output = Some(task.result_summary.clone());
+            // 多轮：/finish 的 mark_done 会把 result_summary 覆盖为
+            // "finished by user"，最后一轮真实回复在 input_summary
+            // （llm_response multi_turn 分支写入）；单轮：result_summary 即回复。
+            trace.final_output = Some(if task.multi_turn {
+                task.input_summary.clone()
+            } else {
+                task.result_summary.clone()
+            });
         }
     }
     let mut wi_query = world.query::<&WorkItem>();
@@ -611,6 +802,14 @@ fn check_assertions(
                     JudgeOutcome::NeedsHuman => AssertionOutcome::NeedsHuman(format!(
                         "Judge 低置信（min={min_confidence:.2}）或票数分裂（{pass_votes}/{samples}），降级待审"
                     )),
+                }
+            }
+            AssertionSpec::SummarizationTriggered { min_times } => {
+                let count = trace.summarization_triggers;
+                if count >= *min_times {
+                    AssertionOutcome::Pass
+                } else {
+                    AssertionOutcome::Fail(format!("压缩触发 {count} 次，期望 >= {min_times}"))
                 }
             }
             AssertionSpec::HumanReview { .. } => {
@@ -1020,6 +1219,95 @@ fn scenario_tool_call_loop_reaches_done() {
     );
 }
 
+/// Mock 模式多轮注入回归：守护 runner 的 follow-up 注入走生产 routing 续轮链路
+/// （Waiting(User) → ContinueTaskMessage → 同 Task STM 追加）与 /finish 收尾。
+/// 回归锚点：第 1 轮回复不含 "Falcon"，仅当续轮发生（input_summary 被第 2 轮
+/// 回复覆写）时最终输出才含 "Falcon"——若续轮被破坏（follow-up 未路由到
+/// Waiting(User) 任务），final_output 停留在第 1 轮回复，response_matches 真实
+/// FAIL。同时 task_status == Done 只能经 /finish 收尾链路达成，守护该链路不回归。
+#[test]
+fn scenario_framework_mock_smoke_multi_turn() {
+    let file = load_scenario("multi_turn_context");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CannedExecutor::new(vec![
+        // 首轮确认：不含项目代号——若续轮链路破坏，final_output 停留在此回复
+        // （无 Falcon），response_matches 真实 FAIL，回归锚点才有效。
+        text_output("好的，已记住。"),
+        text_output("本次会话的项目代号是 Falcon。"),
+    ]));
+    // Judge 只收 Evaluation 请求，final_text 不会被读取；独立 executor 保证
+    // llm_judge 确定性走 canned 高置信 verdict（避免与 CannedExecutor 队列互斥）。
+    let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
+        final_text: "unused",
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor,
+        judge,
+        runtime,
+        "mock（多轮回归）",
+        tmp.path(),
+    );
+
+    // /finish 收尾后任务 Done；最终输出取 input_summary（最后一轮真实回复）
+    assert_eq!(
+        report.trace.task_status.as_deref(),
+        Some("Done"),
+        "多轮任务应经 /finish 到达 Done: {:?}",
+        report.trace.task_status
+    );
+    assert!(
+        report
+            .trace
+            .final_output
+            .as_deref()
+            .unwrap_or("")
+            .contains("Falcon"),
+        "最终输出应包含最后一轮回复内容: {:?}",
+        report.trace.final_output
+    );
+    assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
+    assert!(!report.needs_human, "不应有待审: {:?}", report.results);
+}
+
+/// Mock 模式压缩链路自检：低阈值 + 多轮长文本触发
+/// memory_compression_system → Summarization WorkItem 完成，任务经 /finish 到 Done。
+#[test]
+fn scenario_framework_mock_smoke_compression() {
+    let file = load_scenario("memory_compression");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CompressionSelfcheckExecutor);
+    let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
+        final_text: "unused",
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor,
+        judge,
+        runtime,
+        "mock（压缩自检）",
+        tmp.path(),
+    );
+
+    assert!(
+        report.trace.summarization_triggers >= 1,
+        "应至少完成一次 Summarization: workitems={:?}",
+        report.trace.workitem_statuses
+    );
+    assert_eq!(
+        report.trace.task_status.as_deref(),
+        Some("Done"),
+        "压缩后任务仍应完成: {:?}",
+        report.trace.task_status
+    );
+    assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
+    assert!(!report.needs_human, "不应有待审: {:?}", report.results);
+}
+
 /// Mock 模式断言引擎单元验证：tool_called 失败、human_review 待审、正则不匹配失败。
 #[test]
 fn scenario_assertion_engine_branches() {
@@ -1027,6 +1315,8 @@ fn scenario_assertion_engine_branches() {
         name: "selfcheck".into(),
         description: "断言引擎分支自检".into(),
         input: "x".into(),
+        follow_ups: vec![],
+        compression_threshold_tokens: None,
         max_cost_usd: 0.0,
         timeout_secs: 1,
     };
@@ -1035,6 +1325,7 @@ fn scenario_assertion_engine_branches() {
         final_output: Some("系统正常运行".into()),
         tool_calls: vec![("shell_exec".into(), "{}".into())],
         workitem_statuses: vec![],
+        summarization_triggers: 0,
         llm_calls: 1,
         judge_calls: 0,
         elapsed_ms: 0,
@@ -1067,6 +1358,76 @@ fn scenario_assertion_engine_branches() {
         labels,
         vec!["PASS", "FAIL", "PASS", "PASS", "FAIL", "NEEDS_HUMAN"]
     );
+}
+
+/// summarization_triggered 断言分支：达标 PASS、未达标 FAIL。
+#[test]
+fn scenario_assertion_summarization_triggered_branches() {
+    let spec = ScenarioSpec {
+        name: "selfcheck".into(),
+        description: "d".into(),
+        input: "x".into(),
+        follow_ups: vec![],
+        compression_threshold_tokens: None,
+        max_cost_usd: 0.0,
+        timeout_secs: 1,
+    };
+    let mut trace = RunTrace {
+        task_status: Some("Done".into()),
+        final_output: Some("汇总完成".into()),
+        tool_calls: vec![],
+        workitem_statuses: vec!["Completed".into()],
+        summarization_triggers: 1,
+        llm_calls: 1,
+        judge_calls: 0,
+        elapsed_ms: 0,
+    };
+    let assertions = vec![
+        AssertionSpec::SummarizationTriggered { min_times: 1 },
+        AssertionSpec::SummarizationTriggered { min_times: 2 },
+    ];
+    let (results, _) = check_assertions(&spec, &trace, &assertions, None);
+    let labels: Vec<&str> = results.iter().map(|(_, _, o)| o.label()).collect();
+    assert_eq!(labels, vec!["PASS", "FAIL"]);
+
+    trace.summarization_triggers = 0;
+    let (results, _) = check_assertions(&spec, &trace, &assertions, None);
+    let labels: Vec<&str> = results.iter().map(|(_, _, o)| o.label()).collect();
+    assert_eq!(labels, vec!["FAIL", "FAIL"]);
+}
+
+/// 新字段解析：follow_ups 与 compression_threshold_tokens。
+#[test]
+fn scenario_spec_parses_follow_ups_and_threshold() {
+    let content = r#"
+[scenario]
+name = "x"
+description = "d"
+input = "第一轮"
+follow_ups = ["第二轮", "第三轮"]
+compression_threshold_tokens = 300
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+"#;
+    let file: ScenarioFile = toml::from_str(content).expect("解析应成功");
+    assert_eq!(file.scenario.follow_ups.len(), 2);
+    assert_eq!(file.scenario.compression_threshold_tokens, Some(300));
+}
+
+/// 向后兼容：旧场景文件（无新字段）解析后 follow_ups 为空、阈值为 None。
+#[test]
+fn scenario_spec_defaults_backward_compatible() {
+    let content = r#"
+[scenario]
+name = "x"
+description = "d"
+input = "第一轮"
+"#;
+    let file: ScenarioFile = toml::from_str(content).expect("解析应成功");
+    assert!(file.scenario.follow_ups.is_empty());
+    assert_eq!(file.scenario.compression_threshold_tokens, None);
 }
 
 /// Real 模式（#[ignore] + 环境变量双重门控）：真实 API 跑全部场景。

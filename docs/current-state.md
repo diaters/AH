@@ -74,10 +74,13 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   采用 `#[ignore]` + `HARNESS_TEST_REAL_LLM` 双重门控，永不进入 CI
 - 错误分类测试（401/429）基于 wiremock 本地端点，确定性执行，随 CI 常规运行
 - Layer 2/3：声明式场景测试框架已可用（`tests/real_llm_scenarios.rs` +
-  `tests/scenarios/*.toml`）——TOML 场景定义五类断言
-  （`tool_called` / `state_reached` / `response_matches` / `llm_judge` / `human_review`），
-  产出 Markdown 报告、待审队列与金标准快照；框架自检（mock executor）随 CI
-  常规运行，真实场景手动执行
+  `tests/scenarios/*.toml`）——TOML 场景定义六类断言
+  （`tool_called` / `state_reached` / `response_matches` / `llm_judge` /
+  `human_review` / `summarization_triggered`），支持多轮输入注入
+  （`follow_ups`，经生产 routing 续轮链路挂回同一 Task）与场景级压缩阈值覆写
+  （`compression_threshold_tokens`）；首批场景集合（echo_report、shell_stat_task、
+  multi_turn_context、memory_compression）已齐备；产出 Markdown 报告、待审队列
+  与金标准快照；框架自检（mock executor）随 CI 常规运行，真实场景手动执行
 - LLM-as-Judge 已成为 harness 一等能力：`JudgeVerdict` / `JudgeRubric` /
   `parse_judge_verdict`（`src/domain/evaluation.rs`）与 Judge prompt 构建
   （`src/llm/judge_prompt.rs`），复用 `AgentRequestKind::Evaluation` 请求通道；

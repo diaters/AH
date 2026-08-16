@@ -1,0 +1,38 @@
+# 场景：摘要压缩触发（设计 §4.2）
+# 低阈值 + 多轮长文本：每轮回复累积 STM 超阈值，触发 memory_compression_system；
+# 压缩后任务仍正常完成，最终总结轮验证关键上下文保留。
+[scenario]
+name = "memory_compression"
+description = "低阈值多轮触发摘要压缩，压缩后任务仍正常完成"
+input = """介绍一下 Aurora 项目背景并逐条确认：Aurora 是内部数据平台重构项目，
+2026 年 Q1 立项，目标是将离线批处理延迟从小时级降到分钟级；分三个里程碑：
+3 月完成存储迁移（Iceberg），6 月完成计算引擎切换（Flink），9 月全量流量切灰度；
+团队 12 人，后端 8 人、数据 3 人、PM 1 人；技术栈 Rust + Flink + Iceberg + Kafka；
+年度预算 300 万。"""
+follow_ups = [
+    "详细展开存储迁移里程碑：Iceberg 表设计、分区策略、小文件治理方案，逐项说明",
+    "详细展开计算引擎切换：Flink 作业拓扑、状态管理、Exactly-Once 语义如何保证",
+    "详细展开全量流量切灰度：灰度分层、回滚预案、监控告警指标，逐项说明",
+    "基于以上所有讨论，用一段话完整总结 Aurora 项目的目标、三个里程碑与团队构成",
+]
+compression_threshold_tokens = 300
+max_cost_usd = 0.20
+timeout_secs = 180
+
+[[assertions]]
+type = "summarization_triggered"
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = "Aurora"
+desc = "最终总结包含项目名"
+
+[[assertions]]
+type = "llm_judge"
+rubric = "压缩发生后最终回答是否仍连贯正确、未丢失关键上下文（目标、里程碑、团队构成）"
+threshold = 0.7
+samples = 1
