@@ -35,8 +35,9 @@ use harness::{
 };
 use harness::{
     AgentExecutionRequest, AgentRequestKind, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, FrontendKind, HarnessConfig, JudgeOutcome, JudgePromptData, JudgeRubric,
-    JudgeVerdict, JudgeVote, LongTermMemory, PendingDispatch, ShortTermMemory, Task, WorkItem,
+    DispatchStrategy, ExternalInput, FrontendKind, HarnessConfig, JudgeOutcome, JudgePromptData,
+    JudgeRubric, JudgeVerdict, JudgeVote, LongTermMemory, MemoryConfig, PendingDispatch,
+    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
     build_harness_app, build_judge_user_prompt, judge_system_prompt, llm::ExecutorRegistry,
     parse_judge_verdict,
 };
@@ -350,6 +351,45 @@ fn count_llm_requests_system(
     count.0 += requests.iter().count();
 }
 
+/// 场景稳定态：所有 Task 处于终态或 Waiting(User)（多轮等待续轮），
+/// 且所有 WorkItem 到达终态（无 in-flight Summarization 等）。
+///
+/// 注意：若实现中发现 Summarization 完成后任务停留态导致该条件永不满足
+/// （见"实现前已确认机制"第 8 条），按实际状态机放宽 Task 侧条件，
+/// WorkItem 侧"全部终态"必须保留（防 follow-up 在压缩 in-flight 时注入
+/// 被 routing 判为无 Waiting(User) 任务而开新 Task 丢上下文）。
+fn scenario_settled(app: &mut bevy_app::App) -> bool {
+    let world = app.world_mut();
+    let mut task_query = world.query::<&Task>();
+    let tasks_settled = task_query.iter(world).all(|t| {
+        t.status.is_terminal() || matches!(t.status, TaskStatus::Waiting(WaitingReason::User))
+    });
+    if !tasks_settled {
+        return false;
+    }
+    let mut wi_query = world.query::<&WorkItem>();
+    wi_query.iter(world).all(|wi| wi.is_terminal())
+}
+
+/// 轮询至稳定态；返回是否在整体超时前到达。
+fn wait_until_settled(
+    app: &mut bevy_app::App,
+    start: &Instant,
+    timeout: Duration,
+    poll_ms: u64,
+) -> bool {
+    loop {
+        app.update();
+        if scenario_settled(app) {
+            return true;
+        }
+        if start.elapsed() > timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(poll_ms));
+    }
+}
+
 /// 运行场景：构建完整 ECS app + 注入 executor，轮询至 Task 终态或超时，收集运行事实。
 fn execute_scenario(
     spec: &ScenarioSpec,
@@ -358,7 +398,7 @@ fn execute_scenario(
 ) -> RunTrace {
     let start = Instant::now();
     let registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let (_input_tx, input_rx) = unbounded();
+    let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         scenario_config(),
         runtime,
@@ -367,6 +407,14 @@ fn execute_scenario(
         vec![],
         harness::channels::ChannelManager::empty().0,
     );
+
+    // 场景级压缩阈值覆写（仅测试侧注入，不触生产代码）
+    if let Some(threshold) = spec.compression_threshold_tokens {
+        app.insert_resource(MemoryConfig {
+            compression_threshold_tokens: threshold,
+            ..Default::default()
+        });
+    }
 
     app.insert_resource(LlmRequestCount::default());
     // 注意：请求实体为帧内瞬态（Dispatch/Transform spawn、Execution 的
@@ -379,7 +427,11 @@ fn execute_scenario(
 
     // DirectDelegate 直派 default-llm-agent：场景聚焦"单轮输入 → 完整工具循环 → 完成"
     // 链路；Brain 调度策略属 Layer 0 既有覆盖（brain_dispatch_flow.rs）。
-    let task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
+    let mut task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
+    // 多轮场景置 multi_turn：LLM 文本回复后任务转 Waiting(User) 等续轮，
+    // follow-up 才能经 routing continue_existing 挂回同一 Task（STM 保留）；
+    // 单轮场景保持 false，文本回复后直接 Done（现有行为不变）。
+    task.multi_turn = !spec.follow_ups.is_empty();
     let task_id = task.id;
     let task_entity = app
         .world_mut()
@@ -412,15 +464,41 @@ fn execute_scenario(
         .and_then(|v| v.parse().ok())
         .unwrap_or(50);
     let timeout = Duration::from_secs(spec.timeout_secs);
+    let channel = scenario_channel();
 
-    // 轮询至所有 Task 终态（场景只有一个顶层 Task）或超时
+    // 多轮场景：逐条 follow-up 经生产 ingress → routing 续轮链路注入。
+    // 每条前置等待稳定态，确保上一轮回复完成且无 in-flight Summarization。
+    for follow_up in &spec.follow_ups {
+        if !wait_until_settled(&mut app, &start, timeout, poll_ms) {
+            break; // 超时，交由终态轮询统一判定
+        }
+        if input_tx
+            .send(ExternalInput::TextWithChannel {
+                channel: channel.clone(),
+                content: follow_up.clone(),
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // 多轮任务停在 Waiting(User) 不会自行 Done：
+    // 注入 /finish 命令走生产命令链路收尾（command → FinishTaskMessage → Done）。
+    if !spec.follow_ups.is_empty() && wait_until_settled(&mut app, &start, timeout, poll_ms) {
+        let _ = input_tx.send(ExternalInput::TextWithChannel {
+            channel: channel.clone(),
+            content: "/finish".to_string(),
+        });
+    }
+
+    // 终态等待：所有 Task 到达 terminal 或整体超时
     loop {
         app.update();
         let all_terminal = {
             let world = app.world_mut();
             let mut query = world.query::<&Task>();
-            let mut iter = query.iter(world);
-            !iter.any(|t| !t.status.is_terminal())
+            !query.iter(world).any(|t| !t.status.is_terminal())
         };
         if all_terminal {
             break;
@@ -443,13 +521,25 @@ fn execute_scenario(
     for task in task_query.iter(world) {
         if trace.task_status.is_none() {
             trace.task_status = Some(format!("{:?}", task.status));
-            trace.final_output = Some(task.result_summary.clone());
+            // 多轮：/finish 的 mark_done 会把 result_summary 覆盖为
+            // "finished by user"，最后一轮真实回复在 input_summary
+            // （llm_response multi_turn 分支写入）；单轮：result_summary 即回复。
+            trace.final_output = Some(if task.multi_turn {
+                task.input_summary.clone()
+            } else {
+                task.result_summary.clone()
+            });
         }
     }
     let mut wi_query = world.query::<&WorkItem>();
     for wi in wi_query.iter(world) {
         if wi.is_terminal() {
             trace.workitem_statuses.push(format!("{:?}", wi.status));
+            if wi.work_type == WorkItemType::Summarization
+                && matches!(wi.status, WorkItemStatus::Completed)
+            {
+                trace.summarization_completed += 1;
+            }
         }
     }
     // 工具调用记录来自 STM（tool_result_system 写入，稳定来源）
