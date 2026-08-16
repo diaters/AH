@@ -30,7 +30,8 @@
 | `async-tool-bridge-pilot-report.md` | 当前有效 | 异步工具桥接试点验证报告 |
 | `plugin-development.md` | 当前有效 | 插件系统开发参考（Host API 与 hook 点） |
 | `AI-Harness-Data-Flow-Guide.md` | 当前有效 | 数据流转概述，实施依据见对应规格 |
-| `configuration.md` | 当前有效 | 配置项参考 |
+| `configuration.md` | 当前有效 | 配置项参考（含测试环境变量） |
+| `testing.md` | 当前有效 | 测试使用指南（四层测试模型与运行方式） |
 | `logs.md` | 当前有效 | 结构化日志规范 |
 | `TODO.md` | 动态 | 进行中与待办清单 |
 | `framework-architecture-analysis.md` | 历史背景 | 早期模块布局分析，已被 `current-state.md`、`wiki/system-pipeline.md` 取代 |
@@ -97,6 +98,7 @@ docs/
 ├── README.md                  # 统一索引（本文件）
 ├── current-state.md           # 唯一真相源：当前能力状态
 ├── configuration.md           # 配置项参考
+├── testing.md                 # 测试使用指南
 ├── logs.md                    # 结构化日志规范
 ├── TODO.md                    # 进行中与待办
 ├── AGENTS.md 镜像说明见仓库根 CLAUDE.md

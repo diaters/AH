@@ -2,6 +2,7 @@
 
 本目录承载声明式场景测试，设计见
 `docs/design/2026-08-16-real-llm-scenario-testing-design.md`。
+完整测试使用方式（四层模型、冒烟/场景/人工流程）见 `docs/testing.md`。
 
 ## 目录结构
 
