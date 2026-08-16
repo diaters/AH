@@ -26,12 +26,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::mock_executor::{DEFAULT_BRAIN_DECISION_JSON, text_output};
+use common::mock_executor::{CannedExecutor, DEFAULT_BRAIN_DECISION_JSON, text_output};
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    ExecutorFuture,
+    ExecutorFuture, ToolPermission,
 };
 use harness::{
     AgentExecutionRequest, AgentRequestKind, ChannelId, DispatchHint, DispatchKind,
@@ -278,25 +278,42 @@ fn scenario_channel() -> ChannelId {
 }
 
 fn spawn_scenario_agent(app: &mut bevy_app::App) {
-    app.world_mut().spawn((
-        Agent {
-            id: Uuid::new_v4(),
-            profile: AgentProfile {
-                name: "default-llm-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string(), "default".to_string()],
-                description: "Scenario runner default agent".to_string(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
+    let agent = Agent {
+        id: Uuid::new_v4(),
+        profile: AgentProfile {
+            name: "default-llm-agent".to_string(),
+            model: "gpt-4.1-mini".to_string(),
         },
-        LongTermMemory::default(),
-    ));
+        capabilities: AgentCapabilities {
+            tags: vec!["llm".to_string(), "default".to_string()],
+            description: "Scenario runner default agent".to_string(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        // 显式 Allow：场景 runner 无人值守，不能让 Confirm 权限的工具等待用户确认
+        // （否则卡死在 Waiting(User)，见 scenario_tool_call_loop_reaches_done 注释）。
+        // 同时 default_permission_explicit=true 让 implicit_confirm 回落不生效，
+        // effective_permission 稳定返回 Allow。
+        tool_permissions: AgentToolPermissions {
+            default_permission: ToolPermission::Allow,
+            default_permission_explicit: true,
+            overrides: std::collections::HashMap::new(),
+        },
+        system_prompt: None,
+    };
+    let id = agent.id;
+    let entity = app
+        .world_mut()
+        .spawn((agent, LongTermMemory::default()))
+        .id();
+    // 与中心 spawn_agent 封装一致：登记 AgentId → Entity。
+    // async_tool_dispatch_system / tool_calling_orchestrator_system 均经 EntityIndex
+    // 做 O(1) 解析；绕过封装直接 spawn 必须手动补登记，否则索引为空导致解析失败。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .agents
+        .insert(id, entity);
 }
 
 /// LLM 请求计数（Added 过滤器，对 mock/real 两种模式一致计数）
@@ -332,6 +349,9 @@ fn execute_scenario(
     );
 
     app.insert_resource(LlmRequestCount::default());
+    // 注意：请求实体为帧内瞬态（Dispatch/Transform spawn、Execution 的
+    // agent_execution_system 同帧 despawn），从测试侧无法用 `Added` 可靠计数，
+    // 报告中的 "LLM 调用" 仅作参考，可能为 0（已知诊断限制，不影响断言）。
     app.add_systems(bevy_app::Update, count_llm_requests_system);
 
     app.update();
@@ -339,19 +359,33 @@ fn execute_scenario(
 
     // DirectDelegate 直派 default-llm-agent：场景聚焦"单轮输入 → 完整工具循环 → 完成"
     // 链路；Brain 调度策略属 Layer 0 既有覆盖（brain_dispatch_flow.rs）。
-    app.world_mut().spawn((
-        Task::from_user_input_ready(&spec.input, 3, scenario_channel()),
-        ShortTermMemory::default(),
-        PendingDispatch {
-            kind: DispatchKind::Task,
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: Some("default-llm-agent".to_string()),
-                required_skill_id: None,
-                agent_spawn_spec: None,
+    let task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
+    let task_id = task.id;
+    let task_entity = app
+        .world_mut()
+        .spawn((
+            task,
+            ShortTermMemory::default(),
+            PendingDispatch {
+                kind: DispatchKind::Task,
+                hint: DispatchHint {
+                    strategy: DispatchStrategy::DirectDelegate,
+                    preferred_agent_name: Some("default-llm-agent".to_string()),
+                    required_skill_id: None,
+                    agent_spawn_spec: None,
+                },
             },
-        },
-    ));
+        ))
+        .id();
+    // 关键：绕开 spawn_task 中心封装直接 spawn，必须手动登记 EntityIndex.tasks。
+    // 否则 tool_calling_orchestrator_system 的 index.get_task() 解析失败（返回 None），
+    // 会把 task_is_waiting 判为 false 而 skip，工具结果永不汇入 follow-up LLM，
+    // 任务卡死在 Waiting(ToolExecution)（shell_stat_task 失败根因，见回归测试
+    // scenario_tool_call_loop_reaches_done）。
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     let poll_ms: u64 = std::env::var("HARNESS_TEST_SCENARIO_POLL_MS")
         .ok()
@@ -696,39 +730,81 @@ fn render_review_pending_markdown(report: &ScenarioReport) -> String {
     md
 }
 
-/// 金标准快照：首次运行写入；后续运行 diff（结构差异仅标注，`--bless` 显式更新，设计 §6.3A）
+/// 金标准快照（结构级）：只锚定 Agent 使用的**工具集合**，最终输出文本不参与比对。
+///
+/// 设计依据（`docs/design/2026-08-16-real-llm-scenario-testing-design.md` §6.3A）：
+/// 金标准做"结构差异"比对而非字节比对——真实 LLM 输出措辞必然波动，整文件全等
+/// 只会产生噪音；文本正确性交由 `llm_judge` 语义判断。
+///
+/// 比对粒度为**去重后的工具集合**（无序、忽略调用次数）：只回答"Agent 是否用了
+/// 预期的工具种类"。比"有序含重复序列"更稳健——真实 LLM 可能对同一工具调用多次
+/// （如 shell_exec 重试），这不算行为回归；而"不用工具 → 用工具"或"换用别的工具"
+/// 这类结构变化才会触发漂移。
+///
+/// 首次运行自动创建；后续运行仅比对工具集合，漂移时给出期望/实际集合，
+/// 不自动更新（`--bless` 语义由人工显式覆盖实现）。
 fn apply_golden(root: &Path, spec: &ScenarioSpec, trace: &RunTrace) -> String {
     let golden_dir = root.join("golden");
     let _ = std::fs::create_dir_all(&golden_dir);
     let path = golden_dir.join(format!("{}.md", spec.name));
-    let tools = if trace.tool_calls.is_empty() {
-        "（无）\n".to_string()
-    } else {
-        trace
-            .tool_calls
-            .iter()
-            .map(|(n, _)| format!("- {n}\n"))
-            .collect()
-    };
+
+    let tools = unique_tools(trace.tool_calls.iter().map(|(name, _)| name.clone()));
     let snapshot = format!(
-        "# 金标准：{}\n\n## 最终输出\n\n```text\n{}\n```\n\n## 工具序列\n\n{}",
+        "# 金标准：{}\n\n## 工具序列\n\n{}",
         spec.name,
-        trace.final_output.as_deref().unwrap_or("（无输出）"),
-        tools
+        if tools.is_empty() {
+            "（无）\n".to_string()
+        } else {
+            tools
+                .iter()
+                .map(|t| format!("- {t}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        }
     );
+
     match std::fs::read_to_string(&path) {
-        Ok(old) if old == snapshot => "与金标准一致".to_string(),
-        Ok(old) => format!(
-            "金标准漂移（旧 {} 字节 / 新 {} 字节），需人工比对；显式更新请覆盖 {}",
-            old.len(),
-            snapshot.len(),
-            path.display()
-        ),
+        Ok(old) => {
+            let old_tools = unique_tools(parse_golden_tools(&old));
+            if old_tools == tools {
+                "与金标准一致".to_string()
+            } else {
+                format!(
+                    "金标准漂移（工具集合变化）：期望 {:?} / 实际 {:?}；显式更新请覆盖 {}",
+                    old_tools,
+                    tools,
+                    path.display()
+                )
+            }
+        }
         _ => {
             let _ = std::fs::write(&path, &snapshot);
             "首次运行，金标准已创建".to_string()
         }
     }
+}
+
+/// 工具名去重并排序，得到集合语义（比对忽略调用顺序与次数）。
+fn unique_tools(tools: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut set: Vec<String> = tools.into_iter().collect();
+    set.sort();
+    set.dedup();
+    set
+}
+
+/// 从 golden 文件解析工具名：收集所有 `- xxx` 前缀行。
+/// `（无）` 不以 `- ` 开头，解析为空集合，与"无工具"语义一致。
+fn parse_golden_tools(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("- ")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        })
+        .collect()
 }
 
 fn timestamp() -> String {
@@ -881,6 +957,69 @@ fn scenario_framework_mock_smoke_echo_report() {
     assert!(!tmp.path().join("review-pending").exists());
 }
 
+/// Mock 模式工具循环回归（shell_stat_task 失败根因的守护测试）。
+///
+/// 修复前 runner 直接 `world.spawn(Task)` 绕过 `spawn_task` 中心封装，EntityIndex
+/// 未登记，`tool_calling_orchestrator_system` 的 `index.get_task()` 解析失败（None）
+/// 把 `task_is_waiting` 判为 false 而 skip —— 工具结果永不汇入 follow-up LLM，
+/// 任务卡死在 `Waiting(ToolExecution)`，最终输出为空（真实 API 运行报告复现）。
+///
+/// 修复：
+/// 1. runner 手动登记 Task/Agent 到 EntityIndex（与中心封装等价）；
+/// 2. 场景 agent 显式 Allow 权限——修复 1 后权限检查生效，若仍用默认 Confirm
+///    权限，shell_exec 会卡在等待用户确认的 `Waiting(User)`。
+///
+/// 本测试用 `CannedExecutor`（首次返回 `shell_exec` 工具调用、follow-up 返回含
+/// 数字的文本）跑 shell_stat_task 场景，断言任务到达 `Done` 且确定性断言无 FAIL。
+#[test]
+fn scenario_tool_call_loop_reaches_done() {
+    let file = load_scenario("shell_stat_task");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CannedExecutor::new(vec![
+        harness::AgentExecutionOutput {
+            content: harness::OutputContent::ToolCalls(vec![harness::LlmToolCall {
+                id: "call_shell_stat".to_string(),
+                name: "shell_exec".to_string(),
+                arguments: r#"{"command":"echo 279","timeout_secs":30}"#.to_string(),
+            }]),
+            reasoning_content: None,
+        },
+        text_output("统计完成：当前目录共有 279 个 .rs 文件。"),
+    ]));
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor.clone(),
+        executor,
+        runtime,
+        "mock（工具循环回归）",
+        tmp.path(),
+    );
+
+    assert_eq!(
+        report.trace.task_status.as_deref(),
+        Some("Done"),
+        "工具循环应到达 Done（EntityIndex 登记后 follow-up 正常续跑）: {:?}",
+        report.trace.task_status
+    );
+    assert!(
+        report
+            .trace
+            .final_output
+            .as_deref()
+            .unwrap_or("")
+            .contains("279"),
+        "最终输出应包含工具统计结果: {:?}",
+        report.trace.final_output
+    );
+    assert!(
+        report.all_passed,
+        "确定性断言不应 FAIL（tool_called / state_reached / response_matches）: {:?}",
+        report.results
+    );
+}
+
 /// Mock 模式断言引擎单元验证：tool_called 失败、human_review 待审、正则不匹配失败。
 #[test]
 fn scenario_assertion_engine_branches() {
@@ -948,6 +1087,9 @@ fn real_llm_scenarios_run() {
         eprintln!("skip: 未设置 HARNESS_TEST_REAL_LLM / HARNESS_LLM_API_KEY，自动跳过真实场景运行");
         return;
     }
+    // 与冒烟测试一致：安装 rustls ring CryptoProvider（生产入口 main.rs 同样处理）。
+    // `install_default` 仅首次生效，重复调用返回 Err 可忽略。
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let names = list_scenario_files();
     assert!(!names.is_empty(), "tests/scenarios/ 下应至少有一个场景文件");
 
