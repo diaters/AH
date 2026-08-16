@@ -354,10 +354,10 @@ fn count_llm_requests_system(
 /// 场景稳定态：所有 Task 处于终态或 Waiting(User)（多轮等待续轮），
 /// 且所有 WorkItem 到达终态（无 in-flight Summarization 等）。
 ///
-/// 注意：若实现中发现 Summarization 完成后任务停留态导致该条件永不满足
-/// （见"实现前已确认机制"第 8 条），按实际状态机放宽 Task 侧条件，
-/// WorkItem 侧"全部终态"必须保留（防 follow-up 在压缩 in-flight 时注入
-/// 被 routing 判为无 Waiting(User) 任务而开新 Task 丢上下文）。
+/// 注意：若未来实现中 Summarization 完成后任务停留态导致本条件永不满足，
+/// 可按实际状态机放宽 Task 侧条件；但 WorkItem 侧"全部终态"必须保留——
+/// 否则 follow-up 会在压缩 in-flight 时注入，被 routing 判为无 Waiting(User)
+/// 任务而开新 Task，丢失原任务上下文。
 fn scenario_settled(app: &mut bevy_app::App) -> bool {
     let world = app.world_mut();
     let mut task_query = world.query::<&Task>();
@@ -372,6 +372,9 @@ fn scenario_settled(app: &mut bevy_app::App) -> bool {
 }
 
 /// 轮询至稳定态；返回是否在整体超时前到达。
+///
+/// 注意：每次循环调用 `app.update()` 会推进 ECS 一帧（运行所有 system，
+/// 可能产生副作用），调用方需知悉。
 fn wait_until_settled(
     app: &mut bevy_app::App,
     start: &Instant,
@@ -485,11 +488,18 @@ fn execute_scenario(
 
     // 多轮任务停在 Waiting(User) 不会自行 Done：
     // 注入 /finish 命令走生产命令链路收尾（command → FinishTaskMessage → Done）。
-    if !spec.follow_ups.is_empty() && wait_until_settled(&mut app, &start, timeout, poll_ms) {
-        let _ = input_tx.send(ExternalInput::TextWithChannel {
-            channel: channel.clone(),
-            content: "/finish".to_string(),
-        });
+    // 边界：若此前 wait_until_settled 超时（WorkItem 未终态），/finish 不会注入，
+    // 场景会卡在 Waiting(User) 直到整体超时（mock 测试不会触发，真实场景属预期超时风险）。
+    if !spec.follow_ups.is_empty()
+        && wait_until_settled(&mut app, &start, timeout, poll_ms)
+        && input_tx
+            .send(ExternalInput::TextWithChannel {
+                channel: channel.clone(),
+                content: "/finish".to_string(),
+            })
+            .is_err()
+    {
+        // 发送失败（receiver 已关闭），交由终态轮询统一判定超时
     }
 
     // 终态等待：所有 Task 到达 terminal 或整体超时
