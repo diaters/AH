@@ -18,6 +18,6 @@ desc = "回复包含状态词"
 
 [[assertions]]
 type = "llm_judge"
-rubric = "回复是否为一句简短的状态汇报，且明确包含「正常运行」字样"
+rubric = "回复是否完成了系统状态确认，且明确包含「正常运行」字样，内容合理无错误"
 threshold = 0.7
 samples = 1
