@@ -1,12 +1,12 @@
 # 真实 LLM 场景测试与分层正确性判断设计
 
-> **状态：当前有效**
+> __状态：当前有效__
 
 | 属性 | 值 |
 |------|-----|
 | 创建日期 | 2026-08-16 |
 | 实施状态 | 分阶段实施中（PR 路径见第 10 节） |
-| 相关文档 | `2026-05-24-genai-migration-design.md`、`2026-06-06-plan-evaluation-reassessment-design.md`、`docs/current-state.md` |
+| 相关文档 | `2026-05-24-genai-migration-design.md`、`2026-06-06-plan-evaluation-reassessment-design.md` |
 
 ## 1. 背景与问题
 
@@ -21,21 +21,21 @@
 
 | 缺口 | 影响 |
 |------|------|
-| `src/llm/genai.rs` 适配层零测试：`build_chat_request`、`build_genai_tools`、`parse_response`、`sanitize_tool_name`、`OpenAiCompatible` 的 `ServiceTargetResolver` 注入 | genai 升级或 API 响应格式变化无法被任何测试捕获；`AGENTS.md` 已注明"Provider 兼容性需要结合真实场景继续验证"，但当前没有验证入口 |
+| `src/llm/genai.rs` 适配层零测试（`build_chat_request`、`parse_response` 等） | genai 升级或 API 格式变化无法被测试捕获；无验证入口 |
 | 无 `#[ignore]` 真实 LLM 冒烟测试 | 手动验证 provider 连通性只能靠运行完整 TUI 会话，无法快速回归 |
-| 多 provider 降级链路无测试 | 生产走 `ExecutorRegistry::from_config`（多 provider + 冷却），测试全部走单 provider 注入，`per-agent-multi-model-fallback` 语义未被覆盖 |
+| 多 provider 降级链路无测试 | 生产走 `ExecutorRegistry::from_config`，测试全部走单 provider 注入，`per-agent-multi-model-fallback` 语义未覆盖 |
 | Evaluation 决策下游分支未验证 | `EvaluationDecision`（Continue/Complete/Failed/OffTrack）解析后的运行时行为分支缺少集成覆盖 |
 | Mock executor 重复定义 | `EchoExecutor` 等基础 mock 在约 20 个测试文件中重复实现，行为可能漂移 |
 | 真实场景正确性无判断手段 | "Agent 是否真的完成了任务"只能靠人工开 TUI 观察，无结构化判断与沉淀机制 |
 
 ### 1.3 核心矛盾
 
-mock 测试验证的是**编排逻辑**（状态机、派发、工具循环、通道路由），它无法回答两类问题：
+mock 测试验证的是__编排逻辑__（状态机、派发、工具循环、通道路由），它无法回答两类问题：
 
-- **连通性问题**：真实 provider 的请求格式、响应解析、错误分类是否正确。
-- **语义问题**：真实 LLM 输出是否正确完成了任务（摘要是否准确、决策是否合理）。
+- __连通性问题__：真实 provider 的请求格式、响应解析、错误分类是否正确。
+- __语义问题__：真实 LLM 输出是否正确完成了任务（摘要是否准确、决策是否合理）。
 
-第二类问题本质上**无法用确定性代码完全判断**，需要引入 AI 判断与人工判断的分层机制。
+第二类问题本质上__无法用确定性代码完全判断__，需要引入 AI 判断与人工判断的分层机制。
 
 ## 2. 设计目标与非目标
 
@@ -74,10 +74,10 @@ Layer 0  单元/集成    Mock executor（现有 1027 个，CI 必跑，确定�
 
 设计原则：
 
-- **逐层收敛**：Layer 1 失败无需跑 Layer 2；Layer 2 的确定性断言失败无需看 Judge 结果。
-- **判断成本递增**：代码断言零成本，AI 斤断低成本（每场景数次 LLM 调用），人工判断高成本
+- __逐层收敛__：Layer 1 失败无需跑 Layer 2；Layer 2 的确定性断言失败无需看 Judge 结果。
+- __判断成本递增__：代码断言零成本，AI 斤断低成本（每场景数次 LLM 调用），人工判断高成本
   （只处理前两级无法裁决的样本）。
-- **门控统一**：所有真实 API 测试共用同一组环境变量开关，未设置时测试体自动 skip 并提示，
+- __门控统一__：所有真实 API 测试共用同一组环境变量开关，未设置时测试体自动 skip 并提示，
   不产生失败。
 
 ## 4. Layer 1：真实 LLM 冒烟测试
@@ -115,7 +115,7 @@ fn real_llm_enabled() -> bool {
 ### 4.4 与单元测试的分工
 
 `build_chat_request`、`build_genai_tools`、`parse_response`、`build_chat_messages` 属于纯
-函数，补**无网络的单元测试**（放 `src/llm/genai.rs` 的 `#[cfg(test)]`），覆盖消息转换、
+函数，补__无网络的单元测试__（放 `src/llm/genai.rs` 的 `#[cfg(test)]`），覆盖消息转换、
 tool_calls 解析、`reasoning_content` 透传等分支。冒烟测试只负责"真实端点 + 真实响应格式"
 这层单元测试无法覆盖的部分。
 
@@ -185,7 +185,7 @@ note = "汇报口吻是否符合中文助手风格"
 
 ## 6. Layer 3：三级正确性判断体系
 
-核心原则：**代码能判的归代码，代码判不了的归 AI，AI 判不稳的归人。**
+核心原则：__代码能判的归代码，代码判不了的归 AI，AI 判不稳的归人。__
 
 ### 6.1 第 1 级：结构性断言（代码判断）
 
@@ -194,11 +194,11 @@ note = "汇报口吻是否符合中文助手风格"
 
 ### 6.2 第 2 级：LLM-as-Judge（AI 判断，复用 Evaluation 体系）
 
-**请求通道**：复用 `AgentRequestKind::Evaluation`（`src/domain/execution.rs:17`）与
+__请求通道__：复用 `AgentRequestKind::Evaluation`（`src/domain/execution.rs:17`）与
 `AgentExecutionRequest`，Judge 本质是对测试输出的评估请求，通过 `system_prompt`
 注入 Judge 语境。不新增枚举变体，不触碰既有 match 分支（简化优先）。
 
-**数据结构**（新增于 `src/domain/evaluation.rs`，与 `EvaluationResult` 并列）：
+__数据结构__（新增于 `src/domain/evaluation.rs`，与 `EvaluationResult` 并列）：
 
 ```rust
 /// Judge 维度
@@ -230,28 +230,28 @@ pub struct JudgeRubric {
 pub fn parse_judge_verdict(content: &str) -> Result<JudgeVerdict, String>;
 ```
 
-**非确定性治理**：
+__非确定性治理__：
 
-- Judge 模型与被测模型**必须不同源**（场景文件中独立声明 judge provider），避免自我偏好。
+- Judge 模型与被测模型__必须不同源__（场景文件中独立声明 judge provider），避免自我偏好。
 - 每个断言采样 `samples` 次（默认 3），多数投票决定 pass/fail。
 - 票数分裂（如 2:1）或任一次 `confidence < 0.8` → 自动降级为人工待审，不强行裁决。
 - Judge 请求 `temperature = 0`。
 - 复用 `parse_evaluation_result` 的 markdown code block 提取模式，容忍 LLM 输出包裹格式。
 
-**Prompt 构建**：新增 `build_judge_prompt`（放 `src/llm/` 下与
+__Prompt 构建__：新增 `build_judge_prompt`（放 `src/llm/` 下与
 `summarization_prompt.rs` 并列的 `judge_prompt.rs`），输入为场景描述 + 用户输入 +
 Agent 最终输出 + 工具调用摘要，输出要求 JSON 格式的 `JudgeVerdict`。
 
 ### 6.3 第 3 级：人工判断（human-in-the-loop）
 
-**A. 金标准快照（golden set）**
+__A. 金标准快照（golden set）__
 
 - 场景首次运行通过（代码断言 + Judge + 人工确认）后，输出存为
   `tests/scenarios/golden/<scenario>.md`（含输入、输出、工具序列、Judge 裁决）。
 - 后续运行自动 diff：结构差异（工具序列变化）报告 + 语义差异交 Judge 复核。
 - 金标准更新必须显式 `--bless`（类似 snapshot test），防止静默漂移。
 
-**B. 待审队列（review queue）**
+__B. 待审队列（review queue）__
 
 - Judge 低置信、票数分裂、`human_review` 断言、以及运行失败的场景样本，写入
   `tests/scenarios/review-pending/<scenario>-<timestamp>.md`。
@@ -286,15 +286,15 @@ Judge（采样投票）→ 高置信通过/失败 → 金标准比对
   `KindAwareMockExecutor`（按 `request_kind` 分发，统一覆盖 Brain/Summarization/Evaluation
   场景）。
 - 各测试文件删除本地定义改用共享版本，行为以共享实现为准。
-- 收敛原则：只收敛**跨文件重复**的定义，单场景专用 mock（如 `InfiniteToolCallExecutor`）
+- 收敛原则：只收敛__跨文件重复__的定义，单场景专用 mock（如 `InfiniteToolCallExecutor`）
   留在原文件。
 
 ## 9. 文件变更清单
 
 | 文件 | 变更类型 | 说明 |
 |------|---------|------|
-| `src/llm/genai.rs` | 修改 | 补 `build_chat_request` / `build_genai_tools` / `parse_response` / `build_chat_messages` / sanitize 往返的无网络单元测试 |
-| `src/domain/evaluation.rs` | 修改 | 新增 `JudgeDimension`、`JudgeVerdict`、`JudgeRubric`、`parse_judge_verdict` |
+| `src/llm/genai.rs` | 修改 | 补适配层无网络单元测试（消息转换、tool_calls 解析、sanitize 往返） |
+| `src/domain/evaluation.rs` | 修改 | 新增 Judge 数据结构与 `parse_judge_verdict` |
 | `src/llm/judge_prompt.rs` | 新增 | `build_judge_prompt`（场景 + 输出 + 工具摘要 → Judge prompt） |
 | `tests/common/mock_executor.rs` | 新增 | 共享 mock executor 集 |
 | `tests/common/mod.rs` | 修改 | 导出 `mock_executor` 子模块 |
@@ -312,14 +312,14 @@ Judge（采样投票）→ 高置信通过/失败 → 金标准比对
 
 按依赖顺序拆为 3 个 PR：
 
-1. **PR 1：测试基础设施收敛与适配层单元测试**
+1. __PR 1：测试基础设施收敛与适配层单元测试__
    - `tests/common/mock_executor.rs` 共享 mock + 各文件迁移。
    - `genai.rs` 纯单元测试（无网络，进 CI）。
    - 风险最低，先行合入。
-2. **PR 2：Layer 1 冒烟测试**
+2. __PR 2：Layer 1 冒烟测试__
    - `tests/real_llm_smoke.rs` + 门控 + provider 矩阵。
    - 文档同步（`configuration.md`、`current-state.md`）。
-3. **PR 3：Layer 2/3 场景框架与 Judge**
+3. __PR 3：Layer 2/3 场景框架与 Judge__
    - Judge 数据结构与 prompt 构建（含单元测试：`parse_judge_verdict` 鲁棒性、
      `build_judge_prompt` 内容）。
    - 场景 runner + 断言引擎 + 报告产出。
@@ -327,23 +327,23 @@ Judge（采样投票）→ 高置信通过/失败 → 金标准比对
 
 ## 11. 验证方案
 
-- **PR 1**：现有 342 个集成测试全绿（mock 收敛不改变行为）；新增 genai 单元测试进 CI。
-- **PR 2**：无环境变量时测试自动 skip 且不 fail；配置真实 key 手动执行
+- __PR 1__：现有 342 个集成测试全绿（mock 收敛不改变行为）；新增 genai 单元测试进 CI。
+- __PR 2__：无环境变量时测试自动 skip 且不 fail；配置真实 key 手动执行
   `cargo test --test real_llm_smoke -- --ignored` 全部通过；四个 provider kind 至少
   各验证一次。
-- **PR 3**：场景框架自身用 mock executor 跑通（框架正确性不依赖真实 API，可进 CI 的
+- __PR 3__：场景框架自身用 mock executor 跑通（框架正确性不依赖真实 API，可进 CI 的
   非门控冒烟子集）；真实场景手动执行产出报告；`parse_judge_verdict` 单元测试覆盖
   纯 JSON、markdown 包裹、非法输入。
-- **文档验证**：`markdownlint` 与 `cargo fmt` / `clippy` / `test` 全部通过。
+- __文档验证__：`markdownlint` 与 `cargo fmt` / `clippy` / `test` 全部通过。
 
 ## 12. 风险与边界
 
-- **Judge 判断质量依赖 prompt 与模型**：金标准集合是校准手段；rubric 措辞随场景演进，
+- __Judge 判断质量依赖 prompt 与模型__：金标准集合是校准手段；rubric 措辞随场景演进，
   初期接受"低置信转人工"比例偏高，通过待审标注逐步收敛。
-- **真实 API 测试天然非确定**：本设计不追求其稳定复现，定位是"手动回归 + 趋势监控"，
+- __真实 API 测试天然非确定__：本设计不追求其稳定复现，定位是"手动回归 + 趋势监控"，
   不作为合并门禁。
-- **成本**：单次全场景运行预算控制在美元级（首批 3-5 个场景、Judge 采样 3 次），
+- __成本__：单次全场景运行预算控制在美元级（首批 3-5 个场景、Judge 采样 3 次），
   报告中显式汇总；后续场景增长时按需提高采样或调整频率。
-- **Evaluation 下游分支覆盖缺口**（1.2 节第 4 行）不纳入本设计，作为独立任务跟进。
-- **`build_harness_app` 真实配置路径测试**（真实 `agents.toml` 解析）属配置加载范畴，
+- __Evaluation 下游分支覆盖缺口__（1.2 节第 4 行）不纳入本设计，作为独立任务跟进。
+- __`build_harness_app` 真实配置路径测试__（真实 `agents.toml` 解析）属配置加载范畴，
   同样作为独立任务，不与真实 API 测试耦合。
