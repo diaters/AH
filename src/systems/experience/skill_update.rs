@@ -233,12 +233,15 @@ pub(crate) fn skill_update_workitem_system(
                 - 二级标题级：replace_section / add_section / remove_section\n\
                 - 三级标题级：replace_subsection / add_subsection / remove_subsection\n\
                 - 兜底：replace_body（整体替换 body，frontmatter 不变）\n\
-                - frontmatter：replace_frontmatter（仅 name / description / self_updatable）\n\
+                - frontmatter：replace_frontmatter（name / description / self_updatable / dependencies）\n\
                 - 文件级：replace_file / create_file / delete_file（不可作用于 SKILL.md）\n\
              4. section 级操作默认作用于 SKILL.md；指定 path 字段可作用于其他 .md 文件（如 'download.md'）\n\
              5. path 指定的文件必须已存在且后缀为 .md；新建文件使用 create_file\n\
              6. replace_section / replace_subsection 的 content 字段不得包含标题行本身\n\
-             7. 优先使用颗粒度更细的 operation（subsection > section > replace_body / replace_file）",
+             7. 优先使用颗粒度更细的 operation（subsection > section > replace_body / replace_file）\n\
+             8. 若更新后 skill 的执行依赖同 agent 名下其他 skill 提供的能力（工具用法、操作流程等），\
+             通过 replace_frontmatter 的 dependencies 字段声明，例如 `dependencies: [browser-automation]`；\
+             依赖只能引用同 agent 名下已存在的 skill，引用不存在的 skill 将导致更新回滚",
             candidate_kind_label,
             skill_entry.version,
             skill_md_content,
@@ -494,25 +497,62 @@ pub(crate) fn skill_update_completion_system(
             );
         }
 
-        // 8. 解析新内容并刷新 SkillRegistry；若解析失败，文件已写入，候选仍置 Persisted
+        // 8. 解析新内容；解析成功后再校验依赖（存在性 + 环），校验失败走既有回滚路径
         // ADR-006：从磁盘重新读取 SKILL.md（apply 可能是多文件的）
-        let skill_dir_for_parse = skill_dir.clone();
         let new_skill_md_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
-        let parsed_entry = crate::infrastructure::skills::loader::parse_skill_md(
+        let parsed_skill = crate::infrastructure::skills::loader::parse_skill_md(
             &new_skill_md_content,
-            skill_dir_for_parse,
-        )
-        .map(|parsed| SkillEntry {
-            skill_id: msg.skill_id.clone(),
-            name: parsed.name,
-            description: parsed.description,
-            instructions: parsed.instructions,
-            version: msg.new_version,
-            owner_agent_name: msg.skill_id.owner_agent_name.clone(),
-            self_updatable: parsed.self_updatable,
-            dependencies: parsed.dependencies,
-        });
-        if let Some(entry) = parsed_entry {
+            skill_dir.clone(),
+        );
+
+        // 8.1 严格校验依赖（存在性 + 环），数据源为磁盘扫描（与注入路径一致）
+        if let Some(parsed) = &parsed_skill {
+            let loaded = skill_loader.load_skills(&msg.skill_id.owner_agent_name);
+            let problems = crate::infrastructure::skills::loader::validate_skill_dependencies(
+                &loaded,
+                &msg.skill_id.skill_name,
+                &parsed.dependencies,
+            );
+            if !problems.is_empty() {
+                warn!(
+                    event = "SkillUpdateDependencyValidationFailed",
+                    task_id = %msg.task_id,
+                    skill_id = %msg.skill_id.as_string(),
+                    base_version = context.base_version,
+                    problems = ?problems,
+                    error = "updated skill declares invalid dependencies, rolling back",
+                    error_type = "DependencyValidationFailed",
+                    "dependency validation failed, attempting rollback"
+                );
+                if let Err(re) =
+                    crate::infrastructure::skills::restore_skill_dir(&skill_dir, &backup_dir)
+                {
+                    warn!(
+                        event = "SkillDirRollbackFailed",
+                        task_id = %msg.task_id,
+                        skill_id = %msg.skill_id.as_string(),
+                        error = %re,
+                        error_type = "RollbackFailed",
+                        "CRITICAL: rollback failed, skill directory may be in inconsistent state"
+                    );
+                }
+                commands.entity(entity).despawn();
+                continue;
+            }
+        }
+
+        // 8.2 刷新 SkillRegistry；若解析失败，文件已写入，候选仍置 Persisted
+        if let Some(parsed) = parsed_skill {
+            let entry = SkillEntry {
+                skill_id: msg.skill_id.clone(),
+                name: parsed.name,
+                description: parsed.description,
+                instructions: parsed.instructions,
+                version: msg.new_version,
+                owner_agent_name: msg.skill_id.owner_agent_name.clone(),
+                self_updatable: parsed.self_updatable,
+                dependencies: parsed.dependencies,
+            };
             skill_registry.refresh(entry);
         } else {
             warn!(
@@ -1559,6 +1599,154 @@ mod completion_system_tests {
         // SKILL.md 未被改动
         let skill_md = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
         assert!(skill_md.contains("Do the thing."));
+
+        // 候选状态保持 GovernanceResolved（未 Persisted）
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::GovernanceResolved);
+    }
+
+    /// 更新引入不存在的依赖 → 依赖校验失败，走既有回滚路径。
+    #[test]
+    fn completion_system_rejects_missing_dependency_and_rolls_back() {
+        let skill_id = SkillId::new("agent-a", "coding");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+        let skill_path = loader.skill_md_path(&skill_id);
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let (work_item_id, context_candidate_id, work_item_entity) =
+            spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        // 与既有测试一致：把 candidate_id 对齐到 context 里的 candidate_id
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .get_mut(&candidate_id)
+            .unwrap()
+            .candidate_id = context_candidate_id;
+        let c = world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .remove(&candidate_id)
+            .unwrap();
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .insert(context_candidate_id, c);
+        let candidate_id = context_candidate_id;
+
+        // replace_frontmatter 把 dependencies 改为引用不存在的 skill
+        let operations = vec![SkillUpdateOperation::ReplaceFrontmatter {
+            field: "dependencies".to_string(),
+            value: "[not-exist]".to_string(),
+        }];
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(
+                work_item_id,
+                skill_id.clone(),
+                1,
+                2,
+                operations,
+            ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // 已回滚：SKILL.md 恢复为原内容，不含非法依赖
+        let content = fs::read_to_string(&skill_path).unwrap();
+        assert!(content.contains("Do the thing."));
+        assert!(
+            !content.contains("not-exist"),
+            "SKILL.md 应已回滚，不保留非法依赖声明"
+        );
+
+        // 候选状态保持 GovernanceResolved（未 Persisted）
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::GovernanceResolved);
+
+        // registry 未被刷新为非法依赖
+        let registry = world.resource::<SkillRegistry>();
+        let entry = registry.get(&skill_id);
+        if let Some(e) = entry {
+            assert!(
+                !e.dependencies.contains(&"not-exist".to_string()),
+                "registry 不应包含非法依赖"
+            );
+        }
+    }
+
+    /// 更新引入传递依赖环（coding→helper→coding）→ 依赖校验失败，走回滚路径。
+    #[test]
+    fn completion_system_rejects_dependency_cycle_and_rolls_back() {
+        let skill_id = SkillId::new("agent-a", "coding");
+        let helper_id = SkillId::new("agent-a", "helper");
+        let (_tmp, loader) = setup_skill_dir(&skill_id, SAMPLE_SKILL_MD);
+        let skill_path = loader.skill_md_path(&skill_id);
+        // helper skill 已依赖 coding（形成潜在环的前提）
+        let helper_path = loader.skill_md_path(&helper_id);
+        fs::create_dir_all(helper_path.parent().unwrap()).unwrap();
+        fs::write(
+            &helper_path,
+            "---\nname: helper\ndescription: helper skill\nversion: 1\nself_updatable: true\ndependencies: [coding]\n---\n\n## Usage\n\nHelp.\n",
+        )
+        .unwrap();
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_resolved_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let (work_item_id, context_candidate_id, work_item_entity) =
+            spawn_work_item_with_context(&mut world, skill_id.clone(), 1);
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .get_mut(&candidate_id)
+            .unwrap()
+            .candidate_id = context_candidate_id;
+        let c = world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .remove(&candidate_id)
+            .unwrap();
+        world
+            .resource_mut::<ExperienceStore>()
+            .candidates
+            .insert(context_candidate_id, c);
+        let candidate_id = context_candidate_id;
+
+        // replace_frontmatter 让 coding 依赖 helper → coding→helper→coding 环
+        let operations = vec![SkillUpdateOperation::ReplaceFrontmatter {
+            field: "dependencies".to_string(),
+            value: "[helper]".to_string(),
+        }];
+        world
+            .entity_mut(work_item_entity)
+            .insert(make_completed_message(
+                work_item_id,
+                skill_id.clone(),
+                1,
+                2,
+                operations,
+            ));
+
+        let _ = world.run_system_once(skill_update_completion_system);
+
+        // 已回滚：SKILL.md 恢复为原内容，不含依赖环声明
+        let content = fs::read_to_string(&skill_path).unwrap();
+        assert!(content.contains("Do the thing."));
+        assert!(
+            !content.contains("dependencies: [helper]"),
+            "SKILL.md 应已回滚，不保留引入环的依赖声明"
+        );
 
         // 候选状态保持 GovernanceResolved（未 Persisted）
         let store = world.resource::<ExperienceStore>();

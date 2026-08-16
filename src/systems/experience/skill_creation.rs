@@ -12,7 +12,7 @@ use crate::domain::{
     SkillCreationWritebackMessage, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
     WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
-use crate::infrastructure::skills::{SkillEntry, SkillId, SkillLoader, SkillRegistry};
+use crate::infrastructure::skills::{LoadedSkill, SkillEntry, SkillId, SkillLoader, SkillRegistry};
 use crate::user_plugins::hook_point::HookPoint;
 
 /// skill 创建 WorkItem 创建系统：消费 SkillCreationRequestMessage，创建 sandbox 目录，
@@ -77,6 +77,7 @@ pub(crate) fn skill_creation_workitem_system(
              description: <简要描述 skill 用途>\n\
              version: 1\n\
              self_updatable: false\n\
+             dependencies: [<依赖的现有 skill 名称，无依赖则省略>]\n\
              ---\n\n\
              ## Instruction\n\n\
              <skill 的详细指令，描述何时触发、如何执行>\n\
@@ -85,11 +86,19 @@ pub(crate) fn skill_creation_workitem_system(
              - name：skill 名称，小写字母 + 连字符，全局唯一\n\
              - description：一句话描述用途\n\
              - version：初始版本为 1\n\
-             - self_updatable：默认 false\n\n\
+             - self_updatable：默认 false\n\
+             - dependencies：若新 skill 的执行依赖现有 skill 提供的能力（工具用法、操作流程等），\
+             在此列出这些 skill 名；无依赖则省略该字段\n\n\
              body 要求：\n\
              - 必须包含 ## Instruction section\n\
              - 可包含其他 section（如 ## Examples、## Constraints）\n\
              - 指令应清晰、可操作、避免歧义\n\n\
+             ## 依赖声明\n\n\
+             - 若新 skill 需要复用现有 skill 的能力（如 browser-automation 的抓取流程），\
+             必须在 frontmatter 的 dependencies 中声明，例如：`dependencies: [browser-automation]`\n\
+             - 依赖只能引用上方“现有 skill 列表”中已存在的 skill 名；引用不存在的 skill \
+             将在写回校验时失败、导致创建失败\n\
+             - 无依赖的新 skill 可省略该字段\n\n\
              ## 工作流程\n\n\
              1. 使用 read_skill_file 读取现有 skill 文件（如需参考格式）\n\
              2. 使用 write_skill_file 创建 SKILL.md 文件\n\
@@ -98,7 +107,8 @@ pub(crate) fn skill_creation_workitem_system(
              - skill name 不能与现有 skill 重复\n\
              - 文件路径相对于当前 sandbox 目录\n\
              - SKILL.md 是必须创建的文件\n\
-             - 可创建辅助文件（如示例文件），通过 write_skill_file 的 path 参数指定",
+             - 可创建辅助文件（如示例文件），通过 write_skill_file 的 path 参数指定\n\
+             - dependencies 只能引用现有 skill 列表中存在的 skill，写回校验失败将导致创建失败",
             request.intent, skills_listing,
         );
 
@@ -284,7 +294,71 @@ pub(crate) fn skill_creation_writeback_system(
             continue;
         }
 
-        // 3. 执行 rename（原子移动）
+        // 3. 读取并解析 sandbox SKILL.md（rename 前校验依赖，避免落盘不可信声明）
+        let mut parsed_skill: Option<LoadedSkill> = None;
+        match std::fs::read_to_string(context.sandbox_dir.join("SKILL.md")) {
+            Ok(content) => {
+                match crate::infrastructure::skills::loader::parse_skill_md(
+                    &content,
+                    target_dir.clone(),
+                ) {
+                    Some(parsed) => {
+                        // 3.1 严格校验依赖：存在性 + 环，数据源为磁盘扫描（与注入路径一致）
+                        let loaded = skill_loader.load_skills(&context.agent_name);
+                        let problems =
+                            crate::infrastructure::skills::loader::validate_skill_dependencies(
+                                &loaded,
+                                &context.skill_name,
+                                &parsed.dependencies,
+                            );
+                        if !problems.is_empty() {
+                            warn!(
+                                event = "SkillCreationDependencyValidationFailed",
+                                task_id = %msg.task_id,
+                                candidate_id = %msg.candidate_id,
+                                skill_name = %context.skill_name,
+                                agent_name = %context.agent_name,
+                                problems = ?problems,
+                                error = "new skill declares invalid dependencies, rejecting writeback",
+                                error_type = "DependencyValidationFailed",
+                                "dependency validation failed, skipping writeback"
+                            );
+                            if let Some(c) = store.candidates.get_mut(&msg.candidate_id) {
+                                c.status = ExperienceCandidateStatus::WritebackFailed;
+                            }
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        parsed_skill = Some(parsed);
+                    }
+                    None => {
+                        warn!(
+                            event = "SkillCreationParseFailed",
+                            task_id = %msg.task_id,
+                            candidate_id = %msg.candidate_id,
+                            skill_name = %context.skill_name,
+                            error = "parse_skill_md returned None for new SKILL.md",
+                            error_type = "ParseFailed",
+                            "failed to parse new SKILL.md content, registry not updated"
+                        );
+                    }
+                }
+            }
+            Err(_) => {
+                warn!(
+                    event = "SkillCreationMdReadFailed",
+                    task_id = %msg.task_id,
+                    candidate_id = %msg.candidate_id,
+                    skill_name = %context.skill_name,
+                    skill_md_path = ?context.sandbox_dir.join("SKILL.md"),
+                    error = "failed to read SKILL.md from sandbox directory",
+                    error_type = "FileReadFailed",
+                    "failed to read SKILL.md from sandbox directory before writeback"
+                );
+            }
+        }
+
+        // 4. 执行 rename（原子移动）
         if let Err(e) = std::fs::rename(&context.sandbox_dir, &target_dir) {
             warn!(
                 event = "SkillCreationRenameFailed",
@@ -303,56 +377,29 @@ pub(crate) fn skill_creation_writeback_system(
             continue;
         }
 
-        // 4. 注册到 SkillRegistry
-        let skill_md_path = target_dir.join("SKILL.md");
-        let skill_dir = target_dir.clone();
-
-        if let Ok(skill_md_content) = std::fs::read_to_string(&skill_md_path) {
-            if let Some(parsed) =
-                crate::infrastructure::skills::loader::parse_skill_md(&skill_md_content, skill_dir)
-            {
-                let skill_id = SkillId::new(&context.agent_name, &context.skill_name);
-                let entry = SkillEntry {
-                    skill_id: skill_id.clone(),
-                    name: parsed.name,
-                    description: parsed.description,
-                    instructions: parsed.instructions,
-                    version: parsed.version,
-                    owner_agent_name: context.agent_name.clone(),
-                    self_updatable: parsed.self_updatable,
-                    dependencies: parsed.dependencies,
-                };
-                skill_registry.upsert(entry);
-            } else {
-                warn!(
-                    event = "SkillCreationParseFailed",
-                    task_id = %msg.task_id,
-                    candidate_id = %msg.candidate_id,
-                    skill_name = %context.skill_name,
-                    error = "parse_skill_md returned None for new SKILL.md",
-                    error_type = "ParseFailed",
-                    "failed to parse new SKILL.md content, registry not updated"
-                );
-            }
-        } else {
-            warn!(
-                event = "SkillCreationMdReadFailed",
-                task_id = %msg.task_id,
-                candidate_id = %msg.candidate_id,
-                skill_name = %context.skill_name,
-                skill_md_path = ?skill_md_path,
-                error = "failed to read SKILL.md from target directory",
-                error_type = "FileReadFailed",
-                "failed to read SKILL.md from target directory after rename"
-            );
+        // 5. 注册到 SkillRegistry（复用步骤 3 解析结果；parse/read 失败时 registry 不更新，
+        //    写回继续，保持既有容错语义）
+        if let Some(parsed) = parsed_skill {
+            let skill_id = SkillId::new(&context.agent_name, &context.skill_name);
+            let entry = SkillEntry {
+                skill_id: skill_id.clone(),
+                name: parsed.name,
+                description: parsed.description,
+                instructions: parsed.instructions,
+                version: parsed.version,
+                owner_agent_name: context.agent_name.clone(),
+                self_updatable: parsed.self_updatable,
+                dependencies: parsed.dependencies,
+            };
+            skill_registry.upsert(entry);
         }
 
-        // 5. 候选状态置为 Persisted
+        // 6. 候选状态置为 Persisted
         if let Some(c) = store.candidates.get_mut(&msg.candidate_id) {
             c.status = ExperienceCandidateStatus::Persisted;
         }
 
-        // 6. 标记 WorkItem 完成并 despawn
+        // 7. 标记 WorkItem 完成并 despawn
         commands
             .entity(entity)
             .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemCompleted));
@@ -781,5 +828,172 @@ mod tests {
             skills_dir.is_dir(),
             "skills parent directory should still be a directory, not corrupted by rename"
         );
+    }
+
+    /// 在 `<tmp>/<agent>/skills/<name>/` 下写入一个已有 skill。
+    fn write_existing_skill(tmp: &std::path::Path, agent: &str, name: &str, deps: &[&str]) {
+        let dir = tmp.join(agent).join("skills").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dep_line = if deps.is_empty() {
+            String::new()
+        } else {
+            format!("dependencies: [{}]\n", deps.join(", "))
+        };
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: existing {name}\nversion: 1\nself_updatable: false\n{dep_line}---\n\n## Instruction\n\nExisting.\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// 候选声明不存在的依赖 → 写回 Failed（WritebackFailed），sandbox 不落盘。
+    #[test]
+    fn writeback_system_rejects_missing_dependency() {
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+
+        // 已有 skill：good（无依赖）；候选声明依赖 not-exist
+        write_existing_skill(tmp.path(), "test-agent", "good", &[]);
+
+        let sandbox_dir = tmp
+            .path()
+            .join("test-agent")
+            .join("skills")
+            .join(".sandbox")
+            .join("_draft_20260811120000");
+        std::fs::create_dir_all(&sandbox_dir).unwrap();
+        let candidate_md = "---\nname: new-skill\ndescription: new skill\ndependencies: [not-exist]\n---\n\n## Instruction\n\nDo it.\n";
+        std::fs::write(sandbox_dir.join("SKILL.md"), candidate_md).unwrap();
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_skill_new_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let mut work_item =
+            WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
+        work_item.start();
+
+        world.spawn((
+            work_item,
+            SkillCreationContext {
+                task_id,
+                agent_id,
+                agent_name: "test-agent".to_string(),
+                sandbox_dir: sandbox_dir.clone(),
+                skill_name: "new-skill".to_string(),
+            },
+            SkillCreationWritebackMessage {
+                candidate_id,
+                task_id,
+            },
+        ));
+
+        let _ = world.run_system_once(skill_creation_writeback_system);
+
+        // 候选状态为 WritebackFailed（校验失败）
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::WritebackFailed);
+
+        // sandbox 未被移走，target 不存在
+        assert!(
+            sandbox_dir.exists(),
+            "sandbox should not be renamed on dependency validation failure"
+        );
+        let target_dir = tmp
+            .path()
+            .join("test-agent")
+            .join("skills")
+            .join("new-skill");
+        assert!(
+            !target_dir.exists(),
+            "target dir should not exist after validation failure"
+        );
+
+        // registry 无 new-skill
+        let registry = world.resource::<SkillRegistry>();
+        assert!(
+            registry
+                .get(&SkillId::new("test-agent", "new-skill"))
+                .is_none()
+        );
+    }
+
+    /// 候选声明合法依赖 → 写回成功，registry 中可见 dependencies。
+    #[test]
+    fn writeback_system_persists_with_valid_dependency() {
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+
+        // 已有 skill：browser-automation；候选声明依赖它
+        write_existing_skill(tmp.path(), "test-agent", "browser-automation", &[]);
+
+        let sandbox_dir = tmp
+            .path()
+            .join("test-agent")
+            .join("skills")
+            .join(".sandbox")
+            .join("_draft_20260811120000");
+        std::fs::create_dir_all(&sandbox_dir).unwrap();
+        let candidate_md = "---\nname: daily-news\ndescription: news\ndependencies: [browser-automation]\n---\n\n## Instruction\n\nGet news.\n";
+        std::fs::write(sandbox_dir.join("SKILL.md"), candidate_md).unwrap();
+
+        let mut world = World::new();
+        let mut store = ExperienceStore::default();
+        let candidate_id = stage_skill_new_candidate(&mut store);
+        world.insert_resource(store);
+        world.insert_resource(SkillRegistry::default());
+        world.insert_resource(loader);
+
+        let task_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let mut work_item =
+            WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
+        work_item.start();
+
+        world.spawn((
+            work_item,
+            SkillCreationContext {
+                task_id,
+                agent_id,
+                agent_name: "test-agent".to_string(),
+                sandbox_dir: sandbox_dir.clone(),
+                skill_name: "daily-news".to_string(),
+            },
+            SkillCreationWritebackMessage {
+                candidate_id,
+                task_id,
+            },
+        ));
+
+        let _ = world.run_system_once(skill_creation_writeback_system);
+
+        // 候选状态为 Persisted
+        let store = world.resource::<ExperienceStore>();
+        let c = store.candidates.get(&candidate_id).unwrap();
+        assert_eq!(c.status, ExperienceCandidateStatus::Persisted);
+
+        // target 目录存在，registry 中 dependencies 可见
+        let target_dir = tmp
+            .path()
+            .join("test-agent")
+            .join("skills")
+            .join("daily-news");
+        assert!(
+            target_dir.exists(),
+            "target dir should exist after writeback"
+        );
+        let registry = world.resource::<SkillRegistry>();
+        let entry = registry
+            .get(&SkillId::new("test-agent", "daily-news"))
+            .expect("skill should be registered");
+        assert_eq!(entry.dependencies, vec!["browser-automation".to_string()]);
     }
 }

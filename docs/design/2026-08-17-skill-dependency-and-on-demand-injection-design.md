@@ -1,6 +1,9 @@
 # Skill 依赖声明与按需注入设计
 
-> __状态：当前有效（设计已确认，待实施）__
+> __状态：当前有效（已实现）__
+>
+> 实现于分支 `feat/skill-dependency-injection`（T1~T6）。本文档为设计依据，实际行为以
+> `docs/current-state.md` 与代码为准。
 
 ## 背景
 
@@ -145,10 +148,10 @@ instructions），依赖 skill 与选中 skill 使用同一格式，按拓扑序
 - __写回校验__：`skill_creation_writeback_system` 在 rename 落盘前校验
   候选 SKILL.md 的 `dependencies`：
   - 每个依赖名存在于同 agent 名下（数据源为 `load_skills(agent_name)`
-    磁盘扫描，与 D3 一致），否则候选置 `Failed`，错误信息写明缺失的
-    依赖名。
+    磁盘扫描，与 D3 一致），否则候选置 `WritebackFailed`（既有写回失败状态），
+    错误信息写明缺失的依赖名。
   - 环校验：新 skill 的依赖均为已存在 skill，且写回要求目标目录不存在，
-    理论无环；仍做防御性闭包解析，异常时按 Failed 处理。
+    理论无环；仍做防御性闭包解析，异常时按 `WritebackFailed` 处理。
 
 ### D6 更新流程改造（skill_update.rs / diff.rs）
 
@@ -222,5 +225,5 @@ instructions），依赖 skill 与选中 skill 使用同一格式，按拓扑序
 ## 已确认决策
 
 - Q1：Brain 未选中 skill 时__维持全量注入__（D4/G4，行为变更最小）。
-- Q2：写回校验失败时候选置 __Failed__（D5，语义诚实，避免落盘不可信
-  声明）。
+- Q2：写回校验失败时候选置 __WritebackFailed__（D5，语义诚实，避免落盘不可信
+  声明；沿用既有写回失败状态枚举）。

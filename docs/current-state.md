@@ -46,7 +46,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Brain LLM 决策：Brain Agent 选择执行 Agent + skill，产出 `PendingDispatch(DirectDelegate)`；
   LLM 失败直接标记 Task 为 `Failed`，不 fallback
 - skill 注入：对所有 Task 适用（max 1），仅限 Persistent Agent，通过 `TaskInjectedSkill`
-  Component 注入
+  Component 注入；Brain 选中 skill 时按依赖闭包收窄注入（`build_injected_skills`），
+  未选中或闭包为空时维持全量注入（G4 行为变更最小化）
 - WorkItem 创建器/派发器职责切分：summarization、evaluation、experience_collection、
   profile_generation、skill_update 系统仅创建 WorkItem + 附加 `PendingDispatch`，不再直接派发
 
@@ -226,7 +227,14 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `SkillId`（`owner_agent_name` + `skill_name` 复合）+ `SkillEntry`（`name`、`description`、
   `instructions`、`version`、`self_updatable`）+ `SkillRegistry` Resource 作为 skill 一等公民基础
 - `SkillLoader::build_registry()` 启动时扫描 `.harness/assets/agents/<owner>/skills/<name>/SKILL.md`
-  构造 `SkillRegistry`；SKILL.md frontmatter 支持 `version` 与 `self_updatable` 字段
+  构造 `SkillRegistry`；SKILL.md frontmatter 支持 `version`、`self_updatable` 与 `dependencies` 字段
+- skill 依赖声明与按需注入（设计文档
+  `docs/design/2026-08-17-skill-dependency-and-on-demand-injection-design.md`）：
+  - frontmatter `dependencies: [skill-b]` 声明同 agent 名下 skill 的依赖，数据源为磁盘扫描
+  - `resolve_skill_closure` 按拓扑序解析传递依赖闭包（DFS + 访问栈环检测，缺失跳过、环截断）
+  - `validate_skill_dependencies` 严格校验依赖存在性 + 环，创建/更新写回前调用，
+    失败时新 skill 候选置 `WritebackFailed`（不落盘）、更新走既有回滚路径
+  - `build_injected_skills`：Brain 选中 skill 时注入其依赖闭包，未选中时维持全量注入
 - 持久 Agent 直接吸收子任务经验而非向上转发（`route_persistent_agent_experience`）：
   - `Skill` kind → skill-updater WorkItem 路径
   - `Knowledge` kind → `WritebackPending`（直接写长期记忆）
