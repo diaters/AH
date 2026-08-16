@@ -59,6 +59,20 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 冷却期自动恢复到原优先级
 - `providers.toml` 配置文件支持多 provider 实例
 - 向后兼容：现有 `model` 字段和环境变量配置继续工作
+- genai 适配层错误分类覆盖非流式 `exec_chat` 路径：HTTP 状态码从
+  `webc::Error::ResponseFailedStatus` 中提取，401/403 → `Authentication`（不重试不降级）、
+  429 → `RateLimited`（可重试可降级）、402 → `QuotaExhausted`（降级）
+
+#### 测试分层（真实 LLM 场景测试）
+
+- 四层测试模型与三级正确性判断体系已确立（设计文档
+  `docs/design/2026-08-16-real-llm-scenario-testing-design.md`）
+- Layer 0：共享 mock executor 基础设施已收敛（`tests/common/mock_executor.rs`），
+  genai 适配层纯函数已有无网络单元测试
+- Layer 1：真实 LLM 冒烟测试已可用（`tests/real_llm_smoke.rs`），覆盖纯文本往返、
+  tool_calls 往返、工具名 sanitize 往返、OpenAiCompatible 自定义端点与错误分类；
+  采用 `#[ignore]` + `HARNESS_TEST_REAL_LLM` 双重门控，永不进入 CI
+- 错误分类测试（401/429）基于 wiremock 本地端点，确定性执行，随 CI 常规运行
 
 #### 工具与会话
 
