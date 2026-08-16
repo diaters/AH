@@ -240,6 +240,52 @@ mod tests {
             "should contain second tool call"
         );
     }
+
+    /// 复现日志 harness_2026-08-15_23-56-36.jsonl 的分组场景：
+    /// [User(78字符), Assistant(含大 tool_calls), User, Assistant] → 3 组
+    fn log_scenario_stm() -> ShortTermMemory {
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(
+            EntryRole::User,
+            "帮我看今天的新闻",
+            EntryMetadata::default(),
+        );
+        let mut metadata = EntryMetadata::default();
+        metadata.tool_calls.push(ToolCall {
+            id: Some("call_1".to_string()),
+            tool_name: "shell_exec".to_string(),
+            input: "playwright-cli browse".to_string(),
+            output: "huge news page content".repeat(2000),
+            timestamp: chrono::Utc::now(),
+        });
+        stm.add_entry(EntryRole::Assistant, String::new(), metadata);
+        stm.add_entry(EntryRole::User, "总结一下", EntryMetadata::default());
+        stm.add_entry(EntryRole::Assistant, "好的", EntryMetadata::default());
+        stm
+    }
+
+    #[test]
+    fn split_into_groups_tool_entry_forms_own_group() {
+        let stm = log_scenario_stm();
+        let groups = split_into_groups(&stm.entries);
+        assert_eq!(groups, vec![vec![0], vec![1], vec![2, 3]]);
+    }
+
+    #[test]
+    fn compressible_entry_count_protects_recent_groups() {
+        let stm = log_scenario_stm();
+        let groups = split_into_groups(&stm.entries);
+
+        // preserve=2（默认）：保留工具组与最近对话组，仅组 0 可压缩（日志中的 78 字符）
+        assert_eq!(compressible_entry_count(&groups, 2), 1);
+        // preserve=1：工具组落入压缩区
+        assert_eq!(compressible_entry_count(&groups, 1), 2);
+        // 组数 <= preserve：无可压缩
+        assert_eq!(compressible_entry_count(&groups, 3), 0);
+        assert_eq!(compressible_entry_count(&groups, 4), 0);
+        // 空分组
+        assert_eq!(compressible_entry_count(&[], 2), 0);
+    }
 }
 
 /// 估算文本的 token 数
@@ -247,6 +293,63 @@ pub fn estimate_tokens(text: &str) -> u32 {
     cl100k_base()
         .map(|enc| enc.encode_with_special_tokens(text).len() as u32)
         .unwrap_or_else(|_| (text.len() / 4) as u32) // fallback: 4 chars ≈ 1 token
+}
+
+/// 将 STM entries 按配对组切分。
+///
+/// 配对组定义：
+/// - User 开启新的对话配对组
+/// - Assistant（无 tool_calls）归入当前对话配对组
+/// - Assistant（有 tool_calls）开启新的工具配对组（原子性锚点）
+/// - Summary / Archive 归入最近的配对组
+///
+/// 触发端（`memory_compression_system`）与完成端
+/// （`ShortTermMemory::drain_compressed_groups`）共用此分组逻辑，
+/// 保证两端粒度对齐。
+pub fn split_into_groups(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut current_group: Vec<usize> = Vec::new();
+
+    for (i, entry) in entries.iter().enumerate() {
+        let starts_new_group = match entry.role {
+            EntryRole::User => true,
+            EntryRole::Assistant if !entry.metadata.tool_calls.is_empty() => true,
+            EntryRole::Assistant => false,
+            EntryRole::Summary | EntryRole::Archive => false,
+        };
+
+        if starts_new_group && !current_group.is_empty() {
+            groups.push(std::mem::take(&mut current_group));
+        }
+        current_group.push(i);
+    }
+
+    if !current_group.is_empty() {
+        groups.push(current_group);
+    }
+
+    groups
+}
+
+/// 计算可压缩的 entry 数量：排除最后 `preserve_recent_turns` 个配对组后，
+/// 前置各组包含的 entry 总数。组数不足时返回 0。
+///
+/// 触发端（`memory_compression_system`）与完成端
+/// （`ShortTermMemory::drain_compressed_groups`）共用此选择逻辑，
+/// 保证两端粒度对齐。
+pub fn compressible_entry_count(groups: &[Vec<usize>], preserve_recent_turns: u32) -> usize {
+    let preserve = preserve_recent_turns as usize;
+    if groups.len() <= preserve {
+        return 0;
+    }
+    groups
+        .iter()
+        .take(groups.len() - preserve)
+        .map(|g| g.len())
+        .sum()
 }
 
 /// 短期记忆条目。

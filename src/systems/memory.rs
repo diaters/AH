@@ -4,48 +4,13 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, EntryRole, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
-        LtmWriteHookPending, MemoryEntry, MemoryImportance, ShortTermMemory,
+        Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
+        LtmWriteHookPending, MemoryImportance, ShortTermMemory,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
-        render_tool_calls_summary,
+        render_tool_calls_summary, split_into_groups,
     },
     infrastructure::memory::LongTermMemoryService,
 };
-
-/// 将 STM entries 按配对组切分。
-///
-/// 配对组定义：
-/// - User 开启新的对话配对组
-/// - Assistant（无 tool_calls）归入当前对话配对组
-/// - Assistant（有 tool_calls）开启新的工具配对组（原子性锚点）
-/// - Summary / Archive 归入最近的配对组
-fn split_into_groups(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
-    if entries.is_empty() {
-        return Vec::new();
-    }
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut current_group: Vec<usize> = Vec::new();
-
-    for (i, entry) in entries.iter().enumerate() {
-        let starts_new_group = match entry.role {
-            EntryRole::User => true,
-            EntryRole::Assistant if !entry.metadata.tool_calls.is_empty() => true,
-            EntryRole::Assistant => false,
-            EntryRole::Summary | EntryRole::Archive => false,
-        };
-
-        if starts_new_group && !current_group.is_empty() {
-            groups.push(std::mem::take(&mut current_group));
-        }
-        current_group.push(i);
-    }
-
-    if !current_group.is_empty() {
-        groups.push(current_group);
-    }
-
-    groups
-}
 
 /// 记忆压缩系统：检测 token 阈值并触发摘要请求
 pub(crate) fn memory_compression_system(
