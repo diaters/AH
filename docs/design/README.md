@@ -18,6 +18,9 @@
 | `2026-07-18-dispatch-architecture-unification-design.md` | 当前有效 | 派发架构统一 | 单一 `PendingDispatch` 入口，治理 9 个腐化点 |
 | `2026-07-26-ecs-relation-modeling-design.md` | 当前有效 | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 消灭 55+ 线性扫描 |
 | `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效 | 上下文压缩盲区修复 | 工具结果入 STM、配对组粒度压缩、结构化发送路径 |
+| `2026-08-10-skill-creation-command-design.md` | 当前有效 | `/skill` 命令与 skill-creator 链路 | 治理触发环节由 2026-08-16 触发修复设计补全 |
+| `2026-08-16-summarization-loop-fix.md` | 当前有效 | 摘要压缩无限循环修复 | 完成端 drain 粒度对齐配对组 + 在飞保护 |
+| `2026-08-16-skill-creation-governance-trigger-fix.md` | 当前有效 | `/skill` 候选治理触发修复 | WorkItem 完成分支驱动候选进入治理审批 |
 
 ## 推荐阅读顺序
 

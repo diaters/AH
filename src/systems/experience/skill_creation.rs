@@ -68,7 +68,7 @@ pub(crate) fn skill_creation_workitem_system(
         let prompt = format!(
             "## 任务\n\n根据以下意图创建新的 skill。\n\n\
              ## 用户意图\n\n{}\n\n\
-             ## 现有 skill 列表\n\n{}\n\n\
+             ## 现有 skill 列表（仅用于避免重名，无需读取完整内容）\n\n{}\n\n\
              ## SKILL.md 模板规范\n\n\
              SKILL.md 使用 YAML frontmatter + Markdown body 格式：\n\n\
              ```markdown\n\
@@ -91,9 +91,10 @@ pub(crate) fn skill_creation_workitem_system(
              - 可包含其他 section（如 ## Examples、## Constraints）\n\
              - 指令应清晰、可操作、避免歧义\n\n\
              ## 工作流程\n\n\
-             1. 使用 read_skill_file 读取现有 skill 文件（如需参考格式）\n\
-             2. 使用 write_skill_file 创建 SKILL.md 文件\n\
-             3. 调用 submit_skill 提交创建结果\n\n\
+             1. 参考下方\"SKILL.md 模板规范\"和\"现有 skill 列表\"，构思新 skill 的结构\n\
+             2. 使用 write_skill_file 创建 SKILL.md 文件（path 参数填 \"SKILL.md\"）\n\
+             3. 如需辅助文件（脚本、模板等），继续使用 write_skill_file 创建\n\
+             4. 调用 submit_skill 提交创建结果（name + description）\n\n\
              ## 注意事项\n\n\
              - skill name 不能与现有 skill 重复\n\
              - 文件路径相对于当前 sandbox 目录\n\
@@ -102,7 +103,8 @@ pub(crate) fn skill_creation_workitem_system(
             request.intent, skills_listing,
         );
 
-        // 4. 构造工具列表：submit_skill + write_skill_file + read_skill_file
+        // 4. 构造工具列表：submit_skill + write_skill_file
+        // （read_skill_file 已移除：required_tag = "skill-updater"，skill-creator 不可用）
         let tools = vec![
             make_tool_def(
                 "submit_skill",
@@ -138,20 +140,6 @@ pub(crate) fn skill_creation_workitem_system(
                         }
                     },
                     "required": ["path", "content"]
-                }),
-            ),
-            make_tool_def(
-                "read_skill_file",
-                "读取 skill 目录中的文件内容。用于参考现有 skill 的格式与结构。",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "文件路径（相对于 skill 目录），默认为 SKILL.md"
-                        }
-                    },
-                    "required": ["path"]
                 }),
             ),
         ];
@@ -780,5 +768,47 @@ mod tests {
             skills_dir.is_dir(),
             "skills parent directory should still be a directory, not corrupted by rename"
         );
+    }
+
+    #[test]
+    fn workitem_system_does_not_include_read_skill_file() {
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let loader = SkillLoader::new(tmp.path().to_path_buf());
+        let mut world = World::new();
+        world.insert_resource(loader);
+        world.insert_resource(crate::ecs::EntityIndex::default());
+
+        // spawn SkillCreationRequestMessage
+        let request = SkillCreationRequestMessage {
+            task_id: uuid::Uuid::new_v4(),
+            agent_id: uuid::Uuid::new_v4(),
+            agent_name: "test-agent".to_string(),
+            intent: "test intent".to_string(),
+        };
+        world.spawn(request);
+
+        // 运行 system
+        let _ = world.run_system_once(skill_creation_workitem_system);
+
+        // 断言：WorkItem.input.context.tools 不含 "read_skill_file"
+        let mut query = world.query::<&WorkItem>();
+        let work_item = query.iter(&world).next().expect("WorkItem spawned");
+        let tool_names: Vec<String> = work_item
+            .input
+            .context
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+
+        assert!(
+            !tool_names.contains(&"read_skill_file".to_string()),
+            "read_skill_file should not be exposed to skill-creator; got {:?}",
+            tool_names
+        );
+        assert!(tool_names.contains(&"write_skill_file".to_string()));
+        assert!(tool_names.contains(&"submit_skill".to_string()));
     }
 }

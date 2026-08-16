@@ -252,34 +252,18 @@ pub fn tool_dispatch_system(
                     tool_name,
                 );
 
-                let current_skill_dir = if let Some(wi_entity) = request.work_item_entity {
-                    if let Ok((_, _, _, creation_ctx, _)) = context_queries.get(wi_entity) {
-                        creation_ctx.map(|ctx| ctx.sandbox_dir.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                // Fallback: SkillUpdateContext uses skill_loader to resolve skill directory
-                let current_skill_dir = current_skill_dir.or_else(|| {
-                    if let Some(wi_entity) = request.work_item_entity {
-                        if let Ok((_, _, update_ctx, _, _)) = context_queries.get(wi_entity) {
-                            update_ctx.as_ref().map(|ctx| {
-                                index_clock_loader
-                                    .2
-                                    .skill_md_path(&ctx.skill_id)
-                                    .parent()
-                                    .map(|p| p.to_path_buf())
-                                    .unwrap_or_default()
-                            })
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                });
+                // 从 Query 提取 context 数据,再调用共享函数解析 skill 目录
+                let (creation_ctx, update_ctx) = request
+                    .work_item_entity
+                    .and_then(|wi_entity| context_queries.get(wi_entity).ok())
+                    .map(|(_, _, update_ctx, creation_ctx, _)| (creation_ctx, update_ctx))
+                    .unwrap_or((None, None));
+
+                let current_skill_dir = super::skill_dir_resolver::resolve_skill_dir_from_context(
+                    creation_ctx,
+                    update_ctx,
+                    Some(&index_clock_loader.2),
+                );
 
                 let ctx = ToolContext {
                     knowledge: &knowledge,
