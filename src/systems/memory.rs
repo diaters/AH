@@ -4,11 +4,10 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
-        LtmWriteHookPending, MemoryImportance, ShortTermMemory,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
-        WorkItem, WorkItemStatus, WorkItemType, compressible_entry_count,
-        render_tool_calls_summary, split_into_groups,
+        Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
+        MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
+        TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
+        compressible_entry_count, render_tool_calls_summary, split_into_groups,
     },
     infrastructure::memory::LongTermMemoryService,
 };

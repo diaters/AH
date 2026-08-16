@@ -317,10 +317,7 @@ mod tests {
         // 此时分组 [[工具组], [对话组], [新对话组]]：工具组成为可压缩区
         let removed = stm.drain_compressed_groups(2);
         assert_eq!(removed, 1);
-        assert!(stm
-            .entries
-            .iter()
-            .all(|e| e.metadata.tool_calls.is_empty()));
+        assert!(stm.entries.iter().all(|e| e.metadata.tool_calls.is_empty()));
     }
 }
 
