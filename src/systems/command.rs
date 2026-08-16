@@ -3,21 +3,25 @@ use tracing::debug;
 
 use crate::app::MemoryConfig;
 use crate::domain::{
-    ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
+    Agent, ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
     FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
     ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
     ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy,
     TaskStatus, UserCommand, UserInputMessage,
 };
+use crate::ecs::EntityIndex;
 
 /// 命令解析系统：解析用户输入中的指令
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn command_parse_system(
     mut commands: Commands,
     mut knowledge: ResMut<SharedKnowledgeBase>,
     mut pending_writes: ResMut<PendingKnowledgeWriteHooks>,
     config: Res<MemoryConfig>,
+    index: Res<EntityIndex>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
+    agents: Query<&Agent>,
     plugin_registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
 ) {
     for (entity, input) in &user_inputs {
@@ -307,16 +311,26 @@ pub(crate) fn command_parse_system(
                     });
 
                     if let Some((task, _)) = current_task {
+                        // 优先使用 task.delegate（执行 Agent），回退到 task.creator
+                        let agent_id = task.delegate.unwrap_or(task.creator);
+                        let agent_name = index
+                            .get_agent(&agent_id)
+                            .and_then(|e| agents.get(e).ok())
+                            .map(|a| a.profile.name.clone())
+                            .unwrap_or_default();
+
                         debug!(
                             event = "SkillCreationCommandReceived",
                             task_id = %task.id,
+                            agent_id = %agent_id,
+                            agent_name = %agent_name,
                             intent = %intent,
                             "spawning skill creation request"
                         );
                         commands.spawn(crate::domain::SkillCreationRequestMessage {
                             task_id: task.id,
-                            agent_id: task.creator,
-                            agent_name: String::new(),
+                            agent_id,
+                            agent_name,
                             intent,
                         });
                     } else {
@@ -388,12 +402,13 @@ mod tests {
     use crate::prelude::*;
 
     use super::command_parse_system;
+    use crate::ecs::EntityIndex;
     use crate::{
         app::MemoryConfig,
         domain::{
-            ChannelId, CreateTaskMessage, KnowledgeValidationStatus, PendingKnowledgeWriteHooks,
-            SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus, UserCommand,
-            UserCommand::Remember, UserInputMessage,
+            Agent, ChannelId, CreateTaskMessage, KnowledgeValidationStatus,
+            PendingKnowledgeWriteHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,
+            UserCommand, UserCommand::Remember, UserInputMessage,
         },
     };
 
@@ -475,6 +490,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
         app.world_mut().spawn(UserInputMessage {
             content: "/remember Docs should stay in Chinese".to_string(),
@@ -579,6 +595,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         // QQ 通道的活跃任务
@@ -652,6 +669,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         // QQ 通道的活跃父任务
@@ -722,6 +740,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         let qq_channel = ChannelId {
@@ -786,6 +805,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         let qq_channel = ChannelId {
@@ -859,6 +879,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         let channel = ChannelId {
@@ -919,6 +940,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         let channel = ChannelId {
@@ -971,6 +993,98 @@ mod tests {
         assert_eq!(skill_msgs.len(), 1);
         assert_eq!(skill_msgs[0].task_id, task_id);
         assert_eq!(skill_msgs[0].intent, "做代码审查");
+        // delegate 为 None，回退到 creator；无 Agent entity，agent_name 为空
+        assert_eq!(skill_msgs[0].agent_id, creator_id);
+        assert!(skill_msgs[0].agent_name.is_empty());
+    }
+
+    #[test]
+    fn skill_command_uses_delegate_agent_name() {
+        use crate::domain::{FrontendKind, SkillCreationRequestMessage, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
+        app.add_systems(Update, command_parse_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        let delegate_id = uuid::Uuid::new_v4();
+        // 注册 Agent 实体
+        let agent_entity = app
+            .world_mut()
+            .spawn(Agent {
+                id: delegate_id,
+                profile: crate::domain::AgentProfile {
+                    name: "browser-operator".to_string(),
+                    model: "gpt-4".to_string(),
+                },
+                capabilities: crate::domain::AgentCapabilities {
+                    tags: vec![],
+                    description: String::new(),
+                },
+                kind: crate::domain::AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: crate::domain::AgentToolPermissions::default(),
+                system_prompt: None,
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .agents
+            .insert(delegate_id, agent_entity);
+
+        app.world_mut().spawn((
+            Task {
+                id: task_id,
+                content: "active task".to_string(),
+                creator: uuid::Uuid::new_v4(),
+                delegate: Some(delegate_id),
+                status: TaskStatus::Running,
+                pending_confirmation_id: None,
+                input_summary: "test".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "/skill 创建测试 skill".to_string(),
+            origin_channel: channel,
+        });
+
+        app.update();
+
+        let skill_msgs: Vec<&SkillCreationRequestMessage> = app
+            .world_mut()
+            .query::<&SkillCreationRequestMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(skill_msgs.len(), 1);
+        assert_eq!(skill_msgs[0].task_id, task_id);
+        assert_eq!(skill_msgs[0].agent_id, delegate_id);
+        assert_eq!(skill_msgs[0].agent_name, "browser-operator");
     }
 
     #[test]
@@ -981,6 +1095,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         let channel = ChannelId {
@@ -1042,6 +1157,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
         let qq_channel = ChannelId {

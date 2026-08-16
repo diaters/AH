@@ -113,7 +113,7 @@ skip_profile_update = "Allow"
 
 [[agent]]
 name = "skill-updater"
-tags = ["skill-updater", "persistent"]
+tags = ["skill-updater", "persistent", "skill"]
 description = "负责根据经验候选更新已有 skill 的 instruction，通过 submit_skill_update 工具提交结构化更新操作"
 system_prompt = """\
 你是一个 skill 更新专家。根据经验候选和原 skill 内容，通过 submit_skill_update 工具提交结构化更新操作。\
@@ -134,7 +134,7 @@ read_skill_file = "Allow"
 
 [[agent]]
 name = "skill-creator"
-tags = ["skill-creator"]
+tags = ["skill-creator", "skill"]
 description = "技能创建专家，根据用户意图为指定 Agent 设计并生成新 skill"
 system_prompt = """\
 你是一名技能创建专家。根据用户的意图描述，为指定 Agent 创建新 skill。

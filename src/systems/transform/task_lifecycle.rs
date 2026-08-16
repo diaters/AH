@@ -253,13 +253,22 @@ pub fn task_termination_system(
             let candidates = experience_store.candidates_by_producer_task(task.id);
             let candidate_status = candidates.first().map(|c| c.status.clone());
             match candidate_status {
-                Some(ExperienceCandidateStatus::NeedsUserApproval) => {
-                    // 用户可能仍会审批，不清理
+                Some(
+                    ExperienceCandidateStatus::NeedsUserApproval
+                    | ExperienceCandidateStatus::GovernancePending
+                    | ExperienceCandidateStatus::GovernanceResolved,
+                ) => {
+                    // 用户可能仍会审批，或治理/写回仍在进行中，不清理。
+                    // GovernancePending 是关键：本系统在 Transform 集运行、早于
+                    // Execution 集的 experience_governance_system，任务终态当帧候选
+                    // 仍处于 GovernancePending，若在此 force-clean 会 despawn WorkItem
+                    // 并 Discard 候选，导致治理拿不到候选、skill 永不被审核发布。
                     debug!(
                         event = "SkillSandboxPreserved",
                         task_id = %task.id,
                         sandbox_dir = %ctx.sandbox_dir.display(),
-                        "skill creation sandbox preserved (candidate needs user approval)"
+                        candidate_status = ?candidate_status,
+                        "skill creation sandbox preserved (governance or approval in progress)"
                     );
                 }
                 Some(

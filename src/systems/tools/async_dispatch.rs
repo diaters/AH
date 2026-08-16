@@ -31,9 +31,9 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
         PermissionAction, PermissionAuditContext, PermissionSource, ScheduledTaskInfoSnapshot,
-        ScheduledTaskRegistrySnapshot, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
-        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
-        ToolWorkerOutput, ToolWorkerPayload,
+        ScheduledTaskRegistrySnapshot, SkillCreationContext, SpaceToolRegistry, Task,
+        ToolActionKind, ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission,
+        ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
     },
     ecs::EntityIndex,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
@@ -64,9 +64,14 @@ pub fn async_tool_dispatch_system(
     settings: Res<HarnessSettings>,
     executors: Res<BuiltinToolExecutors>,
     registry: Option<Res<SpaceToolRegistry>>,
-    index: Res<EntityIndex>,
-    agents: Query<&Agent>,
-    tasks: Query<&Task>,
+    // 合并 index / agents / tasks / skill_creation_contexts 为单 SystemParam，
+    // 规避 Bevy 单 system 16 参数上限（与 dispatch.rs 的 index_clock_loader 同模式）。
+    index_agents_tasks_skill_ctx: (
+        Res<EntityIndex>,
+        Query<&Agent>,
+        Query<&Task>,
+        Query<&SkillCreationContext>,
+    ),
     sender: Res<ToolResultSender>,
     backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
     scheduler_state: Option<Res<SchedulerState>>,
@@ -75,6 +80,11 @@ pub fn async_tool_dispatch_system(
     frontend_registry: Option<Res<FrontendRegistry>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
+    let index = &index_agents_tasks_skill_ctx.0;
+    let agents = &index_agents_tasks_skill_ctx.1;
+    let tasks = &index_agents_tasks_skill_ctx.2;
+    let skill_creation_contexts = &index_agents_tasks_skill_ctx.3;
+
     for (entity, request) in &requests {
         // 等待确认的请求不归这里管（Confirm 路径先行）
         if request.pending_confirmation_id.is_some() {
@@ -173,6 +183,13 @@ pub fn async_tool_dispatch_system(
             .get_task(&task_id)
             .and_then(|e| tasks.get(e).ok())
             .and_then(|t| t.origin_channel.clone());
+        // 从 WorkItem 的 SkillCreationContext 注入 current_skill_dir（与同步路径
+        // dispatch.rs:255-282 对称）。write_skill_file 等异步 skill 工具需要此值
+        // 确定沙盒目录。
+        let current_skill_dir = request
+            .work_item_entity
+            .and_then(|wi_entity| skill_creation_contexts.get(wi_entity).ok())
+            .map(|ctx| ctx.sandbox_dir.clone());
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state
                 .as_deref()
@@ -188,7 +205,7 @@ pub fn async_tool_dispatch_system(
             experience_candidates,
             current_task_id: Some(task_id),
             current_origin_channel,
-            current_skill_dir: None,
+            current_skill_dir,
             cancel: cancel.clone(),
         };
 
