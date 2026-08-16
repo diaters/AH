@@ -43,5 +43,6 @@ reqwest_013 = { package = "reqwest", version = "0.13", default-features = false,
 webpki-roots = "0.26"
 
 [dev-dependencies]
+regex = "1"
 tempfile = "3.27.0"
 wiremock = "0.6"

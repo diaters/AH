@@ -1,0 +1,23 @@
+# 场景：最简文本汇报（真实 API 冒烟级场景，也可用于框架自检）
+# 断言全部为确定性代码断言 + 单次采样 Judge（mock 模式下走 canned judge）。
+[scenario]
+name = "echo_report"
+description = "Agent 收到固定汇报请求后返回包含运行状态词的简短回复"
+input = "请确认系统状态：回复一句包含「正常运行」的状态汇报"
+max_cost_usd = 0.05
+timeout_secs = 60
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = "正常运行"
+desc = "回复包含状态词"
+
+[[assertions]]
+type = "llm_judge"
+rubric = "回复是否为一句简短的状态汇报，且明确包含「正常运行」字样"
+threshold = 0.7
+samples = 1

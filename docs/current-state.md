@@ -60,6 +60,24 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `providers.toml` 配置文件支持多 provider 实例
 - 向后兼容：现有 `model` 字段和环境变量配置继续工作
 
+#### 测试分层（真实 LLM 场景测试）
+
+- 四层测试模型与三级正确性判断体系已确立（设计文档
+  `docs/design/2026-08-16-real-llm-scenario-testing-design.md`）
+- Layer 0：共享 mock executor 基础设施已收敛（`tests/common/mock_executor.rs`），
+  genai 适配层纯函数已有无网络单元测试
+- Layer 1：真实 LLM 冒烟测试已可用（`tests/real_llm_smoke.rs`），
+  采用 `#[ignore]` + `HARNESS_TEST_REAL_LLM` 双重门控，永不进入 CI
+- Layer 2/3：声明式场景测试框架已可用（`tests/real_llm_scenarios.rs` +
+  `tests/scenarios/*.toml`）——TOML 场景定义五类断言
+  （`tool_called` / `state_reached` / `response_matches` / `llm_judge` / `human_review`），
+  产出 Markdown 报告、待审队列与金标准快照；框架自检（mock executor）随 CI
+  常规运行，真实场景手动执行
+- LLM-as-Judge 已成为 harness 一等能力：`JudgeVerdict` / `JudgeRubric` /
+  `parse_judge_verdict`（`src/domain/evaluation.rs`）与 Judge prompt 构建
+  （`src/llm/judge_prompt.rs`），复用 `AgentRequestKind::Evaluation` 请求通道；
+  采样投票 + 低置信/分裂降级人工待审
+
 #### 工具与会话
 
 - 工具调用软限制：单轮用户输入内达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，让 LLM 总结并询问用户；绝对硬上限（HARD_LIMIT_MULTIPLIER × max_iterations）时强制失败
