@@ -54,6 +54,18 @@ __规格：__ `docs/superpowers/specs/2026-08-16-layer2-scenario-extension-desig
    （回 Running 还是回 `Waiting(User)`）决定稳定态轮询是否会卡住——任务 5 的
    mock 测试会揭示真实流转，若卡住按实际状态机调整稳定态条件
    （见任务 3 步骤 4 的注释）。
+9. __实施后确认的源码事实（任务 5 实现中验证，取代第 8 条的猜测）__：
+   - Summarization WorkItem 派发按 `work_type.required_tag()`（= "summarization"）
+     查找 Persistent Agent（`src/systems/dispatch/dispatch_system.rs` L224-248），
+     缺失即 `work_item.fail()`；场景 runner 的单 agent 必须补 `"summarization"`
+     tag（生产由独立 summarizer agent 承担）。
+   - 生产 `handle_summarization_work_item_result`（`src/systems/transform/
+     llm_response.rs` L507-661）完成 Summarization 时 __从不调用 `complete()`__
+     （保持 Running）且末尾直接 despawn WorkItem——因此 Summarization 从不会
+     处于 Completed 终态，`RunTrace.summarization_completed` 无法用终态集合统计，
+     任务 5 改用 `Added<WorkItem>` + `work_type == Summarization` 计数"压缩触发"。
+   - 稳定态条件 __无需放宽__：修复 agent tag 后，Summarization 完成将任务回填
+     `Waiting(User)`，`scenario_settled` 正常达成。
 
 ## 文件结构
 
@@ -730,16 +742,16 @@ fn scenario_framework_mock_smoke_compression() {
 cargo test --test real_llm_scenarios scenario_framework_mock_smoke_compression -- --nocapture
 ```
 
-预期：PASS。若失败，按失败点排查（对应"实现前已确认机制"第 8 条边界）：
+预期：PASS。若失败，按失败点排查（对应"实现前已确认机制"第 9 条实际确认的源码事实）：
 
-- 超时且任务停在非 `Waiting(User)` 状态：Summarization 完成后任务回填态与稳定态条件
-  不符——阅读 `src/systems/transform/llm_response.rs` 中 Summarization 结果回填分支，
-  按实际状态放宽 `scenario_settled` 的 Task 侧条件（WorkItem"全部终态"条件保留）；
-- `summarization_completed = 0`：阈值未生效（检查任务 3 步骤 2 的 `insert_resource`
-  是否在 `app.update()` 首帧前执行）或长文本 token 估算未超 300
-  （`estimate_tokens` 是字符近似，canned 长文本应远超）；
+- 任务卡死/超时且 Summarization 大量 Failed：场景 agent 缺 `"summarization"` tag
+  （dispatch_system 按 required_tag 找 agent，缺失即 fail）——给
+  `spawn_scenario_agent` 补该 tag（生产由独立 summarizer agent 承担）。
+- `summarization_triggers = 0`：终态集合统计恒为 0（生产 Summarization WorkItem
+  完成即 despawn 且从不置 Completed）——改用 `Added<WorkItem>` +
+  `work_type == Summarization` 计数"压缩触发"，计数系统注册在所有生产系统之后。
 - follow-up 后新 Task 被创建：压缩 in-flight 期间注入了 follow-up，
-  检查稳定态的 WorkItem 条件。
+  检查稳定态的 WorkItem 条件（`scenario_settled` 的 WorkItem"全部终态"必须保留）。
 
 - [ ] __步骤 4：Commit__
 
