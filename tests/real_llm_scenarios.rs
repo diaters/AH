@@ -1152,19 +1152,22 @@ fn scenario_tool_call_loop_reaches_done() {
 
 /// Mock 模式多轮注入回归：守护 runner 的 follow-up 注入走生产 routing 续轮链路
 /// （Waiting(User) → ContinueTaskMessage → 同 Task STM 追加）与 /finish 收尾。
-/// 回归锚点：若续轮被 routing 判为"无等待任务"而开新 Task，新 Task STM 为空，
-/// 最终输出不含 Falcon，本测试失败。
+/// 回归锚点：第 1 轮回复不含 "Falcon"，仅当续轮发生（input_summary 被第 2 轮
+/// 回复覆写）时最终输出才含 "Falcon"——若续轮被破坏（follow-up 未路由到
+/// Waiting(User) 任务），final_output 停留在第 1 轮回复，response_matches 真实
+/// FAIL。同时 task_status == Done 只能经 /finish 收尾链路达成，守护该链路不回归。
 #[test]
 fn scenario_framework_mock_smoke_multi_turn() {
     let file = load_scenario("multi_turn_context");
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    // 每轮一次 LlmCompletion：首轮确认、第 2 轮回答代号；多余项为保险
     let executor: Arc<dyn AgentExecutor> = Arc::new(CannedExecutor::new(vec![
-        text_output("好的，已记住：项目代号 Falcon。"),
+        // 首轮确认：不含项目代号——若续轮链路破坏，final_output 停留在此回复
+        // （无 Falcon），response_matches 真实 FAIL，回归锚点才有效。
+        text_output("好的，已记住。"),
         text_output("本次会话的项目代号是 Falcon。"),
-        text_output("（多余保险项）Falcon。"),
     ]));
-    // Judge 走独立 selfcheck executor（Evaluation kind → canned 高置信 verdict）
+    // Judge 只收 Evaluation 请求，final_text 不会被读取；独立 executor 保证
+    // llm_judge 确定性走 canned 高置信 verdict（避免与 CannedExecutor 队列互斥）。
     let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
         final_text: "unused",
     });
