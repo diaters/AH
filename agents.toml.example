@@ -130,3 +130,58 @@ model = "deepseek-chat"
 [agent.tools]
 default_permission = "Deny"
 submit_skill_update = "Allow"
+read_skill_file = "Allow"
+
+[[agent]]
+name = "skill-creator"
+tags = ["skill-creator"]
+description = "技能创建专家，根据用户意图为指定 Agent 设计并生成新 skill"
+system_prompt = """\
+你是一名技能创建专家。根据用户的意图描述，为指定 Agent 创建新 skill。
+
+## 工作流程
+
+1. 使用 read_skill_file 读取已有 skill，理解现有能力和风格
+2. 在沙盒目录下自由创建 skill 文件（SKILL.md + 辅助文件）
+3. 使用 write_skill_file 创建或修改沙盒中的文件
+4. 完成后调用 submit_skill(name, description) 提交
+
+## SKILL.md 规范
+
+SKILL.md 是 skill 的入口文件，必须存在于 skill 目录根路径。
+
+frontmatter 格式：
+```
+---
+name: <skill 名称>
+description: <一句话描述>
+version: 1
+self_updatable: true
+---
+```
+
+body 要求：
+- 至少包含一个 ## 二级标题
+- 第一个 ## 标题下必须有实质内容
+
+## 文件创建规则
+
+- path 必须为相对路径，不允许 `../` 逃逸
+- 可以创建多文件 skill：辅助 markdown、脚本、配置等
+- 所有文件必须在沙盒目录内
+
+## 质量要求
+
+- 与已有 skill 形成联动，避免功能重叠
+- 指令清晰、步骤明确，Agent 可直接执行
+- 优先与 Agent 的定位（tags、description）一致"""
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"
+
+[agent.tools]
+default_permission = "Deny"
+submit_skill = "Allow"
+write_skill_file = "Allow"
+read_skill_file = "Allow"

@@ -44,6 +44,11 @@ impl SkillLoader {
         }
     }
 
+    /// 返回 base_dir 路径引用。
+    pub fn base_dir(&self) -> &std::path::Path {
+        &self.base_dir
+    }
+
     /// 用指定 base_dir 构造 SkillLoader。
     ///
     /// `base_dir` 语义与 `default_path()` 一致：直接指向 `agents/` 目录本身，
@@ -73,6 +78,14 @@ impl SkillLoader {
         entries
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
+                // 跳过隐藏目录（如 .sandbox）
+                if path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('.'))
+                    .unwrap_or(false)
+                {
+                    return None;
+                }
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
                     let content = std::fs::read_to_string(&skill_md).ok()?;
@@ -127,7 +140,16 @@ impl SkillLoader {
                 let skills_dir = agent_entry.path().join("skills");
                 if let Ok(skill_entries) = std::fs::read_dir(&skills_dir) {
                     for skill_entry in skill_entries.flatten() {
-                        let skill_path = skill_entry.path().join("SKILL.md");
+                        let skill_path_raw = skill_entry.path();
+                        // 跳过隐藏目录（如 .sandbox）
+                        if skill_path_raw
+                            .file_name()
+                            .map(|n| n.to_string_lossy().starts_with('.'))
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let skill_path = skill_path_raw.join("SKILL.md");
                         // skill_entry.path() 即为 skill 目录
                         let skill_dir = skill_entry.path();
                         if let Ok(content) = std::fs::read_to_string(&skill_path)
@@ -478,5 +500,56 @@ mod registry_build_tests {
             .get(&SkillId::new("agent-b", "writing"))
             .expect("writing skill should exist");
         assert!(!writing.self_updatable);
+    }
+
+    #[test]
+    fn build_registry_skips_hidden_directories() {
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join(".harness").join("assets").join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "coding",
+            "---\nname: coding\ndescription: coding skill\n---\n\n## Usage\n\nDo it.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            ".sandbox",
+            "---\nname: draft\ndescription: draft\n---\n\n## Usage\n\nDraft.\n",
+        );
+
+        let loader = SkillLoader {
+            base_dir: agents_dir.clone(),
+        };
+        let registry = loader.build_registry();
+        assert_eq!(registry.skills.len(), 1, "should skip .sandbox directory");
+        assert!(registry.get(&SkillId::new("agent-a", "coding")).is_some());
+        assert!(registry.get(&SkillId::new("agent-a", ".sandbox")).is_none());
+    }
+
+    #[test]
+    fn load_skills_skips_hidden_directories() {
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join(".harness").join("assets").join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "coding",
+            "---\nname: coding\ndescription: coding skill\n---\n\n## Usage\n\nDo it.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            ".sandbox",
+            "---\nname: draft\ndescription: draft\n---\n\n## Usage\n\nDraft.\n",
+        );
+
+        let loader = SkillLoader {
+            base_dir: agents_dir,
+        };
+        let skills = loader.load_skills("agent-a");
+        assert_eq!(skills.len(), 1, "should skip .sandbox directory");
+        assert_eq!(skills[0].name, "coding");
     }
 }

@@ -13,9 +13,9 @@ use crate::{
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
         ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
         PermissionSource, ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory,
-        SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
-        WorkItem,
+        SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus,
+        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolPermission, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -28,7 +28,7 @@ use super::orchestrator::{handle_tool_action, spawn_tool_error};
 /// Tool 分发 System
 ///
 /// 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tool_dispatch_system(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut Task)>,
@@ -42,13 +42,14 @@ pub fn tool_dispatch_system(
     chat_sessions: Query<&ChatSession>,
     calling_states: Query<(Entity, &crate::domain::ToolCallingState)>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
-    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
-    // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
+    // 合并 ProfileGenerationContext / SkillUpdateContext / SkillCreationContext 查询为单个 SystemParam，
+    // 规避 Bevy 单 system 16 参数上限；三者都是与 WorkItem 同 entity 的 Component，
     // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
     context_queries: Query<(
         Entity,
         Option<&ProfileGenerationContext>,
         Option<&SkillUpdateContext>,
+        Option<&SkillCreationContext>,
         &WorkItem,
     )>,
     settings: Res<HarnessSettings>,
@@ -251,6 +252,35 @@ pub fn tool_dispatch_system(
                     tool_name,
                 );
 
+                let current_skill_dir = if let Some(wi_entity) = request.work_item_entity {
+                    if let Ok((_, _, _, creation_ctx, _)) = context_queries.get(wi_entity) {
+                        creation_ctx.map(|ctx| ctx.sandbox_dir.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                // Fallback: SkillUpdateContext uses skill_loader to resolve skill directory
+                let current_skill_dir = current_skill_dir.or_else(|| {
+                    if let Some(wi_entity) = request.work_item_entity {
+                        if let Ok((_, _, update_ctx, _, _)) = context_queries.get(wi_entity) {
+                            update_ctx.as_ref().map(|ctx| {
+                                index_clock_loader
+                                    .2
+                                    .skill_md_path(&ctx.skill_id)
+                                    .parent()
+                                    .map(|p| p.to_path_buf())
+                                    .unwrap_or_default()
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                });
+
                 let ctx = ToolContext {
                     knowledge: &knowledge,
                     experience_store: &experience_store,
@@ -268,7 +298,7 @@ pub fn tool_dispatch_system(
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
-                    current_skill_dir: None,
+                    current_skill_dir,
                 };
                 let action = executor.execute(&request.tool_input, &ctx);
 

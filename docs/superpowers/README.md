@@ -107,6 +107,10 @@
 
 </details>
 
+另：`plans/2026-08-10-skill-creation-command.md` — `/skill` 命令创建 skill 实施，计划执行完毕后于
+2026-08-14 归档（对应功能随 `feat/skill-creation-command` 分支合入，见
+[`docs/design/2026-08-10-skill-creation-command-design.md`](../design/2026-08-10-skill-creation-command-design.md)）。
+
 ## 生命周期规则
 
 - 计划执行完毕或规格被代码实现后，应在 **7 天内** 移动到 `docs/archive/superpowers/`

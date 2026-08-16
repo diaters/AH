@@ -256,6 +256,11 @@ pub enum ToolAction {
         /// 本次更新的理由说明
         rationale: String,
     },
+    /// 提交 skill 创建候选
+    ///
+    /// 由 skill-creator Agent 调用，实际的 skill 文件写入与 registry 刷新
+    /// 在后续任务中完成。
+    SubmitSkillCandidate { name: String, description: String },
     /// 向用户提出问题并等待开放文本回复。
     /// executor 只负责解析参数，问题呈现与等待状态由 orchestrator 完成。
     AskUser {

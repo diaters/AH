@@ -295,6 +295,36 @@ pub(crate) fn command_parse_system(
                 }
                 commands.entity(entity).despawn();
             }
+            UserCommand::CreateSkill { intent } => {
+                // /skill - 为当前任务的 Agent 创建新 skill
+                if intent.is_empty() {
+                    eprintln!("[skill] usage: /skill <intent description>");
+                } else {
+                    // 查找当前活跃任务的 Agent（与 /finish 同逻辑：同 channel、非终态）
+                    let current_task = tasks.iter().find(|(t, _)| {
+                        !t.status.is_terminal()
+                            && t.origin_channel == Some(input.origin_channel.clone())
+                    });
+
+                    if let Some((task, _)) = current_task {
+                        debug!(
+                            event = "SkillCreationCommandReceived",
+                            task_id = %task.id,
+                            intent = %intent,
+                            "spawning skill creation request"
+                        );
+                        commands.spawn(crate::domain::SkillCreationRequestMessage {
+                            task_id: task.id,
+                            agent_id: task.creator,
+                            agent_name: String::new(),
+                            intent,
+                        });
+                    } else {
+                        eprintln!("[skill] no active task — /skill requires an active task");
+                    }
+                }
+                commands.entity(entity).despawn();
+            }
         }
     }
 }
@@ -879,6 +909,129 @@ mod tests {
             .collect();
         assert_eq!(clear_msgs.len(), 1);
         assert_eq!(clear_msgs[0].task_id, task_id);
+    }
+
+    #[test]
+    fn skill_command_spawns_creation_request() {
+        use crate::domain::{FrontendKind, SkillCreationRequestMessage, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        let task_id = uuid::Uuid::new_v4();
+        let creator_id = uuid::Uuid::new_v4();
+        app.world_mut().spawn((
+            Task {
+                id: task_id,
+                content: "active task".to_string(),
+                creator: creator_id,
+                delegate: None,
+                status: TaskStatus::Running,
+                pending_confirmation_id: None,
+                input_summary: "test".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "/skill 做代码审查".to_string(),
+            origin_channel: channel,
+        });
+
+        app.update();
+
+        let skill_msgs: Vec<&SkillCreationRequestMessage> = app
+            .world_mut()
+            .query::<&SkillCreationRequestMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(skill_msgs.len(), 1);
+        assert_eq!(skill_msgs[0].task_id, task_id);
+        assert_eq!(skill_msgs[0].intent, "做代码审查");
+    }
+
+    #[test]
+    fn skill_command_empty_intent_no_request() {
+        use crate::domain::{FrontendKind, SkillCreationRequestMessage, Task, TaskStatus};
+
+        let mut app = App::new();
+        app.insert_resource(MemoryConfig::default());
+        app.insert_resource(SharedKnowledgeBase::default());
+        app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.add_systems(Update, command_parse_system);
+
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "test".to_string(),
+            thread_id: None,
+        };
+        let now = chrono::Utc::now();
+        app.world_mut().spawn((
+            Task {
+                id: uuid::Uuid::new_v4(),
+                content: "active task".to_string(),
+                creator: uuid::Uuid::nil(),
+                delegate: None,
+                status: TaskStatus::Running,
+                pending_confirmation_id: None,
+                input_summary: "test".to_string(),
+                result_summary: String::new(),
+                priority: 0,
+                created_at: now,
+                updated_at: now,
+                retry_count: 0,
+                max_retries: 3,
+                next_retry_at: None,
+                last_error: None,
+                multi_turn: false,
+                parent_task_id: None,
+                batch_id: None,
+                origin_channel: Some(channel.clone()),
+                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
+                last_evaluated_turn: None,
+            },
+            ShortTermMemory::default(),
+        ));
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "/skill".to_string(),
+            origin_channel: channel,
+        });
+
+        app.update();
+
+        let skill_count = app
+            .world_mut()
+            .query::<&SkillCreationRequestMessage>()
+            .iter(app.world())
+            .count();
+        assert_eq!(
+            skill_count, 0,
+            "/skill with no intent should not spawn request"
+        );
     }
 
     #[test]

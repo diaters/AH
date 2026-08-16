@@ -1,11 +1,11 @@
 use crate::prelude::*;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
     PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationRequestMessage,
-    ToolConfirmationResponseMessage, WorkItem,
+    SkillCreationContext, SkillCreationWritebackMessage, ToolConfirmationResponseMessage, WorkItem,
 };
 use crate::user_plugins::hook_point::HookPoint;
 
@@ -20,6 +20,7 @@ pub(crate) fn experience_approval_result_system(
     pending_decisions: Query<(Entity, &ExperienceGovernanceDecision)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
+    skill_creation_contexts: Query<(Entity, &SkillCreationContext, &WorkItem)>,
 ) {
     for (entity, response) in &responses {
         let candidate_id = match store
@@ -113,6 +114,38 @@ pub(crate) fn experience_approval_result_system(
                         proposal.status = IncubationProposalStatus::Approved;
                         proposal.updated_at = chrono::Utc::now();
                     }
+                }
+
+                // SkillCreation 目标：insert SkillCreationWritebackMessage 到 WorkItem entity
+                if decision.destination == ExperienceWritebackDestination::SkillCreation {
+                    // 通过 task_id 找到带 SkillCreationContext 的 WorkItem entity
+                    if let Some((wi_entity, _, _)) = skill_creation_contexts
+                        .iter()
+                        .find(|(_, ctx, _)| ctx.task_id == decision.source_task_id)
+                    {
+                        commands
+                            .entity(wi_entity)
+                            .insert(SkillCreationWritebackMessage {
+                                candidate_id,
+                                task_id: decision.source_task_id,
+                            });
+                        debug!(
+                            event = "SkillCreationWritebackMessageInserted",
+                            candidate_id = %candidate_id,
+                            task_id = %decision.source_task_id,
+                            "inserted SkillCreationWritebackMessage to WorkItem entity"
+                        );
+                    } else {
+                        warn!(
+                            event = "SkillCreationContextNotFound",
+                            candidate_id = %candidate_id,
+                            task_id = %decision.source_task_id,
+                            "no SkillCreationContext found for approved candidate"
+                        );
+                    }
+                    commands.entity(decision_entity).despawn();
+                    commands.entity(entity).despawn();
+                    continue;
                 }
 
                 // 生成写回请求
@@ -265,6 +298,7 @@ mod tests {
                 description: "run smoke test".to_string(),
                 instructions: "1. Run test".to_string(),
                 file_refs: vec![],
+                is_new: false,
             },
             dependency_refs: vec![],
             status: ExperienceCandidateStatus::NeedsUserApproval,
