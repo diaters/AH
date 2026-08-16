@@ -141,6 +141,22 @@ pub(crate) fn experience_writeback_system(
                 );
                 Ok(())
             }
+            ExperienceWritebackDestination::SkillCreation => {
+                // SkillCreation writeback 由 skill_creation_writeback_system 处理。
+                // 到达此分支说明路由错误——approval 应将 SkillCreation 目标
+                // 插入 SkillCreationWritebackMessage 而非 spawn ExperienceWritebackRequestMessage。
+                warn!(
+                    event = "SkillCreationWritebackRoutedIncorrectly",
+                    candidate_id = %candidate_id,
+                    destination = ?decision.destination,
+                    "SkillCreation writeback should not reach experience_writeback_system; \
+                     this indicates a routing error"
+                );
+                Err(
+                    "SkillCreation writeback must go through skill_creation_writeback_system"
+                        .to_string(),
+                )
+            }
         };
 
         match result {
@@ -233,6 +249,7 @@ fn writeback_to_skill_package(
         description,
         instructions,
         file_refs,
+        ..
     } = &candidate.payload
     else {
         return Err("candidate payload is not skill".to_string());
@@ -358,6 +375,7 @@ fn writeback_incubation_proposal(
                 description,
                 instructions,
                 file_refs,
+                ..
             } = &candidate.payload
         {
             let draft = crate::infrastructure::assets::SkillPackageDraft {

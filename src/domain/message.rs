@@ -541,6 +541,26 @@ pub struct SkillUpdateRequestMessage {
     pub governing_agent_id: AgentId,
 }
 
+/// /skill 命令触发的 skill 创建请求消息。
+///
+/// 由 command_parse_system spawn，由 skill_creation_workitem_system 消费，
+/// 构造 skill-creator WorkItem。
+#[derive(Debug, Clone, Component)]
+pub struct SkillCreationRequestMessage {
+    pub task_id: TaskId,
+    pub agent_id: AgentId,
+    pub agent_name: String,
+    pub intent: String,
+}
+
+/// skill 创建写回消息：用户确认后由 approval system insert 到 WorkItem entity，
+/// 由 skill_creation_writeback_system 消费执行 rename 写回。
+#[derive(Debug, Clone, Component)]
+pub struct SkillCreationWritebackMessage {
+    pub candidate_id: uuid::Uuid,
+    pub task_id: TaskId,
+}
+
 /// /reload-plugins 触发的重载请求消息。
 ///
 /// `command_parse_system` 使用 Commands 无法直接获取 `&mut World`，

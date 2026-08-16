@@ -12,9 +12,9 @@ use crate::{
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, EngineEvent, EventTarget,
         ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
         PermissionAuditContext, PermissionSource, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillUpdateContext, Task, TaskStatus, ToolCallingState, ToolContext,
-        ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, WaitingReason, WorkItem,
+        ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task, TaskStatus,
+        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -100,7 +100,7 @@ pub fn approval_dispatch_system(
 /// 审批结果处理 System
 ///
 /// 处理父 Agent 审批结果，更新权限，恢复任务
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn approval_result_system(
     mut commands: Commands,
     mut agents: Query<&mut Agent>,
@@ -114,13 +114,12 @@ pub fn approval_result_system(
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
-    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
-    // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
-    // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
+    // 合并 Context 查询为单个 SystemParam，规避 Bevy 单 system 16 参数上限。
     context_queries: Query<(
         Entity,
         Option<&ProfileGenerationContext>,
         Option<&SkillUpdateContext>,
+        Option<&SkillCreationContext>,
         &WorkItem,
     )>,
     settings: Res<HarnessSettings>,

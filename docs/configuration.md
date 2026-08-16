@@ -67,12 +67,14 @@
 ## 测试环境变量
 
 真实 LLM 测试（冒烟 `tests/real_llm_smoke.rs`、场景 `tests/real_llm_scenarios.rs`）
-共用以下门控变量：
+采用 `#[ignore]` + 环境变量双重门控，永不进入 CI。变量仅测试进程读取，
+不影响运行时：
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `HARNESS_TEST_REAL_LLM` | 未设置 | 显式开关，设置任意值即启用真实 API 测试 |
 | `HARNESS_LLM_API_KEY` | 无 | API Key（标准 provider 由测试桥接到原生环境变量） |
+| `HARNESS_TEST_PROVIDER` | `openai` | 冒烟测试的 provider，一次只测一个 |
 | `HARNESS_LLM_PROVIDER` | `default` | 场景测试使用的 provider |
 | `HARNESS_MODEL` | `gpt-4.1-mini` | 测试使用的模型 |
 
@@ -90,6 +92,11 @@
 执行方式：
 
 ```bash
+# 冒烟测试
+HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
+  cargo test --test real_llm_smoke -- --ignored --nocapture
+
+# 场景测试
 HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
   cargo test --test real_llm_scenarios -- --ignored --nocapture
 ```

@@ -104,5 +104,33 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                 "next_trigger": next_trigger,
             }))
         }
+        ToolEffect::WriteSkillFile {
+            sandbox_dir,
+            path,
+            content,
+        } => {
+            let full_path = sandbox_dir.join(path);
+            if let Some(parent) = full_path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "failed to create directory {}: {}",
+                    parent.display(),
+                    e
+                )));
+            }
+            let bytes = content.len();
+            match std::fs::write(&full_path, content) {
+                Ok(()) => Ok(serde_json::json!({
+                    "path": path,
+                    "bytes_written": bytes,
+                })),
+                Err(e) => Err(ToolError::ExecutionFailed(format!(
+                    "failed to write file {}: {}",
+                    full_path.display(),
+                    e
+                ))),
+            }
+        }
     }
 }

@@ -10,9 +10,10 @@ use crate::{
     contracts::SessionBackend,
     domain::{
         Agent, ClearTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
-        EventTarget, FailureReason, FinishTaskMessage, PendingDispatch, PreviousTaskStatus,
-        RetryReadyMessage, ShortTermMemory, SubTaskConfig, Task, TaskStatus, TaskTerminatedMessage,
-        ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
+        EventTarget, ExperienceCandidateStatus, ExperienceStore, FailureReason, FinishTaskMessage,
+        PendingDispatch, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
+        SkillCreationContext, SubTaskConfig, Task, TaskStatus, TaskTerminatedMessage,
+        ToolCallingState, ToolExecutionRequestMessage, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     systems::NativeProcessBackend,
@@ -131,12 +132,15 @@ pub fn retry_ready_system(
 /// 依赖 `PreviousTaskStatus` 组件做转换检测。终态内的字段更新（如
 /// `result_summary`、`updated_at` 刷新）不会重复触发。这是 `mark_done`
 /// 幂等化的纵深防御层。
+#[allow(clippy::too_many_arguments)]
 pub fn task_termination_system(
     mut commands: Commands,
     _config: Res<MemoryConfig>,
     mut tasks: Query<(TaskTerminationQuery, &mut PreviousTaskStatus), Changed<Task>>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
+    mut experience_store: ResMut<ExperienceStore>,
+    skill_creation_contexts: Query<(Entity, &SkillCreationContext, &WorkItem)>,
 ) {
     for ((task, memory, sub_task_config), mut prev_status) in &mut tasks {
         let prev = prev_status.0.clone();
@@ -240,6 +244,69 @@ pub fn task_termination_system(
         // TaskComplete 触发的摘要已移除：任务终态后 STM 无后续消费者，
         // 摘要写入 summary_prefix 后不会被读取，浪费 LLM tokens 并产生无用 IM 通知。
         // TokenThreshold 与 UserCommand 两种触发路径仍然保留。
+
+        // Skill Creation 沙盒清理：任务终态后，按 candidate 状态决定是否删除沙盒
+        for (wi_entity, ctx, _) in skill_creation_contexts.iter() {
+            if ctx.task_id != task.id {
+                continue;
+            }
+            let candidates = experience_store.candidates_by_producer_task(task.id);
+            let candidate_status = candidates.first().map(|c| c.status.clone());
+            match candidate_status {
+                Some(ExperienceCandidateStatus::NeedsUserApproval) => {
+                    // 用户可能仍会审批，不清理
+                    debug!(
+                        event = "SkillSandboxPreserved",
+                        task_id = %task.id,
+                        sandbox_dir = %ctx.sandbox_dir.display(),
+                        "skill creation sandbox preserved (candidate needs user approval)"
+                    );
+                }
+                Some(
+                    ExperienceCandidateStatus::Persisted
+                    | ExperienceCandidateStatus::Rejected
+                    | ExperienceCandidateStatus::Discarded
+                    | ExperienceCandidateStatus::WritebackFailed,
+                ) => {
+                    // 已终结：删除沙盒 + despawn WorkItem
+                    debug!(
+                        event = "SkillSandboxCleaned",
+                        task_id = %task.id,
+                        sandbox_dir = %ctx.sandbox_dir.display(),
+                        candidate_status = ?candidate_status,
+                        "cleaning up skill creation sandbox on task termination"
+                    );
+                    let _ = std::fs::remove_dir_all(&ctx.sandbox_dir);
+                    commands.entity(wi_entity).despawn();
+                }
+                _ => {
+                    // Submitted / GovernancePending / InInbox 等中间态：
+                    // 删除沙盒 + despawn WorkItem + candidate 标记 Discarded
+                    debug!(
+                        event = "SkillSandboxForceCleaned",
+                        task_id = %task.id,
+                        sandbox_dir = %ctx.sandbox_dir.display(),
+                        candidate_status = ?candidate_status,
+                        "force cleaning skill creation sandbox and discarding candidate"
+                    );
+                    let _ = std::fs::remove_dir_all(&ctx.sandbox_dir);
+                    // 将关联 candidate 标记为 Discarded
+                    let candidate_ids: Vec<_> = experience_store
+                        .candidates_by_producer_task(task.id)
+                        .iter()
+                        .map(|c| c.candidate_id)
+                        .collect();
+                    for candidate_id in candidate_ids {
+                        if let Some(candidate) = experience_store.candidates.get_mut(&candidate_id)
+                            && !matches!(candidate.status, ExperienceCandidateStatus::Discarded)
+                        {
+                            candidate.status = ExperienceCandidateStatus::Discarded;
+                        }
+                    }
+                    commands.entity(wi_entity).despawn();
+                }
+            }
+        }
     }
 }
 
@@ -289,6 +356,7 @@ pub fn finish_task_system(
 ///
 /// 处理 /clear 命令，直接 despawn task entity 及其附属组件，
 /// 不触发终态处理链路（摘要、经验收集、hook 派发等）。
+#[allow(clippy::too_many_arguments)]
 pub fn clear_task_system(
     mut commands: Commands,
     mut index: ResMut<EntityIndex>,
@@ -297,6 +365,8 @@ pub fn clear_task_system(
     messages: Query<(Entity, &ClearTaskMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
+    mut experience_store: ResMut<ExperienceStore>,
+    skill_creation_contexts: Query<(Entity, &SkillCreationContext)>,
 ) {
     for (entity, msg) in &messages {
         // 停止关联 shell sessions
@@ -354,6 +424,34 @@ pub fn clear_task_system(
             for frontend in &registry.frontends {
                 frontend.push_event(event.clone());
             }
+        }
+
+        // Skill Creation 沙盒强制清理：/clear 无条件删除沙盒
+        for (wi_entity, ctx) in &skill_creation_contexts {
+            if ctx.task_id != msg.task_id {
+                continue;
+            }
+            debug!(
+                event = "SkillSandboxForceCleaned",
+                task_id = %msg.task_id,
+                sandbox_dir = %ctx.sandbox_dir.display(),
+                "force cleaning skill creation sandbox on /clear"
+            );
+            let _ = std::fs::remove_dir_all(&ctx.sandbox_dir);
+            // 将关联 candidate 标记为 Discarded
+            let candidate_ids: Vec<_> = experience_store
+                .candidates_by_producer_task(msg.task_id)
+                .iter()
+                .map(|c| c.candidate_id)
+                .collect();
+            for candidate_id in candidate_ids {
+                if let Some(candidate) = experience_store.candidates.get_mut(&candidate_id)
+                    && !matches!(candidate.status, ExperienceCandidateStatus::Discarded)
+                {
+                    candidate.status = ExperienceCandidateStatus::Discarded;
+                }
+            }
+            commands.entity(wi_entity).despawn();
         }
 
         // 使用中心封装 despawn task（同步维护 EntityIndex）
@@ -465,6 +563,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(HarnessSettings(HarnessConfig::default()));
         app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.insert_resource(ExperienceStore::default());
         app.add_systems(
             Update,
             (
@@ -704,6 +803,7 @@ mod tests {
         app.insert_resource(crate::app::MemoryConfig::default());
         app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, clear_task_system);
 
         let channel = ChannelId {
@@ -789,6 +889,7 @@ mod tests {
         app.insert_resource(crate::app::MemoryConfig::default());
         app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
 
         let channel = ChannelId {
@@ -866,6 +967,7 @@ mod tests {
         app.insert_resource(crate::app::MemoryConfig::default());
         app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
 
         let channel = ChannelId {
@@ -973,6 +1075,7 @@ mod tests {
         app.init_resource::<EntityIndex>();
         app.insert_resource(crate::app::MemoryConfig::default());
         app.insert_resource(crate::systems::NativeProcessBackend::default());
+        app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, clear_task_system);
 
         let channel = ChannelId {

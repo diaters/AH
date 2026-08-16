@@ -59,6 +59,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 冷却期自动恢复到原优先级
 - `providers.toml` 配置文件支持多 provider 实例
 - 向后兼容：现有 `model` 字段和环境变量配置继续工作
+- genai 适配层错误分类覆盖非流式 `exec_chat` 路径：HTTP 状态码从
+  `webc::Error::ResponseFailedStatus` 中提取，401/403 → `Authentication`（不重试不降级）、
+  429 → `RateLimited`（可重试可降级）、402 → `QuotaExhausted`（降级）
 
 #### 测试分层（真实 LLM 场景测试）
 
@@ -66,8 +69,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `docs/design/2026-08-16-real-llm-scenario-testing-design.md`）
 - Layer 0：共享 mock executor 基础设施已收敛（`tests/common/mock_executor.rs`），
   genai 适配层纯函数已有无网络单元测试
-- Layer 1：真实 LLM 冒烟测试已可用（`tests/real_llm_smoke.rs`），
+- Layer 1：真实 LLM 冒烟测试已可用（`tests/real_llm_smoke.rs`），覆盖纯文本往返、
+  tool_calls 往返、工具名 sanitize 往返、OpenAiCompatible 自定义端点与错误分类；
   采用 `#[ignore]` + `HARNESS_TEST_REAL_LLM` 双重门控，永不进入 CI
+- 错误分类测试（401/429）基于 wiremock 本地端点，确定性执行，随 CI 常规运行
 - Layer 2/3：声明式场景测试框架已可用（`tests/real_llm_scenarios.rs` +
   `tests/scenarios/*.toml`）——TOML 场景定义五类断言
   （`tool_called` / `state_reached` / `response_matches` / `llm_judge` / `human_review`），
@@ -289,6 +294,18 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `replace_body` 加软约束警示（仅当其他 operation 无法表达时才使用）
 - `candidate_payload_text` 输出显式 `[候选类型：Knowledge/Skill]` 前缀，与 prompt 中
   `candidate_kind_label` 一致，避免 LLM 在长候选中丢失类型语义
+
+##### `/skill` 命令：Skill 创建
+
+- `/skill <意图描述>` slash command：为活跃任务的 Agent 无中生有创建新 skill
+  （`UserCommand::CreateSkill`）；空意图或无活跃任务时拒绝并提示 usage
+- 执行由专用 `skill-creator` Agent 承担（声明在 `agents.toml.example`，tags `skill-creator`，
+  工具白名单：`submit_skill` / `write_skill_file` / `read_skill_file`）
+- 创作过程在沙盒目录 `.harness/assets/agents/<agent>/skills/.sandbox/<skill_name>/` 内进行，
+  随任务终态或 `/clear` 自动清理；`SkillLoader` 扫描时过滤 `.sandbox` 目录
+- `submit_skill` 提交后构造 `ExperienceCandidatePayload::Skill { is_new: true }`，经
+  `SkillCreation` 目的地 + 用户确认流程，确认后由 `skill_creation_writeback_system`
+  rename 原子写回正式 skill 目录并重建 `SkillRegistry`（同名冲突拒绝）
 
 ### 待完善
 

@@ -4,54 +4,20 @@ use tracing::debug;
 use crate::{
     app::MemoryConfig,
     domain::{
-        Agent, EntryRole, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
-        LtmWriteHookPending, MemoryEntry, MemoryImportance, ShortTermMemory,
-        SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
-        render_tool_calls_summary,
+        Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
+        MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
+        TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
+        compressible_entry_count, render_tool_calls_summary, split_into_groups,
     },
     infrastructure::memory::LongTermMemoryService,
 };
-
-/// 将 STM entries 按配对组切分。
-///
-/// 配对组定义：
-/// - User 开启新的对话配对组
-/// - Assistant（无 tool_calls）归入当前对话配对组
-/// - Assistant（有 tool_calls）开启新的工具配对组（原子性锚点）
-/// - Summary / Archive 归入最近的配对组
-fn split_into_groups(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
-    if entries.is_empty() {
-        return Vec::new();
-    }
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut current_group: Vec<usize> = Vec::new();
-
-    for (i, entry) in entries.iter().enumerate() {
-        let starts_new_group = match entry.role {
-            EntryRole::User => true,
-            EntryRole::Assistant if !entry.metadata.tool_calls.is_empty() => true,
-            EntryRole::Assistant => false,
-            EntryRole::Summary | EntryRole::Archive => false,
-        };
-
-        if starts_new_group && !current_group.is_empty() {
-            groups.push(std::mem::take(&mut current_group));
-        }
-        current_group.push(i);
-    }
-
-    if !current_group.is_empty() {
-        groups.push(current_group);
-    }
-
-    groups
-}
 
 /// 记忆压缩系统：检测 token 阈值并触发摘要请求
 pub(crate) fn memory_compression_system(
     config: Res<MemoryConfig>,
     mut commands: Commands,
     tasks: Query<(&Task, &ShortTermMemory)>,
+    work_items: Query<&WorkItem>,
 ) {
     for (task, short_term) in &tasks {
         // 跳过终态任务和等待摘要的任务
@@ -67,19 +33,25 @@ pub(crate) fn memory_compression_system(
 
         // 检查是否需要压缩
         if short_term.estimated_tokens > config.compression_threshold_tokens {
-            // 替换原有的 preserve_count / compress_count 逻辑
-            let groups = split_into_groups(&short_term.entries);
-            if groups.len() <= config.preserve_recent_turns as usize {
+            // 在飞保护：该 task 已有未完成的 Summarization WorkItem 时不重复触发，
+            // 避免 follow-up 将任务标回 Running 后产生并发摘要
+            let has_inflight = work_items.iter().any(|wi| {
+                wi.work_type == WorkItemType::Summarization
+                    && wi.task_id == task.id
+                    && !matches!(
+                        wi.status,
+                        WorkItemStatus::Completed | WorkItemStatus::Failed
+                    )
+            });
+            if has_inflight {
                 continue;
             }
 
+            // 替换原有的 preserve_count / compress_count 逻辑
+            let groups = split_into_groups(&short_term.entries);
             let preserve_group_count = config.preserve_recent_turns as usize;
-            let compress_entry_count = groups
-                .iter()
-                .take(groups.len() - preserve_group_count)
-                .map(|g| g.len())
-                .sum();
-
+            let compress_entry_count =
+                compressible_entry_count(&groups, config.preserve_recent_turns);
             if compress_entry_count == 0 {
                 continue;
             }
@@ -457,6 +429,73 @@ mod tests {
             stm.estimated_tokens > 50,
             "should exceed threshold, got {}",
             stm.estimated_tokens,
+        );
+    }
+
+    #[test]
+    fn compression_skips_when_summarization_workitem_inflight() {
+        use crate::domain::{SummarizationTrigger, WorkItem, WorkItemStatus};
+        use bevy_ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(MemoryConfig {
+            compression_threshold_tokens: 100,
+            preserve_recent_turns: 1,
+            summary_target_tokens: 50,
+        });
+
+        let task = Task::from_user_input(
+            "test",
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "default".to_string(),
+                thread_id: None,
+            },
+        );
+        let task_id = task.id;
+        let entity = world.spawn((task, ShortTermMemory::default())).id();
+        {
+            let mut stm = world.get_mut::<ShortTermMemory>(entity).unwrap();
+            for i in 0..15 {
+                stm.add_entry(
+                    EntryRole::User,
+                    format!(
+                        "This is message number {} with sufficiently long content to exceed threshold",
+                        i
+                    ),
+                    Default::default(),
+                );
+            }
+        }
+
+        // 该 task 已有一个在飞的 Summarization WorkItem
+        let mut wi = WorkItem::summarization(
+            task_id,
+            "compress".to_string(),
+            100,
+            SummarizationTrigger::TokenThreshold,
+        );
+        wi.status = WorkItemStatus::Running;
+        world.spawn(wi);
+
+        // 前置条件：STM 必须明确超过阈值，否则测试退化为"未触发"而非"在飞保护"
+        let stm = world.get::<ShortTermMemory>(entity).unwrap();
+        assert!(
+            stm.estimated_tokens > 100,
+            "test precondition: STM must exceed threshold, got {}",
+            stm.estimated_tokens,
+        );
+
+        let _ = world.run_system_once(super::memory_compression_system);
+
+        let requests = world
+            .query::<&crate::domain::SummarizationRequestMessage>()
+            .iter(&world)
+            .count();
+        assert_eq!(
+            requests, 0,
+            "must not trigger a new summarization while one is inflight"
         );
     }
 }
