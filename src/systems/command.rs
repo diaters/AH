@@ -12,6 +12,7 @@ use crate::domain::{
 use crate::ecs::EntityIndex;
 
 /// 命令解析系统：解析用户输入中的指令
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn command_parse_system(
     mut commands: Commands,
     mut knowledge: ResMut<SharedKnowledgeBase>,
@@ -401,6 +402,7 @@ mod tests {
     use crate::prelude::*;
 
     use super::command_parse_system;
+    use crate::ecs::EntityIndex;
     use crate::{
         app::MemoryConfig,
         domain::{
@@ -409,7 +411,6 @@ mod tests {
             UserCommand, UserCommand::Remember, UserInputMessage,
         },
     };
-    use crate::ecs::EntityIndex;
 
     #[test]
     fn parse_btw_with_topic() {
@@ -1017,23 +1018,29 @@ mod tests {
         let task_id = uuid::Uuid::new_v4();
         let delegate_id = uuid::Uuid::new_v4();
         // 注册 Agent 实体
-        let agent_entity = app.world_mut().spawn(Agent {
-            id: delegate_id,
-            profile: crate::domain::AgentProfile {
-                name: "browser-operator".to_string(),
-                model: "gpt-4".to_string(),
-            },
-            capabilities: crate::domain::AgentCapabilities {
-                tags: vec![],
-                description: String::new(),
-            },
-            kind: crate::domain::AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: crate::domain::AgentToolPermissions::default(),
-            system_prompt: None,
-        }).id();
-        app.world_mut().resource_mut::<EntityIndex>().agents.insert(delegate_id, agent_entity);
+        let agent_entity = app
+            .world_mut()
+            .spawn(Agent {
+                id: delegate_id,
+                profile: crate::domain::AgentProfile {
+                    name: "browser-operator".to_string(),
+                    model: "gpt-4".to_string(),
+                },
+                capabilities: crate::domain::AgentCapabilities {
+                    tags: vec![],
+                    description: String::new(),
+                },
+                kind: crate::domain::AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: crate::domain::AgentToolPermissions::default(),
+                system_prompt: None,
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .agents
+            .insert(delegate_id, agent_entity);
 
         app.world_mut().spawn((
             Task {

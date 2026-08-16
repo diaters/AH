@@ -630,6 +630,7 @@ mod tests {
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
+        app.insert_resource(crate::ecs::EntityIndex::default());
 
         let pending_id = uuid::Uuid::new_v4();
         let task = make_waiting_task_with_confirmation(telegram_channel(), pending_id);

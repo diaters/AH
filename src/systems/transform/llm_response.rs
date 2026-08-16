@@ -11,13 +11,12 @@ use crate::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
         ChatRoundReadyMessage, ChatSession, ConversationMessage, EntryMetadata, EntryRole,
-        ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage,
-        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy,
-        OutputContent, ProfileGenerationContext, ShortTermMemory, SkillCreationContext,
-        SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState,
-        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
-        WorkItemLifecycleHookPending, WorkItemType,
+        ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceStore,
+        FailureReason, MessageDispatchedHookPending, OffTrackPolicy, OutputContent,
+        ProfileGenerationContext, ShortTermMemory, SkillCreationContext, SystemOutputMessage, Task,
+        TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState, ToolDefinition,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+        UserOutputMessage, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     ecs::EntityIndex,
     user_plugins::hook_point::HookPoint,
@@ -1022,6 +1021,8 @@ pub fn llm_response_system(
                                             ),
                                         );
                                     }
+                                    // 无候选提交，despawn WorkItem；不 despawn result entity
+                                    commands.entity(work_item_entity).despawn();
                                 } else {
                                     let agent_id = skill_creation_contexts
                                         .get(work_item_entity)
@@ -1050,12 +1051,9 @@ pub fn llm_response_system(
                                             ),
                                         );
                                     }
+                                    // 保留 WorkItem entity 不 despawn，确保治理批准后
+                                    // SkillCreationContext 能被写回系统读取并执行 rename。
                                 }
-
-                                // despawn WorkItem；不 despawn result entity、不 continue：
-                                // 最终文本继续走通用路径（result entity 由通用路径收尾
-                                // despawn，见下方 commands.entity(entity).despawn()）
-                                commands.entity(work_item_entity).despawn();
                             }
                             Err(_) => {
                                 warn!(

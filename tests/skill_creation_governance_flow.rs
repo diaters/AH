@@ -1,18 +1,18 @@
 //! /skill 候选治理触发集成测试（2026-08-16 修复）
 //!
 //! 验证 SkillCreation WorkItem 完成后：
-//! 1. 有候选提交 → 候选推进 GovernancePending + WorkItem 完成清理
+//! 1. 有候选提交 → 候选推进 GovernancePending + WorkItem 保留（供批准后写回）
 //! 2. 无候选提交 → WorkItem fail 清理，候选不被推进
 
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExecutionResult, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, ExecutorFuture, ExperienceCandidate, ExperienceCandidateStatus, FrontendKind,
-    HarnessConfig, LongTermMemory, ShortTermMemory, SkillCreationContext, Task, WorkItem,
-    WorkItemStatus, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult,
+    AgentExecutor, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
+    ExecutorFuture, ExperienceCandidate, ExperienceCandidateStatus, FrontendKind, HarnessConfig,
+    LongTermMemory, ShortTermMemory, SkillCreationContext, Task, WorkItem, WorkItemStatus,
+    WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -65,8 +65,14 @@ fn test_config() -> HarnessConfig {
 }
 
 /// 构造 SkillCreation 完成场景，返回 (app, task_id, candidate_id)。
-/// `submit_candidate` 控制是否向 ExperienceStore 预置候选。
-fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+/// - `submit_candidate` 控制是否向 ExperienceStore 预置候选
+/// - `sandbox_dir` 指定 SkillCreationContext.sandbox_dir
+/// - `spawn_result` 控制是否 spawn AgentExecutionResultMessage（触发治理推进）
+fn setup_with(
+    submit_candidate: bool,
+    sandbox_dir: std::path::PathBuf,
+    spawn_result: bool,
+) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
     let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(TextExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -123,7 +129,7 @@ fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
             task_id,
             agent_id: governing_agent_id,
             agent_name: "default".to_string(),
-            sandbox_dir: std::path::PathBuf::from("/tmp/test-sandbox"),
+            sandbox_dir,
             skill_name: "daily-news".to_string(),
         },
     ));
@@ -145,25 +151,41 @@ fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
             .stage_root_candidate(candidate);
     }
 
-    let result = AgentExecutionResult {
-        task_id,
-        agent_id: governing_agent_id,
-        request_kind: AgentRequestKind::LlmCompletion,
-        result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text("已创建 skill".to_string()),
+    if spawn_result {
+        let result = AgentExecutionResult {
+            task_id,
+            agent_id: governing_agent_id,
+            request_kind: AgentRequestKind::LlmCompletion,
+            result: Ok(AgentExecutionOutput {
+                content: harness::OutputContent::Text("已创建 skill".to_string()),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
             reasoning_content: None,
-        }),
-        prompt: String::new(),
-        system_prompt: None,
-        tools: vec![],
-        reasoning_content: None,
-        work_item_id: Some(work_item_id),
-        conversation: None,
-    };
-    app.world_mut()
-        .spawn(harness::AgentExecutionResultMessage { result });
+            work_item_id: Some(work_item_id),
+            conversation: None,
+        };
+        app.world_mut()
+            .spawn(harness::AgentExecutionResultMessage { result });
+    }
 
     (app, task_id, candidate_id)
+}
+
+/// 默认场景：提交候选 + 触发治理推进。
+fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+    setup_with(
+        submit_candidate,
+        std::path::PathBuf::from("/tmp/test-sandbox"),
+        true,
+    )
+}
+
+/// 隔离的批准场景：不触发治理系统，直接测试批准→写回路径。
+fn setup_for_approval() -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+    setup_with(true, std::path::PathBuf::from("/tmp/test-sandbox"), false)
 }
 
 #[test]
@@ -172,16 +194,17 @@ fn skill_creation_completion_promotes_candidate_and_requests_governance() {
 
     app.update();
 
-    // WorkItem 已清理
+    // WorkItem 应保留（供批准后写回系统读取 SkillCreationContext）
     let work_items: Vec<_> = app
         .world_mut()
         .query::<&WorkItem>()
         .iter(app.world())
         .filter(|wi| wi.work_type == WorkItemType::SkillCreation)
         .collect();
-    assert!(
-        work_items.is_empty(),
-        "SkillCreation WorkItem should be despawned after completion"
+    assert_eq!(
+        work_items.len(),
+        1,
+        "SkillCreation WorkItem should be kept alive for writeback after completion"
     );
 
     // 候选越过 Submitted（GovernancePending 或同帧被治理消费为 NeedsUserApproval）
@@ -197,6 +220,102 @@ fn skill_creation_completion_promotes_candidate_and_requests_governance() {
                 | Some(ExperienceCandidateStatus::NeedsUserApproval)
         ),
         "candidate should be promoted beyond Submitted, got {:?}",
+        status
+    );
+}
+
+#[test]
+fn skill_creation_approval_finds_context_and_triggers_writeback() {
+    // 回归测试（2026-08-16 日志中的 SkillCreationContextNotFound bug）：
+    // 批准后必须能找到 SkillCreationContext，否则写回永不触发、skill 不会发布。
+    let (mut app, task_id, candidate_id) = setup_for_approval();
+
+    // 手动模拟治理决议（写回目标为 SkillCreation，需用户确认）
+    let request_id = uuid::Uuid::new_v4();
+    app.world_mut()
+        .spawn(harness::domain::ExperienceGovernanceDecision {
+            candidate_id,
+            destination: harness::domain::ExperienceWritebackDestination::SkillCreation,
+            requires_user_confirmation: true,
+            decision_rationale: "approved by test".to_string(),
+            source_task_id: task_id,
+        });
+
+    // 绑定 approval request 到候选
+    app.world_mut()
+        .resource_mut::<harness::ExperienceStore>()
+        .bind_approval_request(request_id, candidate_id);
+
+    // 模拟 spawn_experience_confirmation 的配对 ToolExecutionRequestMessage：
+    // tool_confirmation_result_system 依赖 pending_confirmation_id + tool_name 识别
+    // experience_governance 确认，保留响应实体交给 experience_approval_result_system；
+    // 缺少该配对实体会被 tool_confirmation_result_system 提前 despawn 响应（真实 bug 路径）。
+    app.world_mut()
+        .spawn(harness::domain::ToolExecutionRequestMessage {
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id: uuid::Uuid::nil(),
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "experience_governance".to_string(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+            },
+            tool_name: "experience_governance".to_string(),
+            tool_input: serde_json::json!({ "candidate_id": candidate_id.to_string() }),
+            pending_confirmation_id: Some(request_id),
+            tool_call_id: None,
+            pending_confirmation_options: Some(
+                harness::domain::ConfirmationOption::default_options(),
+            ),
+            work_item_entity: None,
+            confirmed_once: false,
+        });
+
+    // 用户批准
+    app.world_mut()
+        .spawn(harness::domain::ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "allow_once".to_string(),
+            feedback: None,
+        });
+
+    // 推进若干帧，让 approval 插入写回消息、writeback 系统消费并清理
+    for _ in 0..3 {
+        app.update();
+    }
+
+    // 上下文被找到 → 写回被触发 → WorkItem 被 writeback 系统 despawn。
+    let work_items: Vec<_> = app
+        .world_mut()
+        .query::<&WorkItem>()
+        .iter(app.world())
+        .filter(|wi| wi.work_type == WorkItemType::SkillCreation)
+        .collect();
+    assert!(
+        work_items.is_empty(),
+        "writeback should despawn the SkillCreation WorkItem after approval"
+    );
+
+    // 沙箱 /tmp/test-sandbox 不存在 → rename 失败 → 候选置为 WritebackFailed；
+    // 若上下文缺失（bug），候选停留在 WritebackPending 且 writeback 永不触发。
+    let store = app.world().resource::<harness::ExperienceStore>();
+    let status = store
+        .candidates
+        .get(&candidate_id)
+        .map(|c| c.status.clone());
+    assert!(
+        matches!(
+            status,
+            Some(ExperienceCandidateStatus::WritebackFailed)
+                | Some(ExperienceCandidateStatus::Persisted)
+        ),
+        "writeback should have been attempted after approval (context found), \
+         got {:?}",
         status
     );
 }
