@@ -88,7 +88,7 @@ __文件：__
 - 修改：`tests/real_llm_scenarios.rs`（`ScenarioSpec` 定义，当前 L56-66）
 - 测试：同文件新增解析测试
 
-- [ ] __步骤 1：编写失败的测试__
+- [x] __步骤 1：编写失败的测试__
 
 在 `tests/real_llm_scenarios.rs` 测试区（`scenario_assertion_engine_branches` 之后）新增：
 
@@ -128,7 +128,7 @@ input = "第一轮"
 }
 ```
 
-- [ ] __步骤 2：运行测试验证失败__
+- [x] __步骤 2：运行测试验证失败__
 
 ```bash
 cargo test --test real_llm_scenarios scenario_spec_parses
@@ -136,7 +136,7 @@ cargo test --test real_llm_scenarios scenario_spec_parses
 
 预期：编译失败，报 `error[E0609]: no field 'follow_ups' on type 'ScenarioSpec'`（`deny_unknown_fields` 同时拦截 TOML 字段）。
 
-- [ ] __步骤 3：扩展 ScenarioSpec__
+- [x] __步骤 3：扩展 ScenarioSpec__
 
 ```rust
 #[derive(Debug, Deserialize)]
@@ -164,7 +164,7 @@ struct ScenarioSpec {
 `compression_threshold_tokens: None`——本任务只需修
 `scenario_assertion_engine_branches` 一处（编译器会指出）。
 
-- [ ] __步骤 4：运行测试验证通过__
+- [x] __步骤 4：运行测试验证通过__
 
 ```bash
 cargo test --test real_llm_scenarios scenario_spec
@@ -172,7 +172,7 @@ cargo test --test real_llm_scenarios scenario_spec
 
 预期：2 个新测试 PASS，`scenario_assertion_engine_branches` 编译修复后仍 PASS。
 
-- [ ] __步骤 5：Commit__
+- [x] __步骤 5：Commit__
 
 ```bash
 git add tests/real_llm_scenarios.rs
@@ -188,7 +188,7 @@ __文件：__
 - 修改：`tests/real_llm_scenarios.rs`（`RunTrace` L163-179、`AssertionSpec` L76-114、`check_assertions` L511-623）
 - 测试：同文件新增断言分支测试
 
-- [ ] __步骤 1：编写失败的测试__
+- [x] __步骤 1：编写失败的测试__
 
 ```rust
 /// summarization_triggered 断言分支：达标 PASS、未达标 FAIL。
@@ -230,7 +230,7 @@ fn scenario_assertion_summarization_triggered_branches() {
 
 注意：`RunTrace` 加字段后，现有 `scenario_assertion_engine_branches` 测试的字面量构造也要补 `summarization_completed: 0`。
 
-- [ ] __步骤 2：运行测试验证失败__
+- [x] __步骤 2：运行测试验证失败__
 
 ```bash
 cargo test --test real_llm_scenarios scenario_assertion_summarization
@@ -238,7 +238,7 @@ cargo test --test real_llm_scenarios scenario_assertion_summarization
 
 预期：编译失败，`no field 'summarization_completed'` / `no variant SummarizationTriggered`。
 
-- [ ] __步骤 3：实现__
+- [x] __步骤 3：实现__
 
 `RunTrace` 增加字段：
 
@@ -287,7 +287,7 @@ AssertionSpec::SummarizationTriggered { min_times } => {
 }
 ```
 
-- [ ] __步骤 4：运行测试验证通过__
+- [x] __步骤 4：运行测试验证通过__
 
 ```bash
 cargo test --test real_llm_scenarios scenario_assertion
@@ -295,7 +295,7 @@ cargo test --test real_llm_scenarios scenario_assertion
 
 预期：全部 PASS。
 
-- [ ] __步骤 5：Commit__
+- [x] __步骤 5：Commit__
 
 ```bash
 git add tests/real_llm_scenarios.rs
@@ -311,7 +311,7 @@ __文件：__
 - 修改：`tests/real_llm_scenarios.rs`（`execute_scenario` L334-447、use 列表 L22-42）
 - 测试：本任务改造运行时骨架，行为验证在任务 4/5 的场景 mock 测试（跨任务依赖，本任务以编译 + 现有 3 个 mock 测试不回归为准）
 
-- [ ] __步骤 1：扩展 use 导入__
+- [x] __步骤 1：扩展 use 导入__
 
 在现有 `use harness::{...}` 列表（第二个 use 块）中追加：
 
@@ -321,7 +321,7 @@ ExternalInput, MemoryConfig, TaskStatus, WaitingReason, WorkItemStatus, WorkItem
 
 （均在 crate 根导出，见"实现前已确认机制"第 7 条。）
 
-- [ ] __步骤 2：保留 input_tx 并覆写 MemoryConfig__
+- [x] __步骤 2：保留 input_tx 并覆写 MemoryConfig__
 
 `execute_scenario` 开头（L341）：
 
@@ -346,7 +346,7 @@ if let Some(threshold) = spec.compression_threshold_tokens {
 }
 ```
 
-- [ ] __步骤 3：Task 构造置 multi_turn__
+- [x] __步骤 3：Task 构造置 multi_turn__
 
 ```rust
 // 改动前：let task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
@@ -357,7 +357,7 @@ let mut task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
 task.multi_turn = !spec.follow_ups.is_empty();
 ```
 
-- [ ] __步骤 4：新增稳定态轮询函数__
+- [x] __步骤 4：新增稳定态轮询函数__
 
 在 `execute_scenario` 之前新增两个函数：
 
@@ -403,7 +403,7 @@ fn wait_until_settled(
 }
 ```
 
-- [ ] __步骤 5：替换主轮询循环为多轮注入循环__
+- [x] __步骤 5：替换主轮询循环为多轮注入循环__
 
 将现有 L396-412 的单一终态轮询循环替换为：
 
@@ -459,7 +459,7 @@ loop {
 }
 ```
 
-- [ ] __步骤 6：trace 收集改造__
+- [x] __步骤 6：trace 收集改造__
 
 Task 收集（现 L422-428）改为：
 
@@ -494,7 +494,7 @@ for wi in wi_query.iter(world) {
 }
 ```
 
-- [ ] __步骤 7：验证现有测试不回归__
+- [x] __步骤 7：验证现有测试不回归__
 
 ```bash
 cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings && cargo test --test real_llm_scenarios
@@ -504,7 +504,7 @@ cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings && c
 `scenario_tool_call_loop_reaches_done`、`scenario_assertion_engine_branches`）
 以及任务 1/2 新测试全 PASS（单轮路径 `follow_ups` 为空，行为不变）。
 
-- [ ] __步骤 8：Commit__
+- [x] __步骤 8：Commit__
 
 ```bash
 git add tests/real_llm_scenarios.rs
@@ -520,7 +520,7 @@ __文件：__
 - 创建：`tests/scenarios/multi_turn_context.toml`
 - 修改：`tests/real_llm_scenarios.rs`（新增 mock 测试）
 
-- [ ] __步骤 1：创建场景文件__
+- [x] __步骤 1：创建场景文件__
 
 ```toml
 # 场景：多轮上下文保留（设计 §4.1）
@@ -549,7 +549,7 @@ threshold = 0.7
 samples = 1
 ```
 
-- [ ] __步骤 2：编写失败的 mock 测试__
+- [x] __步骤 2：编写失败的 mock 测试__
 
 ```rust
 /// Mock 模式多轮注入回归：守护 runner 的 follow-up 注入走生产 routing 续轮链路
@@ -598,7 +598,7 @@ fn scenario_framework_mock_smoke_multi_turn() {
 
 注：`ScenarioSelfcheckExecutor.final_text` 类型是 `&'static str`，传 `"unused"` 即可（Evaluation 分支不走它）。
 
-- [ ] __步骤 3：运行测试验证行为__
+- [x] __步骤 3：运行测试验证行为__
 
 ```bash
 cargo test --test real_llm_scenarios scenario_framework_mock_smoke_multi_turn -- --nocapture
@@ -611,7 +611,7 @@ cargo test --test real_llm_scenarios scenario_framework_mock_smoke_multi_turn --
 - 新 Task 被创建（`task_status` 非预期）：routing 未续轮，检查 follow-up 与首轮
   `origin_channel` 是否一致（必须同用 `scenario_channel()`）。
 
-- [ ] __步骤 4：Commit__
+- [x] __步骤 4：Commit__
 
 ```bash
 git add tests/scenarios/multi_turn_context.toml tests/real_llm_scenarios.rs
@@ -627,7 +627,7 @@ __文件：__
 - 创建：`tests/scenarios/memory_compression.toml`
 - 修改：`tests/real_llm_scenarios.rs`（新增压缩自检 executor 与 mock 测试）
 
-- [ ] __步骤 1：创建场景文件__
+- [x] __步骤 1：创建场景文件__
 
 ```toml
 # 场景：摘要压缩触发（设计 §4.2）
@@ -670,7 +670,7 @@ threshold = 0.7
 samples = 1
 ```
 
-- [ ] __步骤 2：编写压缩自检 executor 与失败的 mock 测试__
+- [x] __步骤 2：编写压缩自检 executor 与失败的 mock 测试__
 
 executor（放在 `ScenarioSelfcheckExecutor` 定义之后）：
 
@@ -736,7 +736,7 @@ fn scenario_framework_mock_smoke_compression() {
 }
 ```
 
-- [ ] __步骤 3：运行测试验证行为__
+- [x] __步骤 3：运行测试验证行为__
 
 ```bash
 cargo test --test real_llm_scenarios scenario_framework_mock_smoke_compression -- --nocapture
@@ -753,7 +753,7 @@ cargo test --test real_llm_scenarios scenario_framework_mock_smoke_compression -
 - follow-up 后新 Task 被创建：压缩 in-flight 期间注入了 follow-up，
   检查稳定态的 WorkItem 条件（`scenario_settled` 的 WorkItem"全部终态"必须保留）。
 
-- [ ] __步骤 4：Commit__
+- [x] __步骤 4：Commit__
 
 ```bash
 git add tests/scenarios/memory_compression.toml tests/real_llm_scenarios.rs
@@ -769,7 +769,7 @@ __文件：__
 - 修改：`tests/scenarios/README.md`
 - 修改：`docs/current-state.md`
 
-- [ ] __步骤 1：README 登记新字段与新断言__
+- [x] __步骤 1：README 登记新字段与新断言__
 
 在 `tests/scenarios/README.md` 的"执行方式"章节之后新增：
 
@@ -796,7 +796,7 @@ __文件：__
 多轮场景的 `response_matches` 检查最后一轮回复（非 `/finish` 的收尾文案）。
 ```
 
-- [ ] __步骤 2：current-state.md 登记__
+- [x] __步骤 2：current-state.md 登记__
 
 修改 `docs/current-state.md` L76-80 的 Layer 2/3 条目（`#### 测试分层（真实 LLM 场景测试）` 小节内）：
 
@@ -823,7 +823,7 @@ __文件：__
   与金标准快照；框架自检（mock executor）随 CI 常规运行，真实场景手动执行
 ```
 
-- [ ] __步骤 3：全量验证__
+- [x] __步骤 3：全量验证__
 
 ```bash
 npx markdownlint-cli2
@@ -834,7 +834,7 @@ cargo test --all-features
 
 预期：全部通过（77 个测试 binary、约 1200+ 测试）。
 
-- [ ] __步骤 4：Commit__
+- [x] __步骤 4：Commit__
 
 ```bash
 git add tests/scenarios/README.md docs/current-state.md

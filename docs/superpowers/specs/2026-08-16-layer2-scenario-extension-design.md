@@ -5,7 +5,7 @@
 | 属性 | 值 |
 |------|-----|
 | 创建日期 | 2026-08-16 |
-| 实施状态 | 待实施 |
+| 实施状态 | 已实施 |
 | 相关文档 | `docs/design/2026-08-16-real-llm-scenario-testing-design.md`、`tests/scenarios/README.md` |
 
 ## 1. 背景与目标
@@ -92,11 +92,17 @@ app.insert_resource(MemoryConfig {
 
 ### 3.4 新断言类型 `summarization_triggered`
 
-- 判断依据：`WorkItemType::Summarization` 的 WorkItem 到达过终态 Completed
+- 判断依据：__压缩触发次数__（`WorkItemType::Summarization` 的 WorkItem 创建计数，
+  `RunTrace.summarization_triggers`），而非终态 Completed
+  - 实施中确认的源码事实：生产 `handle_summarization_work_item_result`
+    （`src/systems/transform/llm_response.rs` L507-661）完成 Summarization 时
+    __从不调用 `complete()`__（保持 Running）且末尾直接 despawn WorkItem——因此
+    Summarization 从不会处于 Completed 终态，无法从终态集合统计完成次数
+  - 改为 `Added<WorkItem>` + `work_type == Summarization` 计数"压缩触发"，计数系统
+    注册在所有生产系统之后（同帧可靠命中）；mock 自检触发必成功，计数与
+    "压缩被触发"语义一一对应
 - 可选 `min_times`（默认 1）
 - 属确定性代码断言，失败直接 fail
-- 为此 `RunTrace` 扩展：记录终态 WorkItem 的 `(work_type, status)`（当前仅记录
-  status 字符串）
 - 压缩后链路仍正常由 `state_reached: Completed` 兜底——压缩失败会阻塞任务完成，可观察
 
 ## 4. 场景定义
@@ -168,11 +174,15 @@ threshold = 0.7
 
 ### 5.1 mock 自检（进 CI，非门控）
 
-- `scenario_framework_mock_smoke_multi_turn`：`CannedExecutor` 每轮固定回复含
-  "Falcon"，断言两轮全部 Done、final_output 正确——守护 runner 多轮注入循环本身
+- `scenario_framework_mock_smoke_multi_turn`：`CannedExecutor` 首轮回复不含
+  "Falcon"、续轮回复含 "Falcon"，断言任务 Done 且 final_output 含 "Falcon"——
+  守护 runner 多轮注入循环本身（若续轮链路破坏，final_output 停留在首轮回复，
+  `response_matches` 真实失败，回归锚点有效）
 - `scenario_framework_mock_smoke_compression`：自检 executor 按 `request_kind` 分发
   （Summarization 请求返回 canned 摘要文本，其余返回长文本），低阈值下断言
-  Summarization WorkItem Completed 且 Task Done
+  压缩触发计数 `summarization_triggers >= 1` 且 Task Done
+  （生产 Summarization WorkItem 完成即 despawn 且从不置 Completed，
+  故以压缩触发计数代理完成语义，见 §3.4）
 - 真实模式走既有 `#[ignore]` 入口，`list_scenario_files` 自动发现新场景
 
 ### 5.2 验证清单
