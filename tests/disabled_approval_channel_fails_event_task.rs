@@ -3,17 +3,17 @@
 //! 验证事件任务的 approval_channel 指向未注册的 QQ frontend 时，任务被标记为
 //! Failed(Unknown) 并记录正确的错误信息。
 
+mod common;
+
 use std::sync::{Arc, Mutex};
 
+use common::mock_executor::PanickingExecutor;
 use crossbeam_channel::unbounded;
 use harness::domain::{
     ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, FailureReason, Frontend,
     FrontendKind, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationRequestMessage, UserAction,
 };
-use harness::{
-    AgentExecutionRequest, AgentExecutor, ExecutorFuture, HarnessConfig, build_harness_app,
-    llm::ExecutorRegistry,
-};
+use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -35,20 +35,12 @@ impl Frontend for MockTelegramFrontend {
     }
 }
 
-struct NoopExecutor;
-
-impl AgentExecutor for NoopExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async { panic!("executor should not run in this test") })
-    }
-}
-
 #[test]
 fn disabled_approval_channel_marks_event_task_failed() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (_input_tx, input_rx) = unbounded();
     let runtime = Arc::new(Runtime::new().expect("runtime"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PanickingExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = harness::channels::ChannelManager::empty();
 

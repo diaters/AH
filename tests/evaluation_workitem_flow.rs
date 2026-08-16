@@ -1,13 +1,15 @@
+mod common;
+
 use std::sync::{Arc, Mutex};
 
+use common::mock_executor::MockExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult, AgentExecutionResultMessage,
-    AgentExecutor, AgentRequestKind, ChannelId, EngineEvent, EntryMetadata, EntryRole,
-    ExecutorFuture, FailureReason, Frontend, FrontendKind, HarnessConfig, OffTrackPolicy,
-    ShortTermMemory, Task, TaskStatus, UserAction, WaitingReason, WorkItem, WorkItemType,
-    build_harness_app, llm::ExecutorRegistry,
+    AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentExecutor,
+    AgentRequestKind, ChannelId, EngineEvent, EntryMetadata, EntryRole, FailureReason, Frontend,
+    FrontendKind, HarnessConfig, OffTrackPolicy, ShortTermMemory, Task, TaskStatus, UserAction,
+    WaitingReason, WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -16,19 +18,6 @@ fn default_channel() -> ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-struct MockExecutor;
-
-impl AgentExecutor for MockExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("mock response".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 

@@ -16,33 +16,24 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory, Task,
-    TaskRoutingPolicy, TaskStatus, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
-    build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
+    AgentRequestKind, AgentToolPermissions, ChannelId, ExternalInput, FrontendKind, HarnessConfig,
+    LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus,
+    ToolExecutionRequestMessage, ToolPermission, WaitingReason, build_harness_app,
+    llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
+
+use common::mock_executor::EchoExecutor;
+
+mod common;
 
 fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 

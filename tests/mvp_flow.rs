@@ -1,11 +1,13 @@
+mod common;
+
 use std::{sync::Arc, thread, time::Duration};
 
+use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory, PendingDispatch,
-    Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
+    ChannelId, DispatchHint, DispatchKind, DispatchStrategy, FrontendKind, HarnessConfig,
+    LongTermMemory, PendingDispatch, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -16,19 +18,6 @@ fn default_channel() -> ChannelId {
     }
 }
 use tokio::runtime::Runtime;
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
-                reasoning_content: None,
-            })
-        })
-    }
-}
 
 fn test_config() -> HarnessConfig {
     HarnessConfig {
@@ -85,7 +74,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
 #[test]
 fn completes_single_turn_conversation_flow() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(

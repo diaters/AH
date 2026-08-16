@@ -1,11 +1,14 @@
+mod common;
+
 use std::sync::{Arc, Mutex};
 
+use common::mock_executor::PanickingExecutor;
 use crossbeam_channel::unbounded;
 use harness::channels::ChannelManager;
 use harness::domain::{
-    AgentExecutionRequest, ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent,
-    EventTaskRoute, ExecutorFuture, ExternalInput, Frontend, FrontendKind, Signal, SignalSource,
-    SignalTriggerRegistry, Task, ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
+    ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, EventTaskRoute, ExternalInput,
+    Frontend, FrontendKind, Signal, SignalSource, SignalTriggerRegistry, Task,
+    ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
 };
 use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
 use uuid::Uuid;
@@ -28,20 +31,12 @@ impl Frontend for MockFrontend {
     }
 }
 
-struct NoopExecutor;
-
-impl AgentExecutor for NoopExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async { panic!("executor should not run in this test") })
-    }
-}
-
 #[test]
 fn registered_webhook_creates_task_and_routes_approval() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PanickingExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = ChannelManager::empty();
     let mut app = build_harness_app(
@@ -120,7 +115,7 @@ fn registered_timer_creates_task_without_output_channel() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (_input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PanickingExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = ChannelManager::empty();
     let mut app = build_harness_app(
@@ -166,7 +161,7 @@ fn unregistered_webhook_is_dropped_without_creating_task() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(NoopExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PanickingExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (channel_manager, _) = ChannelManager::empty();
     let mut app = build_harness_app(

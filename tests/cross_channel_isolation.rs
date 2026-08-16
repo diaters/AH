@@ -2,11 +2,14 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, OutputContent, ShortTermMemory, Task,
+    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task,
     TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
+
+use common::mock_executor::EchoExecutor;
+
+mod common;
 
 fn telegram_channel() -> ChannelId {
     ChannelId {
@@ -21,19 +24,6 @@ fn qq_channel() -> ChannelId {
         frontend: FrontendKind::QQ,
         user_id: "qq-user".to_string(),
         thread_id: None,
-    }
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 

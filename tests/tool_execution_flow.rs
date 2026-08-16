@@ -1,16 +1,19 @@
 //! Tool 执行流程集成测试
 
+mod common;
+
 use std::{collections::HashMap, sync::Arc};
 
+use common::mock_executor::MockExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EntryRole,
-    ExecutorFuture, FrontendKind, HarnessConfig, NativeProcessBackend, SharedKnowledgeBase,
-    ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolConfirmationResponseMessage,
-    ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolExecutorKind,
-    ToolPermission, ToolSchema, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentId, AgentKind,
+    AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EntryRole, FrontendKind,
+    HarnessConfig, NativeProcessBackend, SharedKnowledgeBase, ShortTermMemory, SpaceToolRegistry,
+    Task, TaskStatus, ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
+    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
+    build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -21,19 +24,6 @@ fn default_channel() -> ChannelId {
     }
 }
 use tokio::runtime::Runtime;
-
-struct MockExecutor;
-
-impl AgentExecutor for MockExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("mock response".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
-}
 
 fn test_config() -> HarnessConfig {
     HarnessConfig::default()

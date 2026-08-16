@@ -15,11 +15,13 @@ use harness::prelude::*;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task, TaskStatus,
-    build_harness_app, llm::ExecutorRegistry,
+    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task,
+    TaskStatus, build_harness_app, llm::ExecutorRegistry,
 };
+
+mod common;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -32,19 +34,6 @@ fn default_channel() -> ChannelId {
 /// 把任务状态从外部置为终态会通过 `Changed<Task>` 触发 `task_completion_hook_system`。
 fn make_ready_task() -> Task {
     Task::from_user_input_ready("ready-task", 0, default_channel())
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
 }
 
 /// 进程内串行化 HARNESS_PLUGINS_DIR 访问，参考 Task 16 测试的同名锁。

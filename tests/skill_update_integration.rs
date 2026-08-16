@@ -7,21 +7,24 @@
 //! 全部使用 `build_harness_app` 构造完整 ECS World，通过 `app.update()` 推进帧，
 //! 验证端到端 system 链路行为。
 
+mod common;
+
 use std::sync::Arc;
 
 use bevy_ecs::entity::Entity;
+use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::infrastructure::skills::{SkillEntry, SkillId, SkillLoader, SkillRegistry};
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
-    ConversationMessage, EntityIndex, ExperienceCandidate, ExperienceCandidateStatus,
-    ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceKindFilter,
-    ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination, FrontendKind,
-    HarnessConfig, LongTermMemory, ShortTermMemory, SkillUpdateCompletedMessage,
-    SkillUpdateContext, SkillUpdateOperation, Task, TaskExperiencePolicy, TaskInjectedSkill,
-    TaskRoutingPolicy, TaskStatus, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-    ToolPermission, WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
+    AgentRequestKind, AgentToolPermissions, ChannelId, ConversationMessage, EntityIndex,
+    ExperienceCandidate, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
+    ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
+    ExperienceWritebackDestination, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory,
+    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, Task,
+    TaskExperiencePolicy, TaskInjectedSkill, TaskRoutingPolicy, TaskStatus, ToolCallingState,
+    ToolDefinition, ToolExecutionRequestMessage, ToolPermission, WorkItem, WorkItemType,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -42,19 +45,6 @@ fn no_brain_test_config() -> HarnessConfig {
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         providers_config_path: "/nonexistent_providers.toml".to_string(),
         ..HarnessConfig::default()
-    }
-}
-
-struct NoOpExecutor;
-
-impl AgentExecutor for NoOpExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> harness::ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("ok".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 

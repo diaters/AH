@@ -1,10 +1,12 @@
+mod common;
+
 use std::sync::Arc;
 
+use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, EntityIndex,
-    ExecutorFuture, FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem, WorkItemStatus,
-    WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    AgentExecutor, ChannelId, EntityIndex, FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem,
+    WorkItemStatus, WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 
@@ -18,19 +20,6 @@ fn default_channel() -> ChannelId {
 
 fn test_config() -> HarnessConfig {
     HarnessConfig::default()
-}
-
-struct NoOpExecutor;
-
-impl AgentExecutor for NoOpExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("ok".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
 }
 
 #[test]

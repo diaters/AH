@@ -364,6 +364,306 @@ fn classify_http_status(status: reqwest_013::StatusCode, message: String) -> Exe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{
+        ConversationMessage, LlmToolCall, ToolDefinition, ToolExecutorKind, ToolPermission,
+        ToolSchema,
+    };
+    use genai::chat::{ChatRole, MessageContent, Usage};
+
+    fn sample_tool(name: &str, description: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: description.to_string(),
+            parameters: ToolSchema {
+                schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"}
+                    },
+                    "required": ["command"]
+                }),
+            },
+            default_permission: ToolPermission::Allow,
+            executor: ToolExecutorKind::Builtin(name.to_string()),
+            required_tag: None,
+        }
+    }
+
+    fn sample_request() -> AgentExecutionRequest {
+        AgentExecutionRequest {
+            task_id: uuid::Uuid::new_v4(),
+            agent_id: uuid::Uuid::new_v4(),
+            request_kind: crate::domain::AgentRequestKind::LlmCompletion,
+            prompt: "hello".to_string(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+            model_override: None,
+        }
+    }
+
+    fn make_response(content: MessageContent, reasoning: Option<String>) -> ChatResponse {
+        ChatResponse {
+            content,
+            reasoning_content: reasoning,
+            model_iden: ModelIden::new(AdapterKind::OpenAI, "test-model"),
+            provider_model_iden: ModelIden::new(AdapterKind::OpenAI, "test-model"),
+            stop_reason: None,
+            usage: Usage::default(),
+            captured_raw_body: None,
+            response_id: None,
+        }
+    }
+
+    // ---- 工具名 sanitize ----
+
+    #[test]
+    fn sanitize_tool_name_replaces_colons() {
+        assert_eq!(sanitize_tool_name("shell:exec"), "shell__exec");
+        assert_eq!(sanitize_tool_name("a:b:c"), "a__b__c");
+    }
+
+    #[test]
+    fn sanitize_keeps_plain_names() {
+        assert_eq!(sanitize_tool_name("shell_exec"), "shell_exec");
+        assert_eq!(sanitize_tool_name("shell"), "shell");
+    }
+
+    #[test]
+    fn sanitize_unsanitize_roundtrip() {
+        let original = "plugin:tool_name";
+        let roundtrip = unsanitize_tool_name(&sanitize_tool_name(original));
+        assert_eq!(roundtrip, original);
+    }
+
+    // ---- build_genai_tools ----
+
+    #[test]
+    fn build_genai_tools_sanitizes_names() {
+        let tools = build_genai_tools(&[sample_tool("shell:exec", "run a command")]);
+        assert_eq!(tools.len(), 1);
+        assert!(matches!(
+            &tools[0].name,
+            genai::chat::ToolName::Custom(n) if n == "shell__exec"
+        ));
+    }
+
+    #[test]
+    fn build_genai_tools_sets_description_and_schema() {
+        let tools = build_genai_tools(&[sample_tool("shell_exec", "run a command")]);
+        assert_eq!(
+            tools[0].description.as_deref(),
+            Some("run a command"),
+            "非空描述应传递给 LLM"
+        );
+        assert_eq!(
+            tools[0].schema,
+            Some(sample_tool("shell_exec", "").parameters.schema)
+        );
+    }
+
+    #[test]
+    fn build_genai_tools_empty_description_is_omitted() {
+        let tools = build_genai_tools(&[sample_tool("shell_exec", "")]);
+        assert_eq!(tools[0].description, None);
+    }
+
+    // ---- build_chat_request ----
+
+    #[test]
+    fn build_chat_request_prompt_only() {
+        let request = sample_request();
+        let chat_req = build_chat_request(&request).unwrap();
+        assert_eq!(chat_req.messages.len(), 1);
+        assert_eq!(chat_req.messages[0].role, ChatRole::User);
+        assert_eq!(chat_req.messages[0].content.first_text(), Some("hello"));
+    }
+
+    #[test]
+    fn build_chat_request_empty_prompt_without_conversation_yields_no_messages() {
+        // 组合模式：prompt 与 conversation 独立可选，空 prompt 不产生空 user 消息
+        let mut request = sample_request();
+        request.prompt = String::new();
+        let chat_req = build_chat_request(&request).unwrap();
+        assert!(chat_req.messages.is_empty());
+    }
+
+    #[test]
+    fn build_chat_request_appends_prompt_after_conversation() {
+        let mut request = sample_request();
+        request.conversation = Some(vec![ConversationMessage::User {
+            content: "earlier".to_string(),
+        }]);
+        let chat_req = build_chat_request(&request).unwrap();
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].content.first_text(), Some("earlier"));
+        assert_eq!(chat_req.messages[1].content.first_text(), Some("hello"));
+    }
+
+    #[test]
+    fn build_chat_request_sets_system_prompt() {
+        let mut request = sample_request();
+        request.system_prompt = Some("you are a helper".to_string());
+        let chat_req = build_chat_request(&request).unwrap();
+        assert_eq!(chat_req.system.as_deref(), Some("you are a helper"));
+    }
+
+    #[test]
+    fn build_chat_request_attaches_tools() {
+        let mut request = sample_request();
+        request.tools = vec![sample_tool("shell:exec", "run a command")];
+        let chat_req = build_chat_request(&request).unwrap();
+        let tools = chat_req.tools.expect("tools should be attached");
+        assert_eq!(tools.len(), 1);
+    }
+
+    #[test]
+    fn build_chat_request_without_tools_has_no_tools() {
+        let request = sample_request();
+        let chat_req = build_chat_request(&request).unwrap();
+        assert!(chat_req.tools.is_none());
+    }
+
+    // ---- build_chat_messages ----
+
+    #[test]
+    fn build_chat_messages_maps_roles() {
+        let conversation = vec![
+            ConversationMessage::System {
+                content: "sys".to_string(),
+            },
+            ConversationMessage::User {
+                content: "hi".to_string(),
+            },
+            ConversationMessage::Assistant {
+                content: Some("hello".to_string()),
+                tool_calls: vec![],
+                reasoning_content: None,
+            },
+        ];
+        let messages = build_chat_messages(&conversation).unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, ChatRole::System);
+        assert_eq!(messages[1].role, ChatRole::User);
+        assert_eq!(messages[2].role, ChatRole::Assistant);
+        assert_eq!(messages[2].content.first_text(), Some("hello"));
+    }
+
+    #[test]
+    fn build_chat_messages_assistant_tool_calls_parses_json_arguments() {
+        let conversation = vec![ConversationMessage::Assistant {
+            content: Some("I will run ls".to_string()),
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".to_string(),
+                name: "shell:exec".to_string(),
+                arguments: r#"{"command":"ls"}"#.to_string(),
+            }],
+            reasoning_content: Some("thinking".to_string()),
+        }];
+        let messages = build_chat_messages(&conversation).unwrap();
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0];
+        assert_eq!(message.role, ChatRole::Assistant);
+        // 工具调用名称保持内部命名空间格式（sanitize 仅在 build_genai_tools 中进行）
+        let tool_calls = message.content.tool_calls();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].fn_name, "shell:exec");
+        // arguments 从 JSON 字符串解析为 Value
+        assert_eq!(
+            tool_calls[0].fn_arguments,
+            serde_json::json!({"command": "ls"})
+        );
+        // 文本内容与 reasoning 均保留（reasoning 以 ContentPart 形式存在）
+        assert_eq!(message.content.first_text(), Some("I will run ls"));
+        assert_eq!(message.content.first_reasoning_content(), Some("thinking"));
+    }
+
+    #[test]
+    fn build_chat_messages_assistant_invalid_json_arguments_falls_back_to_string() {
+        let conversation = vec![ConversationMessage::Assistant {
+            content: None,
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".to_string(),
+                name: "shell:exec".to_string(),
+                arguments: "not json".to_string(),
+            }],
+            reasoning_content: None,
+        }];
+        let messages = build_chat_messages(&conversation).unwrap();
+        let tool_calls = messages[0].content.tool_calls();
+        assert_eq!(
+            tool_calls[0].fn_arguments,
+            serde_json::Value::String("not json".to_string())
+        );
+    }
+
+    #[test]
+    fn build_chat_messages_tool_response_maps_to_tool_role() {
+        let conversation = vec![ConversationMessage::Tool {
+            tool_call_id: "call_1".to_string(),
+            content: "ls output".to_string(),
+        }];
+        let messages = build_chat_messages(&conversation).unwrap();
+        assert_eq!(messages[0].role, ChatRole::Tool);
+        // 内容以 ToolResponse part 承载
+        let tool_responses = messages[0].content.tool_responses();
+        assert_eq!(tool_responses.len(), 1);
+        assert_eq!(tool_responses[0].call_id, "call_1");
+        assert_eq!(tool_responses[0].content, "ls output");
+    }
+
+    // ---- parse_response ----
+
+    #[test]
+    fn parse_response_returns_text_output() {
+        let response = make_response(ChatMessage::assistant("answer").content, None);
+        let output = parse_response(&uuid::Uuid::new_v4(), response).unwrap();
+        assert_eq!(output.content, OutputContent::Text("answer".to_string()));
+        assert!(output.reasoning_content.is_none());
+    }
+
+    #[test]
+    fn parse_response_preserves_reasoning_content() {
+        let response = make_response(
+            ChatMessage::assistant("answer").content,
+            Some("chain of thought".to_string()),
+        );
+        let output = parse_response(&uuid::Uuid::new_v4(), response).unwrap();
+        assert_eq!(
+            output.reasoning_content.as_deref(),
+            Some("chain of thought")
+        );
+    }
+
+    #[test]
+    fn parse_response_empty_returns_empty_response_error() {
+        let response = make_response(MessageContent::default(), None);
+        let result = parse_response(&uuid::Uuid::new_v4(), response);
+        assert!(matches!(result, Err(ExecutionError::EmptyResponse)));
+    }
+
+    #[test]
+    fn parse_response_tool_calls_unsanitizes_names() {
+        // LLM 返回的是 sanitize 后的工具名（双下划线），解析时应还原为命名空间格式
+        let tool_call = ToolCall {
+            call_id: "call_1".to_string(),
+            fn_name: "shell__exec".to_string(),
+            fn_arguments: serde_json::json!({"command": "ls"}),
+            thought_signatures: None,
+        };
+        let response = make_response(MessageContent::from(vec![tool_call]), None);
+        let output = parse_response(&uuid::Uuid::new_v4(), response).unwrap();
+        match output.content {
+            OutputContent::ToolCalls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "shell:exec");
+                assert_eq!(calls[0].id, "call_1");
+                assert_eq!(calls[0].arguments, r#"{"command":"ls"}"#);
+            }
+            other => panic!("expected ToolCalls, got {:?}", other),
+        }
+    }
 
     #[test]
     fn classify_403_as_authentication() {

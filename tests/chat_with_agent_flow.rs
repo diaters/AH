@@ -1,13 +1,15 @@
 //! chat_with_agent 工具集成测试
 
+mod common;
+
 use std::sync::Arc;
 
+use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, FrontendKind,
-    HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, ToolPermission, build_harness_app,
-    llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
+    ChannelId, FrontendKind, HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, ToolPermission,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -17,19 +19,6 @@ fn default_channel() -> ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
-                reasoning_content: None,
-            })
-        })
     }
 }
 
@@ -65,7 +54,7 @@ fn test_config() -> HarnessConfig {
 #[test]
 fn chat_with_agent_creates_chat_subtask() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -245,7 +234,7 @@ fn chat_with_agent_creates_chat_subtask() {
 #[test]
 fn chat_with_agent_multi_round_via_handle() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -452,7 +441,7 @@ fn chat_with_agent_multi_round_via_handle() {
 #[test]
 fn chat_round_completion_preserves_parent_waiting_status() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(

@@ -62,4 +62,8 @@ triggers.toml
 agents.toml
 providers.toml
 
+# 场景测试运行时产物（详见 docs/design/2026-08-16-real-llm-scenario-testing-design.md）
+tests/scenarios/reports/
+tests/scenarios/review-pending/
+
 plugins/bug-workflow

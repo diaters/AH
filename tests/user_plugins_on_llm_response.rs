@@ -10,24 +10,14 @@ use crossbeam_channel::unbounded;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult, AgentExecutionResultMessage,
-    AgentExecutor, AgentRequestKind, ExecutorFuture, HarnessConfig, LlmResponseHookPending,
-    OutputContent, build_harness_app, llm::ExecutorRegistry,
+    AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentExecutor,
+    AgentRequestKind, HarnessConfig, LlmResponseHookPending, OutputContent, build_harness_app,
+    llm::ExecutorRegistry,
 };
 
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
-}
+mod common;
 
 /// 进程内串行化 HARNESS_PLUGINS_DIR 访问的全局锁。
 static PLUGIN_ENV_LOCK: Mutex<()> = Mutex::new(());

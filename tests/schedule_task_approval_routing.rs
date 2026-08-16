@@ -3,19 +3,18 @@
 //! 验证由 schedule_task 创建的一次性动态任务触发后，执行 Agent 调用需要确认的
 //! shell_exec 工具时，审批请求被正确路由到任务 output_channel 指定的 QQ 用户。
 
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+mod common;
 
+use std::sync::{Arc, Mutex};
+
+use common::mock_executor::CannedExecutor;
 use crossbeam_channel::unbounded;
 use harness::triggers::{ScheduledTaskInfo, ScheduledTaskRegistry};
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EngineEvent,
-    EventTarget, ExecutorFuture, Frontend, FrontendKind, HarnessConfig, LlmToolCall,
-    LongTermMemory, OutputContent, Task, TaskStatus, TaskTrigger, build_harness_app,
-    llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutor, AgentKind, AgentProfile,
+    AgentToolPermissions, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
+    HarnessConfig, LlmToolCall, LongTermMemory, OutputContent, Task, TaskStatus, TaskTrigger,
+    build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -25,13 +24,6 @@ fn qq_channel(user_id: &str) -> ChannelId {
         frontend: FrontendKind::QQ,
         user_id: user_id.to_string(),
         thread_id: None,
-    }
-}
-
-fn text_output(text: &str) -> AgentExecutionOutput {
-    AgentExecutionOutput {
-        content: OutputContent::Text(text.to_string()),
-        reasoning_content: None,
     }
 }
 
@@ -136,42 +128,6 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
         .resource_mut::<harness::ecs::EntityIndex>()
         .agents
         .insert(default_id, default_entity);
-}
-
-/// 按顺序返回预设 LLM 输出的执行器。
-struct CannedExecutor {
-    responses: Mutex<VecDeque<AgentExecutionOutput>>,
-}
-
-impl CannedExecutor {
-    fn new(responses: Vec<AgentExecutionOutput>) -> Self {
-        Self {
-            responses: Mutex::new(responses.into()),
-        }
-    }
-}
-
-impl AgentExecutor for CannedExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        // BrainDecision 请求：返回 JSON 决策（选择 default-llm-agent），
-        // TopLevelTask 经 user_message_to_task_system 创建时附加 PendingDispatch(BrainLlm)，
-        // 需要走 BrainLlm 派发路径。
-        if request.request_kind == AgentRequestKind::BrainDecision {
-            return Box::pin(async move {
-                Ok(text_output(
-                    r#"{"agent_name":"default-llm-agent","skill_name":null}"#,
-                ))
-            });
-        }
-        // 治理型 WorkItem / 非普通 LLM 请求直接返回占位文本，避免干扰主流程。
-        if request.work_item_id.is_some() || request.request_kind != AgentRequestKind::LlmCompletion
-        {
-            return Box::pin(async move { Ok(text_output("ok")) });
-        }
-
-        let response = self.responses.lock().unwrap().pop_front();
-        Box::pin(async move { Ok(response.unwrap_or_else(|| text_output("done"))) })
-    }
 }
 
 /// 捕获所有前端事件的 QQ MockFrontend。

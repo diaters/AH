@@ -2,9 +2,9 @@
 
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExperienceStore,
-    FrontendKind, HarnessConfig, SharedKnowledgeBase, ToolContext, WaitingForTasksInfo,
+    Agent, AgentCapabilities, AgentId, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
+    ExperienceStore, FrontendKind, HarnessConfig, SharedKnowledgeBase, ToolContext,
+    WaitingForTasksInfo,
 };
 use uuid::Uuid;
 
@@ -14,20 +14,6 @@ fn default_channel() -> ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-#[allow(dead_code)]
-struct MockExecutor;
-
-impl AgentExecutor for MockExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("mock response".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 
