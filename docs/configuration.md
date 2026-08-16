@@ -64,6 +64,40 @@
 - 当前代码未消费 `HARNESS_LLM_ORG_ID`、`HARNESS_LLM_PROJECT_ID`
 - 如未来重新启用相关能力，应在代码与文档中一起恢复
 
+## 测试环境变量
+
+真实 LLM 测试（冒烟 `tests/real_llm_smoke.rs`、场景 `tests/real_llm_scenarios.rs`）
+共用以下门控变量：
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `HARNESS_TEST_REAL_LLM` | 未设置 | 显式开关，设置任意值即启用真实 API 测试 |
+| `HARNESS_LLM_API_KEY` | 无 | API Key（标准 provider 由测试桥接到原生环境变量） |
+| `HARNESS_LLM_PROVIDER` | `default` | 场景测试使用的 provider |
+| `HARNESS_MODEL` | `gpt-4.1-mini` | 测试使用的模型 |
+
+场景测试（Layer 2）附加变量：
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `HARNESS_TEST_JUDGE_PROVIDER` | 未设置 | Judge 独立 provider（`openai` / `anthropic` / `deepseek` / `openai-compatible`） |
+| `HARNESS_TEST_JUDGE_MODEL` | `gpt-4.1-mini` | Judge 模型（应与被测模型不同源） |
+| `HARNESS_TEST_JUDGE_API_KEY` | 无 | Judge API Key |
+| `HARNESS_TEST_JUDGE_API_BASE` | 无 | Judge 自定义端点（仅 `openai-compatible` 必需） |
+| `HARNESS_TEST_SCENARIO_GAP_SECS` | `2` | 场景间隔节流秒数（防限流） |
+| `HARNESS_TEST_SCENARIO_POLL_MS` | `50` | 场景轮询间隔毫秒数 |
+
+执行方式：
+
+```bash
+HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
+  cargo test --test real_llm_scenarios -- --ignored --nocapture
+```
+
+未设置环境变量时测试自动 skip 且不产生失败；框架自检（mock executor）随 CI
+常规运行。详见 `tests/scenarios/README.md` 与
+`docs/design/2026-08-16-real-llm-scenario-testing-design.md`。
+
 ## 运行时配置
 
 ### 通用运行参数

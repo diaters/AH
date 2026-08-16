@@ -1,0 +1,30 @@
+# 场景：shell 统计任务（设计文档 §5.1 示例，需真实 API + shell 工具链路）
+[scenario]
+name = "shell_stat_task"
+description = "统计当前目录下 .rs 文件数量并汇报"
+input = "统计当前目录下 .rs 文件数量并汇报"
+max_cost_usd = 0.10
+timeout_secs = 120
+
+[[assertions]]
+type = "tool_called"
+tool = "shell_exec"
+min_times = 1
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = '\d+'
+desc = "结果包含数字"
+
+[[assertions]]
+type = "llm_judge"
+rubric = "回答是否正确完成了统计任务，数字是否合理（1-500 之间）"
+threshold = 0.7
+
+[[assertions]]
+type = "human_review"
+note = "汇报口吻是否符合中文助手风格"
