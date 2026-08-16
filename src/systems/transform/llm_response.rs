@@ -11,13 +11,12 @@ use crate::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
         ChatRoundReadyMessage, ChatSession, ConversationMessage, EntryMetadata, EntryRole,
-        ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage,
-        ExperienceStore, FailureReason, MessageDispatchedHookPending, OffTrackPolicy,
-        OutputContent, ProfileGenerationContext, ShortTermMemory, SkillCreationContext,
-        SystemOutputMessage, Task, TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState,
-        ToolDefinition, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, UserOutputMessage, WaitingReason, WorkItem,
-        WorkItemLifecycleHookPending, WorkItemType,
+        ExperienceCollectionCompletedMessage, ExperienceGovernanceRequestMessage, ExperienceStore,
+        FailureReason, MessageDispatchedHookPending, OffTrackPolicy, OutputContent,
+        ProfileGenerationContext, ShortTermMemory, SkillCreationContext, SystemOutputMessage, Task,
+        TaskId, TaskStatus, ToolCalledHookPending, ToolCallingState, ToolDefinition,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+        UserOutputMessage, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     ecs::EntityIndex,
     user_plugins::hook_point::HookPoint,
@@ -1001,17 +1000,13 @@ pub fn llm_response_system(
                                 // 不 continue，让下面的 tool calling loop 处理 tool calls
                             }
                             Ok(_) => {
-                                let had_submission = has_experience_submission(
-                                    &experience_store,
-                                    work_item.task_id,
-                                );
+                                let had_submission =
+                                    has_experience_submission(&experience_store, work_item.task_id);
 
                                 if had_submission {
                                     // 统一收束入口：root 候选 Submitted → GovernancePending
                                     let advanced = experience_store
-                                        .collect_top_level_governance_candidates(
-                                            work_item.task_id,
-                                        );
+                                        .collect_top_level_governance_candidates(work_item.task_id);
                                     if !advanced.is_empty() {
                                         let agent_id = skill_creation_contexts
                                             .get(work_item_entity)

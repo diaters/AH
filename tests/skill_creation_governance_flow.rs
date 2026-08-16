@@ -8,11 +8,11 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentExecutionResult, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions,
-    ChannelId, ExecutorFuture, ExperienceCandidate, ExperienceCandidateStatus, FrontendKind,
-    HarnessConfig, LongTermMemory, ShortTermMemory, SkillCreationContext, Task, WorkItem,
-    WorkItemStatus, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult,
+    AgentExecutor, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
+    ExecutorFuture, ExperienceCandidate, ExperienceCandidateStatus, FrontendKind, HarnessConfig,
+    LongTermMemory, ShortTermMemory, SkillCreationContext, Task, WorkItem, WorkItemStatus,
+    WorkItemType, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
