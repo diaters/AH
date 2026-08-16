@@ -21,6 +21,7 @@
 | `plans/2026-07-13-agent-profile-llm-generation.md` | Agent Profile LLM 生成实施 | 活跃 |
 | `plans/2026-07-18-dispatch-architecture-unification.md` | 调度架构统一实施 | 活跃 |
 | `plans/2026-07-18-skill-first-class-and-experience-governance.md` | Skill 一等公民与经验治理改造实施 | 活跃 |
+| `plans/2026-08-16-layer2-scenario-extension.md` | Layer 2 场景扩展（多轮上下文与摘要压缩）实施 | 活跃 |
 
 ### 活跃规格
 
@@ -38,8 +39,12 @@
 | `specs/2026-07-10-per-agent-multi-model-fallback-design.md` | 单 Agent 多模型降级设计 | 当前有效 |
 | `specs/2026-07-10-tui-global-task-panel-design.md` | TUI 全局任务面板设计 | 当前有效 |
 | `specs/2026-07-13-plugin-system-v2-application-model-design.md` | 插件系统 v2 应用模型设计 | 当前有效 |
+| `specs/2026-08-16-layer2-scenario-extension-design.md` | Layer 2 场景扩展（多轮上下文与摘要压缩）设计 | 已实施 |
 
-> 注意：规格状态以文件自身顶部标注为准。标记为 `当前有效` 的规格若对应功能已合并 main（对照 `docs/current-state.md` 的"已实现"章节），应按下方生命周期规则在 7 天内归档到 `docs/archive/superpowers/`。`knowledge-manager-agent-design.md` 缺状态标注，建议补 `当前有效` 或 `草案`。
+> 注意：规格状态以文件自身顶部标注为准。标记为 `当前有效` 的规格若对应功能已合并 main
+> （对照 `docs/current-state.md` 的"已实现"章节），应按下方生命周期规则在 7 天内归档到
+> `docs/archive/superpowers/`。`knowledge-manager-agent-design.md` 缺状态标注，
+> 建议补 `当前有效` 或 `草案`。
 
 ### 已归档
 
@@ -113,8 +118,8 @@
 
 ## 生命周期规则
 
-- 计划执行完毕或规格被代码实现后，应在 **7 天内** 移动到 `docs/archive/superpowers/`
-- 归档时在文件顶部添加 `> **状态：已归档**` 标注
+- 计划执行完毕或规格被代码实现后，应在 __7 天内__ 移动到 `docs/archive/superpowers/`
+- 归档时在文件顶部添加 `> __状态：已归档__` 标注
 - 归档后的文档只增不改，不做内容修订
 - 历史计划和规格参见 [docs/archive/superpowers/](../archive/superpowers/)
 

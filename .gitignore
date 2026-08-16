@@ -53,6 +53,7 @@ docs/wiki/
 # Logs (not tracked)
 logs/
 .harness/
+.playwright-cli
 
 skills-lock.json
 

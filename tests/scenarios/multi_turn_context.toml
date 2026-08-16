@@ -1,0 +1,24 @@
+# 场景：多轮上下文保留（设计 §4.1）
+# 第 1 轮告知事实 → 任务转 Waiting(User) → 第 2 轮追问验证上下文保留
+[scenario]
+name = "multi_turn_context"
+description = "跨轮次上下文保留：第 1 轮告知事实，第 2 轮追问验证"
+input = "请记住：本次会话的项目代号是 Falcon。回复确认即可。"
+follow_ups = ["请问本次会话的项目代号是什么？"]
+max_cost_usd = 0.10
+timeout_secs = 120
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = "Falcon"
+desc = "最终输出包含项目代号"
+
+[[assertions]]
+type = "llm_judge"
+rubric = "第二轮回答是否基于第一轮告知的上下文（项目代号 Falcon），而非编造或遗忘"
+threshold = 0.7
+samples = 1

@@ -29,6 +29,27 @@ cargo test --test real_llm_scenarios
 失败即测试失败；Judge 低置信、票数分裂或 `human_review` 断言写入待审队列，
 不算测试失败。
 
+## 场景字段与断言类型
+
+### 场景字段（[scenario] 表）
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` / `description` / `input` | 是 | 场景名、描述、第一轮输入 |
+| `follow_ups` | 否 | 后续轮次输入列表；非空时任务按多轮会话运行（LLM 回复后等待续轮），全部注入后自动发送 `/finish` 收尾 |
+| `compression_threshold_tokens` | 否 | 覆写 MemoryConfig 压缩阈值（默认 8000），用于低阈值触发摘要压缩 |
+| `max_cost_usd` / `timeout_secs` | 否 | 软预算与整体 wall-clock 超时（含全部轮次） |
+
+### 断言类型
+
+在原有 5 类基础上新增：
+
+| 类型 | 判断者 | 失败行为 |
+|------|--------|---------|
+| `summarization_triggered` | 代码 | 压缩触发次数 < `min_times`（默认 1）直接 fail |
+
+多轮场景的 `response_matches` 检查最后一轮回复（非 `/finish` 的收尾文案）。
+
 ## Judge 独立 provider（可选）
 
 Judge 模型应与被测模型不同源（避免自我偏好），通过以下环境变量组配置；
