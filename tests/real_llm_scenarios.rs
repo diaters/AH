@@ -37,9 +37,8 @@ use harness::{
     AgentExecutionRequest, AgentRequestKind, ChannelId, DispatchHint, DispatchKind,
     DispatchStrategy, ExternalInput, FrontendKind, HarnessConfig, JudgeOutcome, JudgePromptData,
     JudgeRubric, JudgeVerdict, JudgeVote, LongTermMemory, MemoryConfig, PendingDispatch,
-    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
-    build_harness_app, build_judge_user_prompt, judge_system_prompt, llm::ExecutorRegistry,
-    parse_judge_verdict,
+    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType, build_harness_app,
+    build_judge_user_prompt, judge_system_prompt, llm::ExecutorRegistry, parse_judge_verdict,
 };
 use serde::Deserialize;
 use tokio::runtime::Runtime;
@@ -189,7 +188,11 @@ struct RunTrace {
     tool_calls: Vec<(String, String)>,
     /// WorkItem 终态集合（DirectDelegate 路径为空）
     workitem_statuses: Vec<String>,
-    /// Summarization WorkItem 到达 Completed 的次数（summarization_triggered 断言依据）
+    /// 压缩触发次数（summarization_triggered 断言依据）。
+    ///
+    /// 语义：Summarization WorkItem 创建计数（压缩被触发）。
+    /// 生产 Summarization WorkItem 完成即 despawn 且从不置 Completed，无法从终态
+    /// 集合统计；mock 自检触发必成功，该计数等价"完成次数"。
     summarization_completed: usize,
     /// LLM 请求次数（被测链路，不含 Judge）
     llm_calls: usize,
@@ -260,6 +263,34 @@ impl AgentExecutor for ScenarioSelfcheckExecutor {
     }
 }
 
+/// 压缩场景自检 executor（本文件专用）：
+/// - `Summarization`（压缩摘要请求）→ canned 摘要文本
+/// - 其他（各轮对话）→ 长文本回复，多轮累积远超低压缩阈值
+struct CompressionSelfcheckExecutor;
+
+impl AgentExecutor for CompressionSelfcheckExecutor {
+    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        match request.request_kind {
+            AgentRequestKind::Summarization => Box::pin(async {
+                Ok(text_output(
+                    "压缩摘要：Aurora 为内部数据平台重构项目，2026 Q1 立项，\
+                     目标离线批处理降至分钟级；里程碑为 3 月 Iceberg 存储迁移、\
+                     6 月 Flink 计算引擎切换、9 月全量灰度；团队 12 人。",
+                ))
+            }),
+            _ => Box::pin(async {
+                Ok(text_output(
+                    "Aurora 项目详述：存储迁移采用 Iceberg 表格式，按天分区，\
+                     配合小文件合并任务治理；计算引擎切换使用 Flink SQL 双跑验证，\
+                     状态后端 RocksDB，通过两阶段提交保证 Exactly-Once；灰度按\
+                     1%、5%、20%、50%、100% 五层放量，每层观察核心延迟与丢失率\
+                     指标，异常即回滚至旧链路。团队构成与预算维持既定规划。",
+                ))
+            }),
+        }
+    }
+}
+
 // ============ Runner：构建 ECS app 并运行场景 ============
 
 fn scenario_config() -> HarnessConfig {
@@ -306,7 +337,15 @@ fn spawn_scenario_agent(app: &mut bevy_app::App) {
             model: "gpt-4.1-mini".to_string(),
         },
         capabilities: AgentCapabilities {
-            tags: vec!["llm".to_string(), "default".to_string()],
+            // 含 "summarization" tag：dispatch_system 按 required_tag（Summarization →
+            // "summarization"）查找 Persistent Agent，缺失会导致 Summarization WorkItem
+            // 一派发即 fail（memory_compression 场景的根因，见
+            // scenario_framework_mock_smoke_compression）。与生产 agents.toml 对齐。
+            tags: vec![
+                "llm".to_string(),
+                "default".to_string(),
+                "summarization".to_string(),
+            ],
             description: "Scenario runner default agent".to_string(),
         },
         kind: AgentKind::Persistent,
@@ -349,6 +388,33 @@ fn count_llm_requests_system(
     mut count: ResMut<LlmRequestCount>,
 ) {
     count.0 += requests.iter().count();
+}
+
+/// Summarization 压缩触发计数。
+///
+/// 为什么不用 World 终态集合统计"Summarization WorkItem 完成次数"：
+/// 生产链路 `handle_summarization_work_item_result` 完成即 despawn Summarization
+/// WorkItem，且从不将其置为 Completed（保持 Running 到 despawn），因此 runner 在
+/// 最终收集时无法从 `workitem_statuses` 看到任何 Summarization 状态。
+///
+/// 为什么不用 `Added<SummarizationRequestMessage>` 计数：压缩请求实体为帧内瞬态
+/// （memory_compression_system spawn 后同帧被 summarization_dispatch_system 消费并
+/// despawn），Added 过滤器的捕获依赖系统运行顺序，不可靠（同 `count_llm_requests_`
+/// 注释的诊断限制）。改用 `Added<WorkItem>` + `work_type == Summarization`：WorkItem
+/// 实体生命周期跨多帧（spawn 后到完成 despawn），Added 可靠命中"压缩触发"。
+/// mock 自检 executor 对 Summarization 请求必返回文本摘要（触发必成功），
+/// 该计数与 `summarization_triggered` 断言语义（压缩被触发）一致，是可靠代理。
+#[derive(Resource, Default)]
+struct SummarizationTriggerCount(usize);
+
+fn count_summarization_triggers_system(
+    work_items: Query<&WorkItem, Added<WorkItem>>,
+    mut count: ResMut<SummarizationTriggerCount>,
+) {
+    count.0 += work_items
+        .iter()
+        .filter(|wi| wi.work_type == WorkItemType::Summarization)
+        .count();
 }
 
 /// 场景稳定态：所有 Task 处于终态或 Waiting(User)（多轮等待续轮），
@@ -420,10 +486,13 @@ fn execute_scenario(
     }
 
     app.insert_resource(LlmRequestCount::default());
+    app.insert_resource(SummarizationTriggerCount::default());
     // 注意：请求实体为帧内瞬态（Dispatch/Transform spawn、Execution 的
     // agent_execution_system 同帧 despawn），从测试侧无法用 `Added` 可靠计数，
     // 报告中的 "LLM 调用" 仅作参考，可能为 0（已知诊断限制，不影响断言）。
     app.add_systems(bevy_app::Update, count_llm_requests_system);
+    // Summarization WorkItem 实体跨多帧存活，Added 计数可靠（见计数系统注释）。
+    app.add_systems(bevy_app::Update, count_summarization_triggers_system);
 
     app.update();
     spawn_scenario_agent(&mut app);
@@ -521,9 +590,14 @@ fn execute_scenario(
 
     // 收集运行事实
     let llm_calls = app.world().resource::<LlmRequestCount>().0;
+    // Summarization "完成"以压缩触发计数为代理：生产 Summarization WorkItem 完成即
+    // despawn 且从不置 Completed（见 count_summarization_triggers_system 注释），
+    // 无法从终态集合统计。mock 自检触发必成功，计数等价完成次数。
+    let summarization_completed = app.world().resource::<SummarizationTriggerCount>().0;
     let mut trace = RunTrace {
         elapsed_ms: start.elapsed().as_millis(),
         llm_calls,
+        summarization_completed,
         ..Default::default()
     };
     let world = app.world_mut();
@@ -545,11 +619,6 @@ fn execute_scenario(
     for wi in wi_query.iter(world) {
         if wi.is_terminal() {
             trace.workitem_statuses.push(format!("{:?}", wi.status));
-            if wi.work_type == WorkItemType::Summarization
-                && matches!(wi.status, WorkItemStatus::Completed)
-            {
-                trace.summarization_completed += 1;
-            }
         }
     }
     // 工具调用记录来自 STM（tool_result_system 写入，稳定来源）
@@ -1201,6 +1270,41 @@ fn scenario_framework_mock_smoke_multi_turn() {
     );
     assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
     assert!(!report.needs_human, "不应有待审: {:?}", report.results);
+}
+
+/// Mock 模式压缩链路自检：低阈值 + 多轮长文本触发
+/// memory_compression_system → Summarization WorkItem 完成，任务经 /finish 到 Done。
+#[test]
+fn scenario_framework_mock_smoke_compression() {
+    let file = load_scenario("memory_compression");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(CompressionSelfcheckExecutor);
+    let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
+        final_text: "unused",
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor,
+        judge,
+        runtime,
+        "mock（压缩自检）",
+        tmp.path(),
+    );
+
+    assert!(
+        report.trace.summarization_completed >= 1,
+        "应至少完成一次 Summarization: workitems={:?}",
+        report.trace.workitem_statuses
+    );
+    assert_eq!(
+        report.trace.task_status.as_deref(),
+        Some("Done"),
+        "压缩后任务仍应完成: {:?}",
+        report.trace.task_status
+    );
+    assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
 }
 
 /// Mock 模式断言引擎单元验证：tool_called 失败、human_review 待审、正则不匹配失败。
