@@ -220,7 +220,7 @@ skill_creation_writeback_system（新建专用写回）
 ````toml
 [[agent]]
 name = "skill-creator"
-tags = ["skill-creator"]
+tags = ["skill-creator", "skill"]
 description = "技能创建专家，根据用户意图为指定 Agent 设计并生成新 skill"
 system_prompt = """
 你是一名技能创建专家。根据用户的意图描述，为指定 Agent 创建新 skill。
@@ -287,6 +287,8 @@ read_skill_file = "Allow"
 # skill-updater 现有配置
 [[agent]]
 name = "skill-updater"
+# tags 追加 "skill"：与 skill-creator 共用 read_skill_file 工具（required_tag: "skill"）
+tags = ["skill-updater", "persistent", "skill"]
 # ...（省略未变字段）
 
 [agent.tools]

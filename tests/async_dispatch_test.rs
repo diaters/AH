@@ -13,9 +13,9 @@ use bevy_ecs::system::RunSystemOnce;
 use common::async_tool_bridge::*;
 use harness::domain::{
     AgentExecutionRequest, AgentRequestKind, BuiltinTool, BuiltinToolExecutors, ChannelId,
-    FrontendKind, InFlightToolCall, OwnedToolContext, Task, TaskStatus, ToolAction, ToolActionKind,
-    ToolContext, ToolError, ToolExecutionRequestMessage, ToolFuture, ToolRequestPending,
-    ToolWorkerOutput,
+    FrontendKind, InFlightToolCall, OwnedToolContext, SkillCreationContext, Task, TaskStatus,
+    ToolAction, ToolActionKind, ToolContext, ToolError, ToolExecutionRequestMessage, ToolFuture,
+    ToolRequestPending, ToolWorkerOutput,
 };
 
 fn make_request(tool_name: &str, tool_call_id: &str) -> ToolExecutionRequestMessage {
@@ -291,6 +291,88 @@ fn dispatch_handles_missing_task_gracefully_for_origin_channel() {
             assert!(
                 v["captured_origin_channel"].is_null(),
                 "missing Task should yield null current_origin_channel, not panic"
+            );
+        }
+        other => panic!("unexpected payload {:?}", other),
+    }
+}
+
+/// 回归修复：`async_tool_dispatch_system` 应从 WorkItem 的 `SkillCreationContext`
+/// 注入 `OwnedToolContext.current_skill_dir`，让 `write_skill_file` 等 skill 工具
+/// 在 worker 内拿到沙盒目录。同步路径 `dispatch.rs` 已正确注入，异步路径此前
+/// 写死 `None`（bug：write_skill_file 报 "no skill directory in current context"）。
+///
+/// 构造一个带 SkillCreationContext 的 WorkItem entity + 捕获 ctx.current_skill_dir
+/// 的探针工具，dispatch 后 worker 应把捕获到的 sandbox_dir 回送。
+#[test]
+fn dispatch_injects_current_skill_dir_from_skill_creation_context() {
+    // 捕获 ctx.current_skill_dir 并把它原样回送的探针工具
+    struct SkillDirProbeTool;
+    impl BuiltinTool for SkillDirProbeTool {
+        fn name(&self) -> &str {
+            "skill_dir_probe"
+        }
+        fn kind(&self) -> ToolActionKind {
+            ToolActionKind::Async
+        }
+        fn execute(&self, _: &serde_json::Value, _: &ToolContext) -> Result<ToolAction, ToolError> {
+            unreachable!()
+        }
+        fn run_async(&self, _: serde_json::Value, ctx: OwnedToolContext) -> ToolFuture {
+            Box::pin(async move {
+                Ok(ToolWorkerOutput::Value(serde_json::json!({
+                    "captured_skill_dir": match &ctx.current_skill_dir {
+                        Some(d) => serde_json::Value::String(d.to_string_lossy().to_string()),
+                        None => serde_json::Value::Null,
+                    }
+                })))
+            })
+        }
+    }
+
+    let mut world = setup_bridge_world();
+    let mut executors = BuiltinToolExecutors::default();
+    executors.register(Box::new(SkillDirProbeTool));
+    world.insert_resource(executors);
+    world.insert_resource(harness::app::HarnessSettings::default_test());
+
+    // 构造带 SkillCreationContext 的 WorkItem entity（sandbox_dir 应注入 ctx）
+    let task_id = uuid::Uuid::new_v4();
+    let agent_id = uuid::Uuid::new_v4();
+    let sandbox = std::path::PathBuf::from("/tmp/probe-sandbox");
+    let wi_entity = world
+        .spawn(SkillCreationContext {
+            task_id,
+            agent_id,
+            agent_name: "skill-creator".to_string(),
+            sandbox_dir: sandbox.clone(),
+            skill_name: "probe".to_string(),
+        })
+        .id();
+
+    // 请求携带 work_item_entity 引用
+    let mut request = make_request("skill_dir_probe", "call-skill-dir");
+    request.work_item_entity = Some(wi_entity);
+    world.spawn(request);
+
+    world
+        .run_system_once(harness::systems::async_tool_dispatch_system)
+        .unwrap();
+
+    let result = wait_for_tool_result(&mut world, 2000).expect("worker result");
+    match result.payload {
+        harness::domain::ToolWorkerPayload::Completed(Ok(v)) => {
+            let captured = &v["captured_skill_dir"];
+            assert!(
+                !captured.is_null(),
+                "current_skill_dir must be injected from SkillCreationContext (got null); \
+                 expected sandbox_dir {}",
+                sandbox.display()
+            );
+            assert_eq!(
+                captured.as_str().unwrap(),
+                "/tmp/probe-sandbox",
+                "current_skill_dir should match SkillCreationContext.sandbox_dir"
             );
         }
         other => panic!("unexpected payload {:?}", other),

@@ -71,14 +71,14 @@ __运行时动态扫描__。在 `skill_update_workitem_system` 构造 prompt 时
 
 | 工具 | 参数 | 约束 |
 |---|---|---|
-| `read_skill_file` | `path`（相对于 skill 目录） | 路径沙箱 + 后缀白名单；仅 skill-updater Agent 可用 |
+| `read_skill_file` | `path`（相对于 skill 目录） | 路径沙箱 + 后缀白名单；skill-updater 与 skill-creator 共用（均持有 `skill` tag） |
 
 LLM 通过 `read_skill_file` 按需读取 sibling 文件内容，而非在 prompt 中全文注入。理由：
 
 - 避免 token 浪费——多数 update 只涉及 1-2 个文件，不需要全部加载
 - LLM 自主决定需要什么上下文，减少无关信息干扰
 
-`read_skill_file` 通过 `required_tag: "skill-updater"` 限制仅 skill-updater Agent 可用。
+`read_skill_file` 通过 `required_tag: "skill"` 限制仅持有 `skill` tag 的 Agent 可用（skill-updater 与 skill-creator 均持有）。
 
 ### 4. 版本语义
 

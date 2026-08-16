@@ -557,7 +557,7 @@ pub fn register_builtin_tools(
     });
     executors.register(Box::new(SubmitSkillUpdateTool));
 
-    // ADR-006：read_skill_file tool (仅 skill-updater 可用)
+    // ADR-006：read_skill_file tool (skill-creator 与 skill-updater 共用，均持有 "skill" tag)
     registry.register(ToolDefinition {
         name: "read_skill_file".to_string(),
         description: "读取当前 skill 目录下的子文件内容。SKILL.md 的内容已在 prompt 中提供，无需再读取。用于了解子流程文档、脚本、模板等内容，以便提交精确的 diff 更新。".to_string(),
@@ -575,7 +575,7 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("read_skill_file".to_string()),
-        required_tag: Some("skill-updater".to_string()),
+        required_tag: Some("skill".to_string()),
     });
     executors.register(Box::new(ReadSkillFileTool));
 
