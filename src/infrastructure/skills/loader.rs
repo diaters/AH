@@ -294,6 +294,18 @@ pub fn parse_skill_md(content: &str, skill_dir: PathBuf) -> Option<LoadedSkill> 
     })
 }
 
+/// 按 frontmatter name 或 skill_dir 目录名匹配 skill。
+/// 优先匹配 frontmatter name，否则回退到目录名匹配。
+/// 设计意图：调用方可能传目录名（SkillId.skill_name 来自 build_registry 的目录名）
+/// 或 frontmatter name（依赖声明），两者均需支持。
+fn find_skill_by_name<'a>(loaded: &'a [LoadedSkill], name: &str) -> Option<&'a LoadedSkill> {
+    loaded.iter().find(|s| s.name == name).or_else(|| {
+        loaded
+            .iter()
+            .find(|s| s.skill_dir.file_name().map(|n| n == name).unwrap_or(false))
+    })
+}
+
 /// 解析 skill 的传递依赖闭包，按拓扑序返回（依赖在前，选中 skill 最后）。
 /// - 依赖缺失：跳过并 warn，不失败
 /// - 循环依赖：环上边截断并 warn
@@ -341,19 +353,27 @@ pub fn resolve_skill_closure<'a>(
         resolved.push(name.to_string());
     }
 
-    if !loaded.iter().any(|s| s.name == skill_name) {
+    let root = find_skill_by_name(loaded, skill_name);
+    let Some(root_skill) = root else {
         warn!(
             event = "SkillDependencyRootMissing",
             skill = %skill_name,
             "skill not found in loaded skills, returning empty closure"
         );
         return Vec::new();
-    }
+    };
 
     let mut stack = Vec::new();
     let mut result = Vec::new();
     let mut resolved = Vec::new();
-    dfs(loaded, skill_name, &mut stack, &mut result, &mut resolved);
+    // 用 root_skill.name（frontmatter name）作为 dfs 入口，确保内部依赖按 frontmatter name 匹配
+    dfs(
+        loaded,
+        &root_skill.name,
+        &mut stack,
+        &mut result,
+        &mut resolved,
+    );
     result
 }
 
@@ -805,5 +825,29 @@ mod dependencies_tests {
         let closure = resolve_skill_closure(&loaded, "a");
         let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["a"]);
+    }
+
+    #[test]
+    fn resolve_closure_matches_by_directory_name() {
+        // 目录名与 frontmatter name 不同（非 ASCII skill 场景）：
+        // 传目录名（SkillId.skill_name 来自 build_registry 的目录名）也能解析到 root skill。
+        let loaded = vec![LoadedSkill {
+            name: "base-skill".to_string(),
+            description: "desc".to_string(),
+            instructions: "instr".to_string(),
+            version: 1,
+            self_updatable: true,
+            dependencies: Vec::new(),
+            skill_dir: PathBuf::from(".harness/skills/通过-adb--ui-automator-远程查看"),
+        }];
+        let dir_name = loaded[0]
+            .skill_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("目录名应为非空 UTF-8 字符串");
+        let closure = resolve_skill_closure(&loaded, dir_name);
+        // 断言按目录名匹配到了 base-skill（frontmatter name）
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["base-skill"]);
     }
 }
