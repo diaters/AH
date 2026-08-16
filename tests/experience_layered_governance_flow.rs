@@ -9,8 +9,11 @@
 //! - 审批→写回链路：配对 ToolExecutionRequestMessage 后确认系统保留响应实体
 //! - 审批通过后 ExperienceWritebackRequestMessage 被创建
 
+mod common;
+
 use std::sync::Arc;
 
+use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
     AgentAssetService, AgentExecutionRequest, AgentRequestKind, ExperienceCandidate,
@@ -19,7 +22,7 @@ use harness::{
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
-use harness::{AgentExecutor, ExecutorFuture, build_harness_app, llm::ExecutorRegistry};
+use harness::{AgentExecutor, build_harness_app, llm::ExecutorRegistry};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -268,19 +271,6 @@ fn failed_writeback_marks_candidate_writeback_failed() {
 }
 
 // ============ P0: 审批→写回链路修复验证 ============
-
-struct NoOpExecutor;
-
-impl AgentExecutor for NoOpExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(harness::AgentExecutionOutput {
-                content: harness::OutputContent::Text("ok".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
-}
 
 fn test_config() -> HarnessConfig {
     HarnessConfig::default()

@@ -1,5 +1,8 @@
+mod common;
+
 use std::sync::{Arc, Mutex};
 
+use common::mock_executor::BrainAwareEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
@@ -19,31 +22,6 @@ fn default_channel() -> ChannelId {
     }
 }
 use tokio::runtime::Runtime;
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        match request.request_kind {
-            // TopLevelTask 经 user_message_to_task_system 创建时附加 PendingDispatch(BrainLlm)，
-            // 需要走 BrainLlm 派发路径，BrainDecision 请求需返回 JSON 决策。
-            harness::AgentRequestKind::BrainDecision => Box::pin(async move {
-                Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text(
-                        r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
-                    ),
-                    reasoning_content: None,
-                })
-            }),
-            _ => Box::pin(async move {
-                Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text("echo response".to_string()),
-                    reasoning_content: None,
-                })
-            }),
-        }
-    }
-}
 
 fn test_config() -> HarnessConfig {
     HarnessConfig {
@@ -135,7 +113,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
 #[test]
 fn multi_turn_task_lifecycle() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -238,7 +216,7 @@ fn multi_turn_task_lifecycle() {
 #[test]
 fn short_term_memory_tracks_turns() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -317,7 +295,7 @@ fn short_term_memory_tracks_turns() {
 #[test]
 fn agent_has_long_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -371,7 +349,7 @@ fn agent_has_long_term_memory() {
 #[test]
 fn experience_collection_triggered_on_agent_termination() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -540,7 +518,7 @@ fn experience_collection_triggered_on_agent_termination() {
 #[test]
 fn multi_turn_memory_records_user_and_assistant() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -618,7 +596,7 @@ fn multi_turn_memory_records_user_and_assistant() {
 #[test]
 fn multi_turn_full_conversation_flow() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -822,7 +800,7 @@ fn prompt_includes_conversation_history() {
 #[test]
 fn initial_user_input_recorded_in_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -884,7 +862,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
 #[test]
 fn three_turn_conversation_maintains_correct_order() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -1117,7 +1095,7 @@ fn second_dispatch_prompt_includes_correct_history() {
 #[test]
 fn task_content_updates_on_continue() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(

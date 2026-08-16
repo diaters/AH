@@ -13,11 +13,14 @@ use crossbeam_channel::unbounded;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use common::mock_executor::EchoExecutor;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentStoppingHookPending, AgentToolPermissions, ChannelId,
-    ExecutorFuture, FrontendKind, HarnessConfig, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentStoppingHookPending,
+    AgentToolPermissions, ChannelId, FrontendKind, HarnessConfig, build_harness_app,
+    llm::ExecutorRegistry,
 };
+
+mod common;
 
 #[allow(dead_code)]
 fn default_channel() -> ChannelId {
@@ -45,19 +48,6 @@ fn make_agent(kind: AgentKind) -> Agent {
         bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
         system_prompt: None,
-    }
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 

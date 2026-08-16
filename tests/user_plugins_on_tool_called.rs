@@ -13,30 +13,19 @@ use harness::prelude::*;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, ToolCalledHookPending, ToolExecutionResultMessage,
-    build_harness_app, llm::ExecutorRegistry,
+    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, ToolCalledHookPending,
+    ToolExecutionResultMessage, build_harness_app, llm::ExecutorRegistry,
 };
+
+mod common;
 
 fn default_channel() -> ChannelId {
     ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
     }
 }
 

@@ -1,11 +1,13 @@
+mod common;
+
 use std::{sync::Arc, thread, time::Duration};
 
+use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, ExecutorFuture, ExternalInput,
-    FrontendKind, HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, TaskTerminatedMessage,
-    build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
+    ChannelId, ExternalInput, FrontendKind, HarnessConfig, Task, TaskRoutingPolicy, TaskStatus,
+    TaskTerminatedMessage, build_harness_app, llm::ExecutorRegistry,
 };
 
 fn default_channel() -> ChannelId {
@@ -16,19 +18,6 @@ fn default_channel() -> ChannelId {
     }
 }
 use tokio::runtime::Runtime;
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
-                reasoning_content: None,
-            })
-        })
-    }
-}
 
 fn multi_agent_config() -> HarnessConfig {
     HarnessConfig {
@@ -62,7 +51,7 @@ fn multi_agent_config() -> HarnessConfig {
 #[test]
 fn loads_persistent_agents_from_config() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -105,10 +94,10 @@ fn loads_persistent_agents_from_config() {
 #[test]
 fn selects_agent_by_tags_match() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let mut app = build_harness_app(
         multi_agent_config(),
@@ -149,10 +138,10 @@ fn selects_agent_by_tags_match() {
 #[test]
 fn task_scoped_agent_lifecycle() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let mut app = build_harness_app(
         multi_agent_config(),

@@ -17,13 +17,15 @@ use crossbeam_channel::unbounded;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use common::mock_executor::EchoExecutor;
 use harness::user_plugins::hook_point::HookPoint;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, WorkItem, WorkItemInput, WorkItemLifecycleHookPending,
-    WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget, build_harness_app,
-    llm::ExecutorRegistry,
+    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, WorkItem, WorkItemInput,
+    WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
+    WorkItemWritebackTarget, build_harness_app, llm::ExecutorRegistry,
 };
+
+mod common;
 
 #[allow(dead_code)]
 fn default_channel() -> ChannelId {
@@ -45,19 +47,6 @@ fn make_work_item(status: WorkItemStatus) -> WorkItem {
     );
     wi.status = status;
     wi
-}
-
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
 }
 
 /// 进程内串行化 HARNESS_PLUGINS_DIR 访问的全局锁。

@@ -15,24 +15,13 @@ use harness::prelude::*;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExecutorFuture,
-    FrontendKind, HarnessConfig, ToolCallingState, ToolExecutionResultMessage,
-    ToolReturnedHookPending, build_harness_app, llm::ExecutorRegistry,
+    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, ToolCallingState,
+    ToolExecutionResultMessage, ToolReturnedHookPending, build_harness_app, llm::ExecutorRegistry,
 };
 
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("echo".to_string()),
-                reasoning_content: None,
-            })
-        })
-    }
-}
+mod common;
 
 /// 进程内串行化 HARNESS_PLUGINS_DIR 访问的全局锁。
 ///

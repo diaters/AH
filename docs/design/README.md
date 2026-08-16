@@ -18,6 +18,7 @@
 | `2026-07-18-dispatch-architecture-unification-design.md` | 当前有效 | 派发架构统一 | 单一 `PendingDispatch` 入口，治理 9 个腐化点 |
 | `2026-07-26-ecs-relation-modeling-design.md` | 当前有效 | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 消灭 55+ 线性扫描 |
 | `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效 | 上下文压缩盲区修复 | 工具结果入 STM、配对组粒度压缩、结构化发送路径 |
+| `2026-08-16-real-llm-scenario-testing-design.md` | 当前有效 | 真实 LLM 场景测试与分层正确性判断 | 四层测试模型：冒烟/场景/AI Judge/人工待审，复用 Evaluation 体系承载 Judge |
 
 ## 推荐阅读顺序
 

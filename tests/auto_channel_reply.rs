@@ -1,10 +1,12 @@
+mod common;
+
 use std::{sync::Arc, time::Duration};
 
+use common::mock_executor::BrainAwareEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, BrainConfig, ChannelId,
-    EntityIndex, ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, OutputContent,
+    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
+    BrainConfig, ChannelId, EntityIndex, ExternalInput, FrontendKind, HarnessConfig,
     build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
     llm::ExecutorRegistry,
@@ -18,32 +20,6 @@ fn extract_short_id_from_text(text: &str) -> Option<String> {
     let start = text.find('[')? + 1;
     let end = text[start..].find(']')? + start;
     Some(text[start..end].to_string())
-}
-
-/// 一个极简的 Executor：
-/// - BrainDecision 请求返回 JSON 决策（选择 default-llm-agent）
-/// - 其他请求返回固定文本作为 Agent 回复
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        match request.request_kind {
-            AgentRequestKind::BrainDecision => Box::pin(async move {
-                Ok(AgentExecutionOutput {
-                    content: OutputContent::Text(
-                        r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
-                    ),
-                    reasoning_content: None,
-                })
-            }),
-            _ => Box::pin(async move {
-                Ok(AgentExecutionOutput {
-                    content: OutputContent::Text("echo reply".to_string()),
-                    reasoning_content: None,
-                })
-            }),
-        }
-    }
 }
 
 /// 生成启用 Brain 的测试配置（auto_channel_reply 测试需要走 BrainLlm 派发路径）。
@@ -151,7 +127,7 @@ fn auto_channel_reply() {
             agents_config_path: "/nonexistent_agents.toml".to_string(),
             ..brain_enabled_config()
         };
-        let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+        let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo reply"));
         let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(
@@ -230,7 +206,7 @@ fn multi_task_channel_reply_has_different_short_ids() {
             agents_config_path: "/nonexistent_agents.toml".to_string(),
             ..brain_enabled_config()
         };
-        let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+        let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo reply"));
         let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(

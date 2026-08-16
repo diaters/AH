@@ -3,14 +3,16 @@
 //! 验证 `handle_spawn_request` 实际行为：spawn 出的子 Agent 继承父 Agent 的
 //! Confirm 权限（而非降级为 Allow）。这是 O2 修复的端到端验证。
 
+mod common;
+
 use std::sync::Arc;
 
+use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentSpawnRequestMessage, AgentToolPermissions, ChannelId,
-    ExecutorFuture, ExternalInput, FrontendKind, HarnessConfig, LongTermMemory, Task,
-    TaskRoutingPolicy, TaskStatus, ToolPermission, build_harness_app, llm::ExecutorRegistry,
+    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentSpawnRequestMessage,
+    AgentToolPermissions, ChannelId, ExternalInput, FrontendKind, HarnessConfig, LongTermMemory,
+    Task, TaskRoutingPolicy, TaskStatus, ToolPermission, build_harness_app, llm::ExecutorRegistry,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -20,20 +22,6 @@ fn default_channel() -> ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "default".to_string(),
         thread_id: None,
-    }
-}
-
-/// 简单回显执行器：避免 LLM 调用干扰权限继承验证。
-struct EchoExecutor;
-
-impl AgentExecutor for EchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        Box::pin(async move {
-            Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
-                reasoning_content: None,
-            })
-        })
     }
 }
 
@@ -69,7 +57,7 @@ fn test_config() -> HarnessConfig {
 #[test]
 fn child_agent_inherits_confirm_permission_from_parent() {
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
+    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded::<ExternalInput>();
     let mut app = build_harness_app(
