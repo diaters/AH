@@ -1,6 +1,6 @@
 # `/skill` 候选治理触发修复设计
 
-> **状态：当前有效**
+> __状态：当前有效__
 
 | 属性 | 值 |
 |------|-----|
@@ -45,7 +45,7 @@ ProfileGeneration / SkillUpdate 提供了专门分支，`SkillCreation` 落入 `
 （`src/domain/contribution.rs:393`）由
 `experience_collection_completion_system`
 （`src/systems/experience/collection.rs:318-332`）调用，而该系统依赖
-`ExperienceCollectionCompletedMessage`，其上游是**任务终态**触发的经验收集
+`ExperienceCollectionCompletedMessage`，其上游是__任务终态__触发的经验收集
 WorkItem。`/skill` 是任务进行中的命令，原任务不因 skill 创建完成而终态，
 治理链路根本不会启动。
 
@@ -114,7 +114,7 @@ WorkItemType::SkillCreation => {
 
 要点：
 
-- **治理链路无需新系统**：`experience_governance_system` 已消费
+- __治理链路无需新系统__：`experience_governance_system` 已消费
   `ExperienceGovernanceRequestMessage` 并按
   `governance_candidates_for_task`（过滤 `GovernancePending`，
   `src/domain/contribution.rs:425-438`）处理；`is_new == true` 的 Skill 候选
@@ -123,9 +123,9 @@ WorkItemType::SkillCreation => {
   `requires_user_confirmation = true`（`src/systems/experience/governance.rs`，
   2026-08-10 设计 N3 修复已实现），后续审批 → 写回 → `SkillRegistry` 注册链路
   均已存在。本设计只补上"按下启动键"的缺失环节。
-- **审批路由**：治理产出的 `ToolConfirmationRequestMessage` 按既有审批链路路由到
+- __审批路由__：治理产出的 `ToolConfirmationRequestMessage` 按既有审批链路路由到
   任务 `origin_channel`（QQ），满足"审批请求必须回到原会话通道"的约束。
-- **`agent_id` 选择**：治理请求的 agent 用
+- __`agent_id` 选择__：治理请求的 agent 用
   `SkillCreationContext.agent_id`（任务创建者，即用户对话的 default agent），
   与治理的 governing 语义一致；`index.get_agent` 可解析。is_new 早期拦截
   不依赖 `is_default` 判断，agent 身份不影响路由结果。
@@ -162,14 +162,14 @@ WorkItemType::SkillCreation => {
 
 ### 6.2 集成测试
 
-- **闭环主链路**：`/skill intent` → skill-creator `write_skill_file` +
+- __闭环主链路__：`/skill intent` → skill-creator `write_skill_file` +
   `submit_skill` → WorkItem 完成分支 → 候选 `GovernancePending` →
   `experience_governance_system` → 候选 `NeedsUserApproval` +
   审批请求路由到 `origin_channel` → 模拟用户批准 → 沙盒 rename 到正式目录 +
   `SkillRegistry` 注册 → 候选 `Persisted` → 下一次 `load_skills` 可见新 skill。
-- **任务中断清理**：skill-creator 执行中任务终态 → 候选 `Discarded`、沙盒删除
+- __任务中断清理__：skill-creator 执行中任务终态 → 候选 `Discarded`、沙盒删除
   （回归确认既有行为）。
-- **审批期间任务终态**：候选 `NeedsUserApproval` 时任务终态 → 沙盒保留，
+- __审批期间任务终态__：候选 `NeedsUserApproval` 时任务终态 → 沙盒保留，
   批准后写回仍成功（既有 S6 行为回归）。
 
 ### 6.3 手动验证
@@ -180,7 +180,7 @@ WorkItemType::SkillCreation => {
 
 ## 7. 风险与边界
 
-- 完成分支的 Ok(Text) 路径**不 `continue`**、让结果继续走通用文本路径，依赖
+- 完成分支的 Ok(Text) 路径__不 `continue`__、让结果继续走通用文本路径，依赖
   通用路径不重复 despawn WorkItem entity（该 entity 已在分支内 despawn）。
   实现时需验证通用路径对"WorkItem 已 despawn 的结果实体"的容忍性，
   若通用路径会再次操作 WorkItem entity 则需调整 despawn 时序（留到实现计划确认）。
