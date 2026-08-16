@@ -59,6 +59,14 @@ struct ScenarioSpec {
     name: String,
     description: String,
     input: String,
+    /// 后续轮次输入（多轮场景）：每条经生产 ingress → routing 续轮链路注入，
+    /// 挂回同一 Task（STM 保留）；空列表 = 单轮场景（现有行为不变）。
+    #[serde(default)]
+    follow_ups: Vec<String>,
+    /// 场景级压缩阈值覆写：Some 时 runner 覆写 MemoryConfig，
+    /// 让多轮长文本稳定触发 memory_compression_system。
+    #[serde(default)]
+    compression_threshold_tokens: Option<u32>,
     #[serde(default = "default_max_cost_usd")]
     max_cost_usd: f32,
     #[serde(default = "default_timeout_secs")]
@@ -1027,6 +1035,8 @@ fn scenario_assertion_engine_branches() {
         name: "selfcheck".into(),
         description: "断言引擎分支自检".into(),
         input: "x".into(),
+        follow_ups: vec![],
+        compression_threshold_tokens: None,
         max_cost_usd: 0.0,
         timeout_secs: 1,
     };
@@ -1067,6 +1077,40 @@ fn scenario_assertion_engine_branches() {
         labels,
         vec!["PASS", "FAIL", "PASS", "PASS", "FAIL", "NEEDS_HUMAN"]
     );
+}
+
+/// 新字段解析：follow_ups 与 compression_threshold_tokens。
+#[test]
+fn scenario_spec_parses_follow_ups_and_threshold() {
+    let content = r#"
+[scenario]
+name = "x"
+description = "d"
+input = "第一轮"
+follow_ups = ["第二轮", "第三轮"]
+compression_threshold_tokens = 300
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+"#;
+    let file: ScenarioFile = toml::from_str(content).expect("解析应成功");
+    assert_eq!(file.scenario.follow_ups.len(), 2);
+    assert_eq!(file.scenario.compression_threshold_tokens, Some(300));
+}
+
+/// 向后兼容：旧场景文件（无新字段）解析后 follow_ups 为空、阈值为 None。
+#[test]
+fn scenario_spec_defaults_backward_compatible() {
+    let content = r#"
+[scenario]
+name = "x"
+description = "d"
+input = "第一轮"
+"#;
+    let file: ScenarioFile = toml::from_str(content).expect("解析应成功");
+    assert!(file.scenario.follow_ups.is_empty());
+    assert_eq!(file.scenario.compression_threshold_tokens, None);
 }
 
 /// Real 模式（#[ignore] + 环境变量双重门控）：真实 API 跑全部场景。
