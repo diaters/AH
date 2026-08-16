@@ -7,7 +7,8 @@ use crate::{
         Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
         LtmWriteHookPending, MemoryImportance, ShortTermMemory,
         SummarizationRequestMessage, SummarizationTrigger, Task, TaskStatus, WaitingReason,
-        WorkItem, WorkItemStatus, WorkItemType, render_tool_calls_summary, split_into_groups,
+        WorkItem, WorkItemStatus, WorkItemType, compressible_entry_count,
+        render_tool_calls_summary, split_into_groups,
     },
     infrastructure::memory::LongTermMemoryService,
 };
@@ -49,17 +50,9 @@ pub(crate) fn memory_compression_system(
 
             // 替换原有的 preserve_count / compress_count 逻辑
             let groups = split_into_groups(&short_term.entries);
-            if groups.len() <= config.preserve_recent_turns as usize {
-                continue;
-            }
-
             let preserve_group_count = config.preserve_recent_turns as usize;
-            let compress_entry_count = groups
-                .iter()
-                .take(groups.len() - preserve_group_count)
-                .map(|g| g.len())
-                .sum();
-
+            let compress_entry_count =
+                compressible_entry_count(&groups, config.preserve_recent_turns);
             if compress_entry_count == 0 {
                 continue;
             }
