@@ -113,7 +113,7 @@ enum AssertionSpec {
         #[serde(default = "default_one")]
         samples: usize,
     },
-    /// Summarization WorkItem 完成次数 >= min_times（代码断言，设计 §3.4）
+    /// 压缩触发次数 >= min_times（代码断言，设计 §3.4）
     #[serde(rename = "summarization_triggered")]
     SummarizationTriggered {
         #[serde(default = "default_one")]
@@ -192,8 +192,8 @@ struct RunTrace {
     ///
     /// 语义：Summarization WorkItem 创建计数（压缩被触发）。
     /// 生产 Summarization WorkItem 完成即 despawn 且从不置 Completed，无法从终态
-    /// 集合统计；mock 自检触发必成功，该计数等价"完成次数"。
-    summarization_completed: usize,
+    /// 集合统计；mock 自检触发必成功，计数与"压缩被触发"一一对应。
+    summarization_triggers: usize,
     /// LLM 请求次数（被测链路，不含 Judge）
     llm_calls: usize,
     /// Judge 采样次数
@@ -340,7 +340,8 @@ fn spawn_scenario_agent(app: &mut bevy_app::App) {
             // 含 "summarization" tag：dispatch_system 按 required_tag（Summarization →
             // "summarization"）查找 Persistent Agent，缺失会导致 Summarization WorkItem
             // 一派发即 fail（memory_compression 场景的根因，见
-            // scenario_framework_mock_smoke_compression）。与生产 agents.toml 对齐。
+            // scenario_framework_mock_smoke_compression）。生产环境中该 tag 由独立的
+            // summarizer agent 承担，测试单 agent 需补该 tag。
             tags: vec![
                 "llm".to_string(),
                 "default".to_string(),
@@ -399,10 +400,10 @@ fn count_llm_requests_system(
 ///
 /// 为什么不用 `Added<SummarizationRequestMessage>` 计数：压缩请求实体为帧内瞬态
 /// （memory_compression_system spawn 后同帧被 summarization_dispatch_system 消费并
-/// despawn），Added 过滤器的捕获依赖系统运行顺序，不可靠（同 `count_llm_requests_`
-/// 注释的诊断限制）。改用 `Added<WorkItem>` + `work_type == Summarization`：WorkItem
-/// 实体生命周期跨多帧（spawn 后到完成 despawn），Added 可靠命中"压缩触发"。
-/// mock 自检 executor 对 Summarization 请求必返回文本摘要（触发必成功），
+/// despawn），Added 过滤器的捕获依赖系统运行顺序，不可靠。
+/// 改用 `Added<WorkItem>` + `work_type == Summarization`：计数系统注册在所有生产
+/// 系统之后，确定性晚于生成 Summarization WorkItem 的系统同帧运行，Added 可靠命中
+/// "压缩触发"。mock 自检 executor 对 Summarization 请求必返回文本摘要（触发必成功），
 /// 该计数与 `summarization_triggered` 断言语义（压缩被触发）一致，是可靠代理。
 #[derive(Resource, Default)]
 struct SummarizationTriggerCount(usize);
@@ -491,7 +492,8 @@ fn execute_scenario(
     // agent_execution_system 同帧 despawn），从测试侧无法用 `Added` 可靠计数，
     // 报告中的 "LLM 调用" 仅作参考，可能为 0（已知诊断限制，不影响断言）。
     app.add_systems(bevy_app::Update, count_llm_requests_system);
-    // Summarization WorkItem 实体跨多帧存活，Added 计数可靠（见计数系统注释）。
+    // Summarization WorkItem 计数系统注册于所有生产系统之后，确定性晚于生成
+    // Summarization WorkItem 的系统同帧运行，Added 可靠命中（见计数系统注释）。
     app.add_systems(bevy_app::Update, count_summarization_triggers_system);
 
     app.update();
@@ -590,14 +592,14 @@ fn execute_scenario(
 
     // 收集运行事实
     let llm_calls = app.world().resource::<LlmRequestCount>().0;
-    // Summarization "完成"以压缩触发计数为代理：生产 Summarization WorkItem 完成即
-    // despawn 且从不置 Completed（见 count_summarization_triggers_system 注释），
-    // 无法从终态集合统计。mock 自检触发必成功，计数等价完成次数。
-    let summarization_completed = app.world().resource::<SummarizationTriggerCount>().0;
+    // 压缩触发计数：生产 Summarization WorkItem 完成即 despawn 且从不置
+    // Completed（见 count_summarization_triggers_system 注释），无法从终态集合
+    // 统计，以触发计数为代理；mock 自检触发必成功，计数可靠。
+    let summarization_triggers = app.world().resource::<SummarizationTriggerCount>().0;
     let mut trace = RunTrace {
         elapsed_ms: start.elapsed().as_millis(),
         llm_calls,
-        summarization_completed,
+        summarization_triggers,
         ..Default::default()
     };
     let world = app.world_mut();
@@ -803,13 +805,11 @@ fn check_assertions(
                 }
             }
             AssertionSpec::SummarizationTriggered { min_times } => {
-                let count = trace.summarization_completed;
+                let count = trace.summarization_triggers;
                 if count >= *min_times {
                     AssertionOutcome::Pass
                 } else {
-                    AssertionOutcome::Fail(format!(
-                        "Summarization 完成 {count} 次，期望 >= {min_times}"
-                    ))
+                    AssertionOutcome::Fail(format!("压缩触发 {count} 次，期望 >= {min_times}"))
                 }
             }
             AssertionSpec::HumanReview { .. } => {
@@ -1294,7 +1294,7 @@ fn scenario_framework_mock_smoke_compression() {
     );
 
     assert!(
-        report.trace.summarization_completed >= 1,
+        report.trace.summarization_triggers >= 1,
         "应至少完成一次 Summarization: workitems={:?}",
         report.trace.workitem_statuses
     );
@@ -1305,6 +1305,7 @@ fn scenario_framework_mock_smoke_compression() {
         report.trace.task_status
     );
     assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
+    assert!(!report.needs_human, "不应有待审: {:?}", report.results);
 }
 
 /// Mock 模式断言引擎单元验证：tool_called 失败、human_review 待审、正则不匹配失败。
@@ -1324,7 +1325,7 @@ fn scenario_assertion_engine_branches() {
         final_output: Some("系统正常运行".into()),
         tool_calls: vec![("shell_exec".into(), "{}".into())],
         workitem_statuses: vec![],
-        summarization_completed: 0,
+        summarization_triggers: 0,
         llm_calls: 1,
         judge_calls: 0,
         elapsed_ms: 0,
@@ -1376,7 +1377,7 @@ fn scenario_assertion_summarization_triggered_branches() {
         final_output: Some("汇总完成".into()),
         tool_calls: vec![],
         workitem_statuses: vec!["Completed".into()],
-        summarization_completed: 1,
+        summarization_triggers: 1,
         llm_calls: 1,
         judge_calls: 0,
         elapsed_ms: 0,
@@ -1389,7 +1390,7 @@ fn scenario_assertion_summarization_triggered_branches() {
     let labels: Vec<&str> = results.iter().map(|(_, _, o)| o.label()).collect();
     assert_eq!(labels, vec!["PASS", "FAIL"]);
 
-    trace.summarization_completed = 0;
+    trace.summarization_triggers = 0;
     let (results, _) = check_assertions(&spec, &trace, &assertions, None);
     let labels: Vec<&str> = results.iter().map(|(_, _, o)| o.label()).collect();
     assert_eq!(labels, vec!["FAIL", "FAIL"]);
