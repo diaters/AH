@@ -1000,44 +1000,14 @@ pub fn llm_response_system(
                                 // 不 continue，让下面的 tool calling loop 处理 tool calls
                             }
                             Ok(_) => {
-                                let had_submission =
-                                    has_experience_submission(&experience_store, work_item.task_id);
+                                // 统一收束入口：root 候选 Submitted → GovernancePending。
+                                // 以 advanced 是否非空作为"有候选/无候选"的唯一判断，
+                                // 避免 has_experience_submission（含 inbox 口径）
+                                // 与收束入口口径不一致导致的静默完成。
+                                let advanced = experience_store
+                                    .collect_top_level_governance_candidates(work_item.task_id);
 
-                                if had_submission {
-                                    // 统一收束入口：root 候选 Submitted → GovernancePending
-                                    let advanced = experience_store
-                                        .collect_top_level_governance_candidates(work_item.task_id);
-                                    if !advanced.is_empty() {
-                                        let agent_id = skill_creation_contexts
-                                            .get(work_item_entity)
-                                            .ok()
-                                            .map(|c| c.agent_id)
-                                            .unwrap_or(
-                                                work_item
-                                                    .governing_agent_id
-                                                    .unwrap_or(uuid::Uuid::nil()),
-                                            );
-                                        commands.spawn(ExperienceGovernanceRequestMessage {
-                                            task_id: work_item.task_id,
-                                            agent_id,
-                                        });
-                                        debug!(
-                                            event = "SkillCreationGovernanceRequested",
-                                            task_id = %work_item.task_id,
-                                            candidate_count = advanced.len(),
-                                            "skill creation candidate promoted to governance"
-                                        );
-                                    }
-
-                                    if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
-                                        wi.1.complete();
-                                        commands.entity(work_item_entity).insert(
-                                            WorkItemLifecycleHookPending(
-                                                HookPoint::OnWorkItemCompleted,
-                                            ),
-                                        );
-                                    }
-                                } else {
+                                if advanced.is_empty() {
                                     warn!(
                                         event = "SkillCreationWorkItemNoSubmission",
                                         work_item_id = %work_item.id,
@@ -1052,6 +1022,34 @@ pub fn llm_response_system(
                                         commands.entity(work_item_entity).insert(
                                             WorkItemLifecycleHookPending(
                                                 HookPoint::OnWorkItemFailed,
+                                            ),
+                                        );
+                                    }
+                                } else {
+                                    let agent_id = skill_creation_contexts
+                                        .get(work_item_entity)
+                                        .ok()
+                                        .map(|c| c.agent_id)
+                                        .unwrap_or(
+                                            work_item
+                                                .governing_agent_id
+                                                .unwrap_or(uuid::Uuid::nil()),
+                                        );
+                                    commands.spawn(ExperienceGovernanceRequestMessage {
+                                        task_id: work_item.task_id,
+                                        agent_id,
+                                    });
+                                    debug!(
+                                        event = "SkillCreationGovernanceRequested",
+                                        task_id = %work_item.task_id,
+                                        candidate_count = advanced.len(),
+                                        "skill creation candidate promoted to governance"
+                                    );
+                                    if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                                        wi.1.complete();
+                                        commands.entity(work_item_entity).insert(
+                                            WorkItemLifecycleHookPending(
+                                                HookPoint::OnWorkItemCompleted,
                                             ),
                                         );
                                     }
