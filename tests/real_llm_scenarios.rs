@@ -113,6 +113,12 @@ enum AssertionSpec {
         #[serde(default = "default_one")]
         samples: usize,
     },
+    /// Summarization WorkItem 完成次数 >= min_times（代码断言，设计 §3.4）
+    #[serde(rename = "summarization_triggered")]
+    SummarizationTriggered {
+        #[serde(default = "default_one")]
+        min_times: usize,
+    },
     /// 强制人工复核（人工断言）
     #[serde(rename = "human_review")]
     HumanReview {
@@ -148,6 +154,9 @@ impl AssertionSpec {
             } => {
                 format!("llm_judge (×{samples}, threshold {threshold}): {rubric}")
             }
+            Self::SummarizationTriggered { min_times } => {
+                format!("summarization_triggered: × >= {min_times}")
+            }
             Self::HumanReview { note } => {
                 format!("human_review: {}", note.clone().unwrap_or_default())
             }
@@ -160,6 +169,7 @@ impl AssertionSpec {
             Self::StateReached { .. } => "state_reached",
             Self::ResponseMatches { .. } => "response_matches",
             Self::LlmJudge { .. } => "llm_judge",
+            Self::SummarizationTriggered { .. } => "summarization_triggered",
             Self::HumanReview { .. } => "human_review",
         }
     }
@@ -178,6 +188,8 @@ struct RunTrace {
     tool_calls: Vec<(String, String)>,
     /// WorkItem 终态集合（DirectDelegate 路径为空）
     workitem_statuses: Vec<String>,
+    /// Summarization WorkItem 到达 Completed 的次数（summarization_triggered 断言依据）
+    summarization_completed: usize,
     /// LLM 请求次数（被测链路，不含 Judge）
     llm_calls: usize,
     /// Judge 采样次数
@@ -621,6 +633,16 @@ fn check_assertions(
                     )),
                 }
             }
+            AssertionSpec::SummarizationTriggered { min_times } => {
+                let count = trace.summarization_completed;
+                if count >= *min_times {
+                    AssertionOutcome::Pass
+                } else {
+                    AssertionOutcome::Fail(format!(
+                        "Summarization 完成 {count} 次，期望 >= {min_times}"
+                    ))
+                }
+            }
             AssertionSpec::HumanReview { .. } => {
                 AssertionOutcome::NeedsHuman("human_review 断言，强制待审".to_string())
             }
@@ -1045,6 +1067,7 @@ fn scenario_assertion_engine_branches() {
         final_output: Some("系统正常运行".into()),
         tool_calls: vec![("shell_exec".into(), "{}".into())],
         workitem_statuses: vec![],
+        summarization_completed: 0,
         llm_calls: 1,
         judge_calls: 0,
         elapsed_ms: 0,
@@ -1077,6 +1100,42 @@ fn scenario_assertion_engine_branches() {
         labels,
         vec!["PASS", "FAIL", "PASS", "PASS", "FAIL", "NEEDS_HUMAN"]
     );
+}
+
+/// summarization_triggered 断言分支：达标 PASS、未达标 FAIL。
+#[test]
+fn scenario_assertion_summarization_triggered_branches() {
+    let spec = ScenarioSpec {
+        name: "selfcheck".into(),
+        description: "d".into(),
+        input: "x".into(),
+        follow_ups: vec![],
+        compression_threshold_tokens: None,
+        max_cost_usd: 0.0,
+        timeout_secs: 1,
+    };
+    let mut trace = RunTrace {
+        task_status: Some("Done".into()),
+        final_output: Some("汇总完成".into()),
+        tool_calls: vec![],
+        workitem_statuses: vec!["Completed".into()],
+        summarization_completed: 1,
+        llm_calls: 1,
+        judge_calls: 0,
+        elapsed_ms: 0,
+    };
+    let assertions = vec![
+        AssertionSpec::SummarizationTriggered { min_times: 1 },
+        AssertionSpec::SummarizationTriggered { min_times: 2 },
+    ];
+    let (results, _) = check_assertions(&spec, &trace, &assertions, None);
+    let labels: Vec<&str> = results.iter().map(|(_, _, o)| o.label()).collect();
+    assert_eq!(labels, vec!["PASS", "FAIL"]);
+
+    trace.summarization_completed = 0;
+    let (results, _) = check_assertions(&spec, &trace, &assertions, None);
+    let labels: Vec<&str> = results.iter().map(|(_, _, o)| o.label()).collect();
+    assert_eq!(labels, vec!["FAIL", "FAIL"]);
 }
 
 /// 新字段解析：follow_ups 与 compression_threshold_tokens。
