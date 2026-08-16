@@ -601,3 +601,51 @@ fn sub_agent_tool_calls_stay_in_own_stm() {
         "parent STM should NOT have tool_calls from child"
     );
 }
+
+// ── 9. 摘要循环终止性回归（2026-08-16 修复）────────────────────
+
+#[test]
+fn summarization_loop_terminates_after_group_aligned_drain() {
+    use harness::domain::{compressible_entry_count, split_into_groups};
+
+    // 复现日志 harness_2026-08-15_23-56-36.jsonl：
+    // 大 token 工具 entry 独立成组，落入 preserve_recent_turns=2 保护窗口
+    let mut stm = ShortTermMemory::default();
+    stm.add_entry(
+        EntryRole::User,
+        "帮我看今天的新闻",
+        EntryMetadata::default(),
+    );
+    let mut metadata = EntryMetadata::default();
+    metadata.tool_calls.push(ToolCall {
+        id: Some("call_1".to_string()),
+        tool_name: "shell_exec".to_string(),
+        input: "playwright-cli browse".to_string(),
+        output: "huge news page content".repeat(2000),
+        timestamp: chrono::Utc::now(),
+    });
+    stm.add_entry(EntryRole::Assistant, String::new(), metadata);
+    stm.add_entry(EntryRole::User, "总结一下", EntryMetadata::default());
+    stm.add_entry(EntryRole::Assistant, "好的", EntryMetadata::default());
+    stm.summary_prefix = Some("历史摘要".to_string());
+
+    assert!(
+        stm.estimated_tokens > 8000,
+        "场景应超过默认阈值 8000，got {}",
+        stm.estimated_tokens
+    );
+
+    // 模拟完成端 drain：首轮压缩组 0（78 字符对话组）
+    let removed = stm.drain_compressed_groups(2);
+    assert_eq!(removed, 1);
+
+    // 触发端视角：剩余组数 <= preserve → 不再触发，循环终止
+    let groups = split_into_groups(&stm.entries);
+    assert_eq!(compressible_entry_count(&groups, 2), 0);
+
+    // 用户下一轮对话后，工具组落出保护窗口，可被正常压缩
+    stm.add_entry(EntryRole::User, "新问题", EntryMetadata::default());
+    stm.add_entry(EntryRole::Assistant, "新回答", EntryMetadata::default());
+    let groups = split_into_groups(&stm.entries);
+    assert_eq!(compressible_entry_count(&groups, 2), 1);
+}

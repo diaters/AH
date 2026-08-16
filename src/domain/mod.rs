@@ -95,7 +95,8 @@ pub use frontend::{
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
     LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, MemorySnapshot,
-    ShortTermMemory, ToolCall, estimate_tokens, render_tool_calls_summary,
+    ShortTermMemory, ToolCall, compressible_entry_count, estimate_tokens,
+    render_tool_calls_summary, split_into_groups,
 };
 
 // message
