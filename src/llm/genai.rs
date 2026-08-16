@@ -326,28 +326,38 @@ fn classify_genai_error(error: genai::Error) -> ExecutionError {
         | genai::Error::NoAuthResolver { .. }
         | genai::Error::NoAuthData { .. } => ExecutionError::Authentication(error.to_string()),
 
-        genai::Error::HttpError { status, .. } => {
-            let message = error.to_string();
-            match status.as_u16() {
-                401 => ExecutionError::Authentication(message),
-                402 => ExecutionError::QuotaExhausted(message), // 降级
-                403 => ExecutionError::Authentication(message), // 不降级
-                429 => ExecutionError::RateLimited {
-                    message,
-                    retry_after_secs: Some(5),
-                },
-                408 | 504 => ExecutionError::Timeout(message),
-                _ => ExecutionError::Unknown(message),
-            }
-        }
+        genai::Error::HttpError { status, .. } => classify_http_status(*status, error.to_string()),
 
-        genai::Error::WebAdapterCall { .. }
-        | genai::Error::WebModelCall { .. }
-        | genai::Error::WebStream { .. } => ExecutionError::Transport(error.to_string()),
+        // 非流式 exec_chat 的 HTTP 错误路径：状态码包装在 webc::Error::ResponseFailedStatus 中。
+        // 不提取状态码会导致 401/403 被误判为 Transport（可重试）、429 丢失降级资格。
+        genai::Error::WebAdapterCall { webc_error, .. }
+        | genai::Error::WebModelCall { webc_error, .. } => match webc_error {
+            genai::webc::Error::ResponseFailedStatus { status, .. } => {
+                classify_http_status(*status, error.to_string())
+            }
+            _ => ExecutionError::Transport(error.to_string()),
+        },
+
+        genai::Error::WebStream { .. } => ExecutionError::Transport(error.to_string()),
 
         genai::Error::NoChatResponse { .. } => ExecutionError::EmptyResponse,
 
         _ => ExecutionError::Unknown(error.to_string()),
+    }
+}
+
+/// 将 HTTP 状态码映射为稳定的 ExecutionError 分类。
+fn classify_http_status(status: reqwest_013::StatusCode, message: String) -> ExecutionError {
+    match status.as_u16() {
+        401 => ExecutionError::Authentication(message), // 不降级
+        402 => ExecutionError::QuotaExhausted(message), // 降级
+        403 => ExecutionError::Authentication(message), // 不降级
+        429 => ExecutionError::RateLimited {
+            message,
+            retry_after_secs: Some(5),
+        },
+        408 | 504 => ExecutionError::Timeout(message),
+        _ => ExecutionError::Unknown(message),
     }
 }
 
@@ -378,5 +388,50 @@ mod tests {
         let classified = classify_genai_error(error);
         assert!(matches!(classified, ExecutionError::QuotaExhausted(_)));
         assert!(classified.is_fallback_eligible());
+    }
+
+    /// 构造非流式 exec_chat 路径的 WebModelCall 错误（状态码包装在 webc::Error 中）。
+    fn web_model_call_error(status: reqwest_013::StatusCode) -> genai::Error {
+        genai::Error::WebModelCall {
+            model_iden: ModelIden::new(AdapterKind::OpenAI, "test-model"),
+            webc_error: genai::webc::Error::ResponseFailedStatus {
+                status,
+                body: String::new(),
+                headers: Box::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn classify_web_model_call_401_as_authentication() {
+        // 非流式路径 401 应提取状态码归类为 Authentication，而非 Transport
+        let error = web_model_call_error(reqwest_013::StatusCode::UNAUTHORIZED);
+        let classified = classify_genai_error(error);
+        assert!(matches!(classified, ExecutionError::Authentication(_)));
+        assert!(!classified.is_retryable());
+        assert!(!classified.is_fallback_eligible());
+    }
+
+    #[test]
+    fn classify_web_model_call_429_as_rate_limited() {
+        // 非流式路径 429 应提取状态码归类为 RateLimited，保留降级资格
+        let error = web_model_call_error(reqwest_013::StatusCode::TOO_MANY_REQUESTS);
+        let classified = classify_genai_error(error);
+        assert!(matches!(
+            classified,
+            ExecutionError::RateLimited {
+                retry_after_secs: Some(_),
+                ..
+            }
+        ));
+        assert!(classified.is_retryable());
+        assert!(classified.is_fallback_eligible());
+    }
+
+    #[test]
+    fn classify_web_model_call_500_as_unknown() {
+        let error = web_model_call_error(reqwest_013::StatusCode::INTERNAL_SERVER_ERROR);
+        let classified = classify_genai_error(error);
+        assert!(matches!(classified, ExecutionError::Unknown(_)));
     }
 }
