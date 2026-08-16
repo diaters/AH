@@ -477,6 +477,7 @@ mod tests {
             instructions: "test instructions".to_string(),
             version: 1,
             self_updatable,
+            dependencies: Vec::new(),
         }
     }
 

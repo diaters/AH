@@ -173,6 +173,7 @@ mod tests {
             version: 1,
             owner_agent_name: owner.to_string(),
             self_updatable: true,
+            dependencies: Vec::new(),
         }
     }
 

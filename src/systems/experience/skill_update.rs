@@ -510,6 +510,7 @@ pub(crate) fn skill_update_completion_system(
             version: msg.new_version,
             owner_agent_name: msg.skill_id.owner_agent_name.clone(),
             self_updatable: parsed.self_updatable,
+            dependencies: parsed.dependencies,
         });
         if let Some(entry) = parsed_entry {
             skill_registry.refresh(entry);
@@ -1598,6 +1599,7 @@ mod workitem_system_tests {
             instructions: format!("instructions for {}", skill_id.skill_name),
             version,
             self_updatable: true,
+            dependencies: Vec::new(),
         }
     }
 

@@ -320,6 +320,7 @@ pub(crate) fn skill_creation_writeback_system(
                     version: parsed.version,
                     owner_agent_name: context.agent_name.clone(),
                     self_updatable: parsed.self_updatable,
+                    dependencies: parsed.dependencies,
                 };
                 skill_registry.upsert(entry);
             } else {
