@@ -6,7 +6,8 @@ use tracing::warn;
 use crate::domain::SkillUpdateOperation;
 
 /// 允许 LLM 修改的 frontmatter 字段白名单
-pub const FRONTMATTER_WHITELIST: &[&str] = &["name", "description", "self_updatable"];
+pub const FRONTMATTER_WHITELIST: &[&str] =
+    &["name", "description", "self_updatable", "dependencies"];
 
 /// v8 D19：SKILL.md body 结构校验错误
 #[derive(Debug, Error)]
@@ -862,6 +863,17 @@ mod tests {
             apply_skill_operations(SAMPLE, &ops),
             Err(ApplyError::FieldNotWhitelisted(_))
         ));
+    }
+
+    #[test]
+    fn replace_frontmatter_dependencies_in_whitelist() {
+        // 单行 YAML 数组值直接拼接为 `{field}: {value}`，不返回 FieldNotWhitelisted
+        let ops = vec![SkillUpdateOperation::ReplaceFrontmatter {
+            field: "dependencies".to_string(),
+            value: "[browser-automation]".to_string(),
+        }];
+        let result = apply_skill_operations(SAMPLE, &ops).unwrap();
+        assert!(result.contains("dependencies: [browser-automation]"));
     }
 
     #[test]
