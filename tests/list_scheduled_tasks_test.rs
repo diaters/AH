@@ -3,7 +3,7 @@ use harness::domain::{
     ScheduledTaskRegistrySnapshot, SchedulerStateSnapshot, ToolWorkerOutput,
 };
 use harness::systems::tools::builtin::scheduled::list::ListScheduledTasksTool;
-use harness::triggers::scheduled_task::ScheduleSpec;
+use harness::triggers::ScheduleSpec;
 use std::sync::Arc;
 
 fn ctx_with_two_ledgers() -> OwnedToolContext {

@@ -155,7 +155,7 @@ fn on_experience_hook_drains_pending_queue() {
             .world_mut()
             .resource_mut::<harness::PendingExperienceHooks>();
         pending.0.push((
-            harness::user_plugins::hook_point::HookPoint::OnExperienceCandidateSubmitted,
+            harness::domain::HookPoint::OnExperienceCandidateSubmitted,
             uuid::Uuid::new_v4(),
         ));
     }

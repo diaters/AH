@@ -12,11 +12,16 @@ mod error;
 mod evaluation;
 mod execution;
 mod frontend;
+mod hook_point;
+mod llm_provider;
 mod memory;
 mod message;
 mod model_chain;
+mod schedule;
 mod session;
+mod session_backend;
 mod signal_trigger;
+mod skill;
 mod space;
 mod summarization;
 mod task;
@@ -92,6 +97,12 @@ pub use frontend::{
     WaitingReasonKind, summarize_tool_input,
 };
 
+// hook_point
+pub use hook_point::{HookPoint, HookPointParseError};
+
+// llm_provider
+pub use llm_provider::LlmProviderKind;
+
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
@@ -121,8 +132,15 @@ pub use message::{
 // model_chain
 pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, ProvidersConfig};
 
+// schedule
+pub use schedule::ScheduleSpec;
+pub(crate) use schedule::compute_next_trigger;
+
 // signal_trigger
 pub use signal_trigger::{EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger};
+
+// skill
+pub use skill::SkillId;
 
 // session
 pub use session::{
@@ -130,6 +148,9 @@ pub use session::{
     SessionReadRequest, SessionStartRequest, SessionStatus, SessionSummary, ShellExecResult,
     ShellSessionResult,
 };
+
+// session_backend
+pub use session_backend::SessionBackend;
 
 // space
 pub use space::{

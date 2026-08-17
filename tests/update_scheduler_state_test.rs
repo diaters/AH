@@ -7,8 +7,9 @@ use chrono::{Duration, Utc};
 use harness::prelude::*;
 use uuid::Uuid;
 
+use harness::triggers::ScheduleSpec;
 use harness::triggers::scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
+    DynamicScheduledTask, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
     update_scheduler_state,
 };
 

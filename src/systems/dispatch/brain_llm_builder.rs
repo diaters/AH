@@ -1,12 +1,11 @@
 //! Brain LLM 调用构建辅助函数
 //!
 //! 从原 `brain_dispatch.rs` 提取 Brain LLM 调用逻辑，供 `dispatch_system` 复用。
-//! 保留 Brain Agent 选择（FirstBrainPolicy）、prompt 构建、AgentExecutionRequest 构造。
+//! 保留 Brain Agent 选择、prompt 构建、AgentExecutionRequest 构造。
 
 use tracing::debug;
 
 use crate::{
-    contracts::{AgentCapabilitySummary, BrainSelectionPolicy, FirstBrainPolicy},
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentId, AgentKind,
         AgentRequestKind, MessageDispatchedHookPending, ShortTermMemory, SpaceToolRegistry, Task,
@@ -21,20 +20,17 @@ use super::brain_dispatch::{
 
 /// 查找 Brain Agent
 ///
-/// 通过 Tag 查找所有带 "brain" 标签的 Persistent Agent，使用 FirstBrainPolicy 选择。
+/// 通过 Tag 查找所有带 "brain" 标签的 Persistent Agent，按配置顺序取第一个。
 /// 返回选中的 `AgentId`，调用方经 `EntityIndex` 解析到 `&Agent`（ADR-005 §3：
 /// UUID 寻址改用 EntityIndex O(1) 解析，不在本函数内做二次线性扫描）。
 pub fn find_brain_agent(agents: &[&Agent]) -> Option<AgentId> {
-    let brain_candidates: Vec<AgentCapabilitySummary> = agents
+    agents
         .iter()
         .filter(|a| {
             a.kind == AgentKind::Persistent && a.capabilities.tags.contains(&"brain".to_string())
         })
-        .map(|a| AgentCapabilitySummary::from_agent(a))
-        .collect();
-
-    let policy = FirstBrainPolicy;
-    policy.select_brain(&brain_candidates)
+        .map(|a| a.id)
+        .next()
 }
 
 /// 构建所有 Persistent Agent 的描述列表（供 Brain LLM prompt 使用）

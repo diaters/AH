@@ -31,8 +31,9 @@ use harness::domain::{
 };
 use harness::ecs::EntityIndex;
 use harness::systems::tools::builtin::scheduled::ListScheduledTasksTool;
+use harness::triggers::ScheduleSpec;
 use harness::triggers::scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
+    DynamicScheduledTask, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
 };
 use uuid::Uuid;
 

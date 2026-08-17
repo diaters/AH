@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::{
     app::{Clock, FrontendRegistry, MemoryConfig},
-    contracts::SessionBackend,
+    domain::SessionBackend,
     domain::{
         Agent, ClearTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
         EventTarget, ExperienceCandidateStatus, ExperienceStore, FailureReason, FinishTaskMessage,

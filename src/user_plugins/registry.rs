@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::prelude::Resource;
 use rhai::AST;
 
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 use crate::user_plugins::manifest::PluginManifest;
 
 /// 一个已通过校验、加载到内存的插件。

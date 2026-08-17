@@ -25,7 +25,7 @@ use crate::domain::{
 use crate::infrastructure::skills::{
     SkillEntry, SkillId, SkillLoader, SkillRegistry, apply_skill_operations,
 };
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 
 /// 持久Agent吸收路径：候选不进父 inbox，按 kind 分流。
 ///

@@ -6,7 +6,7 @@ use crate::prelude::*;
 use uuid::Uuid;
 
 use crate::domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition};
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 
 /// 工作项类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

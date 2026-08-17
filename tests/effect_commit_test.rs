@@ -18,8 +18,9 @@ mod common;
 use bevy_ecs::system::RunSystemOnce;
 use common::async_tool_bridge::*;
 use harness::domain::{ToolEffect, ToolEffectPending, ToolWorkerPayload};
+use harness::triggers::ScheduleSpec;
 use harness::triggers::scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
+    DynamicScheduledTask, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
     update_scheduler_state,
 };
 

@@ -16,7 +16,7 @@ use crate::domain::{
     ChannelId, DispatchHint, DispatchKind, DispatchStrategy, FrontendKind, PendingDispatch, Task,
 };
 use crate::prelude::World;
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 use crate::user_plugins::host_api;
 use crate::user_plugins::host_api::approval::ApprovalContext;
 use crate::user_plugins::host_api::entity_query::WorldSnapshot;

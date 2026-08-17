@@ -27,7 +27,7 @@ use tracing::debug;
 
 use crate::{
     app::{AsyncRuntime, Clock, FrontendRegistry, HarnessSettings},
-    contracts::SessionBackend,
+    domain::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
         PermissionAction, PermissionAuditContext, PermissionSource, ScheduledTaskInfoSnapshot,

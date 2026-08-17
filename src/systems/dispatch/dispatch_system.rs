@@ -30,7 +30,7 @@ use crate::{
         LoadedSkill, PluginSkillContributions, SkillId, SkillLoader, SkillRegistry,
         resolve_skill_closure,
     },
-    user_plugins::hook_point::HookPoint,
+    domain::HookPoint,
 };
 
 use super::{

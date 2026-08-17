@@ -4,7 +4,6 @@
 //! 详见 `docs/superpowers/specs/2026-06-23-plugin-system-design.md`。
 
 pub mod dispatcher;
-pub mod hook_point;
 pub mod host_api;
 pub mod integrate;
 pub mod loader;

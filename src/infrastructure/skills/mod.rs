@@ -10,4 +10,5 @@ pub use diff::{
 pub use loader::{
     LoadedSkill, PluginSkillContributions, PluginSkillEntry, SkillLoader, resolve_skill_closure,
 };
-pub use registry::{SkillEntry, SkillId, SkillRegistry};
+pub use crate::domain::SkillId;
+pub use registry::{SkillEntry, SkillRegistry};

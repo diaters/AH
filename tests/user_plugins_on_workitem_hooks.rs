@@ -18,7 +18,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
-use harness::user_plugins::hook_point::HookPoint;
+use harness::domain::HookPoint;
 use harness::{
     AgentExecutor, ChannelId, FrontendKind, HarnessConfig, WorkItem, WorkItemInput,
     WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,

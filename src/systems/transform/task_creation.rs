@@ -13,14 +13,13 @@ use crate::{
     app::HarnessSettings,
     domain::{
         CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
-        NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
+        HookPoint, NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
     },
     user_plugins::{
         dispatcher::{
             HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
             flush_world_commands,
         },
-        hook_point::HookPoint,
         host_api::{
             approval::ApprovalContext,
             entity_query::WorldSnapshot,

@@ -22,8 +22,9 @@ use harness::domain::{
     ToolResultSender, ToolWorkerPayload,
 };
 use harness::systems::commit_tool_effects_system;
+use harness::triggers::ScheduleSpec;
 use harness::triggers::scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
+    DynamicScheduledTask, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
     SchedulerStateWatcher,
 };
 

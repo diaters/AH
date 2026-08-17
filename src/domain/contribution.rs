@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{AgentId, TaskId};
-use crate::infrastructure::skills::SkillId;
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::SkillId;
+use crate::domain::HookPoint;
 
 /// 经验候选类型提示。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

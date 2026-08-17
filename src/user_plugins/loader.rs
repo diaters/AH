@@ -5,7 +5,7 @@ use rhai::{AST, Dynamic, Engine};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 use crate::user_plugins::manifest::{ManifestError, PluginManifest};
 use crate::user_plugins::registry::{LoadedPlugin, PluginLoadFailure, PluginRegistry};
 

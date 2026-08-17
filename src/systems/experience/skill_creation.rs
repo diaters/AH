@@ -13,7 +13,7 @@ use crate::domain::{
     WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::infrastructure::skills::{LoadedSkill, SkillEntry, SkillId, SkillLoader, SkillRegistry};
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 
 /// skill 创建 WorkItem 创建系统：消费 SkillCreationRequestMessage，创建 sandbox 目录，
 /// 构造 prompt 与工具列表，spawn WorkItem + SkillCreationContext + PendingDispatch。

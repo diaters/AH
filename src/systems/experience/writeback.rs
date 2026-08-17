@@ -7,7 +7,7 @@ use crate::domain::{
     ProfileGenerationContext, TaskId, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 
 fn build_incubated_agent_description(
     store: &crate::domain::ExperienceStore,

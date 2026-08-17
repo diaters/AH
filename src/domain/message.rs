@@ -11,7 +11,7 @@ use super::{
     AgentExecutionRequest, AgentExecutionResult, AgentId, SignalSource, SummarizationTrigger,
     TaskId, TaskRoutingPolicy, TaskTrigger,
 };
-use crate::infrastructure::skills::SkillId;
+use crate::domain::SkillId;
 
 // ============ 信号与输入 ============
 

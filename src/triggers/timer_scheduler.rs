@@ -17,7 +17,8 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{ExternalInput, SignalSource};
 use crate::triggers::config::build_schedules;
-use crate::triggers::scheduled_task::{ScheduleSpec, ScheduledItem, SchedulerState};
+use crate::triggers::scheduled_task::{ScheduledItem, SchedulerState};
+use crate::triggers::ScheduleSpec;
 
 /// 启动 timer scheduler。
 ///

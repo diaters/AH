@@ -15,7 +15,7 @@ use crate::domain::{
     ProfileGenerationRequestMessage, WorkItem, sanitize_tags,
 };
 use crate::ecs::EntityIndex;
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 
 /// Profile 更新触发系统：检测 LTM/SkillPackage 写回成功后，触发 profile 更新评估。
 ///

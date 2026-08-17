@@ -5,7 +5,7 @@
 //! 由单一的 `dispatch_system` 扫描处理。
 
 use crate::domain::{AgentId, TaskId, WorkItemType};
-use crate::infrastructure::skills::SkillId;
+use crate::domain::SkillId;
 use bevy_ecs::prelude::Component;
 
 /// 派发请求标记 Component，附加在 Task 或 WorkItem Entity 上。

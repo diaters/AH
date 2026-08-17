@@ -1,4 +1,4 @@
-use crate::infrastructure::skills::SkillId;
+use crate::domain::SkillId;
 use crate::prelude::Component;
 
 /// 标记 Task 注入的 skill（由 brain 派发时写入）

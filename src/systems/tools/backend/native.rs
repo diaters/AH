@@ -13,7 +13,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    contracts::SessionBackend,
+    domain::SessionBackend,
     domain::{
         SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest,
         SessionOutputSnapshot, SessionReadRequest, SessionStartRequest, SessionStatus,

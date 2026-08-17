@@ -17,9 +17,10 @@ pub use config::{
     TimerConfig, TimerRouteConfig, TriggerConfig, WebhookConfig, WebhookRouteConfig,
     build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
 };
+pub use crate::domain::ScheduleSpec;
 pub use scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry,
-    SchedulerRoutes, SchedulerState, SchedulerStateWatcher, update_scheduler_state,
+    DynamicScheduledTask, ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerRoutes,
+    SchedulerState, SchedulerStateWatcher, update_scheduler_state,
     update_scheduler_state_with_watcher,
 };
 pub use timer_scheduler::run_timer_scheduler;

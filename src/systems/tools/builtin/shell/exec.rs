@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::contracts::SessionBackend;
+use crate::domain::SessionBackend;
 use crate::domain::{
     AgentId, BuiltinTool, OwnedToolContext, SessionStartRequest, ShellExecResult, TaskId,
     ToolAction, ToolActionKind, ToolContext, ToolError, ToolFuture, ToolWorkerOutput,

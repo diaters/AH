@@ -19,7 +19,7 @@ use crate::{
         UserOutputMessage, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     ecs::EntityIndex,
-    user_plugins::hook_point::HookPoint,
+    domain::HookPoint,
 };
 
 /// 绝对硬上限倍数：iteration 超过此值 × max_iterations 时强制失败任务

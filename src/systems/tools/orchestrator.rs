@@ -8,7 +8,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::app::{Clock, FrontendRegistry};
-use crate::contracts::SessionBackend;
+use crate::domain::SessionBackend;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, AskUserPending,
     BatchTaskState, ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind,
@@ -633,7 +633,7 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             // 推入待派发队列，由 companion 系统触发 on_experience_candidate_submitted hook。
             pending_experience_hooks.0.push((
-                crate::user_plugins::hook_point::HookPoint::OnExperienceCandidateSubmitted,
+                crate::domain::HookPoint::OnExperienceCandidateSubmitted,
                 candidate.candidate_id,
             ));
 
@@ -1445,7 +1445,7 @@ pub fn handle_tool_action<B: SessionBackend>(
 
             // 7. Push PendingExperienceHooks
             pending_experience_hooks.0.push((
-                crate::user_plugins::hook_point::HookPoint::OnExperienceCandidateSubmitted,
+                crate::domain::HookPoint::OnExperienceCandidateSubmitted,
                 candidate_id,
             ));
 

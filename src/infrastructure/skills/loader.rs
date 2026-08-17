@@ -1,4 +1,5 @@
-use crate::infrastructure::skills::registry::{SkillEntry, SkillId, SkillRegistry};
+use crate::domain::SkillId;
+use crate::infrastructure::skills::registry::{SkillEntry, SkillRegistry};
 use crate::prelude::Resource;
 use std::path::PathBuf;
 use tracing::warn;
@@ -626,7 +627,8 @@ mod version_field_tests {
 #[cfg(test)]
 mod registry_build_tests {
     use super::*;
-    use crate::infrastructure::skills::registry::{SkillId, SkillRegistry};
+    use crate::domain::SkillId;
+    use crate::infrastructure::skills::registry::SkillRegistry;
     use std::fs;
     use tempfile::TempDir;
 
