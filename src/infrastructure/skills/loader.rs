@@ -1,6 +1,7 @@
 use crate::infrastructure::skills::registry::{SkillEntry, SkillId, SkillRegistry};
 use crate::prelude::Resource;
 use std::path::PathBuf;
+use tracing::warn;
 
 /// 插件贡献的 Skill 条目。
 #[derive(Debug, Clone)]
@@ -27,6 +28,8 @@ pub struct LoadedSkill {
     pub instructions: String,
     pub version: u32,
     pub self_updatable: bool,
+    /// 同 agent 名下依赖的 skill 名列表（缺省为空 Vec）。
+    pub dependencies: Vec<String>,
     /// Skill 目录路径（SKILL.md 所在目录），用于解析相对路径资源。
     pub skill_dir: PathBuf,
 }
@@ -167,6 +170,7 @@ impl SkillLoader {
                                 version: loaded.version,
                                 owner_agent_name: agent_name.clone(),
                                 self_updatable: loaded.self_updatable,
+                                dependencies: loaded.dependencies,
                             };
                             registry.upsert(entry);
                         }
@@ -220,6 +224,7 @@ pub fn parse_skill_md(content: &str, skill_dir: PathBuf) -> Option<LoadedSkill> 
     let mut description = String::new();
     let mut version: u32 = 1;
     let mut self_updatable: bool = true;
+    let mut dependencies: Vec<String> = Vec::new();
     let mut instructions_lines: Vec<String> = Vec::new();
     let mut in_frontmatter = true;
     let mut frontmatter_closed = false;
@@ -245,6 +250,24 @@ pub fn parse_skill_md(content: &str, skill_dir: PathBuf) -> Option<LoadedSkill> 
                     "false" => self_updatable = false,
                     _ => {}
                 }
+            } else if let Some(rest) = line.strip_prefix("dependencies:") {
+                let rest = rest.trim();
+                if rest.starts_with('[') && rest.ends_with(']') {
+                    let inner = &rest[1..rest.len() - 1];
+                    dependencies = inner
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                } else {
+                    // 非数组格式回退为空 Vec，并 warn（name 此时可能尚未解析到）
+                    warn!(
+                        event = "SkillDependenciesMalformed",
+                        skill = %name,
+                        raw = %rest,
+                        "malformed dependencies field, falling back to empty list"
+                    );
+                }
             }
         } else {
             instructions_lines.push(line.to_string());
@@ -266,8 +289,160 @@ pub fn parse_skill_md(content: &str, skill_dir: PathBuf) -> Option<LoadedSkill> 
         instructions,
         version,
         self_updatable,
+        dependencies,
         skill_dir,
     })
+}
+
+/// 按 frontmatter name 或 skill_dir 目录名匹配 skill。
+/// 优先匹配 frontmatter name，否则回退到目录名匹配。
+/// 设计意图：调用方可能传目录名（SkillId.skill_name 来自 build_registry 的目录名）
+/// 或 frontmatter name（依赖声明），两者均需支持。
+fn find_skill_by_name<'a>(loaded: &'a [LoadedSkill], name: &str) -> Option<&'a LoadedSkill> {
+    loaded.iter().find(|s| s.name == name).or_else(|| {
+        loaded
+            .iter()
+            .find(|s| s.skill_dir.file_name().map(|n| n == name).unwrap_or(false))
+    })
+}
+
+/// 解析 skill 的传递依赖闭包，按拓扑序返回（依赖在前，选中 skill 最后）。
+/// - 依赖缺失：跳过并 warn，不失败
+/// - 循环依赖：环上边截断并 warn
+///
+/// 数据源约定：入参为 `SkillLoader::load_skills(agent_name)` 的磁盘扫描结果
+/// （`Vec<LoadedSkill>`），而非 SkillRegistry——与 dispatch 注入的既有数据源
+/// 保持一致。
+pub fn resolve_skill_closure<'a>(
+    loaded: &'a [LoadedSkill],
+    skill_name: &str,
+) -> Vec<&'a LoadedSkill> {
+    fn dfs<'a>(
+        loaded: &'a [LoadedSkill],
+        name: &str,
+        stack: &mut Vec<String>,
+        result: &mut Vec<&'a LoadedSkill>,
+        resolved: &mut Vec<String>,
+    ) {
+        let Some(current) = find_skill_by_name(loaded, name) else {
+            warn!(
+                event = "SkillDependencyMissing",
+                skill = %name,
+                "skill dependency not found, skipping"
+            );
+            return;
+        };
+        stack.push(name.to_string());
+        for dep in &current.dependencies {
+            if stack.iter().any(|n| n == dep) {
+                warn!(
+                    event = "SkillDependencyCycle",
+                    skill = %name,
+                    dependency = %dep,
+                    "circular dependency detected, truncating edge"
+                );
+                continue;
+            }
+            if resolved.iter().any(|n| n == dep) {
+                continue;
+            }
+            dfs(loaded, dep, stack, result, resolved);
+        }
+        stack.pop();
+        result.push(current);
+        resolved.push(name.to_string());
+    }
+
+    let root = find_skill_by_name(loaded, skill_name);
+    let Some(root_skill) = root else {
+        warn!(
+            event = "SkillDependencyRootMissing",
+            skill = %skill_name,
+            "skill not found in loaded skills, returning empty closure"
+        );
+        return Vec::new();
+    };
+
+    let mut stack = Vec::new();
+    let mut result = Vec::new();
+    let mut resolved = Vec::new();
+    // 用 root_skill.name（frontmatter name）作为 dfs 入口，确保内部依赖按 frontmatter name 匹配
+    dfs(
+        loaded,
+        &root_skill.name,
+        &mut stack,
+        &mut result,
+        &mut resolved,
+    );
+    result
+}
+
+/// 以 subject 为根，检测其依赖图是否回到 subject 自身（依赖环）。
+/// - subject 的依赖按 `subject_dependencies` 取（更新时即新声明）
+/// - 其余节点按 frontmatter name / 目录名从 loaded 取
+fn reaches_subject(
+    loaded: &[LoadedSkill],
+    subject_name: &str,
+    subject_dependencies: &[String],
+) -> bool {
+    fn dfs(
+        loaded: &[LoadedSkill],
+        subject_name: &str,
+        subject_dependencies: &[String],
+        name: &str,
+        visited: &mut Vec<String>,
+    ) -> bool {
+        if visited.iter().any(|n| n == name) {
+            return false;
+        }
+        visited.push(name.to_string());
+        let deps: Vec<String> = if name == subject_name {
+            subject_dependencies.to_vec()
+        } else {
+            find_skill_by_name(loaded, name)
+                .map(|s| s.dependencies.clone())
+                .unwrap_or_default()
+        };
+        for dep in deps {
+            if dep == subject_name || dfs(loaded, subject_name, subject_dependencies, &dep, visited)
+            {
+                return true;
+            }
+        }
+        false
+    }
+    dfs(
+        loaded,
+        subject_name,
+        subject_dependencies,
+        subject_name,
+        &mut Vec::new(),
+    )
+}
+
+/// 严格校验依赖声明（创建/更新写回前使用）。返回问题描述列表，空表示通过。
+///
+/// - 存在性：每个依赖必须能在同 agent 名下被找到（frontmatter name 或目录名）。
+/// - 环：以 subject 为根做传递依赖分析，若依赖闭包回到 subject 自身则拒绝
+///   （创建时 subject 未落盘、理论无环；更新时可因新声明引入环）。
+///
+/// 数据源约定：`loaded` 为 `SkillLoader::load_skills(agent_name)` 的磁盘扫描结果，
+/// 与注入路径（`resolve_skill_closure`）保持一致。
+pub fn validate_skill_dependencies(
+    loaded: &[LoadedSkill],
+    subject_name: &str,
+    subject_dependencies: &[String],
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for dep in subject_dependencies {
+        if find_skill_by_name(loaded, dep).is_none() {
+            problems.push(format!("依赖不存在：{dep}"));
+        }
+    }
+    if reaches_subject(loaded, subject_name, subject_dependencies) {
+        problems.push(format!("依赖存在环：{subject_name}"));
+    }
+    problems
 }
 
 #[cfg(test)]
@@ -282,6 +457,7 @@ mod tests {
             instructions: "1. 运行脚本".to_string(),
             version: 1,
             self_updatable: true,
+            dependencies: Vec::new(),
             skill_dir: PathBuf::from(".harness/assets/agents/main/skills/smoke-test"),
         }];
         let prompt = SkillLoader::format_skills_prompt(&skills);
@@ -306,6 +482,7 @@ mod tests {
             instructions: "1. 运行 scripts/setup.sh".to_string(),
             version: 1,
             self_updatable: true,
+            dependencies: Vec::new(),
             skill_dir: PathBuf::from(".harness/assets/agents/main/skills/my-skill"),
         }];
         let prompt = SkillLoader::format_skills_prompt(&skills);
@@ -328,6 +505,7 @@ mod tests {
             instructions: "do stuff".to_string(),
             version: 1,
             self_updatable: true,
+            dependencies: Vec::new(),
             skill_dir: abs_dir,
         }];
         let prompt = SkillLoader::format_skills_prompt(&skills);
@@ -551,5 +729,312 @@ mod registry_build_tests {
         let skills = loader.load_skills("agent-a");
         assert_eq!(skills.len(), 1, "should skip .sandbox directory");
         assert_eq!(skills[0].name, "coding");
+    }
+}
+
+#[cfg(test)]
+mod dependencies_tests {
+    use super::*;
+
+    /// 构造测试用 LoadedSkill。
+    fn skill(name: &str, dependencies: Vec<&str>) -> LoadedSkill {
+        LoadedSkill {
+            name: name.to_string(),
+            description: format!("desc {}", name),
+            instructions: format!("instr {}", name),
+            version: 1,
+            self_updatable: true,
+            skill_dir: PathBuf::from(".harness/skills").join(name),
+            dependencies: dependencies.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    // ---------- parse_skill_md 的 dependencies 解析 ----------
+
+    #[test]
+    fn parse_skill_md_parses_dependencies() {
+        let content = "---\nname: daily-news\ndescription: news\nversion: 1\nself_updatable: false\ndependencies: [browser-automation, another-skill]\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content, PathBuf::from("skills/daily-news")).unwrap();
+        assert_eq!(
+            parsed.dependencies,
+            vec![
+                "browser-automation".to_string(),
+                "another-skill".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_skill_md_dependencies_default_empty() {
+        // 未声明 dependencies 时缺省为空 Vec
+        let content = "---\nname: my-skill\ndescription: A skill\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
+        assert!(parsed.dependencies.is_empty());
+    }
+
+    #[test]
+    fn parse_skill_md_dependencies_invalid_format_falls_back_to_empty() {
+        // 非数组格式（如裸字符串或空值）静默回退为空 Vec
+        let content =
+            "---\nname: my-skill\ndependencies: browser-automation\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
+        assert!(parsed.dependencies.is_empty());
+    }
+
+    #[test]
+    fn parse_skill_md_dependencies_trims_whitespace_and_skips_empty_items() {
+        // 逗号后带空白、存在空项时应 trim 并过滤
+        let content = "---\nname: my-skill\ndependencies: [ a, , b ]\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
+        assert_eq!(parsed.dependencies, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_skill_md_single_element_array() {
+        let content =
+            "---\nname: my-skill\ndependencies: [browser-automation]\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
+        assert_eq!(parsed.dependencies, vec!["browser-automation".to_string()]);
+    }
+
+    #[test]
+    fn parse_skill_md_empty_array() {
+        let content = "---\nname: my-skill\ndependencies: []\n---\n\n## Usage\n\nDo it.\n";
+        let parsed = parse_skill_md(content, PathBuf::from("skills/my-skill")).unwrap();
+        assert!(parsed.dependencies.is_empty());
+    }
+
+    // ---------- resolve_skill_closure ----------
+
+    #[test]
+    fn resolve_closure_single_level_dependency() {
+        let loaded = vec![
+            skill("browser-automation", vec![]),
+            skill("daily-news", vec!["browser-automation"]),
+        ];
+        let closure = resolve_skill_closure(&loaded, "daily-news");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        // 依赖在前，选中 skill 最后
+        assert_eq!(names, vec!["browser-automation", "daily-news"]);
+    }
+
+    #[test]
+    fn resolve_closure_transitive_dependencies() {
+        let loaded = vec![
+            skill("base", vec![]),
+            skill("mid", vec!["base"]),
+            skill("top", vec!["mid"]),
+        ];
+        let closure = resolve_skill_closure(&loaded, "top");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["base", "mid", "top"]);
+    }
+
+    #[test]
+    fn resolve_closure_preserves_sibling_load_order() {
+        // 同层依赖保持 loaded 中的出现顺序
+        let loaded = vec![
+            skill("c", vec![]),
+            skill("a", vec!["c"]),
+            skill("b", vec!["c"]),
+        ];
+        let closure = resolve_skill_closure(&loaded, "a");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["c", "a"]);
+    }
+
+    #[test]
+    fn resolve_closure_skips_missing_dependency() {
+        // 缺失依赖应被跳过，不失败，其余依赖仍注入
+        let loaded = vec![skill("good", vec![]), skill("top", vec!["good", "missing"])];
+        let closure = resolve_skill_closure(&loaded, "top");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["good", "top"]);
+    }
+
+    #[test]
+    fn resolve_closure_breaks_cycle() {
+        // 环上边截断，不无限递归，其余节点仍注入
+        let loaded = vec![
+            skill("a", vec!["b"]),
+            skill("b", vec!["a"]),
+            skill("top", vec!["a"]),
+        ];
+        let closure = resolve_skill_closure(&loaded, "top");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["b", "a", "top"]);
+    }
+
+    #[test]
+    fn resolve_closure_deduplicates_shared_dependency() {
+        // 同一依赖被多个路径引用时只注入一次
+        let loaded = vec![
+            skill("shared", vec![]),
+            skill("x", vec!["shared"]),
+            skill("y", vec!["shared"]),
+            skill("top", vec!["x", "y"]),
+        ];
+        let closure = resolve_skill_closure(&loaded, "top");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["shared", "x", "y", "top"]);
+    }
+
+    #[test]
+    fn resolve_closure_unknown_skill_returns_empty() {
+        // 找不到 skill_name 本身时返回空 Vec
+        let loaded = vec![skill("a", vec![])];
+        let closure = resolve_skill_closure(&loaded, "not-exist");
+        assert!(closure.is_empty());
+    }
+
+    #[test]
+    fn resolve_closure_no_dependencies_returns_self() {
+        let loaded = vec![skill("a", vec![])];
+        let closure = resolve_skill_closure(&loaded, "a");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a"]);
+    }
+
+    #[test]
+    fn resolve_closure_matches_by_directory_name() {
+        // 目录名与 frontmatter name 不同（非 ASCII skill 场景）：
+        // 传目录名（SkillId.skill_name 来自 build_registry 的目录名）也能解析到 root skill。
+        let loaded = vec![LoadedSkill {
+            name: "base-skill".to_string(),
+            description: "desc".to_string(),
+            instructions: "instr".to_string(),
+            version: 1,
+            self_updatable: true,
+            dependencies: Vec::new(),
+            skill_dir: PathBuf::from(".harness/skills/通过-adb--ui-automator-远程查看"),
+        }];
+        let dir_name = loaded[0]
+            .skill_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("目录名应为非空 UTF-8 字符串");
+        let closure = resolve_skill_closure(&loaded, dir_name);
+        // 断言按目录名匹配到了 base-skill（frontmatter name）
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["base-skill"]);
+    }
+
+    #[test]
+    fn resolve_closure_dependency_matches_by_directory_name() {
+        // 回归：依赖按目录名声明时，DFS 内部查找也应命中（与 validate_skill_dependencies
+        // 的存在性判定保持一致，避免"校验通过但注入丢弃"的信任缺口）。
+        let dep = LoadedSkill {
+            name: "base-skill".to_string(),
+            description: "desc".to_string(),
+            instructions: "instr".to_string(),
+            version: 1,
+            self_updatable: true,
+            dependencies: Vec::new(),
+            skill_dir: PathBuf::from(".harness/skills/通过-adb--ui-automator-远程查看"),
+        };
+        let dir_name = dep
+            .skill_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("目录名应为非空 UTF-8 字符串");
+        let mut top = skill("top-skill", vec![dir_name]);
+        top.skill_dir = PathBuf::from(".harness/skills/top-skill");
+        let loaded = vec![dep, top];
+        let closure = resolve_skill_closure(&loaded, "top-skill");
+        let names: Vec<&str> = closure.iter().map(|s| s.name.as_str()).collect();
+        // 依赖（base-skill）在前、选中 skill（top-skill）在后，且依赖已解析而非跳过
+        assert_eq!(names, vec!["base-skill", "top-skill"]);
+    }
+
+    // ---------- validate_skill_dependencies ----------
+
+    #[test]
+    fn validate_dependencies_accepts_existing() {
+        let loaded = vec![
+            skill("browser-automation", vec![]),
+            skill("daily-news", vec!["browser-automation"]),
+        ];
+        // 校验 daily-news 的声明（subject 在 loaded 中即更新场景）
+        let problems =
+            validate_skill_dependencies(&loaded, "daily-news", &["browser-automation".to_string()]);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn validate_dependencies_accepts_no_dependencies() {
+        let loaded = vec![skill("standalone", vec![])];
+        let problems = validate_skill_dependencies(&loaded, "standalone", &[]);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn validate_dependencies_rejects_missing() {
+        // 创建场景：subject 尚未落盘（不在 loaded 中），声明了不存在的依赖
+        let loaded = vec![skill("good", vec![])];
+        let problems = validate_skill_dependencies(
+            &loaded,
+            "new-skill",
+            &["good".to_string(), "not-exist".to_string()],
+        );
+        assert_eq!(problems.len(), 1, "仅缺失的依赖应被报告");
+        assert!(
+            problems[0].contains("not-exist"),
+            "错误信息应包含缺失的依赖名"
+        );
+        assert!(!problems[0].contains("good"), "已存在的依赖不应被报告");
+    }
+
+    #[test]
+    fn validate_dependencies_rejects_self_dependency() {
+        // 直接自依赖视为环
+        let loaded = vec![skill("a", vec![])];
+        let problems = validate_skill_dependencies(&loaded, "a", &["a".to_string()]);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("环") || problems[0].contains("a"));
+    }
+
+    #[test]
+    fn validate_dependencies_rejects_transitive_cycle() {
+        // 更新场景：subject 在 loaded 中，新声明 a->b，而 b 已依赖 a，形成传递环
+        let loaded = vec![
+            skill("a", vec!["c"]), // 旧声明
+            skill("b", vec!["a"]),
+        ];
+        let problems = validate_skill_dependencies(&loaded, "a", &["b".to_string()]);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("环"), "应报告依赖环");
+    }
+
+    #[test]
+    fn validate_dependencies_accepts_diamond_without_cycle() {
+        // 菱形依赖无环，应通过
+        let loaded = vec![
+            skill("shared", vec![]),
+            skill("x", vec!["shared"]),
+            skill("y", vec!["shared"]),
+        ];
+        let problems =
+            validate_skill_dependencies(&loaded, "top", &["x".to_string(), "y".to_string()]);
+        assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn validate_dependencies_matches_by_directory_name() {
+        // 依赖按目录名（非 ASCII skill）匹配
+        let loaded = vec![LoadedSkill {
+            name: "base-skill".to_string(),
+            description: "desc".to_string(),
+            instructions: "instr".to_string(),
+            version: 1,
+            self_updatable: true,
+            dependencies: Vec::new(),
+            skill_dir: PathBuf::from(".harness/skills/通过-adb--ui-automator-远程查看"),
+        }];
+        let problems = validate_skill_dependencies(
+            &loaded,
+            "top",
+            &["通过-adb--ui-automator-远程查看".to_string()],
+        );
+        assert!(problems.is_empty(), "应按目录名命中 base-skill");
     }
 }

@@ -34,7 +34,7 @@ use crate::{
 ///
 /// - Brain 输出 JSON 解析失败 → Task Failed
 /// - Brain 选的 Agent 不存在或非 Persistent → Task Failed
-/// - Brain 选的 skill 不属于该 Agent → 降级为 None + warn 日志（设计 gap：Brain prompt 当前未包含 skills 列表）
+/// - Brain 选的 skill 不属于该 Agent → 降级为 None + warn 日志（防御性处理，Brain prompt 已含候选 Agent skills 清单）
 /// - Brain LLM 调用返回可重试错误且未超 retry 上限 → schedule_retry
 /// - Brain LLM 调用返回不可重试错误或超 retry → mark_failed
 #[allow(clippy::too_many_arguments)]
@@ -107,9 +107,8 @@ pub fn brain_decision_system(
 
                     // 解析 skill_id（如有）
                     // 校验 skill 归属：通过 SkillRegistry.list_by_owner 查找
-                    // 设计 gap：Brain prompt 当前未包含 skills 列表，Brain 输出的 skill_name
-                    // 可能不准确。校验失败时降级为 None + warn，而非 Failed。
-                    // 未来 Brain prompt 改造后可收紧为 Failed。
+                    // Brain prompt 已含候选 Agent 名下 skills 清单（build_agent_descriptions），
+                    // 此处仍保留降级防御：LLM 输出偶发不准确时降级为 None + warn，而非 Failed。
                     let skill_id = if let Some(skill_name) = skill_name {
                         let owner_skills = skill_registry.list_by_owner(&agent_name);
                         let matched = owner_skills.iter().find(|entry| {

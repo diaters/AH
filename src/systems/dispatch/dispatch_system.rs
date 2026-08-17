@@ -26,7 +26,10 @@ use crate::{
         WorkItemLifecycleHookPending, WorkItemType, estimate_tokens,
     },
     ecs::EntityIndex,
-    infrastructure::skills::{PluginSkillContributions, SkillLoader, SkillRegistry},
+    infrastructure::skills::{
+        LoadedSkill, PluginSkillContributions, SkillId, SkillLoader, SkillRegistry,
+        resolve_skill_closure,
+    },
     user_plugins::hook_point::HookPoint,
 };
 
@@ -182,6 +185,35 @@ fn truncate_conversation_by_budget(messages: &mut Vec<ConversationMessage>, budg
             }
         }
     }
+}
+
+/// 构建 DirectDelegate 注入的 skill 列表：
+/// - Brain 选中 skill 时，内置 skill 收窄为依赖闭包（拓扑序：依赖在前、选中最后），
+///   插件 skill 维持全量追加（设计 D4 / 边界 B2）
+/// - 未选中（None）时，维持 agent 名下全量注入（决策 Q1，行为不变）
+fn build_injected_skills(
+    skill_loader: &SkillLoader,
+    agent_name: &str,
+    required_skill_id: Option<&SkillId>,
+    plugin_skills: &PluginSkillContributions,
+) -> Vec<LoadedSkill> {
+    let all_skills = skill_loader.load_skills(agent_name);
+    let mut skills = match required_skill_id {
+        Some(skill_id) => {
+            // Brain 选中 skill：内置 skill 收窄为依赖闭包
+            let closure = resolve_skill_closure(&all_skills, &skill_id.skill_name);
+            if !closure.is_empty() {
+                closure.into_iter().cloned().collect()
+            } else {
+                // 闭包为空（root 缺失等）：降级为全量注入，避免行为回退（设计 G4）
+                all_skills
+            }
+        }
+        None => all_skills,
+    };
+    // 插件 skill 维持全量追加（设计文档 B2）
+    skills.extend(skill_loader.load_plugin_skills(plugin_skills, agent_name));
+    skills
 }
 
 /// 统一派发 System
@@ -466,10 +498,12 @@ pub fn dispatch_system(
                         (prompt, None)
                     };
 
-                    // 构建 skills 系统提示（内置 + 插件贡献）
-                    let mut skills = skill_loader.load_skills(&agent.profile.name);
-                    skills.extend(
-                        skill_loader.load_plugin_skills(&plugin_skills, &agent.profile.name),
+                    // 构建 skills 系统提示（内置 + 插件贡献；Brain 选中 skill 时收窄为依赖闭包）
+                    let skills = build_injected_skills(
+                        &skill_loader,
+                        &agent.profile.name,
+                        hint.required_skill_id.as_ref(),
+                        &plugin_skills,
                     );
                     let skills_prompt = SkillLoader::format_skills_prompt(&skills);
                     // 优先级：skills_prompt 非空时用 skills_prompt，否则用 agent.system_prompt
@@ -568,6 +602,16 @@ pub fn dispatch_system(
 mod tests {
     use super::*;
     use crate::domain::{EntryMetadata, EntryRole, ToolCall};
+    use crate::infrastructure::skills::PluginSkillEntry;
+    use tempfile::TempDir;
+
+    /// 写入一个 SKILL.md 到 `<agents_dir>/<agent>/skills/<skill_name>/SKILL.md`。
+    /// `agents_dir` 应直接指向 `agents/` 目录本身，与 `SkillLoader::new` 语义一致。
+    fn write_skill(agents_dir: &std::path::Path, agent: &str, skill_name: &str, content: &str) {
+        let dir = agents_dir.join(agent).join("skills").join(skill_name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
 
     #[test]
     fn build_structured_conversation_from_stm() {
@@ -604,5 +648,175 @@ mod tests {
         assert!(
             matches!(&messages[4], ConversationMessage::Assistant { tool_calls, .. } if tool_calls.is_empty())
         );
+    }
+
+    // ---------- build_injected_skills ----------
+
+    #[test]
+    fn build_injected_skills_narrows_to_dependency_closure_when_selected() {
+        // Brain 选中 dep-a 时：内置 skill 收窄为依赖闭包（依赖在前，选中最后），
+        // 不含无关的 dep-b
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "base",
+            "---\nname: base\ndescription: base skill\n---\n\n## Usage\n\nDo base.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "dep-a",
+            "---\nname: dep-a\ndescription: dep-a skill\ndependencies: [base]\n---\n\n## Usage\n\nDo a.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "dep-b",
+            "---\nname: dep-b\ndescription: dep-b skill\n---\n\n## Usage\n\nDo b.\n",
+        );
+
+        let loader = SkillLoader::new(agents_dir);
+        let plugin = PluginSkillContributions::default();
+        let skill_id = SkillId::new("agent-a", "dep-a");
+        let skills = build_injected_skills(&loader, "agent-a", Some(&skill_id), &plugin);
+
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["base", "dep-a"],
+            "依赖在前、选中最后，且不含无关 skill"
+        );
+    }
+
+    #[test]
+    fn build_injected_skills_selected_skill_without_dependencies_returns_self() {
+        // 选中 skill 无依赖时：只返回选中 skill 本身
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "solo",
+            "---\nname: solo\ndescription: solo skill\n---\n\n## Usage\n\nSolo.\n",
+        );
+
+        let loader = SkillLoader::new(agents_dir);
+        let plugin = PluginSkillContributions::default();
+        let skill_id = SkillId::new("agent-a", "solo");
+        let skills = build_injected_skills(&loader, "agent-a", Some(&skill_id), &plugin);
+
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["solo"]);
+    }
+
+    #[test]
+    fn build_injected_skills_none_keeps_full_injection() {
+        // Brain 未选中 skill（None）时：维持 agent 名下全量注入（决策 Q1）
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "base",
+            "---\nname: base\ndescription: base skill\n---\n\n## Usage\n\nDo base.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "dep-a",
+            "---\nname: dep-a\ndescription: dep-a skill\n---\n\n## Usage\n\nDo a.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "dep-b",
+            "---\nname: dep-b\ndescription: dep-b skill\n---\n\n## Usage\n\nDo b.\n",
+        );
+
+        let loader = SkillLoader::new(agents_dir);
+        let plugin = PluginSkillContributions::default();
+        let skills = build_injected_skills(&loader, "agent-a", None, &plugin);
+
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names.len(), 3, "未选中时全量注入");
+        for n in ["base", "dep-a", "dep-b"] {
+            assert!(names.contains(&n), "应包含 skill {n}");
+        }
+    }
+
+    #[test]
+    fn build_injected_skills_appends_plugin_skills_when_selected() {
+        // 选中 skill 时：内置闭包在前，插件 skill 维持全量追加在后（设计 B2）
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "base",
+            "---\nname: base\ndescription: base skill\n---\n\n## Usage\n\nDo base.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "dep-a",
+            "---\nname: dep-a\ndescription: dep-a skill\ndependencies: [base]\n---\n\n## Usage\n\nDo a.\n",
+        );
+
+        // 插件贡献的 skill：独立 SKILL.md 文件，经命名空间化为 plugin_id:skill_name
+        let plugin_md = tmp.path().join("plugin-skill.md");
+        std::fs::write(
+            &plugin_md,
+            "---\nname: p1\ndescription: plugin one\n---\n\n## Usage\n\nPlugin.\n",
+        )
+        .unwrap();
+        let plugin = PluginSkillContributions {
+            entries: vec![PluginSkillEntry {
+                plugin_id: "my-plugin".to_string(),
+                skill_id: "p1".to_string(),
+                path: plugin_md,
+            }],
+        };
+
+        let loader = SkillLoader::new(agents_dir);
+        let skill_id = SkillId::new("agent-a", "dep-a");
+        let skills = build_injected_skills(&loader, "agent-a", Some(&skill_id), &plugin);
+
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["base", "dep-a", "my-plugin:p1"]);
+    }
+
+    #[test]
+    fn build_injected_skills_falls_back_to_full_when_closure_empty() {
+        // Brain 选中的 root skill 在 load_skills 结果中找不到（如 registry 快照与磁盘漂移、
+        // skill 目录被删、owner 不匹配）时，依赖闭包为空：应降级为全量注入，
+        // 而非注入空列表（设计 G4 行为变更最小化）
+        let tmp = TempDir::new().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "base",
+            "---\nname: base\ndescription: base skill\n---\n\n## Usage\n\nDo base.\n",
+        );
+        write_skill(
+            &agents_dir,
+            "agent-a",
+            "solo",
+            "---\nname: solo\ndescription: solo skill\n---\n\n## Usage\n\nSolo.\n",
+        );
+
+        let loader = SkillLoader::new(agents_dir);
+        let plugin = PluginSkillContributions::default();
+        // root 不存在的 skill_id：skill_name 在 load_skills 结果中找不到 → 闭包为空
+        let skill_id = SkillId::new("agent-a", "nonexistent");
+        let skills = build_injected_skills(&loader, "agent-a", Some(&skill_id), &plugin);
+
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names.len(), 2, "闭包为空时应降级为全量注入");
+        for n in ["base", "solo"] {
+            assert!(names.contains(&n), "应包含 skill {n}");
+        }
     }
 }

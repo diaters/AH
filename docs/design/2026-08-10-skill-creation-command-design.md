@@ -1,6 +1,10 @@
 # `/skill` Slash Command 设计文档
 
 > __状态：当前有效__
+>
+> 依赖声明：`/skill` 创建的新 skill 可通过 frontmatter `dependencies` 声明对同 agent
+> 名下现有 skill 的依赖，写回前校验依赖存在性与环。详见
+> `docs/design/2026-08-17-skill-dependency-and-on-demand-injection-design.md`。
 
 ## 1. 背景
 

@@ -45,6 +45,8 @@ pub struct SkillEntry {
     pub version: u32,
     pub owner_agent_name: String,
     pub self_updatable: bool,
+    /// 同 agent 名下依赖的 skill 名列表（缺省为空 Vec）。
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -95,6 +97,7 @@ mod tests {
             version: 1,
             owner_agent_name: owner.to_string(),
             self_updatable: true,
+            dependencies: Vec::new(),
         }
     }
 
@@ -156,6 +159,7 @@ mod refresh_tests {
             version: 1,
             owner_agent_name: "agent".to_string(),
             self_updatable: true,
+            dependencies: Vec::new(),
         };
         reg.upsert(entry.clone());
         entry.version = 2;
@@ -179,6 +183,7 @@ mod refresh_tests {
             version: 1,
             owner_agent_name: "agent".to_string(),
             self_updatable: true,
+            dependencies: Vec::new(),
         };
         reg.refresh(entry);
         assert_eq!(reg.skills.len(), 1);

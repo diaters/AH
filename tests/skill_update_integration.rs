@@ -122,6 +122,7 @@ fn make_skill_entry(skill_id: SkillId, self_updatable: bool) -> SkillEntry {
         instructions: format!("instructions for {}", skill_id.skill_name),
         version: 1,
         self_updatable,
+        dependencies: Vec::new(),
     }
 }
 
