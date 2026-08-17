@@ -268,3 +268,37 @@ __风险__：波及面实测 62 个文件（`src/` 47 + `tests/` 15），必须�
   状态转换约束入 P4）、G4（`lib.rs` 七连 glob re-export 移除入 P0 并新增验收断言），
   另补 P5 两条小项（插件目录默认值逻辑去重、registry `placeholder` 字段语义修正）。
   用户决策：G1 并入 P0、G2 入 P1、G4 入 P0。
+
+## 8. 实施记录
+
+### P0：模块依赖方向治理（2026-08-17，待 PR 合并）
+
+- 死抽象裁决：7 个无消费者 trait 全部删除（`ToolCatalog`、`ToolApprovalPolicy`、
+  `ExecutionBackend`、`ExecutionPolicy`、`MemoryCompactor`、`ContributionPolicy`、
+  `BrainSelectionPolicy` 及伴生类型）。其中 `BrainSelectionPolicy`/`FirstBrainPolicy`/
+  `AgentCapabilitySummary` 在 `brain_llm_builder.rs` 有仪式性使用（构造摘要后取第一个
+  候选），简化为直接迭代取首个后删除；`contracts/memory.rs` 精简为仅 `MemoryStore`。
+- 类型下沉：`SkillId`、`HookPoint`、`LlmProviderKind`、`ScheduleSpec`（含
+  `compute_next_trigger`）、`SessionBackend` 按计划下沉 `domain/`。
+- 实施中发现的隐藏反向边（内联路径，非 use 语句，原审视 grep 未覆盖）一并处置：
+  `prompt_template.rs` 整体下沉 `domain/`（消灭 `domain/signal_trigger.rs` → triggers）；
+  `ChannelAttachment`/`AttachmentKind`/`extract_attachments` 下沉 `domain/attachment.rs`
+  （消灭 `domain/{message,space}.rs` → channels）。
+- app↔systems 解环超出原任务清单的部分（同属 systems→app 反向边，全部清零）：
+  通道资源桥 `InputReceiver`/`ExecutionResult{Sender,Receiver}`/
+  `ModelChainStateUpdate{Sender,Receiver}` 归位 `domain/message.rs`（与
+  `ToolResultSender` 同模式）；`ShutdownState` 归位 `domain/command.rs`；
+  `MemoryConfig` 归位 `domain/memory.rs`；`HarnessConfig`/`HarnessSettings`/
+  `BrainConfig` 归位 `systems/runtime_config.rs`（依赖 llm/channels，无法放
+  contracts）；`ExecutorHandle`（自注释"临时向后兼容"零消费者）按死抽象删除。
+- triggers↔app：新增 `domain::TriggersConfigPath` 投影注入，
+  `reload_triggers_system` 改读该资源。
+- systems↔user_plugins：`plugin_load_startup_system` 改 exclusive system 只加载
+  registry 与技能贡献；工具注册经 `systems::tools::register_plugin_tools_in_world`
+  由装配期主动拉取（Startup 排序 + reload 后置调用）。
+- lib.rs 七连 glob 移除；tests（92 文件）与 main.rs 全量改模块全路径引用。
+- 分层断言澄清（脚本注释固化）：plugins 为 systems 的装配扩展，允许
+  plugins→systems 单向边；app 最顶层。`scripts/check_module_deps.sh` 已接入
+  CI（code-check job 首步）。
+- 验证：`cargo fmt` / `cargo clippy -D warnings` / `cargo test --all-features`
+  （79 套件）全绿；断言脚本本地通过。

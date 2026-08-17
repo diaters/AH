@@ -583,7 +583,7 @@ pub struct PendingChannelSend {
     /// （优先 `routing_policy.output_channel`，其次 `origin_channel`）。
     pub recipient: Option<String>,
     pub content: String,
-    pub attachments: Vec<crate::channels::ChannelAttachment>,
+    pub attachments: Vec<crate::domain::ChannelAttachment>,
     pub tool_call_id: Option<String>,
     pub task_id: TaskId,
     pub agent_id: AgentId,

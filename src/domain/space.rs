@@ -215,7 +215,7 @@ pub enum ToolAction {
         channel: String,
         target: Option<String>,
         content: String,
-        attachments: Vec<crate::channels::ChannelAttachment>,
+        attachments: Vec<crate::domain::ChannelAttachment>,
     },
     /// 开始或继续 chat_with_agent 对话轮次。
     /// executor 只负责解析参数，真正的子任务创建/更新在 orchestrator 中完成。

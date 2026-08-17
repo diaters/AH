@@ -3,6 +3,7 @@
 //! 定义项目的核心领域类型。
 
 mod agent;
+mod attachment;
 mod chat_session;
 mod command;
 mod confirmation;
@@ -90,6 +91,9 @@ pub use execution::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult, AgentRequestKind,
     ConversationMessage, LlmToolCall, OutputContent,
 };
+
+// attachment
+pub use attachment::{AttachmentKind, ChannelAttachment, extract_attachments};
 
 // frontend
 pub use frontend::{
