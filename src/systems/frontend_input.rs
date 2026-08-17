@@ -2,7 +2,7 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::{
-    app::FrontendRegistry,
+    contracts::FrontendRegistry,
     domain::{Signal, ToolConfirmationResponseMessage, UserAction},
 };
 

@@ -5,10 +5,11 @@ use std::sync::Arc;
 use common::mock_executor::BrainAwareEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    ChannelId, EntityIndex, ExternalInput, FrontendKind, HarnessConfig, LongTermMemory,
-    ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app,
-    llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
+    domain::ExternalInput, domain::FrontendKind, domain::LongTermMemory, domain::ShortTermMemory,
+    domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus, domain::WaitingReason,
+    ecs::EntityIndex, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -171,7 +172,7 @@ fn user_input_continues_waiting_task() {
         .insert(task_id, task_entity);
 
     // Simulate user input
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "continue input".to_string(),
         origin_channel: default_channel(),
     });
@@ -220,30 +221,30 @@ fn evaluation_triggered_on_turn_limit() {
     );
 
     // Configure evaluation with max_turns = 2
-    app.insert_resource(harness::TaskEvaluationConfig {
+    app.insert_resource(harness::domain::TaskEvaluationConfig {
         enabled: true,
         max_turns: Some(2),
         evaluator_agent_name: "evaluator".to_string(),
-        offtrack_policy: harness::OffTrackPolicy::AskUser,
+        offtrack_policy: harness::domain::OffTrackPolicy::AskUser,
     });
 
     app.update();
 
     // Add evaluator agent
-    app.world_mut().spawn(harness::Agent {
+    app.world_mut().spawn(harness::domain::Agent {
         id: uuid::Uuid::new_v4(),
-        profile: harness::AgentProfile {
+        profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
-        capabilities: harness::AgentCapabilities {
+        capabilities: harness::domain::AgentCapabilities {
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::AgentKind::Persistent,
+        kind: harness::domain::AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
+        tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
 
@@ -257,25 +258,25 @@ fn evaluation_triggered_on_turn_limit() {
     };
     // 第一轮
     stm.add_entry(
-        harness::EntryRole::User,
+        harness::domain::EntryRole::User,
         "user message 1",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     stm.add_entry(
-        harness::EntryRole::Assistant,
+        harness::domain::EntryRole::Assistant,
         "assistant response 1",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     // 第二轮
     stm.add_entry(
-        harness::EntryRole::User,
+        harness::domain::EntryRole::User,
         "user message 2",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     stm.add_entry(
-        harness::EntryRole::Assistant,
+        harness::domain::EntryRole::Assistant,
         "assistant response 2",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
 
     app.world_mut().spawn((
@@ -310,9 +311,9 @@ fn evaluation_triggered_on_turn_limit() {
     // Check for WorkItem instead of EvaluationRequestMessage
     let has_evaluation_workitem = app
         .world_mut()
-        .query::<&harness::WorkItem>()
+        .query::<&harness::domain::WorkItem>()
         .iter(app.world())
-        .any(|wi| wi.work_type == harness::WorkItemType::Evaluation);
+        .any(|wi| wi.work_type == harness::domain::WorkItemType::Evaluation);
 
     // This test verifies the trigger logic creates WorkItem
     assert!(
@@ -415,7 +416,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
         .insert(task_id_2, task_entity_2);
 
     // 模拟用户输入
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "hello".to_string(),
         origin_channel: default_channel(),
     });
@@ -500,7 +501,7 @@ fn finish_command_ends_multi_turn_conversation() {
         .insert(task_id, task_entity);
 
     // 模拟用户输入 /finish
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "/finish".to_string(),
         origin_channel: default_channel(),
     });

@@ -1,13 +1,13 @@
 use crate::prelude::*;
 use tracing::{debug, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
     PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationRequestMessage,
     SkillCreationContext, SkillCreationWritebackMessage, ToolConfirmationResponseMessage, WorkItem,
 };
-use crate::domain::HookPoint;
 
 /// 经验确认结果系统：处理用户对经验候选的确认，触发统一写回。
 ///

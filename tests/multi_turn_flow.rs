@@ -6,12 +6,14 @@ use common::mock_executor::BrainAwareEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, EntityIndex, EntryRole, ExecutorFuture, ExperienceCollectionRequestMessage,
-    FrontendKind, HarnessConfig, LongTermMemory, PendingDispatch, ShortTermMemory, Task,
-    TaskRoutingPolicy, TaskStatus, WaitingReason, WorkItem, build_harness_app,
-    llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentToolPermissions, domain::ChannelId, domain::DispatchHint, domain::DispatchKind,
+    domain::DispatchStrategy, domain::EntryRole, domain::ExecutorFuture,
+    domain::ExperienceCollectionRequestMessage, domain::FrontendKind, domain::LongTermMemory,
+    domain::PendingDispatch, domain::ShortTermMemory, domain::Task, domain::TaskRoutingPolicy,
+    domain::TaskStatus, domain::WaitingReason, domain::WorkItem, ecs::EntityIndex,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -26,13 +28,13 @@ use tokio::runtime::Runtime;
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::BrainConfig { enabled: true }),
+        brain: Some(harness::systems::BrainConfig { enabled: true }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -168,7 +170,7 @@ fn multi_turn_task_lifecycle() {
         .insert(task_id, entity_id);
 
     // Simulate user input
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "continue with this input".to_string(),
         origin_channel: default_channel(),
     });
@@ -269,9 +271,13 @@ fn short_term_memory_tracks_turns() {
             .world_mut()
             .get_mut::<ShortTermMemory>(entity_id)
             .unwrap();
-        stm.add_entry(harness::EntryRole::User, "hello", Default::default());
         stm.add_entry(
-            harness::EntryRole::Assistant,
+            harness::domain::EntryRole::User,
+            "hello",
+            Default::default(),
+        );
+        stm.add_entry(
+            harness::domain::EntryRole::Assistant,
             "hi there",
             Default::default(),
         );
@@ -461,11 +467,11 @@ fn experience_collection_triggered_on_agent_termination() {
 
     // Trigger termination by spawning TaskTerminatedMessage
     app.world_mut()
-        .spawn(harness::TaskTerminatedMessage { task_id });
+        .spawn(harness::domain::TaskTerminatedMessage { task_id });
 
     let terminated_before = app
         .world_mut()
-        .query::<&harness::TaskTerminatedMessage>()
+        .query::<&harness::domain::TaskTerminatedMessage>()
         .iter(app.world())
         .count();
     assert_eq!(terminated_before, 1, "TaskTerminatedMessage should exist");
@@ -482,7 +488,7 @@ fn experience_collection_triggered_on_agent_termination() {
 
     let terminated_after = app
         .world_mut()
-        .query::<&harness::TaskTerminatedMessage>()
+        .query::<&harness::domain::TaskTerminatedMessage>()
         .iter(app.world())
         .count();
 
@@ -497,7 +503,12 @@ fn experience_collection_triggered_on_agent_termination() {
         .world_mut()
         .query::<&WorkItem>()
         .iter(app.world())
-        .filter(|w| matches!(w.work_type, harness::WorkItemType::ExperienceCollection))
+        .filter(|w| {
+            matches!(
+                w.work_type,
+                harness::domain::WorkItemType::ExperienceCollection
+            )
+        })
         .count();
 
     assert!(
@@ -571,7 +582,7 @@ fn multi_turn_memory_records_user_and_assistant() {
         .insert(task_id, entity_id);
 
     // 模拟用户继续输入
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "what is the weather?".to_string(),
         origin_channel: default_channel(),
     });
@@ -612,7 +623,7 @@ fn multi_turn_full_conversation_flow() {
     spawn_default_agent(&mut app);
 
     // 通过 CreateTaskMessage 创建任务，走完整系统流程
-    app.world_mut().spawn(harness::CreateTaskMessage {
+    app.world_mut().spawn(harness::domain::CreateTaskMessage {
         content: "hello".to_string(),
         origin_channel: Some(default_channel()),
         routing_policy: TaskRoutingPolicy::conversational(default_channel()),
@@ -650,7 +661,7 @@ fn multi_turn_full_conversation_flow() {
     assert_eq!(stm.entries[1].role, EntryRole::Assistant);
 
     // 模拟用户继续输入
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "tell me more".to_string(),
         origin_channel: default_channel(),
     });
@@ -685,7 +696,7 @@ fn prompt_includes_conversation_history() {
             *self.captured.lock().unwrap() = Some(request.prompt.clone());
             Box::pin(async move {
                 Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text("response".to_string()),
+                    content: harness::domain::OutputContent::Text("response".to_string()),
                     reasoning_content: None,
                 })
             })
@@ -744,8 +755,8 @@ fn prompt_includes_conversation_history() {
             },
             ShortTermMemory {
                 entries: vec![
-                    harness::MemoryEntry::new(EntryRole::User, "previous question"),
-                    harness::MemoryEntry::new(EntryRole::Assistant, "previous answer"),
+                    harness::domain::MemoryEntry::new(EntryRole::User, "previous question"),
+                    harness::domain::MemoryEntry::new(EntryRole::Assistant, "previous answer"),
                 ],
                 summary_prefix: None,
                 estimated_tokens: 100,
@@ -816,7 +827,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
     spawn_default_agent(&mut app);
 
     // 通过 CreateTaskMessage 创建任务，走 user_message_to_task_system 流程
-    app.world_mut().spawn(harness::CreateTaskMessage {
+    app.world_mut().spawn(harness::domain::CreateTaskMessage {
         content: "hello world".to_string(),
         origin_channel: Some(default_channel()),
         routing_policy: TaskRoutingPolicy::conversational(default_channel()),
@@ -878,7 +889,7 @@ fn three_turn_conversation_maintains_correct_order() {
     spawn_default_agent(&mut app);
 
     // 第一轮：通过 CreateTaskMessage 创建任务
-    app.world_mut().spawn(harness::CreateTaskMessage {
+    app.world_mut().spawn(harness::domain::CreateTaskMessage {
         content: "first question".to_string(),
         origin_channel: Some(default_channel()),
         routing_policy: TaskRoutingPolicy::conversational(default_channel()),
@@ -908,7 +919,7 @@ fn three_turn_conversation_maintains_correct_order() {
     assert_eq!(stm.entries[1].role, EntryRole::Assistant);
 
     // 第二轮：继续对话
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "second question".to_string(),
         origin_channel: default_channel(),
     });
@@ -929,7 +940,7 @@ fn three_turn_conversation_maintains_correct_order() {
     assert_eq!(stm.entries[3].role, EntryRole::Assistant);
 
     // 第三轮：继续对话
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "third question".to_string(),
         origin_channel: default_channel(),
     });
@@ -973,7 +984,7 @@ fn second_dispatch_prompt_includes_correct_history() {
             self.captured.lock().unwrap().push(request.prompt.clone());
             Box::pin(async move {
                 Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text("response".to_string()),
+                    content: harness::domain::OutputContent::Text("response".to_string()),
                     reasoning_content: None,
                 })
             })
@@ -1029,8 +1040,8 @@ fn second_dispatch_prompt_includes_correct_history() {
             },
             ShortTermMemory {
                 entries: vec![
-                    harness::MemoryEntry::new(EntryRole::User, "previous question"),
-                    harness::MemoryEntry::new(EntryRole::Assistant, "previous answer"),
+                    harness::domain::MemoryEntry::new(EntryRole::User, "previous question"),
+                    harness::domain::MemoryEntry::new(EntryRole::Assistant, "previous answer"),
                 ],
                 summary_prefix: None,
                 estimated_tokens: 100,
@@ -1047,7 +1058,7 @@ fn second_dispatch_prompt_includes_correct_history() {
     let _ = entity_id;
 
     // 模拟用户继续对话
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "follow-up question".to_string(),
         origin_channel: default_channel(),
     });
@@ -1148,7 +1159,7 @@ fn task_content_updates_on_continue() {
         .insert(task_id, entity_id);
 
     // 模拟用户继续输入
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "new follow-up question".to_string(),
         origin_channel: default_channel(),
     });

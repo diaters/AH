@@ -6,11 +6,13 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, DispatchHint,
-    DispatchKind, DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory,
-    PendingDispatch, ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy, domain::ExecutorFuture,
+    domain::FrontendKind, domain::LongTermMemory, domain::PendingDispatch, domain::ShortTermMemory,
+    domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus, domain::WaitingReason,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -43,17 +45,17 @@ impl AgentExecutor for SummarizationMockExecutor {
             match request.request_kind {
                 AgentRequestKind::Summarization => {
                     summarization_called.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
                 }
-                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
+                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
                 AgentRequestKind::BrainDecision => {
-                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
                 AgentRequestKind::ToolExecution { .. } => {
-                    Err(harness::ExecutionError::Unknown("Not supported".to_string()))
+                    Err(harness::domain::ExecutionError::Unknown("Not supported".to_string()))
                 }
                 AgentRequestKind::Evaluation => {
-                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"decision":"Continue","reasoning":"test"}"#.to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"decision":"Continue","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
             }
         })
@@ -63,8 +65,8 @@ impl AgentExecutor for SummarizationMockExecutor {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
@@ -186,8 +188,14 @@ fn task_completion_does_not_trigger_summarization() {
             },
             ShortTermMemory {
                 entries: vec![
-                    harness::MemoryEntry::new(harness::EntryRole::User, "user message"),
-                    harness::MemoryEntry::new(harness::EntryRole::Assistant, "assistant response"),
+                    harness::domain::MemoryEntry::new(
+                        harness::domain::EntryRole::User,
+                        "user message",
+                    ),
+                    harness::domain::MemoryEntry::new(
+                        harness::domain::EntryRole::Assistant,
+                        "assistant response",
+                    ),
                 ],
                 summary_prefix: None,
                 estimated_tokens: 100,
@@ -275,8 +283,11 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
         },
         ShortTermMemory {
             entries: vec![
-                harness::MemoryEntry::new(harness::EntryRole::User, "user message"),
-                harness::MemoryEntry::new(harness::EntryRole::Assistant, "assistant response"),
+                harness::domain::MemoryEntry::new(harness::domain::EntryRole::User, "user message"),
+                harness::domain::MemoryEntry::new(
+                    harness::domain::EntryRole::Assistant,
+                    "assistant response",
+                ),
             ],
             summary_prefix: None,
             estimated_tokens: 100,
@@ -324,7 +335,10 @@ fn summarization_preserves_terminal_task_status() {
         .spawn((
             Task::from_user_input_ready("complete this task", 3, default_channel()),
             ShortTermMemory {
-                entries: vec![harness::MemoryEntry::new(harness::EntryRole::User, "hello")],
+                entries: vec![harness::domain::MemoryEntry::new(
+                    harness::domain::EntryRole::User,
+                    "hello",
+                )],
                 summary_prefix: None,
                 estimated_tokens: 50,
                 last_cached_tokens: None,
@@ -403,8 +417,8 @@ fn execution_populates_memory_but_does_not_trigger_summarization() {
         .spawn((
             Task::from_user_input_ready("test", 3, default_channel()),
             ShortTermMemory {
-                entries: vec![harness::MemoryEntry::new(
-                    harness::EntryRole::User,
+                entries: vec![harness::domain::MemoryEntry::new(
+                    harness::domain::EntryRole::User,
                     "user input",
                 )],
                 summary_prefix: None,

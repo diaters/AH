@@ -10,7 +10,8 @@ use common::mock_executor::{
     MockExecutor, NoOpExecutor, PanickingExecutor, PromptEchoExecutor, text_output,
 };
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, OutputContent,
+    domain::AgentExecutionOutput, domain::AgentExecutionRequest, domain::AgentExecutor,
+    domain::AgentRequestKind, domain::OutputContent,
 };
 
 fn sample_request(kind: AgentRequestKind) -> AgentExecutionRequest {

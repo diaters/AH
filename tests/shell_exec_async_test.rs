@@ -95,7 +95,7 @@ fn world_with_shell_exec() -> World {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(ShellExecTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
     world.insert_resource(harness::NativeProcessBackend::default());
 
     world

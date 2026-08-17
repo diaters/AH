@@ -9,7 +9,9 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
-use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
+use harness::{
+    app::build_harness_app, domain::AgentExecutor, llm::ExecutorRegistry, systems::HarnessConfig,
+};
 
 mod common;
 
@@ -72,12 +74,10 @@ fn on_shared_knowledge_write_drains_pending_queue() {
     {
         let mut pending = app
             .world_mut()
-            .resource_mut::<harness::PendingKnowledgeWriteHooks>();
-        pending
-            .0
-            .push(harness::SharedKnowledgeEntry::approved_from_user_input(
-                "test knowledge",
-            ));
+            .resource_mut::<harness::domain::PendingKnowledgeWriteHooks>();
+        pending.0.push(
+            harness::domain::SharedKnowledgeEntry::approved_from_user_input("test knowledge"),
+        );
     }
 
     // 推帧让 companion 系统派发 hook
@@ -88,7 +88,7 @@ fn on_shared_knowledge_write_drains_pending_queue() {
     // 队列应被清空
     let pending = app
         .world()
-        .resource::<harness::PendingKnowledgeWriteHooks>();
+        .resource::<harness::domain::PendingKnowledgeWriteHooks>();
     assert!(
         pending.0.is_empty(),
         "PendingKnowledgeWriteHooks 队列应在 hook 派发后清空"
@@ -153,7 +153,7 @@ fn on_experience_hook_drains_pending_queue() {
     {
         let mut pending = app
             .world_mut()
-            .resource_mut::<harness::PendingExperienceHooks>();
+            .resource_mut::<harness::domain::PendingExperienceHooks>();
         pending.0.push((
             harness::domain::HookPoint::OnExperienceCandidateSubmitted,
             uuid::Uuid::new_v4(),
@@ -166,7 +166,9 @@ fn on_experience_hook_drains_pending_queue() {
     }
 
     // 队列应被清空
-    let pending = app.world().resource::<harness::PendingExperienceHooks>();
+    let pending = app
+        .world()
+        .resource::<harness::domain::PendingExperienceHooks>();
     assert!(
         pending.0.is_empty(),
         "PendingExperienceHooks 队列应在 hook 派发后清空"
@@ -231,7 +233,7 @@ fn on_approval_requested_removes_marker() {
     let entity = app
         .world_mut()
         .spawn((
-            harness::ApprovalRequestMessage {
+            harness::domain::ApprovalRequestMessage {
                 request_id: uuid::Uuid::new_v4(),
                 source_task_id: uuid::Uuid::nil(),
                 approval_task_id: uuid::Uuid::new_v4(),
@@ -241,7 +243,7 @@ fn on_approval_requested_removes_marker() {
                 tool_input: serde_json::json!({"command": "ls"}),
                 context: String::new(),
             },
-            harness::ApprovalRequestedHookPending,
+            harness::domain::ApprovalRequestedHookPending,
         ))
         .id();
 
@@ -253,7 +255,7 @@ fn on_approval_requested_removes_marker() {
     // 标记应被移除
     assert!(
         app.world()
-            .get::<harness::ApprovalRequestedHookPending>(entity)
+            .get::<harness::domain::ApprovalRequestedHookPending>(entity)
             .is_none(),
         "ApprovalRequestedHookPending 应在 hook 派发后移除"
     );
@@ -312,15 +314,15 @@ log_info("on_approval_resolved: task count = " + ids.len());
     let entity = app
         .world_mut()
         .spawn((
-            harness::ApprovalResultMessage {
+            harness::domain::ApprovalResultMessage {
                 request_id: uuid::Uuid::new_v4(),
                 source_task_id: uuid::Uuid::nil(),
                 approval_task_id: uuid::Uuid::new_v4(),
-                decision: harness::ApprovalDecision::Approved,
+                decision: harness::domain::ApprovalDecision::Approved,
                 reasoning: "test".to_string(),
-                grant_mode: harness::GrantMode::Once,
+                grant_mode: harness::domain::GrantMode::Once,
             },
-            harness::ApprovalResolvedHookPending,
+            harness::domain::ApprovalResolvedHookPending,
         ))
         .id();
 
@@ -332,7 +334,7 @@ log_info("on_approval_resolved: task count = " + ids.len());
     // 标记应被移除
     assert!(
         app.world()
-            .get::<harness::ApprovalResolvedHookPending>(entity)
+            .get::<harness::domain::ApprovalResolvedHookPending>(entity)
             .is_none(),
         "ApprovalResolvedHookPending 应在 hook 派发后移除"
     );

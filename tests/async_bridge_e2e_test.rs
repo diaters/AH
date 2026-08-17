@@ -117,7 +117,7 @@ fn world_with_list_tool() -> World {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(ListScheduledTasksTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     // 双账本各一条任务（造 list 的数据源）—— dynamic_tasks 与 registry 一致
     let mut state = SchedulerState::default();
@@ -149,7 +149,7 @@ fn world_with_async_tool(tool: Box<dyn BuiltinTool>) -> World {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(tool);
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
     world
 }
 
@@ -744,7 +744,7 @@ fn world_with_delete_tool() -> World {
         harness::systems::tools::builtin::scheduled::DeleteScheduledTaskTool,
     ));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     // 双账本各一条 "victim" 任务——dynamic_tasks 与 registry 一致
     let mut state = SchedulerState::default();

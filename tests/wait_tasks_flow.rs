@@ -2,9 +2,10 @@
 
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentId, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-    ExperienceStore, FrontendKind, HarnessConfig, SharedKnowledgeBase, ToolContext,
-    WaitingForTasksInfo,
+    domain::Agent, domain::AgentCapabilities, domain::AgentId, domain::AgentKind,
+    domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId, domain::ExperienceStore,
+    domain::FrontendKind, domain::SharedKnowledgeBase, domain::ToolContext,
+    domain::WaitingForTasksInfo, systems::HarnessConfig,
 };
 use uuid::Uuid;
 

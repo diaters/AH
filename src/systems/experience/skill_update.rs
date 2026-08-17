@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::domain::HookPoint;
 use crate::domain::{
     AgentId, DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidate,
     ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
@@ -25,7 +26,6 @@ use crate::domain::{
 use crate::infrastructure::skills::{
     SkillEntry, SkillId, SkillLoader, SkillRegistry, apply_skill_operations,
 };
-use crate::domain::HookPoint;
 
 /// 持久Agent吸收路径：候选不进父 inbox，按 kind 分流。
 ///
@@ -682,7 +682,7 @@ fn writeback_to_long_term_memory_for_persistent_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Agent;
+    use crate::domain::Agent;
     use crate::domain::{
         AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ExperienceCandidate,
         ExperienceKindHint, TaskId, TaskRoutingPolicy,

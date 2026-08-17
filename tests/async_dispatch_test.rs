@@ -51,7 +51,7 @@ fn world_with_echo_tool() -> bevy_ecs::prelude::World {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(EchoAsyncTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
     world
 }
 
@@ -125,7 +125,7 @@ fn dispatch_uses_max_duration_hook_for_inflight_timeout() {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(SlowTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     let e = world.spawn(make_request("slow", "call-d3")).id();
     world
@@ -175,7 +175,7 @@ fn dispatch_injects_current_origin_channel_from_task() {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(ChannelProbeTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     // 构造一个带 Telegram origin_channel 的 Task
     let telegram_channel = ChannelId {
@@ -274,7 +274,7 @@ fn dispatch_handles_missing_task_gracefully_for_origin_channel() {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(ChannelProbeTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     // 故意不 spawn Task；request 引用一个随机 task_id
     let _entity = world
@@ -334,7 +334,7 @@ fn dispatch_injects_current_skill_dir_from_skill_creation_context() {
     let mut executors = BuiltinToolExecutors::default();
     executors.register(Box::new(SkillDirProbeTool));
     world.insert_resource(executors);
-    world.insert_resource(harness::app::HarnessSettings::default_test());
+    world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     // 构造带 SkillCreationContext 的 WorkItem entity（sandbox_dir 应注入 ctx）
     let task_id = uuid::Uuid::new_v4();

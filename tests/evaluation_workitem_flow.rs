@@ -6,10 +6,13 @@ use common::mock_executor::MockExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentExecutor,
-    AgentRequestKind, ChannelId, EngineEvent, EntryMetadata, EntryRole, FailureReason, Frontend,
-    FrontendKind, HarnessConfig, OffTrackPolicy, ShortTermMemory, Task, TaskStatus, UserAction,
-    WaitingReason, WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionResult,
+    domain::AgentExecutionResultMessage, domain::AgentExecutor, domain::AgentRequestKind,
+    domain::ChannelId, domain::EngineEvent, domain::EntryMetadata, domain::EntryRole,
+    domain::FailureReason, domain::Frontend, domain::FrontendKind, domain::OffTrackPolicy,
+    domain::ShortTermMemory, domain::Task, domain::TaskStatus, domain::UserAction,
+    domain::WaitingReason, domain::WorkItem, domain::WorkItemType, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -88,28 +91,28 @@ fn turn_limit_creates_evaluation_workitem() {
     task.status = TaskStatus::Running;
     let task_id = task.id;
 
-    let mut stm = harness::ShortTermMemory::default();
+    let mut stm = harness::domain::ShortTermMemory::default();
     // 第一轮
     stm.add_entry(
-        harness::EntryRole::User,
+        harness::domain::EntryRole::User,
         "user message 1",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     stm.add_entry(
-        harness::EntryRole::Assistant,
+        harness::domain::EntryRole::Assistant,
         "assistant response 1",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     // 第二轮
     stm.add_entry(
-        harness::EntryRole::User,
+        harness::domain::EntryRole::User,
         "user message 2",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     stm.add_entry(
-        harness::EntryRole::Assistant,
+        harness::domain::EntryRole::Assistant,
         "assistant response 2",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
 
     let task_entity = app.world_mut().spawn((task, stm)).id();
@@ -121,30 +124,30 @@ fn turn_limit_creates_evaluation_workitem() {
         .insert(task_id, task_entity);
 
     // 添加评估器 Agent
-    app.world_mut().spawn(harness::Agent {
+    app.world_mut().spawn(harness::domain::Agent {
         id: uuid::Uuid::new_v4(),
-        profile: harness::AgentProfile {
+        profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
-        capabilities: harness::AgentCapabilities {
+        capabilities: harness::domain::AgentCapabilities {
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::AgentKind::Persistent,
+        kind: harness::domain::AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
+        tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
 
     // 配置评估：启用，最大 2 轮
     app.world_mut()
-        .insert_resource(harness::TaskEvaluationConfig {
+        .insert_resource(harness::domain::TaskEvaluationConfig {
             enabled: true,
             max_turns: Some(2),
             evaluator_agent_name: "evaluator".to_string(),
-            offtrack_policy: harness::OffTrackPolicy::AskUser,
+            offtrack_policy: harness::domain::OffTrackPolicy::AskUser,
         });
 
     // 运行系统
@@ -227,25 +230,25 @@ fn setup_eval_test_app(
         .tasks
         .insert(task_id, task_entity);
 
-    app.world_mut().spawn(harness::Agent {
+    app.world_mut().spawn(harness::domain::Agent {
         id: uuid::Uuid::new_v4(),
-        profile: harness::AgentProfile {
+        profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
-        capabilities: harness::AgentCapabilities {
+        capabilities: harness::domain::AgentCapabilities {
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::AgentKind::Persistent,
+        kind: harness::domain::AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
+        tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
 
     app.world_mut()
-        .insert_resource(harness::TaskEvaluationConfig {
+        .insert_resource(harness::domain::TaskEvaluationConfig {
             enabled: true,
             max_turns: Some(max_turns),
             evaluator_agent_name: "evaluator".to_string(),
@@ -307,7 +310,7 @@ fn setup_manual_eval_scenario(
     app.world_mut().spawn(work_item);
 
     app.world_mut()
-        .insert_resource(harness::TaskEvaluationConfig {
+        .insert_resource(harness::domain::TaskEvaluationConfig {
             enabled: true,
             max_turns: Some(2),
             evaluator_agent_name: "evaluator".to_string(),
@@ -428,7 +431,7 @@ fn offtrack_autocorrect_injects_governance_context() {
         agent_id: uuid::Uuid::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -490,7 +493,7 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
         agent_id: uuid::Uuid::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -542,7 +545,7 @@ fn offtrack_fail_sets_error_and_status() {
         agent_id: uuid::Uuid::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -633,7 +636,7 @@ fn offtrack_askuser_injects_stm_context() {
         agent_id: uuid::Uuid::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),

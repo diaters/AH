@@ -11,10 +11,12 @@ use common::mock_executor::CannedExecutor;
 use crossbeam_channel::unbounded;
 use harness::triggers::{ScheduledTaskInfo, ScheduledTaskRegistry};
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutor, AgentKind, AgentProfile,
-    AgentToolPermissions, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
-    HarnessConfig, LlmToolCall, LongTermMemory, OutputContent, Task, TaskStatus, TaskTrigger,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutor, domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions,
+    domain::ChannelId, domain::EngineEvent, domain::EventTarget, domain::Frontend,
+    domain::FrontendKind, domain::LlmToolCall, domain::LongTermMemory, domain::OutputContent,
+    domain::Task, domain::TaskStatus, domain::TaskTrigger, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -45,13 +47,13 @@ fn shell_exec_call(id: &str, command: &str) -> LlmToolCall {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::BrainConfig { enabled: true }),
+        brain: Some(harness::systems::BrainConfig { enabled: true }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -144,7 +146,7 @@ impl Frontend for CapturingQQFrontend {
         self.events.lock().unwrap().push(event);
     }
 
-    fn poll_actions(&self) -> Vec<harness::UserAction> {
+    fn poll_actions(&self) -> Vec<harness::domain::UserAction> {
         vec![]
     }
 }

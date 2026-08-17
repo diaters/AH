@@ -6,7 +6,7 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::{Clock, FrontendRegistry, HarnessSettings},
+    contracts::{Clock, FrontendRegistry},
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, EngineEvent, EventTarget,
         ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
@@ -18,6 +18,7 @@ use crate::{
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
+    systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
 
@@ -460,12 +461,13 @@ pub fn tool_confirmation_result_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Clock, HarnessConfig, HarnessSettings};
+    use crate::contracts::Clock;
     use crate::domain::{
         AgentExecutionRequest, AgentRequestKind, ChannelId, ConfirmationOption, FrontendKind, Task,
         TaskStatus, ToolConfirmationResponseMessage, ToolExecutionRequestMessage, WaitingReason,
     };
     use crate::systems::NativeProcessBackend;
+    use crate::systems::{HarnessConfig, HarnessSettings};
     use bevy_ecs::system::RunSystemOnce;
     use chrono::Utc;
     use uuid::Uuid;
@@ -483,7 +485,7 @@ mod tests {
         world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
             std::path::PathBuf::from("/nonexistent_skills_root"),
         ));
-        world.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        world.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         world
     }
 

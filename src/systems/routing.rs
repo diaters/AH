@@ -3,7 +3,7 @@ use tracing::debug;
 
 use crate::ecs::EntityIndex;
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
         AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
@@ -288,7 +288,8 @@ mod tests {
     use crate::prelude::*;
 
     use super::{continue_task_system, user_input_routing_system};
-    use crate::app::{Clock, MemoryConfig};
+    use crate::contracts::Clock;
+    use crate::domain::MemoryConfig;
     use crate::domain::{
         Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, AskUserPending,
         ChannelId, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchStrategy,

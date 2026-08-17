@@ -16,15 +16,19 @@ use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::infrastructure::skills::{SkillEntry, SkillId, SkillLoader, SkillRegistry};
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    AgentRequestKind, AgentToolPermissions, ChannelId, ConversationMessage, EntityIndex,
-    ExperienceCandidate, ExperienceCandidateStatus, ExperienceCollectionCompletedMessage,
-    ExperienceGovernanceRequestMessage, ExperienceKindFilter, ExperienceKindHint, ExperienceStore,
-    ExperienceWritebackDestination, FrontendKind, HarnessConfig, LongTermMemory, ShortTermMemory,
-    SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation, Task,
-    TaskExperiencePolicy, TaskInjectedSkill, TaskRoutingPolicy, TaskStatus, ToolCallingState,
-    ToolDefinition, ToolExecutionRequestMessage, ToolPermission, WorkItem, WorkItemType,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::ConversationMessage, domain::ExperienceCandidate, domain::ExperienceCandidateStatus,
+    domain::ExperienceCollectionCompletedMessage, domain::ExperienceGovernanceRequestMessage,
+    domain::ExperienceKindFilter, domain::ExperienceKindHint, domain::ExperienceStore,
+    domain::ExperienceWritebackDestination, domain::FrontendKind, domain::LongTermMemory,
+    domain::ShortTermMemory, domain::SkillUpdateCompletedMessage, domain::SkillUpdateContext,
+    domain::SkillUpdateOperation, domain::Task, domain::TaskExperiencePolicy,
+    domain::TaskInjectedSkill, domain::TaskRoutingPolicy, domain::TaskStatus,
+    domain::ToolCallingState, domain::ToolDefinition, domain::ToolExecutionRequestMessage,
+    domain::ToolPermission, domain::WorkItem, domain::WorkItemType, ecs::EntityIndex,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -433,7 +437,7 @@ fn persistent_agent_without_skill_routes_to_governance() {
     let has_skill_package_decision = {
         let mut q = app
             .world_mut()
-            .query::<&harness::ExperienceGovernanceDecision>();
+            .query::<&harness::domain::ExperienceGovernanceDecision>();
         q.iter(app.world())
             .any(|d| d.destination == ExperienceWritebackDestination::SkillPackage)
     };
@@ -446,7 +450,7 @@ fn persistent_agent_without_skill_routes_to_governance() {
     let has_skill_update_request = {
         let mut q = app
             .world_mut()
-            .query::<&harness::SkillUpdateRequestMessage>();
+            .query::<&harness::domain::SkillUpdateRequestMessage>();
         q.iter(app.world()).count() > 0
     };
     assert!(
@@ -522,7 +526,7 @@ fn temporary_agent_routes_to_parent_inbox() {
         .expect("inbox should exist for parent task");
     assert_eq!(
         inbox.status,
-        harness::ExperienceInboxStatus::Consumed,
+        harness::domain::ExperienceInboxStatus::Consumed,
         "inbox status should be Consumed after aggregation"
     );
 }
@@ -836,7 +840,7 @@ fn self_updatable_false_discards_candidate() {
     let has_skill_update_request = {
         let mut q = app
             .world_mut()
-            .query::<&harness::SkillUpdateRequestMessage>();
+            .query::<&harness::domain::SkillUpdateRequestMessage>();
         q.iter(app.world()).count() > 0
     };
     assert!(

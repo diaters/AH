@@ -6,7 +6,7 @@ use crate::prelude::*;
 use tracing::{debug, info};
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{
         DispatchHint, DispatchKind, DispatchStrategy, PendingDispatch, SummarizationRequestMessage,
         SummarizationTrigger, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType,

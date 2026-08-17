@@ -14,7 +14,7 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    contracts::Clock,
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResultMessage, AgentKind, AgentRequestKind,
         AwaitingBrainDecision, DispatchHint, DispatchKind, DispatchStrategy, FailureReason,
@@ -22,6 +22,7 @@ use crate::{
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillRegistry,
+    systems::HarnessSettings,
     systems::dispatch::parse_brain_skill_selection,
 };
 
@@ -205,12 +206,12 @@ pub fn brain_decision_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{BrainConfig, HarnessConfig, HarnessSettings};
     use crate::domain::{
         AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, FrontendKind,
         ToolPermission, WaitingReason,
     };
     use crate::ecs::EntityIndex;
+    use crate::systems::{BrainConfig, HarnessConfig, HarnessSettings};
     use std::collections::HashMap;
     use uuid::Uuid;
 

@@ -7,8 +7,11 @@
 //! - Governance system processes ExperienceGovernanceRequestMessage correctly
 
 use harness::{
-    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceKindHint,
-    ExperienceStore, LongTermMemory, SkillFileRef, SkillFileRole,
+    domain::{
+        ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
+        ExperienceKindHint,
+    },
+    domain::{ExperienceStore, LongTermMemory, SkillFileRef, SkillFileRole},
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 

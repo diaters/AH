@@ -2,6 +2,14 @@
 //!
 //! 定义 /btw、/finish 等用户指令，以及插件 slash command 识别。
 
+use crate::prelude::Resource;
+
+/// 关机请求状态：ingress 系统写入，主循环读取。
+#[derive(Resource, Default)]
+pub struct ShutdownState {
+    pub requested: bool,
+}
+
 /// 用户指令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserCommand {

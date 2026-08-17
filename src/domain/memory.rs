@@ -1,4 +1,4 @@
-use crate::prelude::Component;
+use crate::prelude::{Component, Resource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tiktoken_rs::cl100k_base;
@@ -17,6 +17,27 @@ pub struct LtmWriteHookPending;
 /// 由 companion 系统 `on_ltm_evicted_hook_system` 派发 hook 后移除。
 #[derive(Component, Debug, Clone, Default)]
 pub struct LtmEvictedHookPending;
+
+/// 记忆配置
+#[derive(Debug, Clone, Resource)]
+pub struct MemoryConfig {
+    /// 压缩触发阈值（token 数）
+    pub compression_threshold_tokens: u32,
+    /// 保留最近 N 轮不压缩
+    pub preserve_recent_turns: u32,
+    /// LLM 摘要目标 token 数
+    pub summary_target_tokens: u32,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            compression_threshold_tokens: 8000,
+            preserve_recent_turns: 2,
+            summary_target_tokens: 1000,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -5,8 +5,9 @@ use std::sync::Arc;
 use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutor, ChannelId, EntityIndex, FrontendKind, HarnessConfig, Task, TaskStatus, WorkItem,
-    WorkItemStatus, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
+    domain::Task, domain::TaskStatus, domain::WorkItem, domain::WorkItemStatus,
+    domain::WorkItemType, ecs::EntityIndex, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -45,7 +46,7 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
     task.delegate = Some(governing_agent_id);
     let task_entity = app
         .world_mut()
-        .spawn((task, harness::ShortTermMemory::default()))
+        .spawn((task, harness::domain::ShortTermMemory::default()))
         .id();
     // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
     app.world_mut()
@@ -55,7 +56,7 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
 
     // 不绑定 TaskScoped agent：验证顶层持久型任务不依赖 agent 终止也能触发
     app.world_mut()
-        .spawn(harness::TaskTerminatedMessage { task_id });
+        .spawn(harness::domain::TaskTerminatedMessage { task_id });
 
     app.update();
 
@@ -95,14 +96,16 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
     let task = Task::from_user_input_ready("test task", 3, default_channel());
     let task_id = task.id;
     app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+        .spawn((task, harness::domain::ShortTermMemory::default()));
 
-    let tool = harness::ToolDefinition {
+    let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
-        parameters: harness::ToolSchema::default(),
-        default_permission: harness::ToolPermission::Allow,
-        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        parameters: harness::domain::ToolSchema::default(),
+        default_permission: harness::domain::ToolPermission::Allow,
+        executor: harness::domain::ToolExecutorKind::Builtin(
+            "submit_experience_candidate".to_string(),
+        ),
         required_tag: None,
     };
     let mut work_item = WorkItem::experience_collection(
@@ -119,7 +122,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
     app.world_mut().spawn(work_item);
 
     // 预置候选，模拟 tool 执行已完成
-    let candidate = harness::ExperienceCandidate::knowledge(
+    let candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
         uuid::Uuid::new_v4(),
@@ -127,15 +130,15 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         "test content".to_string(),
     );
     app.world_mut()
-        .resource_mut::<harness::ExperienceStore>()
+        .resource_mut::<harness::domain::ExperienceStore>()
         .stage_root_candidate(candidate);
 
-    let result = harness::AgentExecutionResult {
+    let result = harness::domain::AgentExecutionResult {
         task_id,
         agent_id: uuid::Uuid::new_v4(),
-        request_kind: harness::AgentRequestKind::LlmCompletion,
-        result: Ok(harness::AgentExecutionOutput {
-            content: harness::OutputContent::Text("done".to_string()),
+        request_kind: harness::domain::AgentRequestKind::LlmCompletion,
+        result: Ok(harness::domain::AgentExecutionOutput {
+            content: harness::domain::OutputContent::Text("done".to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -146,7 +149,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         conversation: None,
     };
     app.world_mut()
-        .spawn(harness::AgentExecutionResultMessage { result });
+        .spawn(harness::domain::AgentExecutionResultMessage { result });
 
     app.update();
 
@@ -160,7 +163,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         "WorkItem should be despawned after handling"
     );
 
-    let store = app.world().resource::<harness::ExperienceStore>();
+    let store = app.world().resource::<harness::domain::ExperienceStore>();
     assert!(
         !store.root_candidates_for_task(task_id).is_empty(),
         "candidate should remain in ExperienceStore"
@@ -169,7 +172,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
 
 #[test]
 fn experience_collection_context_excludes_original_system_prompt() {
-    use harness::{EntryMetadata, EntryRole, ShortTermMemory};
+    use harness::{domain::EntryMetadata, domain::EntryRole, domain::ShortTermMemory};
 
     let task = Task::from_user_input_ready("test task", 3, default_channel());
     let mut stm = ShortTermMemory::default();
@@ -182,7 +185,7 @@ fn experience_collection_context_excludes_original_system_prompt() {
 
     // build_experience_collection_conversation 不应依赖外部 system_prompt，
     // 只应返回净化后的任务相关消息。此处直接断言 conversation 长度。
-    let conversation = [harness::ConversationMessage::User {
+    let conversation = [harness::domain::ConversationMessage::User {
         content: task.content.clone(),
     }];
     assert_eq!(conversation.len(), 1);
@@ -210,20 +213,20 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
 
     let agent_entity = app
         .world_mut()
-        .spawn(harness::Agent {
+        .spawn(harness::domain::Agent {
             id: governing_agent_id,
-            profile: harness::AgentProfile {
+            profile: harness::domain::AgentProfile {
                 name: "persistent-worker".to_string(),
                 model: "test".to_string(),
             },
-            capabilities: harness::AgentCapabilities {
+            capabilities: harness::domain::AgentCapabilities {
                 tags: vec![],
                 description: "worker".to_string(),
             },
-            kind: harness::AgentKind::Persistent,
+            kind: harness::domain::AgentKind::Persistent,
             parent_id: None,
             bound_task_id: None,
-            tool_permissions: harness::AgentToolPermissions::default(),
+            tool_permissions: harness::domain::AgentToolPermissions::default(),
             system_prompt: None,
         })
         .id();
@@ -250,7 +253,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
         .tasks
         .insert(task_id, task_entity);
 
-    let candidate = harness::ExperienceCandidate::knowledge(
+    let candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
         collector_id,
@@ -259,11 +262,11 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     );
     let candidate_id = candidate.candidate_id;
     app.world_mut()
-        .resource_mut::<harness::ExperienceStore>()
+        .resource_mut::<harness::domain::ExperienceStore>()
         .stage_root_candidate(candidate);
 
     app.world_mut()
-        .spawn(harness::ExperienceCollectionCompletedMessage {
+        .spawn(harness::domain::ExperienceCollectionCompletedMessage {
             task_id,
             parent_task_id: None,
             agent_id: collector_id,
@@ -275,7 +278,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     // 验证候选的 governing_agent_id 被设置为原任务治理者，而非 collector。
     // route_persistent_agent_experience 在入口对保留候选统一写入 governing_agent_id
     // （与 governance system 的行为对齐）。
-    let store = app.world().resource::<harness::ExperienceStore>();
+    let store = app.world().resource::<harness::domain::ExperienceStore>();
     let candidate = store.candidates.get(&candidate_id).unwrap();
     assert_eq!(
         candidate.governing_agent_id,
@@ -286,14 +289,14 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
 
 #[test]
 fn child_task_experience_still_aggregates_into_parent_inbox() {
-    use harness::{ExperienceStore, TaskId};
+    use harness::{domain::ExperienceStore, domain::TaskId};
 
     let mut store = ExperienceStore::default();
     let parent_task_id: TaskId = uuid::Uuid::new_v4();
     let child_task_id: TaskId = uuid::Uuid::new_v4();
     let parent_agent_id = uuid::Uuid::new_v4();
 
-    let child_candidate = harness::ExperienceCandidate::knowledge(
+    let child_candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         child_task_id,
         uuid::Uuid::new_v4(),
@@ -306,7 +309,7 @@ fn child_task_experience_still_aggregates_into_parent_inbox() {
     assert!(!ids.is_empty());
     assert_eq!(
         store.candidates.get(&ids[0]).unwrap().status,
-        harness::ExperienceCandidateStatus::Aggregated
+        harness::domain::ExperienceCandidateStatus::Aggregated
     );
 }
 
@@ -334,33 +337,33 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
     let governing_agent_id = uuid::Uuid::new_v4();
     let mut task = Task::from_user_input_ready("top task", 3, default_channel());
     task.delegate = Some(governing_agent_id);
-    task.status = harness::TaskStatus::Waiting(harness::WaitingReason::User);
+    task.status = harness::domain::TaskStatus::Waiting(harness::domain::WaitingReason::User);
     let _task_id = task.id;
     app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+        .spawn((task, harness::domain::ShortTermMemory::default()));
 
     // Spawn the governing agent so governance can find it
-    app.world_mut().spawn(harness::Agent {
+    app.world_mut().spawn(harness::domain::Agent {
         id: governing_agent_id,
-        profile: harness::AgentProfile {
+        profile: harness::domain::AgentProfile {
             name: "test-governor".to_string(),
             model: "test".to_string(),
         },
-        capabilities: harness::AgentCapabilities {
+        capabilities: harness::domain::AgentCapabilities {
             tags: vec![],
             description: "governor".to_string(),
         },
-        kind: harness::AgentKind::Persistent,
+        kind: harness::domain::AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
+        tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
     // Give the agent a LongTermMemory
     app.world_mut()
-        .spawn(harness::LongTermMemory::with_name("test-governor"));
+        .spawn(harness::domain::LongTermMemory::with_name("test-governor"));
 
-    app.world_mut().spawn(harness::UserInputMessage {
+    app.world_mut().spawn(harness::domain::UserInputMessage {
         content: "/finish".to_string(),
         origin_channel: default_channel(),
     });
@@ -379,7 +382,7 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
     // 因为 NoOpExecutor 立即返回，WorkItem 可能已被完成并 despawn，
     // 所以我们验证经验收集请求至少被触发过（通过 TaskTerminatedMessage 被正确生成）。
     // 去重验证由领域层单元测试覆盖。
-    let store = app.world().resource::<harness::ExperienceStore>();
+    let store = app.world().resource::<harness::domain::ExperienceStore>();
     // NoOpExecutor 不会提交候选，所以 store 为空，但不应 panic 或产生其他异常
     assert!(
         store.candidates.is_empty(),

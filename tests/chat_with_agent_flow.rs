@@ -7,9 +7,10 @@ use std::sync::Arc;
 use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    ChannelId, FrontendKind, HarnessConfig, Task, TaskRoutingPolicy, TaskStatus, ToolPermission,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
+    domain::FrontendKind, domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus,
+    domain::ToolPermission, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -25,8 +26,8 @@ fn default_channel() -> ChannelId {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
@@ -87,7 +88,7 @@ fn chat_with_agent_creates_chat_subtask() {
                 tool_permissions: AgentToolPermissions::default(),
                 system_prompt: None,
             },
-            harness::LongTermMemory::default(),
+            harness::domain::LongTermMemory::default(),
         ))
         .id();
     app.world_mut()
@@ -120,7 +121,7 @@ fn chat_with_agent_creates_chat_subtask() {
                 tool_permissions: perms,
                 system_prompt: None,
             },
-            harness::LongTermMemory::default(),
+            harness::domain::LongTermMemory::default(),
         ))
         .id();
     app.world_mut()
@@ -155,7 +156,7 @@ fn chat_with_agent_creates_chat_subtask() {
                 routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
-            harness::ShortTermMemory::default(),
+            harness::domain::ShortTermMemory::default(),
         ))
         .id();
     app.world_mut()
@@ -164,29 +165,30 @@ fn chat_with_agent_creates_chat_subtask() {
         .insert(parent_task_id, parent_task_entity);
 
     // 模拟父 Agent 调用 chat_with_agent 工具
-    app.world_mut().spawn(harness::ToolExecutionRequestMessage {
-        request: harness::AgentExecutionRequest {
-            task_id: parent_task_id,
-            agent_id: parent_agent_id,
-            request_kind: harness::AgentRequestKind::LlmCompletion,
-            prompt: "call chat_with_agent".to_string(),
-            system_prompt: None,
-            tools: vec![],
-            conversation: None,
-            work_item_id: None,
-            model_override: None,
-        },
-        tool_name: "chat_with_agent".to_string(),
-        tool_input: serde_json::json!({
-            "agent": "reviewer",
-            "message": "please review this API design"
-        }),
-        pending_confirmation_id: None,
-        tool_call_id: Some("call_chat_1".to_string()),
-        pending_confirmation_options: None,
-        work_item_entity: None,
-        confirmed_once: false,
-    });
+    app.world_mut()
+        .spawn(harness::domain::ToolExecutionRequestMessage {
+            request: harness::domain::AgentExecutionRequest {
+                task_id: parent_task_id,
+                agent_id: parent_agent_id,
+                request_kind: harness::domain::AgentRequestKind::LlmCompletion,
+                prompt: "call chat_with_agent".to_string(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+            },
+            tool_name: "chat_with_agent".to_string(),
+            tool_input: serde_json::json!({
+                "agent": "reviewer",
+                "message": "please review this API design"
+            }),
+            pending_confirmation_id: None,
+            tool_call_id: Some("call_chat_1".to_string()),
+            pending_confirmation_options: None,
+            work_item_entity: None,
+            confirmed_once: false,
+        });
 
     // 先运行一帧初始化
     app.update();
@@ -197,9 +199,9 @@ fn chat_with_agent_creates_chat_subtask() {
     }
 
     // 验证子任务存在、带有 ChatSession 且状态为 Waiting(ChatAgent) 或 Ready
-    let chat_tasks: Vec<(harness::Task, harness::ChatSession)> = {
+    let chat_tasks: Vec<(harness::domain::Task, harness::domain::ChatSession)> = {
         let world = app.world_mut();
-        let mut query = world.query::<(&harness::Task, &harness::ChatSession)>();
+        let mut query = world.query::<(&harness::domain::Task, &harness::domain::ChatSession)>();
         query
             .iter(world)
             .filter(|(t, _)| t.parent_task_id == Some(parent_task_id))
@@ -267,7 +269,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 tool_permissions: AgentToolPermissions::default(),
                 system_prompt: None,
             },
-            harness::LongTermMemory::default(),
+            harness::domain::LongTermMemory::default(),
         ))
         .id();
     app.world_mut()
@@ -300,7 +302,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 tool_permissions: perms,
                 system_prompt: None,
             },
-            harness::LongTermMemory::default(),
+            harness::domain::LongTermMemory::default(),
         ))
         .id();
     app.world_mut()
@@ -335,7 +337,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 routing_policy: TaskRoutingPolicy::conversational(default_channel()),
                 last_evaluated_turn: None,
             },
-            harness::ShortTermMemory::default(),
+            harness::domain::ShortTermMemory::default(),
         ))
         .id();
     app.world_mut()
@@ -346,29 +348,30 @@ fn chat_with_agent_multi_round_via_handle() {
     app.update();
 
     // 第一轮：创建对话
-    app.world_mut().spawn(harness::ToolExecutionRequestMessage {
-        request: harness::AgentExecutionRequest {
-            task_id: parent_task_id,
-            agent_id: parent_agent_id,
-            request_kind: harness::AgentRequestKind::LlmCompletion,
-            prompt: "call chat_with_agent".to_string(),
-            system_prompt: None,
-            tools: vec![],
-            conversation: None,
-            work_item_id: None,
-            model_override: None,
-        },
-        tool_name: "chat_with_agent".to_string(),
-        tool_input: serde_json::json!({
-            "agent": "reviewer",
-            "message": "first round message"
-        }),
-        pending_confirmation_id: None,
-        tool_call_id: Some("call_round_1".to_string()),
-        pending_confirmation_options: None,
-        work_item_entity: None,
-        confirmed_once: false,
-    });
+    app.world_mut()
+        .spawn(harness::domain::ToolExecutionRequestMessage {
+            request: harness::domain::AgentExecutionRequest {
+                task_id: parent_task_id,
+                agent_id: parent_agent_id,
+                request_kind: harness::domain::AgentRequestKind::LlmCompletion,
+                prompt: "call chat_with_agent".to_string(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+            },
+            tool_name: "chat_with_agent".to_string(),
+            tool_input: serde_json::json!({
+                "agent": "reviewer",
+                "message": "first round message"
+            }),
+            pending_confirmation_id: None,
+            tool_call_id: Some("call_round_1".to_string()),
+            pending_confirmation_options: None,
+            work_item_entity: None,
+            confirmed_once: false,
+        });
 
     for _ in 0..10 {
         app.update();
@@ -377,7 +380,7 @@ fn chat_with_agent_multi_round_via_handle() {
     // 找到创建的对话子任务
     let handle: Uuid = {
         let world = app.world_mut();
-        let mut query = world.query::<(&harness::Task, &harness::ChatSession)>();
+        let mut query = world.query::<(&harness::domain::Task, &harness::domain::ChatSession)>();
         query
             .iter(world)
             .find(|(t, _)| t.parent_task_id == Some(parent_task_id))
@@ -386,29 +389,30 @@ fn chat_with_agent_multi_round_via_handle() {
     };
 
     // 第二轮：通过 handle 继续对话
-    app.world_mut().spawn(harness::ToolExecutionRequestMessage {
-        request: harness::AgentExecutionRequest {
-            task_id: parent_task_id,
-            agent_id: parent_agent_id,
-            request_kind: harness::AgentRequestKind::LlmCompletion,
-            prompt: "continue chat".to_string(),
-            system_prompt: None,
-            tools: vec![],
-            conversation: None,
-            work_item_id: None,
-            model_override: None,
-        },
-        tool_name: "chat_with_agent".to_string(),
-        tool_input: serde_json::json!({
-            "handle": handle.to_string(),
-            "message": "second round message"
-        }),
-        pending_confirmation_id: None,
-        tool_call_id: Some("call_round_2".to_string()),
-        pending_confirmation_options: None,
-        work_item_entity: None,
-        confirmed_once: false,
-    });
+    app.world_mut()
+        .spawn(harness::domain::ToolExecutionRequestMessage {
+            request: harness::domain::AgentExecutionRequest {
+                task_id: parent_task_id,
+                agent_id: parent_agent_id,
+                request_kind: harness::domain::AgentRequestKind::LlmCompletion,
+                prompt: "continue chat".to_string(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+            },
+            tool_name: "chat_with_agent".to_string(),
+            tool_input: serde_json::json!({
+                "handle": handle.to_string(),
+                "message": "second round message"
+            }),
+            pending_confirmation_id: None,
+            tool_call_id: Some("call_round_2".to_string()),
+            pending_confirmation_options: None,
+            work_item_entity: None,
+            confirmed_once: false,
+        });
 
     for _ in 0..10 {
         app.update();
@@ -417,7 +421,7 @@ fn chat_with_agent_multi_round_via_handle() {
     // 验证子任务仍然只有一个（没有创建新的）
     let chat_tasks_after: Vec<Uuid> = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::Task>();
+        let mut query = world.query::<&harness::domain::Task>();
         query
             .iter(world)
             .filter(|t| t.parent_task_id == Some(parent_task_id))
@@ -471,7 +475,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         },
-        harness::LongTermMemory::default(),
+        harness::domain::LongTermMemory::default(),
     ));
 
     let parent_agent_id = Uuid::new_v4();
@@ -496,7 +500,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             tool_permissions: perms,
             system_prompt: None,
         },
-        harness::LongTermMemory::default(),
+        harness::domain::LongTermMemory::default(),
     ));
 
     let parent_task_id = Uuid::new_v4();
@@ -510,7 +514,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             content: "test".to_string(),
             creator: parent_agent_id,
             delegate: Some(parent_agent_id),
-            status: TaskStatus::Waiting(harness::WaitingReason::SubTaskBatch { batch_id }),
+            status: TaskStatus::Waiting(harness::domain::WaitingReason::SubTaskBatch { batch_id }),
             pending_confirmation_id: None,
             input_summary: "test".to_string(),
             result_summary: String::new(),
@@ -528,27 +532,28 @@ fn chat_round_completion_preserves_parent_waiting_status() {
             routing_policy: TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
-        harness::ShortTermMemory::default(),
+        harness::domain::ShortTermMemory::default(),
     ));
 
     // 模拟子任务完成，发出 ChatRoundReadyMessage
-    app.world_mut().spawn(harness::ChatRoundReadyMessage {
-        child_task_id,
-        parent_task_id,
-        parent_agent_id,
-        batch_id,
-        parent_tool_call_id: "call_chat_test".to_string(),
-        response: "test response".to_string(),
-        child_agent_name: "reviewer".to_string(),
-    });
+    app.world_mut()
+        .spawn(harness::domain::ChatRoundReadyMessage {
+            child_task_id,
+            parent_task_id,
+            parent_agent_id,
+            batch_id,
+            parent_tool_call_id: "call_chat_test".to_string(),
+            response: "test response".to_string(),
+            child_agent_name: "reviewer".to_string(),
+        });
 
     // 运行一帧让 chat_round_completion_system 处理
     app.update();
 
     // 验证父任务状态仍然是 Waiting(SubTaskBatch)，而非 Ready
-    let parent_status: harness::TaskStatus = {
+    let parent_status: harness::domain::TaskStatus = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::Task>();
+        let mut query = world.query::<&harness::domain::Task>();
         query
             .iter(world)
             .find(|t| t.id == parent_task_id)
@@ -559,7 +564,9 @@ fn chat_round_completion_preserves_parent_waiting_status() {
     assert!(
         matches!(
             parent_status,
-            harness::TaskStatus::Waiting(harness::WaitingReason::SubTaskBatch { .. })
+            harness::domain::TaskStatus::Waiting(
+                harness::domain::WaitingReason::SubTaskBatch { .. }
+            )
         ),
         "parent task should still be Waiting(SubTaskBatch) after chat_round_completion, got {:?}",
         parent_status
@@ -568,7 +575,8 @@ fn chat_round_completion_preserves_parent_waiting_status() {
     // 验证 Tool 调用已记录到父任务的 ShortTermMemory
     let tool_call_recorded: bool = {
         let world = app.world_mut();
-        let mut query = world.query::<(&harness::Task, &harness::ShortTermMemory)>();
+        let mut query =
+            world.query::<(&harness::domain::Task, &harness::domain::ShortTermMemory)>();
         query
             .iter(world)
             .find(|(t, _)| t.id == parent_task_id)

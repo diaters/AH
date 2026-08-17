@@ -16,13 +16,21 @@ use std::sync::Arc;
 use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentAssetService, AgentExecutionRequest, AgentRequestKind, ExperienceCandidate,
-    ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceGovernanceDecision,
-    ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination, HarnessConfig,
-    ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
-    infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
+    app::build_harness_app,
+    domain::{
+        AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExperienceCandidate,
+        ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceGovernanceDecision,
+        ExperienceKindHint, ExperienceStore, ExperienceWritebackDestination,
+        ToolConfirmationRequestMessage, ToolConfirmationResponseMessage,
+        ToolExecutionRequestMessage,
+    },
+    infrastructure::{
+        assets::AgentAssetService,
+        memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
+    },
+    llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
-use harness::{AgentExecutor, build_harness_app, llm::ExecutorRegistry};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -37,7 +45,7 @@ fn make_service(dir: &TempDir) -> LongTermMemoryService {
 fn persistent_agent_knowledge_candidate_persists_to_ltm() {
     let dir = TempDir::new().unwrap();
     let mut service = make_service(&dir);
-    let mut memory = harness::LongTermMemory::with_name("persistent-worker");
+    let mut memory = harness::domain::LongTermMemory::with_name("persistent-worker");
 
     let mut store = ExperienceStore::default();
     let candidate = ExperienceCandidate::knowledge(
@@ -128,18 +136,18 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
     store.stage_root_candidate(candidate.clone());
 
     // default Agent 治理：私有知识不能进 LTM，只能生成 IncubationProposal。
-    let proposal = harness::IncubationProposal {
+    let proposal = harness::domain::IncubationProposal {
         proposal_id: uuid::Uuid::new_v4(),
         source_agent_id: agent_id,
         source_task_id: task_id,
-        proposed_agent_profile: harness::AgentProfile {
+        proposed_agent_profile: harness::domain::AgentProfile {
             name: "incubated-test".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
         knowledge_candidate_ids: vec![candidate.candidate_id],
         skill_candidate_ids: vec![],
         incubation_rationale: String::new(),
-        status: harness::IncubationProposalStatus::Proposed,
+        status: harness::domain::IncubationProposalStatus::Proposed,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -154,12 +162,12 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
 /// 顶层治理统一收束：顶层自身候选与子层汇聚候选同时进入治理输入。
 #[test]
 fn top_level_governance_consumes_root_and_aggregated_candidates() {
-    let mut store = harness::ExperienceStore::default();
+    let mut store = harness::domain::ExperienceStore::default();
     let top_task_id = uuid::Uuid::new_v4();
     let top_agent_id = uuid::Uuid::new_v4();
 
     // 顶层自身候选
-    let root = harness::ExperienceCandidate::knowledge(
+    let root = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         top_task_id,
         top_agent_id,
@@ -170,7 +178,7 @@ fn top_level_governance_consumes_root_and_aggregated_candidates() {
     store.stage_root_candidate(root);
 
     // 子层候选：先进入 inbox，再标记为 Aggregated
-    let child = harness::ExperienceCandidate::knowledge(
+    let child = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
@@ -193,28 +201,28 @@ fn top_level_governance_consumes_root_and_aggregated_candidates() {
     // 两者都应处于 GovernancePending
     assert_eq!(
         store.candidates.get(&root_id).unwrap().status,
-        harness::ExperienceCandidateStatus::GovernancePending
+        harness::domain::ExperienceCandidateStatus::GovernancePending
     );
     assert_eq!(
         store.candidates.get(&child_id).unwrap().status,
-        harness::ExperienceCandidateStatus::GovernancePending
+        harness::domain::ExperienceCandidateStatus::GovernancePending
     );
 }
 
 /// default Agent 的多个私有候选只汇总成一个任务级 IncubationProposal。
 #[test]
 fn default_agent_merges_multiple_private_candidates_into_single_task_level_proposal() {
-    let mut store = harness::ExperienceStore::default();
+    let mut store = harness::domain::ExperienceStore::default();
     let task_id = uuid::Uuid::new_v4();
     let agent_id = uuid::Uuid::new_v4();
 
-    let profile = harness::AgentProfile {
+    let profile = harness::domain::AgentProfile {
         name: "physics-specialist".to_string(),
         model: "gpt-4.1-mini".to_string(),
     };
 
     // 知识类候选
-    let knowledge = harness::ExperienceCandidate::knowledge(
+    let knowledge = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
         agent_id,
@@ -222,13 +230,13 @@ fn default_agent_merges_multiple_private_candidates_into_single_task_level_propo
         "E=mc²".to_string(),
     );
     // Skill 类候选
-    let skill = harness::ExperienceCandidate {
+    let skill = harness::domain::ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics sim".to_string(),
-        kind_hint: harness::ExperienceKindHint::Skill,
-        payload: harness::ExperienceCandidatePayload::Skill {
+        kind_hint: harness::domain::ExperienceKindHint::Skill,
+        payload: harness::domain::ExperienceCandidatePayload::Skill {
             name: "physics simulation".to_string(),
             description: "run physics simulation".to_string(),
             instructions: "after parameter changes".to_string(),
@@ -236,7 +244,7 @@ fn default_agent_merges_multiple_private_candidates_into_single_task_level_propo
             is_new: false,
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::Submitted,
+        status: harness::domain::ExperienceCandidateStatus::Submitted,
         governing_agent_id: None,
         derived_from_candidate_ids: vec![],
     };
@@ -257,18 +265,18 @@ fn default_agent_merges_multiple_private_candidates_into_single_task_level_propo
 /// 写回失败时候选应进入 WritebackFailed 状态。
 #[test]
 fn failed_writeback_marks_candidate_writeback_failed() {
-    let mut candidate = harness::ExperienceCandidate::knowledge(
+    let mut candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
         "bad".to_string(),
         "content".to_string(),
     );
-    candidate.status = harness::ExperienceCandidateStatus::WritebackFailed;
+    candidate.status = harness::domain::ExperienceCandidateStatus::WritebackFailed;
 
     assert_eq!(
         candidate.status,
-        harness::ExperienceCandidateStatus::WritebackFailed
+        harness::domain::ExperienceCandidateStatus::WritebackFailed
     );
 }
 
@@ -311,8 +319,8 @@ fn experience_governance_confirmation_skips_tool_execution() {
         agent_id,
         tool_name: "experience_governance".to_string(),
         tool_input: serde_json::json!({"candidate_id": uuid::Uuid::new_v4().to_string()}),
-        options: harness::ConfirmationOption::default_options(),
-        source: harness::ConfirmationSource::User,
+        options: harness::domain::ConfirmationOption::default_options(),
+        source: harness::domain::ConfirmationSource::User,
         parent_agent_id: None,
         approval_context: None,
     });
@@ -334,7 +342,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
         tool_input: serde_json::json!({}),
         pending_confirmation_id: Some(request_id),
         tool_call_id: None,
-        pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        pending_confirmation_options: Some(harness::domain::ConfirmationOption::default_options()),
         work_item_entity: None,
         confirmed_once: false,
     });
@@ -363,7 +371,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
     // 验证没有生成 ToolExecutionResultMessage（特判阻止了工具执行）
     let exec_results: Vec<_> = app
         .world_mut()
-        .query::<&harness::ToolExecutionResultMessage>()
+        .query::<&harness::domain::ToolExecutionResultMessage>()
         .iter(app.world())
         .filter(|r| r.tool_name == "experience_governance")
         .collect();
@@ -398,23 +406,23 @@ fn approved_candidate_spawns_writeback_request() {
 
     // 创建 Agent 实体和 LongTermMemory 组件（writeback_to_long_term_memory 需要）
     app.world_mut().spawn((
-        harness::Agent {
+        harness::domain::Agent {
             id: agent_id,
-            profile: harness::AgentProfile {
+            profile: harness::domain::AgentProfile {
                 name: agent_name.clone(),
                 model: "test".to_string(),
             },
-            capabilities: harness::AgentCapabilities {
+            capabilities: harness::domain::AgentCapabilities {
                 tags: vec![],
                 description: String::new(),
             },
-            kind: harness::AgentKind::Persistent,
+            kind: harness::domain::AgentKind::Persistent,
             parent_id: None,
             bound_task_id: None,
-            tool_permissions: harness::AgentToolPermissions::default(),
+            tool_permissions: harness::domain::AgentToolPermissions::default(),
             system_prompt: None,
         },
-        harness::LongTermMemory::with_name(&agent_name),
+        harness::domain::LongTermMemory::with_name(&agent_name),
     ));
 
     // 设置 ExperienceStore：添加候选、设置 governing_agent_id、治理决议
@@ -451,8 +459,8 @@ fn approved_candidate_spawns_writeback_request() {
         agent_id,
         tool_name: "experience_governance".to_string(),
         tool_input: serde_json::json!({"candidate_id": promoted_ids[0].to_string()}),
-        options: harness::ConfirmationOption::default_options(),
-        source: harness::ConfirmationSource::User,
+        options: harness::domain::ConfirmationOption::default_options(),
+        source: harness::domain::ConfirmationSource::User,
         parent_agent_id: None,
         approval_context: None,
     });
@@ -474,7 +482,7 @@ fn approved_candidate_spawns_writeback_request() {
         tool_input: serde_json::json!({}),
         pending_confirmation_id: Some(request_id),
         tool_call_id: None,
-        pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        pending_confirmation_options: Some(harness::domain::ConfirmationOption::default_options()),
         work_item_entity: None,
         confirmed_once: false,
     });
@@ -552,7 +560,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         store.merge_into_proposal(
             task_id,
             agent_id,
-            harness::AgentProfile {
+            harness::domain::AgentProfile {
                 name: "incubated-test".to_string(),
                 model: "test".to_string(),
             },
@@ -577,8 +585,8 @@ fn approval_to_writeback_completes_in_same_frame() {
         agent_id,
         tool_name: "experience_governance".to_string(),
         tool_input: serde_json::json!({"candidate_id": candidate_id.to_string()}),
-        options: harness::ConfirmationOption::default_options(),
-        source: harness::ConfirmationSource::User,
+        options: harness::domain::ConfirmationOption::default_options(),
+        source: harness::domain::ConfirmationSource::User,
         parent_agent_id: None,
         approval_context: None,
     });
@@ -600,7 +608,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         tool_input: serde_json::json!({}),
         pending_confirmation_id: Some(request_id),
         tool_call_id: None,
-        pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+        pending_confirmation_options: Some(harness::domain::ConfirmationOption::default_options()),
         work_item_entity: None,
         confirmed_once: false,
     });
@@ -618,7 +626,7 @@ fn approval_to_writeback_completes_in_same_frame() {
     assert!(proposal.is_some(), "proposal should exist for task");
     assert_eq!(
         proposal.unwrap().status,
-        harness::IncubationProposalStatus::Executed,
+        harness::domain::IncubationProposalStatus::Executed,
         "proposal should reach Executed in same frame after approval"
     );
 }
@@ -657,7 +665,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
     // 创建 3 个候选绑定到同一 proposal
     let candidate_ids: Vec<uuid::Uuid> = {
         let mut store = app.world_mut().resource_mut::<ExperienceStore>();
-        let profile = harness::AgentProfile {
+        let profile = harness::domain::AgentProfile {
             name: "incubated-test".to_string(),
             model: "test".to_string(),
         };
@@ -701,8 +709,8 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
             agent_id,
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({"candidate_id": cid.to_string()}),
-            options: harness::ConfirmationOption::default_options(),
-            source: harness::ConfirmationSource::User,
+            options: harness::domain::ConfirmationOption::default_options(),
+            source: harness::domain::ConfirmationSource::User,
             parent_agent_id: None,
             approval_context: None,
         });
@@ -724,7 +732,9 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
             tool_input: serde_json::json!({}),
             pending_confirmation_id: Some(*req_id),
             tool_call_id: None,
-            pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+            pending_confirmation_options: Some(
+                harness::domain::ConfirmationOption::default_options(),
+            ),
             work_item_entity: None,
             confirmed_once: false,
         });
@@ -745,7 +755,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
     let proposal = store.proposals.get(&task_id).unwrap();
     assert_eq!(
         proposal.status,
-        harness::IncubationProposalStatus::Executed,
+        harness::domain::IncubationProposalStatus::Executed,
         "proposal should be Executed after first candidate writeback"
     );
 
@@ -845,7 +855,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
         assert!(ids.contains(&child_id_2));
 
         // 合并到同一 proposal
-        let profile = harness::AgentProfile {
+        let profile = harness::domain::AgentProfile {
             name: "incubated-test".to_string(),
             model: "test".to_string(),
         };
@@ -881,8 +891,8 @@ fn aggregated_child_candidates_writeback_idempotently() {
             agent_id,
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({"candidate_id": cid.to_string()}),
-            options: harness::ConfirmationOption::default_options(),
-            source: harness::ConfirmationSource::User,
+            options: harness::domain::ConfirmationOption::default_options(),
+            source: harness::domain::ConfirmationSource::User,
             parent_agent_id: None,
             approval_context: None,
         });
@@ -904,7 +914,9 @@ fn aggregated_child_candidates_writeback_idempotently() {
             tool_input: serde_json::json!({}),
             pending_confirmation_id: Some(*req_id),
             tool_call_id: None,
-            pending_confirmation_options: Some(harness::ConfirmationOption::default_options()),
+            pending_confirmation_options: Some(
+                harness::domain::ConfirmationOption::default_options(),
+            ),
             work_item_entity: None,
             confirmed_once: false,
         });
@@ -925,7 +937,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
     let proposal = store.proposals.get(&parent_task_id).unwrap();
     assert_eq!(
         proposal.status,
-        harness::IncubationProposalStatus::Executed,
+        harness::domain::IncubationProposalStatus::Executed,
         "proposal should be Executed after first successful writeback"
     );
 

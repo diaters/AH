@@ -1,13 +1,13 @@
 use crate::prelude::*;
 use tracing::{debug, info, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
     ExperienceWritebackRequestMessage, GeneratedProfile, LongTermMemory, PendingExperienceHooks,
     ProfileGenerationContext, TaskId, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
-use crate::domain::HookPoint;
 
 fn build_incubated_agent_description(
     store: &crate::domain::ExperienceStore,
@@ -66,7 +66,7 @@ pub(crate) fn experience_writeback_system(
     asset_service: Res<crate::infrastructure::assets::AgentAssetService>,
     proposal_store: Res<crate::infrastructure::incubation::proposal_store::IncubationProposalStore>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
-    settings: Res<crate::app::HarnessSettings>,
+    settings: Res<crate::systems::HarnessSettings>,
     requests: Query<(Entity, &ExperienceWritebackRequestMessage)>,
     profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {

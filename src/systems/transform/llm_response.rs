@@ -6,7 +6,9 @@ use crate::prelude::*;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    app::{Clock, HarnessSettings, MemoryConfig},
+    contracts::Clock,
+    domain::HookPoint,
+    domain::MemoryConfig,
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResult, AgentExecutionResultMessage, AgentId, AgentRequestKind,
@@ -19,7 +21,7 @@ use crate::{
         UserOutputMessage, WaitingReason, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     ecs::EntityIndex,
-    domain::HookPoint,
+    systems::HarnessSettings,
 };
 
 /// 绝对硬上限倍数：iteration 超过此值 × max_iterations 时强制失败任务

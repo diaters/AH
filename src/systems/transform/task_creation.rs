@@ -10,11 +10,11 @@ use crossbeam_channel::unbounded;
 use tracing::{debug, info};
 
 use crate::{
-    app::HarnessSettings,
     domain::{
         CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
         HookPoint, NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
     },
+    systems::HarnessSettings,
     user_plugins::{
         dispatcher::{
             HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,

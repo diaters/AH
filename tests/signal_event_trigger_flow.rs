@@ -10,7 +10,9 @@ use harness::domain::{
     Frontend, FrontendKind, Signal, SignalSource, SignalTriggerRegistry, Task,
     ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
 };
-use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
+use harness::{
+    app::build_harness_app, domain::AgentExecutor, llm::ExecutorRegistry, systems::HarnessConfig,
+};
 use uuid::Uuid;
 
 struct MockFrontend {

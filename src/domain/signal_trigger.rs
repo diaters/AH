@@ -12,6 +12,13 @@ use super::ChannelId;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SignalSource(pub String);
 
+/// 触发器配置文件路径，供 `reload_triggers_system` 读取。
+///
+/// 从 `HarnessConfig::triggers_config_path` 在装配期投影注入，
+/// 让 triggers 模块不依赖上层配置聚合（P0 依赖方向治理）。
+#[derive(Resource, Default)]
+pub struct TriggersConfigPath(pub Option<String>);
+
 /// 事件任务的触发载荷。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TaskTrigger {
@@ -37,7 +44,7 @@ pub struct EventTaskRoute {
 impl EventTaskRoute {
     /// 渲染任务输入 prompt。
     pub fn build_task_input(&self, trigger: &TaskTrigger) -> anyhow::Result<String> {
-        Ok(crate::triggers::prompt_template::render_template(
+        Ok(crate::domain::render_template(
             &self.prompt_template,
             trigger,
         ))

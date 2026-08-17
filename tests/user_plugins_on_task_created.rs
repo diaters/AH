@@ -15,8 +15,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, NewlyCreatedTask, Task,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::ExternalInput,
+    domain::FrontendKind, domain::NewlyCreatedTask, domain::Task, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 mod common;

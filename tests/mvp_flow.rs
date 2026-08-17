@@ -5,9 +5,11 @@ use std::{sync::Arc, thread, time::Duration};
 use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    ChannelId, DispatchHint, DispatchKind, DispatchStrategy, FrontendKind, HarnessConfig,
-    LongTermMemory, PendingDispatch, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
+    domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy, domain::FrontendKind,
+    domain::LongTermMemory, domain::PendingDispatch, domain::Task, domain::TaskStatus,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -22,8 +24,8 @@ use tokio::runtime::Runtime;
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
@@ -97,7 +99,7 @@ fn completes_single_turn_conversation_flow() {
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
     app.world_mut().spawn((
         task,
-        harness::ShortTermMemory::default(),
+        harness::domain::ShortTermMemory::default(),
         PendingDispatch {
             kind: DispatchKind::Task,
             hint: DispatchHint {

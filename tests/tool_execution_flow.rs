@@ -8,12 +8,15 @@ use common::mock_executor::MockExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentId, AgentKind,
-    AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, EntryRole, FrontendKind,
-    HarnessConfig, NativeProcessBackend, SharedKnowledgeBase, ShortTermMemory, SpaceToolRegistry,
-    Task, TaskStatus, ToolConfirmationResponseMessage, ToolDefinition, ToolExecutionRequestMessage,
-    ToolExecutionResultMessage, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
-    build_harness_app, llm::ExecutorRegistry,
+    NativeProcessBackend, app::build_harness_app, domain::Agent, domain::AgentCapabilities,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentKind,
+    domain::AgentProfile, domain::AgentRequestKind, domain::AgentToolPermissions,
+    domain::ChannelId, domain::EntryRole, domain::FrontendKind, domain::SharedKnowledgeBase,
+    domain::ShortTermMemory, domain::SpaceToolRegistry, domain::Task, domain::TaskStatus,
+    domain::ToolConfirmationResponseMessage, domain::ToolDefinition,
+    domain::ToolExecutionRequestMessage, domain::ToolExecutionResultMessage,
+    domain::ToolExecutorKind, domain::ToolPermission, domain::ToolSchema, domain::WaitingReason,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -800,7 +803,7 @@ fn child_agent_confirm_routes_to_parent() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: Some(default_channel()),
-            routing_policy: harness::TaskRoutingPolicy::conversational(default_channel()),
+            routing_policy: harness::domain::TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),
@@ -950,7 +953,7 @@ fn confirmation_denied_rejects_tool() {
             parent_task_id: None,
             batch_id: None,
             origin_channel: Some(default_channel()),
-            routing_policy: harness::TaskRoutingPolicy::conversational(default_channel()),
+            routing_policy: harness::domain::TaskRoutingPolicy::conversational(default_channel()),
             last_evaluated_turn: None,
         },
         ShortTermMemory::default(),

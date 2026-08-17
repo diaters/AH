@@ -7,7 +7,7 @@ use serde::Serialize;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::app::{Clock, FrontendRegistry};
+use crate::contracts::{Clock, FrontendRegistry};
 use crate::domain::SessionBackend;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, AskUserPending,
@@ -1956,7 +1956,7 @@ mod tests {
     // 4. request_entity 被 despawn
     // 5. 无 output_channel 时返回错误（task 不切 Waiting）
 
-    use crate::SharedKnowledgeBase;
+    use crate::domain::SharedKnowledgeBase;
     use crate::domain::{Frontend, UserAction};
     use std::sync::{Arc, Mutex};
 

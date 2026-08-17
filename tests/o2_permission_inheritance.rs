@@ -10,9 +10,11 @@ use std::sync::Arc;
 use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentSpawnRequestMessage,
-    AgentToolPermissions, ChannelId, ExternalInput, FrontendKind, HarnessConfig, LongTermMemory,
-    Task, TaskRoutingPolicy, TaskStatus, ToolPermission, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentSpawnRequestMessage,
+    domain::AgentToolPermissions, domain::ChannelId, domain::ExternalInput, domain::FrontendKind,
+    domain::LongTermMemory, domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus,
+    domain::ToolPermission, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -28,8 +30,8 @@ fn default_channel() -> ChannelId {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,

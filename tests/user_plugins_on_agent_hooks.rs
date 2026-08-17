@@ -15,9 +15,10 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentStoppingHookPending,
-    AgentToolPermissions, ChannelId, FrontendKind, HarnessConfig, build_harness_app,
-    llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentStoppingHookPending,
+    domain::AgentToolPermissions, domain::ChannelId, domain::FrontendKind, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 mod common;

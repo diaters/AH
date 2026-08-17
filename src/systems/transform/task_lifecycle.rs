@@ -6,7 +6,8 @@ use crate::prelude::*;
 use tracing::{debug, info};
 
 use crate::{
-    app::{Clock, FrontendRegistry, MemoryConfig},
+    contracts::{Clock, FrontendRegistry},
+    domain::MemoryConfig,
     domain::SessionBackend,
     domain::{
         Agent, ClearTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
@@ -566,7 +567,7 @@ mod tests {
     /// 注册 `init_previous_task_status_system` 与 `task_termination_system`，
     /// 并插入所需资源（`MemoryConfig`、`NativeProcessBackend`）。
     fn make_termination_test_app() -> App {
-        use crate::app::{HarnessConfig, HarnessSettings};
+        use crate::systems::{HarnessConfig, HarnessSettings};
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
@@ -809,8 +810,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
-        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::domain::MemoryConfig::default());
+        app.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, clear_task_system);
@@ -895,8 +896,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
-        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::domain::MemoryConfig::default());
+        app.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
@@ -973,8 +974,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
-        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::domain::MemoryConfig::default());
+        app.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
@@ -1052,7 +1053,7 @@ mod tests {
     fn clear_task_system_pushes_task_cleared_event() {
         use std::sync::{Arc, Mutex};
 
-        use crate::app::FrontendRegistry;
+        use crate::contracts::FrontendRegistry;
         use crate::domain::{
             ChannelId, ClearTaskMessage, EngineEvent, EventTarget, Frontend, FrontendKind,
             PreviousTaskStatus, ShortTermMemory, Task, TaskStatus, UserAction,
@@ -1082,7 +1083,7 @@ mod tests {
             })],
         });
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::domain::MemoryConfig::default());
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, clear_task_system);

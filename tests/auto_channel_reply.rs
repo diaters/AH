@@ -5,11 +5,16 @@ use std::{sync::Arc, time::Duration};
 use common::mock_executor::BrainAwareEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    BrainConfig, ChannelId, EntityIndex, ExternalInput, FrontendKind, HarnessConfig,
-    build_harness_app,
+    app::build_harness_app,
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
+    domain::FrontendKind,
+    domain::{
+        Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
+        ChannelId, ExternalInput,
+    },
+    ecs::EntityIndex,
     llm::ExecutorRegistry,
+    systems::{BrainConfig, HarnessConfig},
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -54,7 +59,7 @@ fn spawn_brain_and_default_agent(app: &mut bevy_app::App) {
     let brain_id = brain_agent.id;
     let brain_entity = app
         .world_mut()
-        .spawn((brain_agent, harness::LongTermMemory::default()))
+        .spawn((brain_agent, harness::domain::LongTermMemory::default()))
         .id();
     app.world_mut()
         .resource_mut::<EntityIndex>()
@@ -80,7 +85,7 @@ fn spawn_brain_and_default_agent(app: &mut bevy_app::App) {
     let default_id = default_agent.id;
     let default_entity = app
         .world_mut()
-        .spawn((default_agent, harness::LongTermMemory::default()))
+        .spawn((default_agent, harness::domain::LongTermMemory::default()))
         .id();
     app.world_mut()
         .resource_mut::<EntityIndex>()

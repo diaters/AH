@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use tracing::debug;
 
-use crate::app::MemoryConfig;
+use crate::domain::MemoryConfig;
 use crate::domain::{
     Agent, ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
     FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
@@ -361,8 +361,10 @@ pub(crate) fn reload_plugins_system(world: &mut World) {
         return;
     }
 
-    // 执行重载
+    // 执行重载（user_plugins 侧完成 registry 与技能贡献的重扫），
+    // 随后由 tools 系统主动拉取 registry 注册插件工具（方向反转）。
     crate::user_plugins::reload::reload_plugins(world);
+    crate::systems::tools::register_plugin_tools_in_world(world);
 
     // despawn 消息实体
     for entity in messages {
@@ -404,7 +406,7 @@ mod tests {
     use super::command_parse_system;
     use crate::ecs::EntityIndex;
     use crate::{
-        app::MemoryConfig,
+        domain::MemoryConfig,
         domain::{
             Agent, ChannelId, CreateTaskMessage, KnowledgeValidationStatus,
             PendingKnowledgeWriteHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,

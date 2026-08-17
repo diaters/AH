@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    app::{AsyncRuntime, Clock, FrontendRegistry, HarnessSettings},
+    contracts::{AsyncRuntime, Clock, FrontendRegistry},
     domain::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
@@ -36,6 +36,7 @@ use crate::{
         ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
     },
     ecs::EntityIndex,
+    systems::HarnessSettings,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
 };
 

@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    app::{Clock, FrontendRegistry, HarnessSettings},
+    contracts::{Clock, FrontendRegistry},
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
@@ -19,6 +19,7 @@ use crate::{
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
+    systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
 
@@ -561,7 +562,7 @@ pub(super) fn emit_permission_audit(
 mod tests {
     use super::*;
     use crate::{
-        app::{Clock, FrontendRegistry, HarnessConfig, HarnessSettings},
+        contracts::{Clock, FrontendRegistry},
         domain::{
             Agent, AgentCapabilities, AgentExecutionRequest, AgentKind, AgentProfile,
             AgentRequestKind, AgentToolPermissions, BuiltinToolExecutors, ChannelId,
@@ -571,6 +572,7 @@ mod tests {
             WaitingReason,
         },
         systems::NativeProcessBackend,
+        systems::{HarnessConfig, HarnessSettings},
     };
     use bevy_ecs::prelude::*;
     use chrono::Utc;

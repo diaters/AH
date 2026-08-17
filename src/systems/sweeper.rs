@@ -15,7 +15,7 @@ use crate::prelude::*;
 use tracing::warn;
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{InFlightToolCall, ToolAsyncResult, ToolError, ToolRequestPending, ToolResultSender},
 };
 

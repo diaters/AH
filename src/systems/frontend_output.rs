@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::prelude::*;
 use tracing::{debug, warn};
 
-use crate::app::FrontendRegistry;
+use crate::contracts::FrontendRegistry;
 use crate::domain::{
     Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, FrontendKind, MessageRole,
     SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
@@ -317,7 +317,7 @@ mod tests {
     use crate::prelude::*;
     use uuid::Uuid;
 
-    use crate::app::FrontendRegistry;
+    use crate::contracts::FrontendRegistry;
     use crate::domain::{
         Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
         ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend, FrontendKind,

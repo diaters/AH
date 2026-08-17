@@ -6,9 +6,10 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, DispatchHint, DispatchKind,
-    DispatchStrategy, ExecutorFuture, HarnessConfig, PendingDispatch, WorkItem, WorkItemStatus,
-    WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionRequest,
+    domain::AgentExecutor, domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy,
+    domain::ExecutorFuture, domain::PendingDispatch, domain::WorkItem, domain::WorkItemStatus,
+    domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -19,7 +20,10 @@ impl AgentExecutor for MockExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         Box::pin(async move {
             Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text(format!("response: {}", request.prompt)),
+                content: harness::domain::OutputContent::Text(format!(
+                    "response: {}",
+                    request.prompt
+                )),
                 reasoning_content: None,
             })
         })
@@ -29,8 +33,8 @@ impl AgentExecutor for MockExecutor {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
@@ -137,7 +141,7 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
         task_id,
         "Content to summarize".to_string(),
         500,
-        harness::SummarizationTrigger::TaskComplete,
+        harness::domain::SummarizationTrigger::TaskComplete,
     );
     let work_item_id = work_item.id;
     app.world_mut().spawn((
@@ -223,7 +227,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
     // Verify no execution request was created
     let requests: Vec<_> = app
         .world_mut()
-        .query::<&harness::AgentExecutionRequestMessage>()
+        .query::<&harness::domain::AgentExecutionRequestMessage>()
         .iter(app.world())
         .collect();
     assert_eq!(requests.len(), 0, "Should not create execution request");
@@ -261,12 +265,14 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
-    let tool = harness::ToolDefinition {
+    let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
-        parameters: harness::ToolSchema::default(),
-        default_permission: harness::ToolPermission::Allow,
-        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        parameters: harness::domain::ToolSchema::default(),
+        default_permission: harness::domain::ToolPermission::Allow,
+        executor: harness::domain::ToolExecutorKind::Builtin(
+            "submit_experience_candidate".to_string(),
+        ),
         required_tag: None,
     };
     let work_item = WorkItem::experience_collection(
@@ -325,12 +331,14 @@ fn experience_collection_workitem_without_collector_is_failed() {
     app.update();
 
     let task_id = uuid::Uuid::new_v4();
-    let tool = harness::ToolDefinition {
+    let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
-        parameters: harness::ToolSchema::default(),
-        default_permission: harness::ToolPermission::Allow,
-        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        parameters: harness::domain::ToolSchema::default(),
+        default_permission: harness::domain::ToolPermission::Allow,
+        executor: harness::domain::ToolExecutorKind::Builtin(
+            "submit_experience_candidate".to_string(),
+        ),
         required_tag: None,
     };
     let work_item = WorkItem::experience_collection(

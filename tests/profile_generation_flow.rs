@@ -13,11 +13,13 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId,
-    ExperienceGovernanceDecision, ExperienceStore, ExperienceWritebackDestination, FrontendKind,
-    HarnessConfig, LlmToolCall, OutputContent, ProfileGenerationKind,
-    ProfileGenerationRequestMessage, ShortTermMemory, Task, TaskStatus,
-    ToolExecutionRequestMessage, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionRequest,
+    domain::AgentExecutor, domain::ChannelId, domain::ExperienceGovernanceDecision,
+    domain::ExperienceStore, domain::ExperienceWritebackDestination, domain::FrontendKind,
+    domain::LlmToolCall, domain::OutputContent, domain::ProfileGenerationKind,
+    domain::ProfileGenerationRequestMessage, domain::ShortTermMemory, domain::Task,
+    domain::TaskStatus, domain::ToolExecutionRequestMessage, domain::WaitingReason,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -32,7 +34,7 @@ fn default_channel() -> ChannelId {
 struct ProfileDesignerMockExecutor;
 
 impl AgentExecutor for ProfileDesignerMockExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let has_messages = request.conversation.as_ref().is_some_and(|c| !c.is_empty());
         let response = if has_messages {
             AgentExecutionOutput {
@@ -147,17 +149,17 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
 
     // 预置候选到 ExperienceStore
     let candidate_id = uuid::Uuid::new_v4();
-    let candidate = harness::ExperienceCandidate {
+    let candidate = harness::domain::ExperienceCandidate {
         candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
-        kind_hint: harness::ExperienceKindHint::Knowledge,
-        payload: harness::ExperienceCandidatePayload::Knowledge {
+        kind_hint: harness::domain::ExperienceKindHint::Knowledge,
+        payload: harness::domain::ExperienceCandidatePayload::Knowledge {
             content: "E=mc^2".to_string(),
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::ProfileGenerationPending,
+        status: harness::domain::ExperienceCandidateStatus::ProfileGenerationPending,
         governing_agent_id: Some(agent_id),
         derived_from_candidate_ids: vec![],
     };
@@ -208,7 +210,7 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
 
     // 模拟用户审批通过
     app.world_mut()
-        .spawn(harness::ToolConfirmationResponseMessage {
+        .spawn(harness::domain::ToolConfirmationResponseMessage {
             request_id,
             selected_option: "approve".to_string(),
             feedback: None,
@@ -291,17 +293,17 @@ default_permission = "Allow"
     let agent_id = uuid::Uuid::new_v4();
 
     let candidate_id = uuid::Uuid::new_v4();
-    let candidate = harness::ExperienceCandidate {
+    let candidate = harness::domain::ExperienceCandidate {
         candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
-        kind_hint: harness::ExperienceKindHint::Knowledge,
-        payload: harness::ExperienceCandidatePayload::Knowledge {
+        kind_hint: harness::domain::ExperienceKindHint::Knowledge,
+        payload: harness::domain::ExperienceCandidatePayload::Knowledge {
             content: "E=mc^2".to_string(),
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::ProfileGenerationPending,
+        status: harness::domain::ExperienceCandidateStatus::ProfileGenerationPending,
         governing_agent_id: Some(agent_id),
         derived_from_candidate_ids: vec![],
     };
@@ -355,14 +357,14 @@ default_permission = "Allow"
         .map(|c| c.status.clone());
     assert_eq!(
         candidate_status,
-        Some(harness::ExperienceCandidateStatus::ProfileGenerationFailed),
+        Some(harness::domain::ExperienceCandidateStatus::ProfileGenerationFailed),
         "候选应被标记为 ProfileGenerationFailed"
     );
 
     // 验证：profile_generation_context 已清理（迁移后为 Entity Component，通过 Query 检查）
     let context_count = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ProfileGenerationContext>();
+        let mut query = world.query::<&harness::domain::ProfileGenerationContext>();
         query.iter(world).count()
     };
     assert_eq!(
@@ -377,7 +379,7 @@ struct CountingProfileDesignerExecutor {
 }
 
 impl AgentExecutor for CountingProfileDesignerExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         let has_messages = request.conversation.as_ref().is_some_and(|c| !c.is_empty());
         let response = if has_messages {
@@ -456,17 +458,17 @@ fn profile_generation_does_not_loop_after_successful_submit() {
 
     // 预置候选到 ExperienceStore
     let candidate_id = uuid::Uuid::new_v4();
-    let candidate = harness::ExperienceCandidate {
+    let candidate = harness::domain::ExperienceCandidate {
         candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
-        kind_hint: harness::ExperienceKindHint::Knowledge,
-        payload: harness::ExperienceCandidatePayload::Knowledge {
+        kind_hint: harness::domain::ExperienceKindHint::Knowledge,
+        payload: harness::domain::ExperienceCandidatePayload::Knowledge {
             content: "E=mc^2".to_string(),
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::ProfileGenerationPending,
+        status: harness::domain::ExperienceCandidateStatus::ProfileGenerationPending,
         governing_agent_id: Some(agent_id),
         derived_from_candidate_ids: vec![],
     };
@@ -511,7 +513,7 @@ fn profile_generation_does_not_loop_after_successful_submit() {
     // 修复后：submit 成功后 ToolCallingState 被 despawn，无孤儿。
     let orphan_state_count = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolCallingState>();
+        let mut query = world.query::<&harness::domain::ToolCallingState>();
         query.iter(world).count()
     };
     assert_eq!(

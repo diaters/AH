@@ -16,11 +16,13 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    AgentRequestKind, AgentToolPermissions, ChannelId, ExternalInput, FrontendKind, HarnessConfig,
-    LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus,
-    ToolExecutionRequestMessage, ToolPermission, WaitingReason, build_harness_app,
-    llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::ExternalInput, domain::FrontendKind, domain::LongTermMemory, domain::ShortTermMemory,
+    domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus,
+    domain::ToolExecutionRequestMessage, domain::ToolPermission, domain::WaitingReason,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -40,8 +42,8 @@ fn default_channel() -> ChannelId {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
@@ -186,7 +188,7 @@ fn e2e_ask_user_full_flow() {
     // 断言阶段 1：task 进入 Waiting(AskUser)，且挂载了 AskUserPending
     let (task_status, has_ask_user_pending): (TaskStatus, bool) = {
         let world = app.world_mut();
-        let mut query = world.query::<(&Task, Option<&harness::AskUserPending>)>();
+        let mut query = world.query::<(&Task, Option<&harness::domain::AskUserPending>)>();
         query
             .iter(world)
             .find(|(t, _)| t.id == parent_task_id)
@@ -257,7 +259,7 @@ fn e2e_ask_user_full_flow() {
     // 断言阶段 3：AskUserPending 组件被移除
     let still_pending: bool = {
         let world = app.world_mut();
-        let mut query = world.query::<(&Task, Option<&harness::AskUserPending>)>();
+        let mut query = world.query::<(&Task, Option<&harness::domain::AskUserPending>)>();
         query
             .iter(world)
             .find(|(t, _)| t.id == parent_task_id)

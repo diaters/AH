@@ -3,11 +3,12 @@ use chrono::Utc;
 use tracing::{debug, info, trace};
 
 use crate::{
-    app::{Clock, InputReceiver, ShutdownState},
+    contracts::Clock,
     domain::{
         ExternalInput, MessageReceivedHookPending, Signal, Task, TaskStatus,
         ToolConfirmationResponseMessage, WaitingReason,
     },
+    domain::{InputReceiver, ShutdownState},
 };
 
 /// 更新统一时钟资源，避免各系统直接读取系统时间。

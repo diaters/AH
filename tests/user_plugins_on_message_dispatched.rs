@@ -12,8 +12,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutionRequest, AgentExecutionRequestMessage, AgentExecutor, AgentRequestKind,
-    HarnessConfig, MessageDispatchedHookPending, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionRequest, domain::AgentExecutionRequestMessage,
+    domain::AgentExecutor, domain::AgentRequestKind, domain::MessageDispatchedHookPending,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;

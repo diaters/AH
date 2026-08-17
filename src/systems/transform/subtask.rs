@@ -6,7 +6,7 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{
         BatchTaskState, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage,
         Task, TaskStatus, ToolCallingState, WaitingReason,

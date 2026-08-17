@@ -16,7 +16,8 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
+    domain::HookPoint,
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         AgentSpawnRequestMessage, AwaitingBrainDecision, ConversationMessage, DispatchHint,
@@ -30,7 +31,6 @@ use crate::{
         LoadedSkill, PluginSkillContributions, SkillId, SkillLoader, SkillRegistry,
         resolve_skill_closure,
     },
-    domain::HookPoint,
 };
 
 use super::{

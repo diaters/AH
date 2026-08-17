@@ -12,8 +12,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, NewlyCreatedTask, Task,
-    ToolCalledHookPending, ToolExecutionResultMessage, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::ExternalInput,
+    domain::FrontendKind, domain::NewlyCreatedTask, domain::Task, domain::ToolCalledHookPending,
+    domain::ToolExecutionResultMessage, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
@@ -146,7 +147,10 @@ tool_deny("test deny reason");
 
     // spawn 一个带 ToolCalledHookPending 的请求
     let request_entity = {
-        use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+        use harness::{
+            domain::AgentExecutionRequest, domain::AgentRequestKind,
+            domain::ToolExecutionRequestMessage,
+        };
         let task_id = {
             let channel = default_channel();
             let task = Task::from_user_input("deny-test-task", 0, channel);
@@ -202,7 +206,7 @@ tool_deny("test deny reason");
         .filter(|m| {
             matches!(
                 &m.tool_output,
-                Err(harness::ToolError::PermissionDenied(reason))
+                Err(harness::domain::ToolError::PermissionDenied(reason))
                     if reason.contains("denied by plugin")
             )
         })

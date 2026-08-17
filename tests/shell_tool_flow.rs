@@ -11,10 +11,12 @@ use common::mock_executor::MockExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    AgentRequestKind, AgentToolPermissions, ChannelId, FrontendKind, HarnessConfig, SessionBackend,
-    ShortTermMemory, Task, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::FrontendKind, domain::SessionBackend, domain::ShortTermMemory, domain::Task,
+    domain::ToolExecutionRequestMessage, domain::ToolExecutionResultMessage, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -99,8 +101,8 @@ fn default_channel() -> ChannelId {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
@@ -141,7 +143,7 @@ fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
             parent_id: None,
             bound_task_id: None,
             tool_permissions: AgentToolPermissions {
-                default_permission: harness::ToolPermission::Allow,
+                default_permission: harness::domain::ToolPermission::Allow,
                 default_permission_explicit: true,
                 overrides: Default::default(),
             },
@@ -186,7 +188,7 @@ fn shell_registry_only_exposes_six_simplified_tools() {
         harness::channels::ChannelManager::empty().0,
     );
 
-    let registry = app.world().resource::<harness::SpaceToolRegistry>();
+    let registry = app.world().resource::<harness::domain::SpaceToolRegistry>();
 
     for name in [
         "shell_exec",
@@ -294,7 +296,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
     app.update();
 
     let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
     let results = query.iter(world).cloned().collect::<Vec<_>>();
     let output = results.last().unwrap().tool_output.clone().unwrap();
 
@@ -373,7 +375,7 @@ fn shell_list_returns_only_active_sessions() {
     app.update();
 
     let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
     let results = query.iter(world).cloned().collect::<Vec<_>>();
     let output = results.last().unwrap().tool_output.clone().unwrap();
 
@@ -564,7 +566,7 @@ fn shell_start_returns_running_handle() {
     app.update();
     let results = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         query.iter(world).cloned().collect::<Vec<_>>()
     };
 
@@ -629,7 +631,7 @@ fn shell_start_passes_env_to_child_process() {
 
     let session_id = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
         results
             .iter()
@@ -678,7 +680,7 @@ fn shell_start_passes_env_to_child_process() {
 
     let results = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         query
             .iter(world)
             .filter(|result| result.tool_call_id.as_deref() == Some("call_shell_read_env"))
@@ -848,7 +850,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
 
     let results = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         query.iter(world).cloned().collect::<Vec<_>>()
     };
 
@@ -863,7 +865,7 @@ fn shell_input_returns_backend_backed_status() {
     let agent_id = Uuid::new_v4();
 
     let handle = backend
-        .start_session(harness::SessionStartRequest {
+        .start_session(harness::domain::SessionStartRequest {
             command: "cat".to_string(),
             session_name: None,
             cwd: None,
@@ -876,18 +878,18 @@ fn shell_input_returns_backend_backed_status() {
         .expect("start_session should succeed");
 
     let updated = backend
-        .input_session(harness::SessionInputRequest {
+        .input_session(harness::domain::SessionInputRequest {
             handle_id: handle.handle_id,
             input: "hello".to_string(),
             append_newline: true,
         })
         .expect("input_session should succeed when stdin is available");
-    let accepted = harness::ShellSessionResult::accepted_input(&updated);
+    let accepted = harness::domain::ShellSessionResult::accepted_input(&updated);
 
     assert_eq!(updated.handle_id, handle.handle_id);
-    assert_eq!(updated.status, harness::SessionStatus::Running);
+    assert_eq!(updated.status, harness::domain::SessionStatus::Running);
     assert_eq!(accepted.session_id, handle.handle_id.to_string());
-    assert_eq!(accepted.status, harness::SessionStatus::Running);
+    assert_eq!(accepted.status, harness::domain::SessionStatus::Running);
     assert!(accepted.accepted);
 
     let _ = backend.stop_session(handle.handle_id);
@@ -913,7 +915,8 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
 
     let agent_id = spawn_shell_agent(app.world_mut());
     let mut task = Task::from_user_input_ready("shell input missing stdin", 3, default_channel());
-    task.status = harness::TaskStatus::Waiting(harness::WaitingReason::ToolExecution);
+    task.status =
+        harness::domain::TaskStatus::Waiting(harness::domain::WaitingReason::ToolExecution);
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))
@@ -992,7 +995,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
 
     let results = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         query
             .iter(world)
             .filter(|result| {
@@ -1009,7 +1012,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
         .clone()
         .expect_err("missing stdin should fail instead of reporting accepted");
     assert!(
-        matches!(error, harness::ToolError::ExecutionFailed(_)),
+        matches!(error, harness::domain::ToolError::ExecutionFailed(_)),
         "expected ExecutionFailed, got {:?}",
         error
     );
@@ -1019,7 +1022,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
 fn shell_read_backend_returns_latest_snapshot() {
     let backend = harness::NativeProcessBackend::default();
     let handle = backend
-        .exec_blocking(harness::SessionStartRequest {
+        .exec_blocking(harness::domain::SessionStartRequest {
             command: "printf 'line1\\nline2\\nline3\\n'".to_string(),
             session_name: Some("cursor-test".to_string()),
             cwd: None,
@@ -1032,7 +1035,7 @@ fn shell_read_backend_returns_latest_snapshot() {
         .expect("exec_blocking should succeed");
 
     let first = backend
-        .read_session(harness::SessionReadRequest {
+        .read_session(harness::domain::SessionReadRequest {
             handle_id: handle.handle_id,
             tail_lines: 2,
         })
@@ -1102,7 +1105,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
 
     let outputs = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         query
             .iter(world)
             .map(|result| result.tool_output.clone().unwrap())
@@ -1221,7 +1224,7 @@ fn shell_read_returns_output_text() {
 
     let session_id = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
         results
             .iter()
@@ -1266,7 +1269,7 @@ fn shell_read_returns_output_text() {
 
     let outputs = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         query.iter(world).cloned().collect::<Vec<_>>()
     };
 
@@ -1407,7 +1410,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
 fn shell_input_and_stop_follow_simplified_contract() {
     let backend = harness::NativeProcessBackend::default();
     let handle = backend
-        .start_session(harness::SessionStartRequest {
+        .start_session(harness::domain::SessionStartRequest {
             command: "cat".to_string(),
             session_name: None,
             cwd: None,
@@ -1421,15 +1424,16 @@ fn shell_input_and_stop_follow_simplified_contract() {
     let session_id = handle.handle_id.to_string();
 
     let input_handle = backend
-        .input_session(harness::SessionInputRequest {
+        .input_session(harness::domain::SessionInputRequest {
             handle_id: handle.handle_id,
             input: "hello".to_string(),
             append_newline: true,
         })
         .expect("input_session should succeed");
-    let input_output =
-        serde_json::to_value(harness::ShellSessionResult::accepted_input(&input_handle))
-            .expect("input result should serialize");
+    let input_output = serde_json::to_value(harness::domain::ShellSessionResult::accepted_input(
+        &input_handle,
+    ))
+    .expect("input result should serialize");
     assert_eq!(input_output["accepted"], true);
     assert_eq!(
         input_output["session_id"].as_str(),
@@ -1451,8 +1455,10 @@ fn shell_input_and_stop_follow_simplified_contract() {
     let stopped_handle = backend
         .stop_session(handle.handle_id)
         .expect("stop_session should succeed");
-    let stop_output = serde_json::to_value(harness::ShellSessionResult::stopped(&stopped_handle))
-        .expect("stop result should serialize");
+    let stop_output = serde_json::to_value(harness::domain::ShellSessionResult::stopped(
+        &stopped_handle,
+    ))
+    .expect("stop result should serialize");
     assert_eq!(
         stop_output["session_id"].as_str(),
         Some(session_id.as_str())
@@ -1546,7 +1552,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
     app.update();
 
     let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
     let list_result = query
         .iter(world)
         .filter(|m| m.tool_name == "shell_list")
@@ -1626,7 +1632,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
 
     {
         let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
-        task.status = harness::TaskStatus::Done;
+        task.status = harness::domain::TaskStatus::Done;
     }
     app.update();
 
@@ -1645,7 +1651,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
 fn backend_session_handle_uses_snapshot_output_shape() {
     let backend = harness::NativeProcessBackend::default();
     let handle = backend
-        .exec_blocking(harness::SessionStartRequest {
+        .exec_blocking(harness::domain::SessionStartRequest {
             command: "printf 'line1\\nline2\\nline3\\n'".to_string(),
             session_name: Some("snapshot-shape".to_string()),
             cwd: None,
@@ -1737,7 +1743,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
 
     let session_id = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
         results
             .iter()
@@ -1779,7 +1785,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
     app.update();
 
     let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
     let results = query
         .iter(world)
         .filter(|m| m.tool_name == "shell_read")
@@ -1794,7 +1800,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
     );
     let error = result.tool_output.clone().unwrap_err();
     assert!(
-        matches!(error, harness::ToolError::PermissionDenied(_)),
+        matches!(error, harness::domain::ToolError::PermissionDenied(_)),
         "expected PermissionDenied, got {:?}",
         error
     );
@@ -1849,7 +1855,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
 
     let session_id = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
         results
             .iter()
@@ -1891,7 +1897,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
     app.update();
 
     let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
     let results = query
         .iter(world)
         .filter(|m| m.tool_name == "shell_input")
@@ -1905,7 +1911,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
     );
     let error = result.tool_output.clone().unwrap_err();
     assert!(
-        matches!(error, harness::ToolError::PermissionDenied(_)),
+        matches!(error, harness::domain::ToolError::PermissionDenied(_)),
         "expected PermissionDenied, got {:?}",
         error
     );
@@ -1960,7 +1966,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
 
     let session_id = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
         let results = query.iter(world).cloned().collect::<Vec<_>>();
         results
             .iter()
@@ -2002,7 +2008,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
     app.update();
 
     let world = app.world_mut();
-    let mut query = world.query::<&harness::ToolExecutionResultMessage>();
+    let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
     let results = query
         .iter(world)
         .filter(|m| m.tool_name == "shell_stop")
@@ -2016,7 +2022,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
     );
     let error = result.tool_output.clone().unwrap_err();
     assert!(
-        matches!(error, harness::ToolError::PermissionDenied(_)),
+        matches!(error, harness::domain::ToolError::PermissionDenied(_)),
         "expected PermissionDenied, got {:?}",
         error
     );
@@ -2081,7 +2087,7 @@ fn task_termination_stops_owned_shell_sessions() {
     // Mark task as Done
     {
         let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
-        task.status = harness::TaskStatus::Done;
+        task.status = harness::domain::TaskStatus::Done;
     }
 
     // Drive app update to trigger task_termination_system
@@ -2155,7 +2161,8 @@ fn failed_task_also_stops_owned_shell_sessions() {
     // Mark task as Failed
     {
         let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
-        task.status = harness::TaskStatus::Failed(harness::FailureReason::AgentError);
+        task.status =
+            harness::domain::TaskStatus::Failed(harness::domain::FailureReason::AgentError);
     }
 
     // Drive app update to trigger task_termination_system

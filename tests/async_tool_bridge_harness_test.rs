@@ -14,8 +14,8 @@ use common::async_tool_bridge::*;
 #[test]
 fn harness_world_has_all_resources() {
     let world = setup_bridge_world();
-    assert!(world.contains_resource::<harness::app::AsyncRuntime>());
-    assert!(world.contains_resource::<harness::app::Clock>());
+    assert!(world.contains_resource::<harness::contracts::AsyncRuntime>());
+    assert!(world.contains_resource::<harness::contracts::Clock>());
     assert!(world.contains_resource::<harness::domain::ToolResultSender>());
     assert!(world.contains_resource::<harness::domain::ToolResultReceiver>());
 }

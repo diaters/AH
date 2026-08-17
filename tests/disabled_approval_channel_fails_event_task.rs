@@ -13,7 +13,9 @@ use harness::domain::{
     ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, FailureReason, Frontend,
     FrontendKind, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationRequestMessage, UserAction,
 };
-use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
+use harness::{
+    app::build_harness_app, domain::AgentExecutor, llm::ExecutorRegistry, systems::HarnessConfig,
+};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 

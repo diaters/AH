@@ -3,7 +3,8 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{AgentExecutionRequestMessage, AgentExecutionResult, AgentRequestKind, Task};
 use crate::{
-    app::{AsyncRuntime, Clock, ExecutionResultSender, ModelChainStateUpdateSender},
+    contracts::{AsyncRuntime, Clock},
+    domain::{ExecutionResultSender, ModelChainStateUpdateSender},
     llm::ExecutorRegistry,
 };
 
@@ -187,7 +188,7 @@ async fn execute_with_fallback_logic(
 
 /// 处理 ModelChainState 状态更新消息
 pub(crate) fn model_chain_state_update_system(
-    mut state_rx: ResMut<crate::app::ModelChainStateUpdateReceiver>,
+    mut state_rx: ResMut<crate::domain::ModelChainStateUpdateReceiver>,
     mut agents: Query<(&crate::domain::Agent, &mut crate::domain::ModelChainState)>,
 ) {
     while let Ok(update) = state_rx.0.try_recv() {

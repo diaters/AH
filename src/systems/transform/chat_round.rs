@@ -4,7 +4,7 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, ChatRoundReadyMessage,
         ChatRoundStartedMessage, ChatSession, OutputContent, Task, TaskStatus,

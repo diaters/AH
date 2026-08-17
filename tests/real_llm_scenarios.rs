@@ -30,15 +30,19 @@ use common::mock_executor::{CannedExecutor, DEFAULT_BRAIN_DECISION_JSON, text_ou
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    ExecutorFuture, ToolPermission,
+    app::build_harness_app, domain::AgentExecutionRequest, domain::AgentRequestKind,
+    domain::ChannelId, domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy,
+    domain::ExternalInput, domain::FrontendKind, domain::JudgeOutcome, domain::JudgeRubric,
+    domain::JudgeVerdict, domain::JudgeVote, domain::LongTermMemory, domain::MemoryConfig,
+    domain::PendingDispatch, domain::ShortTermMemory, domain::Task, domain::TaskStatus,
+    domain::WaitingReason, domain::WorkItem, domain::WorkItemType, domain::parse_judge_verdict,
+    llm::ExecutorRegistry, llm::JudgePromptData, llm::build_judge_user_prompt,
+    llm::judge_system_prompt, systems::HarnessConfig,
 };
 use harness::{
-    AgentExecutionRequest, AgentRequestKind, ChannelId, DispatchHint, DispatchKind,
-    DispatchStrategy, ExternalInput, FrontendKind, HarnessConfig, JudgeOutcome, JudgePromptData,
-    JudgeRubric, JudgeVerdict, JudgeVote, LongTermMemory, MemoryConfig, PendingDispatch,
-    ShortTermMemory, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType, build_harness_app,
-    build_judge_user_prompt, judge_system_prompt, llm::ExecutorRegistry, parse_judge_verdict,
+    domain::Agent, domain::AgentCapabilities, domain::AgentExecutor, domain::AgentKind,
+    domain::AgentProfile, domain::AgentToolPermissions, domain::ExecutorFuture,
+    domain::ToolPermission,
 };
 use serde::Deserialize;
 use tokio::runtime::Runtime;
@@ -296,8 +300,8 @@ impl AgentExecutor for CompressionSelfcheckExecutor {
 fn scenario_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
             model: "gpt-4.1-mini".to_string(),
             api_key: Some("scenario-test-key".to_string()),
             api_base: None,
@@ -383,8 +387,8 @@ struct LlmRequestCount(usize);
 
 fn count_llm_requests_system(
     requests: Query<
-        &harness::AgentExecutionRequestMessage,
-        Added<harness::AgentExecutionRequestMessage>,
+        &harness::domain::AgentExecutionRequestMessage,
+        Added<harness::domain::AgentExecutionRequestMessage>,
     >,
     mut count: ResMut<LlmRequestCount>,
 ) {
@@ -685,7 +689,7 @@ fn run_judge_sample(
         .block_on(executor.execute(request))
         .map_err(|e| format!("judge executor error: {e}"))?;
     let content = match output.content {
-        harness::OutputContent::Text(text) => text,
+        harness::domain::OutputContent::Text(text) => text,
         other => return Err(format!("Judge 输出应为文本，实际为 {other:?}")),
     };
     parse_judge_verdict(&content)
@@ -1175,12 +1179,14 @@ fn scenario_tool_call_loop_reaches_done() {
     let file = load_scenario("shell_stat_task");
     let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
     let executor: Arc<dyn AgentExecutor> = Arc::new(CannedExecutor::new(vec![
-        harness::AgentExecutionOutput {
-            content: harness::OutputContent::ToolCalls(vec![harness::LlmToolCall {
-                id: "call_shell_stat".to_string(),
-                name: "shell_exec".to_string(),
-                arguments: r#"{"command":"echo 279","timeout_secs":30}"#.to_string(),
-            }]),
+        harness::domain::AgentExecutionOutput {
+            content: harness::domain::OutputContent::ToolCalls(vec![
+                harness::domain::LlmToolCall {
+                    id: "call_shell_stat".to_string(),
+                    name: "shell_exec".to_string(),
+                    arguments: r#"{"command":"echo 279","timeout_secs":30}"#.to_string(),
+                },
+            ]),
             reasoning_content: None,
         },
         text_output("统计完成：当前目录共有 279 个 .rs 文件。"),
@@ -1523,19 +1529,19 @@ fn judge_executor_from_env() -> Option<Arc<dyn AgentExecutor>> {
     let provider = std::env::var("HARNESS_TEST_JUDGE_PROVIDER").ok()?;
     let model = std::env::var("HARNESS_TEST_JUDGE_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".into());
     let kind = match provider.to_lowercase().as_str() {
-        "openai" => harness::LlmProviderKind::OpenAi,
-        "anthropic" | "claude" => harness::LlmProviderKind::Anthropic,
-        "deepseek" => harness::LlmProviderKind::DeepSeek,
-        "openai-compatible" | "compatible" => harness::LlmProviderKind::OpenAiCompatible,
+        "openai" => harness::domain::LlmProviderKind::OpenAi,
+        "anthropic" | "claude" => harness::domain::LlmProviderKind::Anthropic,
+        "deepseek" => harness::domain::LlmProviderKind::DeepSeek,
+        "openai-compatible" | "compatible" => harness::domain::LlmProviderKind::OpenAiCompatible,
         other => panic!("未知的 HARNESS_TEST_JUDGE_PROVIDER: {other}"),
     };
-    let config = harness::LlmProviderConfig {
+    let config = harness::llm::LlmProviderConfig {
         provider: kind,
         model,
         api_key: std::env::var("HARNESS_TEST_JUDGE_API_KEY").ok(),
         api_base: std::env::var("HARNESS_TEST_JUDGE_API_BASE").ok(),
     };
-    let executor = harness::create_executor_from_config(&config)
+    let executor = harness::llm::create_executor_from_config(&config)
         .expect("构建 Judge executor 失败（检查 HARNESS_TEST_JUDGE_* 配置）");
     Some(executor)
 }

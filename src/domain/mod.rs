@@ -17,6 +17,7 @@ mod llm_provider;
 mod memory;
 mod message;
 mod model_chain;
+mod prompt_template;
 mod schedule;
 mod session;
 mod session_backend;
@@ -55,7 +56,7 @@ pub use agent::{
 pub use chat_session::ChatSession;
 
 // command
-pub use command::UserCommand;
+pub use command::{ShutdownState, UserCommand};
 
 // confirmation
 pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource, GrantMode};
@@ -106,8 +107,8 @@ pub use llm_provider::LlmProviderKind;
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
-    LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, MemorySnapshot,
-    ShortTermMemory, ToolCall, compressible_entry_count, estimate_tokens,
+    LtmEvictedHookPending, LtmWriteHookPending, MemoryConfig, MemoryEntry, MemoryImportance,
+    MemorySnapshot, ShortTermMemory, ToolCall, compressible_entry_count, estimate_tokens,
     render_tool_calls_summary, split_into_groups,
 };
 
@@ -116,12 +117,13 @@ pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ClearTaskMessage,
-    ContinueTaskMessage, CreateTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput,
-    FinishTaskMessage, LlmResponseHookPending, MessageDispatchedHookPending,
-    MessageReceivedHookPending, ModelChainStateUpdate, OutputKind, OutputMessage,
-    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
+    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver, ExecutionResultSender,
+    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, InputReceiver,
+    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
+    ModelChainStateUpdate, ModelChainStateUpdateReceiver, ModelChainStateUpdateSender, OutputKind,
+    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
+    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
+    Signal, SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
     SkillUpdateRequestMessage, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
@@ -132,12 +134,17 @@ pub use message::{
 // model_chain
 pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, ProvidersConfig};
 
+// prompt_template
+pub use prompt_template::{render_template, validate_template};
+
 // schedule
 pub use schedule::ScheduleSpec;
 pub(crate) use schedule::compute_next_trigger;
 
 // signal_trigger
-pub use signal_trigger::{EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger};
+pub use signal_trigger::{
+    EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger, TriggersConfigPath,
+};
 
 // skill
 pub use skill::SkillId;

@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task,
-    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::ExternalInput,
+    domain::FrontendKind, domain::ShortTermMemory, domain::Task, domain::TaskRoutingPolicy,
+    domain::TaskStatus, domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 

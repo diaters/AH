@@ -2,7 +2,7 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::{
-    app::MemoryConfig,
+    domain::MemoryConfig,
     domain::{
         Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
         MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,

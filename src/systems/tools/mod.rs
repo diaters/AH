@@ -34,6 +34,9 @@ pub use tool_called_hook::on_tool_called_hook_system;
 pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
 
+use bevy_ecs::change_detection::Mut;
+use bevy_ecs::world::World;
+
 use crate::domain::{
     BuiltinToolExecutors, SpaceToolRegistry, ToolDefinition, ToolExecutorKind, ToolPermission,
     ToolSchema,
@@ -737,6 +740,34 @@ pub fn register_plugin_tools(
             );
         }
     }
+}
+
+/// 从 World 中的 `PluginRegistry` 资源拉取并注册插件工具。
+///
+/// 方向反转的落点：user_plugins 侧只负责加载 registry 与技能贡献，
+/// 工具注册知识归 tools 系统，由装配方（Startup / reload）主动调用。
+pub fn register_plugin_tools_in_world(world: &mut World) {
+    if !world.contains_resource::<crate::user_plugins::registry::PluginRegistry>() {
+        return;
+    }
+    world.resource_scope(
+        |world: &mut World, registry: Mut<crate::user_plugins::registry::PluginRegistry>| {
+            world.resource_scope(
+                |world: &mut World, mut space: Mut<crate::domain::SpaceToolRegistry>| {
+                    if let Some(mut execs) =
+                        world.get_resource_mut::<crate::domain::BuiltinToolExecutors>()
+                    {
+                        register_plugin_tools(&mut space, &mut execs, &registry);
+                    }
+                },
+            );
+        },
+    );
+}
+
+/// Startup 系统：在 `plugin_load_startup_system` 之后注册插件工具。
+pub fn register_plugin_tools_startup_system(world: &mut World) {
+    register_plugin_tools_in_world(world);
 }
 
 // AgentToolPermissions 的查询行为由 effective_permission 统一覆盖，

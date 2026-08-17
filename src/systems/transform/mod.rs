@@ -32,7 +32,7 @@ pub use trigger_task::trigger_task_routing_system;
 use crate::prelude::*;
 
 use crate::{
-    app::ExecutionResultReceiver,
+    domain::ExecutionResultReceiver,
     domain::{AgentExecutionResultMessage, LlmResponseHookPending},
 };
 

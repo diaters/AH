@@ -6,13 +6,14 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    contracts::Clock,
     domain::{
         Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
         AgentProfile, AgentSpawnRequestMessage, AgentStoppingHookPending, AgentToolPermissions,
         FailureReason, MessageDispatchedHookPending, SpaceToolRegistry, Task, TaskId,
         TaskTerminatedMessage, ToolPermission,
     },
+    systems::HarnessSettings,
 };
 
 /// Startup 系统：加载持久化 Agent

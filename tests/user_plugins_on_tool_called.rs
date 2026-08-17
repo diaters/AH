@@ -15,8 +15,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, ToolCalledHookPending,
-    ToolExecutionResultMessage, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
+    domain::ToolCalledHookPending, domain::ToolExecutionResultMessage, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 mod common;
@@ -54,8 +55,11 @@ script = "hooks/hook.rhai"
 /// 直接在 world 中 spawn 一个带 `ToolCalledHookPending` 标记的占位
 /// `ToolExecutionRequestMessage`，便于在不需要走 LLM 的前提下测试
 /// companion 系统的 hook 派发路径。
-fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::TaskId) {
-    use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::domain::TaskId) {
+    use harness::{
+        domain::AgentExecutionRequest, domain::AgentRequestKind,
+        domain::ToolExecutionRequestMessage,
+    };
 
     world.spawn((
         ToolExecutionRequestMessage {
@@ -122,7 +126,7 @@ log_info("on_tool_called: observing, no deny");
     let mut app = build_app(&dir);
 
     let task_id = {
-        use harness::Task;
+        use harness::domain::Task;
         let channel = default_channel();
         let task = Task::from_user_input("owner-task", 0, channel);
         let id = task.id;
@@ -149,7 +153,7 @@ log_info("on_tool_called: observing, no deny");
     let denied_count = world
         .query::<&ToolExecutionResultMessage>()
         .iter(world)
-        .filter(|m| matches!(&m.tool_output, Err(e) if matches!(e, harness::ToolError::PermissionDenied(_))))
+        .filter(|m| matches!(&m.tool_output, Err(e) if matches!(e, harness::domain::ToolError::PermissionDenied(_))))
         .count();
     assert_eq!(denied_count, 0, "未拒绝时不应出现 PermissionDenied 结果");
 }
@@ -174,9 +178,12 @@ tool_deny("blocked by test");
     let mut app = build_app(&dir);
 
     let request_entity = {
-        use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+        use harness::{
+            domain::AgentExecutionRequest, domain::AgentRequestKind,
+            domain::ToolExecutionRequestMessage,
+        };
         let task_id = {
-            use harness::Task;
+            use harness::domain::Task;
             let channel = default_channel();
             let task = Task::from_user_input("owner-task", 0, channel);
             let id = task.id;
@@ -230,7 +237,7 @@ tool_deny("blocked by test");
         .filter(|m| {
             matches!(
                 &m.tool_output,
-                Err(harness::ToolError::PermissionDenied(reason))
+                Err(harness::domain::ToolError::PermissionDenied(reason))
                     if reason.contains("denied by plugin")
             )
         })

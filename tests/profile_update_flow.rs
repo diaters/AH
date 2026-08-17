@@ -18,10 +18,12 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId, ExistingAgentProfile,
-    ExperienceStore, FrontendKind, HarnessConfig, LlmToolCall, OutputContent,
-    ProfileGenerationKind, ProfileGenerationRequestMessage, ShortTermMemory, Task, TaskStatus,
-    ToolExecutionRequestMessage, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionRequest,
+    domain::AgentExecutor, domain::ChannelId, domain::ExistingAgentProfile,
+    domain::ExperienceStore, domain::FrontendKind, domain::LlmToolCall, domain::OutputContent,
+    domain::ProfileGenerationKind, domain::ProfileGenerationRequestMessage,
+    domain::ShortTermMemory, domain::Task, domain::TaskStatus, domain::ToolExecutionRequestMessage,
+    domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -36,7 +38,7 @@ fn default_channel() -> ChannelId {
 struct UpdateProposeExecutor;
 
 impl AgentExecutor for UpdateProposeExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let has_messages = request.conversation.as_ref().is_some_and(|c| !c.is_empty());
         let response = if has_messages {
             AgentExecutionOutput {
@@ -62,7 +64,7 @@ impl AgentExecutor for UpdateProposeExecutor {
 struct SkipExecutor;
 
 impl AgentExecutor for SkipExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let has_messages = request.conversation.as_ref().is_some_and(|c| !c.is_empty());
         let response = if has_messages {
             AgentExecutionOutput {
@@ -177,17 +179,17 @@ fn update_flow_modifies_agents_toml_and_ecs() {
 
     // 预置候选到 ExperienceStore（更新流程从 Persisted 开始）
     let candidate_id = uuid::Uuid::new_v4();
-    let candidate = harness::ExperienceCandidate {
+    let candidate = harness::domain::ExperienceCandidate {
         candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
-        kind_hint: harness::ExperienceKindHint::Knowledge,
-        payload: harness::ExperienceCandidatePayload::Knowledge {
+        kind_hint: harness::domain::ExperienceKindHint::Knowledge,
+        payload: harness::domain::ExperienceCandidatePayload::Knowledge {
             content: "E=mc^2".to_string(),
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::Persisted,
+        status: harness::domain::ExperienceCandidateStatus::Persisted,
         governing_agent_id: Some(agent_id),
         derived_from_candidate_ids: vec![],
     };
@@ -230,7 +232,7 @@ fn update_flow_modifies_agents_toml_and_ecs() {
 
     // 模拟用户审批通过
     app.world_mut()
-        .spawn(harness::ToolConfirmationResponseMessage {
+        .spawn(harness::domain::ToolConfirmationResponseMessage {
             request_id,
             selected_option: "approve".to_string(),
             feedback: None,
@@ -265,7 +267,7 @@ fn update_flow_modifies_agents_toml_and_ecs() {
     // 验证 ECS Agent 组件更新
     let agent_updated = {
         let world = app.world_mut();
-        let mut query = world.query::<&harness::Agent>();
+        let mut query = world.query::<&harness::domain::Agent>();
         query.iter(world).any(|a| {
             a.profile.name == "physics-specialist"
                 && a.capabilities.tags.contains(&"quantum".to_string())
@@ -312,17 +314,17 @@ fn skip_profile_update_silently_ends() {
         .insert(task_id, task_entity);
 
     let candidate_id = uuid::Uuid::new_v4();
-    let candidate = harness::ExperienceCandidate {
+    let candidate = harness::domain::ExperienceCandidate {
         candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
-        kind_hint: harness::ExperienceKindHint::Knowledge,
-        payload: harness::ExperienceCandidatePayload::Knowledge {
+        kind_hint: harness::domain::ExperienceKindHint::Knowledge,
+        payload: harness::domain::ExperienceCandidatePayload::Knowledge {
             content: "E=mc^2".to_string(),
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::Persisted,
+        status: harness::domain::ExperienceCandidateStatus::Persisted,
         governing_agent_id: Some(agent_id),
         derived_from_candidate_ids: vec![],
     };

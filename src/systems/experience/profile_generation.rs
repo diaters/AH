@@ -12,6 +12,7 @@
 use crate::prelude::*;
 use tracing::{debug, info, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     Agent, AgentExecutionRequest, AgentProfile, AgentRequestKind, ConfirmationOption,
     ConfirmationSource, DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidatePayload,
@@ -20,7 +21,6 @@ use crate::domain::{
     SpaceToolRegistry, TaskId, ToolCalledHookPending, ToolConfirmationRequestMessage,
     ToolExecutionRequestMessage, WorkItem, WorkItemType,
 };
-use crate::domain::HookPoint;
 
 /// profile 生成 WorkItem 创建系统：将生成请求转换为 WorkItem + ProfileGenerationContext Component
 /// + PendingDispatch，由统一 dispatch_system 查找 profile-designer Agent 并派发执行请求。

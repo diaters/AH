@@ -5,10 +5,11 @@ use crossbeam_channel::unbounded;
 use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
-    EngineEvent, ExternalInput, Frontend, HarnessConfig, HarnessSettings, ShutdownState,
-    UserAction, app_is_idle, build_harness_app,
+    app::{app_is_idle, build_harness_app},
     channels::{Channel, ChannelManager, QqChannel, TelegramChannel},
+    domain::{EngineEvent, ExternalInput, Frontend, ShutdownState, UserAction},
     llm::ExecutorRegistry,
+    systems::{HarnessConfig, HarnessSettings},
 };
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
