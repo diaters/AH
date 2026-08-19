@@ -234,7 +234,7 @@ pub(crate) fn profile_update_writeback_system(
                 // 派发 on_agent_profile_updated hook（写回成功后触发）
                 pending_hooks
                     .0
-                    .push((HookPoint::OnAgentProfileUpdated, task_id));
+                    .push((HookPoint::OnAgentProfileUpdated, task_id.0));
             }
             Err(e) => {
                 // 文件写入失败
@@ -336,8 +336,8 @@ mod tests {
     /// profile_update_trigger_system：持久型 Agent 的 Persisted 候选触发更新评估
     #[test]
     fn trigger_system_spawns_update_request_for_persistent_agent() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate =
@@ -368,8 +368,8 @@ mod tests {
     /// profile_update_trigger_system：default Agent 的候选不触发更新评估
     #[test]
     fn trigger_system_skips_default_agent() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate =
@@ -396,8 +396,8 @@ mod tests {
     /// profile_update_trigger_system：已触发的候选不重复触发
     #[test]
     fn trigger_system_does_not_retrigger() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate =
@@ -427,8 +427,8 @@ mod tests {
     /// profile_update_trigger_system：非 Persisted 候选不触发
     #[test]
     fn trigger_system_skips_non_persisted_candidates() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -470,8 +470,8 @@ description = "old description"
 "#;
         std::fs::write(&config_path, initial).unwrap();
 
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -555,8 +555,8 @@ description = "old description"
     fn writeback_system_marks_failed_on_file_error() {
         use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
 
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -621,8 +621,8 @@ description = "old description"
     fn writeback_system_skips_candidates_without_update_context() {
         use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
 
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(

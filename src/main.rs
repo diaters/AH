@@ -99,6 +99,11 @@ fn main() -> Result<()> {
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);
     let config = HarnessConfig::from_env()?;
 
+    // 启动期配置校验：agents.toml 损坏或重名时立即退出，而非运行期 panic
+    harness::infrastructure::incubation::agent_registry::validate_agent_config(
+        &config.agents_config_path,
+    )?;
+
     // 加载 providers.toml 或从环境变量构建
     let executor_registry = if std::path::Path::new(&config.providers_config_path).exists() {
         let providers_toml = std::fs::read_to_string(&config.providers_config_path)
@@ -159,6 +164,7 @@ fn main() -> Result<()> {
     let (channel_manager, channel_handle, channel_frontends) = {
         let _guard = runtime.enter();
         ChannelManager::new(channel_list, input_tx.clone())
+            .map_err(|e| anyhow::anyhow!("channel configuration error: {e}"))?
     };
     let runtime_clone = runtime.clone();
 

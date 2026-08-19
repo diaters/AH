@@ -35,7 +35,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -78,7 +78,7 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
     app.update();
 
     // Create an evaluation work item
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::evaluation(task_id, "评估任务状态".to_string(), None);
     let work_item_id = work_item.id;
     app.world_mut().spawn((
@@ -105,13 +105,13 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
         .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Running,
         "Work item should be in Running status after dispatch"
     );
     assert_eq!(states[0].id, work_item_id);
     assert!(
-        states[0].assigned_agent.is_some(),
+        states[0].assigned_agent().is_some(),
         "Work item should have assigned agent"
     );
 }
@@ -136,7 +136,7 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
     app.update();
 
     // Create a summarization work item
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::summarization(
         task_id,
         "Content to summarize".to_string(),
@@ -168,13 +168,13 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
         .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Running,
         "Work item should be in Running status after dispatch"
     );
     assert_eq!(states[0].id, work_item_id);
     assert!(
-        states[0].assigned_agent.is_some(),
+        states[0].assigned_agent().is_some(),
         "Work item should have assigned agent"
     );
 }
@@ -203,7 +203,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
 
     // Create an Execution work item
     // (The narrow dispatcher only handles Evaluation/Summarization, so this is not dispatched)
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::execution(task_id, "Execute this task".to_string());
     app.world_mut().spawn((
         work_item,
@@ -240,7 +240,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
         .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Failed,
         "Work item should be marked Failed when no matching agent"
     );
@@ -264,7 +264,7 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
 
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
@@ -281,7 +281,7 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         None,
         vec![],
         vec![tool],
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
     );
     let work_item_id = work_item.id;
     app.world_mut().spawn((
@@ -305,9 +305,9 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         .iter(app.world())
         .collect();
     assert_eq!(states.len(), 1);
-    assert_eq!(states[0].status, WorkItemStatus::Running);
+    assert_eq!(states[0].status(), WorkItemStatus::Running);
     assert_eq!(states[0].id, work_item_id);
-    assert!(states[0].assigned_agent.is_some());
+    assert!(states[0].assigned_agent().is_some());
 }
 
 /// Test: ExperienceCollection WorkItem without collector agent is marked Failed
@@ -330,7 +330,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
 
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
@@ -347,7 +347,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
         None,
         vec![],
         vec![tool],
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
     );
     app.world_mut().spawn((
         work_item,
@@ -374,7 +374,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
         .collect();
     assert_eq!(states.len(), 1);
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Failed,
         "ExperienceCollection WorkItem should be Failed when no collector agent"
     );

@@ -164,7 +164,7 @@ tool_deny("test deny reason");
                 ToolExecutionRequestMessage {
                     request: AgentExecutionRequest {
                         task_id,
-                        agent_id: uuid::Uuid::nil(),
+                        agent_id: harness::domain::AgentId::nil(),
                         request_kind: AgentRequestKind::ToolExecution {
                             tool_name: "shell_exec".to_string(),
                         },

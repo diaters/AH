@@ -7,8 +7,8 @@ use crate::{
     contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, ChatRoundReadyMessage,
-        ChatRoundStartedMessage, ChatSession, OutputContent, Task, TaskStatus,
-        TaskTerminatedMessage, ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
+        ChatRoundStartedMessage, ChatSession, OutputContent, Task, TaskTerminatedMessage,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
     },
     ecs::EntityIndex,
 };
@@ -26,10 +26,12 @@ pub fn chat_round_block_system(
             .get_task(&msg.parent_task_id)
             .and_then(|e| tasks.get_mut(e).ok())
         {
-            parent.status = TaskStatus::Waiting(WaitingReason::SubTaskBatch {
-                batch_id: msg.batch_id,
-            });
-            parent.updated_at = clock.0;
+            parent.mark_waiting(
+                WaitingReason::SubTaskBatch {
+                    batch_id: msg.batch_id,
+                },
+                clock.0,
+            );
             debug!(
                 event = "ChatRoundBlocked",
                 parent_task_id = %msg.parent_task_id,

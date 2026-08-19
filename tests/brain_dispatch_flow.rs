@@ -10,7 +10,6 @@ use harness::{
     systems::BrainConfig, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -78,7 +77,7 @@ fn brain_test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -121,7 +120,7 @@ fn completes_brain_dispatch_flow() {
     app.update();
 
     // 手动创建 Brain Agent
-    let brain_id = Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     let brain_entity = app
         .world_mut()
         .spawn((
@@ -152,7 +151,7 @@ fn completes_brain_dispatch_flow() {
         .insert(brain_id, brain_entity);
 
     // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
-    let default_agent_id = Uuid::new_v4();
+    let default_agent_id = harness::domain::AgentId::new();
     let default_entity = app
         .world_mut()
         .spawn((
@@ -220,7 +219,7 @@ fn completes_brain_dispatch_flow() {
     };
 
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, TaskStatus::Done);
+    assert_eq!(tasks[0].status(), &TaskStatus::Done);
 }
 
 /// 验证 Brain 不启用时，MVP 流程不受影响。
@@ -246,7 +245,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     app.update();
 
     // 手动创建 Brain Agent
-    let brain_id = Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: brain_id,
@@ -268,7 +267,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     ));
 
     // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
-    let default_agent_id = Uuid::new_v4();
+    let default_agent_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: default_agent_id,

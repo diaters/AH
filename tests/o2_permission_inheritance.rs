@@ -13,11 +13,10 @@ use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
     domain::AgentKind, domain::AgentProfile, domain::AgentSpawnRequestMessage,
     domain::AgentToolPermissions, domain::ChannelId, domain::ExternalInput, domain::FrontendKind,
-    domain::LongTermMemory, domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus,
-    domain::ToolPermission, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::LongTermMemory, domain::Task, domain::ToolPermission, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -32,7 +31,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -75,7 +74,7 @@ fn child_agent_inherits_confirm_permission_from_parent() {
     app.update();
 
     // 构造父 Agent：default=Deny(explicit=true)，overrides 显式授予 shell_exec: Confirm
-    let parent_id = Uuid::new_v4();
+    let parent_id = harness::domain::AgentId::new();
     let mut parent_overrides = std::collections::HashMap::new();
     parent_overrides.insert("shell_exec".to_string(), ToolPermission::Confirm);
     let parent_entity = app
@@ -110,33 +109,12 @@ fn child_agent_inherits_confirm_permission_from_parent() {
         .insert(parent_id, parent_entity);
 
     // 构造父 Task：Pending 状态，由父 Agent 创建
-    let task_id = Uuid::new_v4();
-    let task_entity = app
-        .world_mut()
-        .spawn(Task {
-            id: task_id,
-            content: "test".to_string(),
-            creator: parent_id,
-            delegate: None,
-            status: TaskStatus::Pending,
-            pending_confirmation_id: None,
-            input_summary: String::new(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: false,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        })
-        .id();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("test", 3, default_channel());
+    task.id = task_id;
+    task.creator = parent_id;
+    task.multi_turn = false;
+    let task_entity = app.world_mut().spawn(task).id();
     app.world_mut()
         .resource_mut::<harness::ecs::EntityIndex>()
         .tasks

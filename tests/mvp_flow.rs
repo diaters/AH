@@ -26,7 +26,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -53,7 +53,7 @@ fn test_config() -> HarnessConfig {
 fn spawn_default_agent(app: &mut bevy_app::App) {
     app.world_mut().spawn((
         Agent {
-            id: uuid::Uuid::new_v4(),
+            id: harness::domain::AgentId::new(),
             profile: AgentProfile {
                 name: "default-llm-agent".to_string(),
                 model: "gpt-4.1-mini".to_string(),
@@ -123,9 +123,12 @@ fn completes_single_turn_conversation_flow() {
     };
 
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, TaskStatus::Done);
+    assert_eq!(tasks[0].status(), &TaskStatus::Done);
     assert_eq!(
         tasks[0].result_summary,
-        "echo: [Current channel]\nchannel=tui, chat_id=default\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='tui' and omit the target; include the file as [DOCUMENT:path] or [IMAGE:path] or [VIDEO:path].\n\n[Current request]\n你好，Harness"
+        format!(
+            "echo: [Current channel]\nchannel=tui, chat_id=default\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='tui' and omit the target; {}\n\n[Current request]\n你好，Harness",
+            harness::domain::ATTACHMENT_MARKER_SYNTAX_HINT
+        )
     );
 }

@@ -32,6 +32,7 @@ use crate::user_plugins::host_api::{
     plugin_resource::PluginRoots,
     skills_meta::SkillsSnapshot,
     temp_resource::TempResourceSlot,
+    tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
 
@@ -144,7 +145,6 @@ fn dispatch_agent_lifecycle_hook(
                 plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                 approval: ApprovalContext {
                     current_request_id: None,
-                    tx: writer_tx.clone(),
                 },
                 experience: ExperienceContext {
                     store: Arc::new(
@@ -153,7 +153,6 @@ fn dispatch_agent_lifecycle_hook(
                             .cloned()
                             .unwrap_or_default(),
                     ),
-                    tx: writer_tx.clone(),
                 },
                 skills: SkillsSnapshot::empty(),
                 message: MessageContext {
@@ -161,6 +160,7 @@ fn dispatch_agent_lifecycle_hook(
                     tx: message_tx.clone(),
                 },
                 temp_resource: TempResourceSlot::new(),
+                tool: ToolCallContext::default(),
             }
         }),
     };
@@ -185,7 +185,7 @@ mod tests {
     /// 构造一个占位 Agent 用于测试派发路径。
     fn make_agent() -> Agent {
         Agent {
-            id: uuid::Uuid::new_v4(),
+            id: crate::domain::AgentId::new(),
             profile: AgentProfile {
                 name: "test-agent".to_string(),
                 model: "test-model".to_string(),

@@ -88,8 +88,8 @@ tool_set_result("replaced");
 /// 同时添加 `ToolCallingState` 使 `tool_result_system` 保留结果 entity
 /// （不 despawn），允许后续检查字段值。
 fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> Entity {
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::nil();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::nil();
     // 确保 Task 存在（tool_result_system 需要匹配 task_id）。
     let channel = ChannelId {
         frontend: FrontendKind::Tui,

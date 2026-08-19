@@ -18,8 +18,8 @@ fn spawn_inflight(
     timeout_secs: i64,
 ) -> bevy_ecs::prelude::Entity {
     let req = harness::domain::AgentExecutionRequest {
-        task_id: uuid::Uuid::new_v4(),
-        agent_id: uuid::Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: harness::domain::AgentRequestKind::ToolExecution {
             tool_name: "t".into(),
         },

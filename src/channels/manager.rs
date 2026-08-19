@@ -10,14 +10,12 @@ use crate::domain::{ExternalInput, Frontend, FrontendKind};
 
 use super::traits::{Channel, ChannelInboundMessage, ChannelOutboundMessage, OutboundEntry};
 
-fn frontend_kind_for_name(name: &str) -> FrontendKind {
-    match name {
-        "telegram" => FrontendKind::Telegram,
-        "qq" => FrontendKind::QQ,
-        "feishu" => FrontendKind::Feishu,
-        _ => panic!("unknown channel name: {name}"),
-    }
-}
+/// `ChannelManager::new` 的返回值：管理器、监督任务句柄与前端列表。
+pub type ChannelManagerSpawn = (
+    ChannelManager,
+    tokio::task::JoinHandle<()>,
+    Vec<Box<dyn Frontend>>,
+);
 
 #[derive(Clone, crate::prelude::Resource)]
 pub struct ChannelManager {
@@ -44,21 +42,19 @@ impl ChannelManager {
     pub fn new(
         channels: Vec<Arc<dyn Channel>>,
         external_input_tx: Sender<ExternalInput>,
-    ) -> (Self, tokio::task::JoinHandle<()>, Vec<Box<dyn Frontend>>) {
+    ) -> Result<ChannelManagerSpawn, String> {
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<OutboundEntry>();
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
-        let frontends: Vec<Box<dyn Frontend>> = channels
-            .iter()
-            .map(|ch| {
-                let kind = frontend_kind_for_name(ch.name());
-                Box::new(super::ChannelFrontend::new(
-                    kind,
-                    ch.name().to_string(),
-                    outbound_tx.clone(),
-                )) as Box<dyn Frontend>
-            })
-            .collect();
+        let mut frontends: Vec<Box<dyn Frontend>> = Vec::with_capacity(channels.len());
+        for ch in &channels {
+            let kind = FrontendKind::from_channel_name(ch.name())?;
+            frontends.push(Box::new(super::ChannelFrontend::new(
+                kind,
+                ch.name().to_string(),
+                outbound_tx.clone(),
+            )) as Box<dyn Frontend>);
+        }
 
         let supervisor_channels = channels.clone();
         let supervisor_shutdown = shutdown_tx.clone();
@@ -80,8 +76,20 @@ impl ChannelManager {
 
                         let bridge_handle = tokio::task::spawn_blocking(move || {
                             while let Ok(msg) = inbound_rx.recv() {
-                                if bridge_input_tx.send(msg.to_external_input()).is_err() {
-                                    break;
+                                match msg.to_external_input() {
+                                    Ok(input) => {
+                                        if bridge_input_tx.send(input).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            event = "ChannelInboundDropped",
+                                            channel = %msg.channel_name,
+                                            error = %e,
+                                            "dropping inbound message with unknown channel name"
+                                        );
+                                    }
                                 }
                             }
                         });
@@ -154,7 +162,7 @@ impl ChannelManager {
             }
         });
 
-        (
+        Ok((
             Self {
                 channels,
                 outbound_tx,
@@ -162,7 +170,7 @@ impl ChannelManager {
             },
             handle,
             frontends,
-        )
+        ))
     }
 
     /// 同步入队出向消息，立即返回。网络发送在后台执行。
@@ -236,7 +244,8 @@ mod tests {
             name: "telegram".to_string(),
             send_count: send_count.clone(),
         }) as Arc<dyn Channel>;
-        let (manager, _handle, _frontends) = ChannelManager::new(vec![channel], input_tx);
+        let (manager, _handle, _frontends) =
+            ChannelManager::new(vec![channel], input_tx).expect("valid channel names");
 
         // 等待入向消息到达（桥接任务需要从 spawn_blocking 转发）
         let input = tokio::time::timeout(Duration::from_secs(5), async {
@@ -284,7 +293,8 @@ mod tests {
     #[tokio::test]
     async fn send_unknown_channel_errors() {
         let (input_tx, _input_rx) = unbounded::<ExternalInput>();
-        let (manager, _handle, _frontends) = ChannelManager::new(vec![], input_tx);
+        let (manager, _handle, _frontends) =
+            ChannelManager::new(vec![], input_tx).expect("valid channel names");
         let result = manager.send(
             "nope".to_string(),
             ChannelOutboundMessage {

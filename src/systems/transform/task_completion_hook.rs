@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::domain::HookPoint;
 use crate::domain::{Task, TaskStatus};
@@ -26,6 +25,7 @@ use crate::user_plugins::host_api::{
     plugin_resource::PluginRoots,
     skills_meta::SkillsSnapshot,
     temp_resource::TempResourceSlot,
+    tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::PluginRegistry;
 
@@ -35,7 +35,7 @@ use crate::user_plugins::registry::PluginRegistry;
 /// 但 `Changed<Task>` 可能在终态后仍有更新（例如 `updated_at` 字段刷新），
 /// 故以集合去重。
 #[derive(Resource, Default)]
-pub struct TaskTerminalDispatched(pub HashSet<Uuid>);
+pub struct TaskTerminalDispatched(pub HashSet<crate::domain::TaskId>);
 
 /// 终态 hook 派发 companion System。
 ///
@@ -123,7 +123,6 @@ fn dispatch_terminal_hook(
                     plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                     approval: ApprovalContext {
                         current_request_id: None,
-                        tx: writer_tx.clone(),
                     },
                     experience: ExperienceContext {
                         store: std::sync::Arc::new(
@@ -132,7 +131,6 @@ fn dispatch_terminal_hook(
                                 .cloned()
                                 .unwrap_or_default(),
                         ),
-                        tx: writer_tx.clone(),
                     },
                     skills: SkillsSnapshot::empty(),
                     message: MessageContext {
@@ -140,6 +138,7 @@ fn dispatch_terminal_hook(
                         tx: message_tx.clone(),
                     },
                     temp_resource: TempResourceSlot::new(),
+                    tool: ToolCallContext::default(),
                 }
             },
         ),
@@ -162,29 +161,33 @@ mod tests {
     use crate::domain::{ChannelId, FailureReason, FrontendKind};
 
     /// 构造一个进度为 Done 的 Task entity 并 spawn 到 world。
-    fn spawn_done_task(world: &mut World) -> Uuid {
+    fn spawn_done_task(world: &mut World) -> crate::domain::TaskId {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
             thread_id: None,
         };
         let mut task = Task::from_user_input("done-task", 0, channel);
-        task.id = Uuid::new_v4();
+        task.id = crate::domain::TaskId::new();
         task.mark_done("ok", chrono::Utc::now());
         world.spawn(task.clone());
         task.id
     }
 
-    fn spawn_failed_task(world: &mut World) -> Uuid {
+    fn spawn_failed_task(world: &mut World) -> crate::domain::TaskId {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
             thread_id: None,
         };
         let mut task = Task::from_user_input("failed-task", 0, channel);
-        task.id = Uuid::new_v4();
+        task.id = crate::domain::TaskId::new();
         // 手动改为 Failed（避免构造 ExecutionError）
-        task.status = TaskStatus::Failed(FailureReason::AgentError);
+        task.mark_failed_reason(
+            FailureReason::AgentError,
+            "test failure",
+            chrono::Utc::now(),
+        );
         world.spawn(task.clone());
         task.id
     }

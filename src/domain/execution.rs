@@ -126,8 +126,8 @@ mod tests {
     #[test]
     fn agent_execution_request_carries_work_item_id() {
         let request = AgentExecutionRequest {
-            task_id: uuid::Uuid::nil(),
-            agent_id: uuid::Uuid::nil(),
+            task_id: crate::domain::TaskId::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             request_kind: AgentRequestKind::LlmCompletion,
             prompt: "test".to_string(),
             system_prompt: None,
@@ -144,8 +144,8 @@ mod tests {
     #[test]
     fn agent_execution_request_supports_model_override() {
         let request = AgentExecutionRequest {
-            task_id: uuid::Uuid::nil(),
-            agent_id: uuid::Uuid::nil(),
+            task_id: crate::domain::TaskId::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             request_kind: AgentRequestKind::LlmCompletion,
             prompt: "test".to_string(),
             system_prompt: None,

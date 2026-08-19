@@ -33,8 +33,8 @@ script = "hooks/on_task_created.rhai"
 log_info("my-plugin: a new task was created");
 ```text
 
-将 `my-plugin/` 目录放到 `$HARNESS_PLUGINS_DIR` 下（默认不加载插件，
-需通过环境变量启用），启动 Harness 即自动加载。
+将 `my-plugin/` 目录放到 `$HARNESS_PLUGINS_DIR` 下（未设置时默认为
+`.harness/plugins`，目录不存在则不加载插件），启动 Harness 即自动加载。
 
 ## 插件目录结构
 
@@ -285,6 +285,11 @@ task_set_tag(task_id, key, value);
 ### 工具控制
 
 ```rhai
+// 获取当前工具调用的名称与入参（仅在 on_tool_called 中有效；
+// 其余 hook 中 tool_call_name() 返回空串、tool_call_input_json() 返回 "null"）
+let name = tool_call_name();        // -> String
+let input = tool_call_input_json(); // -> String（JSON 文本）
+
 // 拒绝工具调用（仅在 on_tool_called 中有效）
 tool_deny(reason);                  // reason: 拒绝原因字符串
 
@@ -304,9 +309,6 @@ let content = read_plugin_resource("data/config.txt");  // -> String
 ```rhai
 // 获取当前审批请求的 ID（在 on_approval_requested / on_approval_resolved 中有效）
 let req_id = approval_request_id(); // -> String（空字符串表示无请求）
-
-// 解决审批请求
-approval_resolve(request_id, decision);  // decision: "approved" / "denied"
 ```text
 
 ### 经验
@@ -314,9 +316,6 @@ approval_resolve(request_id, decision);  // decision: "approved" / "denied"
 ```rhai
 // 查询经验候选详情
 let candidate = experience_get_candidate(candidate_id);  // -> Map 或 ()
-
-// 固定/取消固定经验候选
-experience_set_pinned(candidate_id, true_or_false);
 ```text
 
 ### 技能查询

@@ -28,28 +28,24 @@ pub struct InboundConfirmation {
 }
 
 impl ChannelInboundMessage {
-    pub fn to_external_input(&self) -> crate::domain::ExternalInput {
+    pub fn to_external_input(&self) -> Result<crate::domain::ExternalInput, String> {
         if let Some(ref confirmation) = self.confirmation {
-            return crate::domain::ExternalInput::Confirmation {
+            return Ok(crate::domain::ExternalInput::Confirmation {
                 request_id: confirmation.request_id,
                 option: confirmation.option.clone(),
                 feedback: confirmation.feedback.clone(),
-            };
+            });
         }
 
-        crate::domain::ExternalInput::TextWithChannel {
+        let frontend = FrontendKind::from_channel_name(&self.channel_name)?;
+        Ok(crate::domain::ExternalInput::TextWithChannel {
             channel: ChannelId {
-                frontend: match self.channel_name.as_str() {
-                    "telegram" => FrontendKind::Telegram,
-                    "qq" => FrontendKind::QQ,
-                    "feishu" => FrontendKind::Feishu,
-                    _ => panic!("unknown channel name: {}", self.channel_name),
-                },
+                frontend,
                 user_id: self.chat_id.clone(),
                 thread_id: self.thread_id.clone(),
             },
             content: self.content.clone(),
-        }
+        })
     }
 }
 
@@ -107,6 +103,22 @@ pub enum ReplyMarkup {
 pub struct InlineKeyboardButton {
     pub text: String,
     pub callback_data: String,
+}
+
+/// 生成审批回调数据（格式 `<request_id>:<option_id>` 的唯一权威，
+/// 由 ChannelFrontend 生成、各通道解析，双方都必须经由本模块）。
+pub fn make_callback_data(request_id: Uuid, option_id: &str) -> String {
+    format!("{request_id}:{option_id}")
+}
+
+/// 解析审批回调数据；分隔符缺失、option 为空或 UUID 非法时返回 `None`。
+pub fn parse_callback_data(data: &str) -> Option<(Uuid, String)> {
+    let (uuid_part, option_part) = data.split_once(':')?;
+    if option_part.is_empty() {
+        return None;
+    }
+    let request_id = Uuid::parse_str(uuid_part).ok()?;
+    Some((request_id, option_part.to_string()))
 }
 
 pub use crate::domain::{AttachmentKind, ChannelAttachment, extract_attachments};
@@ -195,7 +207,7 @@ mod tests {
             timestamp_secs: 0,
             confirmation: None,
         };
-        let input = msg.to_external_input();
+        let input = msg.to_external_input().expect("valid channel name");
         match input {
             crate::domain::ExternalInput::TextWithChannel { channel, content } => {
                 assert_eq!(channel.frontend, FrontendKind::Telegram);
@@ -204,6 +216,23 @@ mod tests {
             }
             _ => panic!("unexpected variant"),
         }
+    }
+
+    #[test]
+    fn to_external_input_unknown_channel_is_error_not_panic() {
+        let msg = ChannelInboundMessage {
+            channel_name: "no-such-channel".to_string(),
+            sender_id: "u1".to_string(),
+            chat_id: "c1".to_string(),
+            thread_id: None,
+            content: "hello".to_string(),
+            timestamp_secs: 0,
+            confirmation: None,
+        };
+        let err = msg
+            .to_external_input()
+            .expect_err("unknown channel must error");
+        assert!(err.contains("unknown channel name"));
     }
 
     #[test]
@@ -225,6 +254,22 @@ mod tests {
     }
 
     #[test]
+    fn callback_data_roundtrip() {
+        let id = Uuid::new_v4();
+        let data = make_callback_data(id, "allow_once");
+        let (request_id, option) = parse_callback_data(&data).expect("roundtrip");
+        assert_eq!(request_id, id);
+        assert_eq!(option, "allow_once");
+    }
+
+    #[test]
+    fn parse_callback_data_rejects_invalid() {
+        assert!(parse_callback_data("not-a-uuid:allow_once").is_none());
+        assert!(parse_callback_data("01912345-6789-7abc-8def-0123456789ab").is_none());
+        assert!(parse_callback_data("01912345-6789-7abc-8def-0123456789ab:").is_none());
+    }
+
+    #[test]
     fn to_external_input_propagates_feedback() {
         let msg = ChannelInboundMessage {
             channel_name: "telegram".to_string(),
@@ -240,7 +285,7 @@ mod tests {
                 feedback: Some("name should be more specific".to_string()),
             }),
         };
-        match msg.to_external_input() {
+        match msg.to_external_input().expect("valid channel name") {
             crate::domain::ExternalInput::Confirmation { feedback, .. } => {
                 assert_eq!(feedback.as_deref(), Some("name should be more specific"));
             }

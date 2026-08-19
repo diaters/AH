@@ -25,9 +25,9 @@ use common::async_tool_bridge::*;
 use harness::domain::{
     AgentExecutionRequest, AgentExecutionRequestMessage, AgentRequestKind, BuiltinTool,
     BuiltinToolExecutors, ChannelId, FrontendKind, InFlightToolCall, OwnedToolContext,
-    ShortTermMemory, Task, TaskStatus, ToolAction, ToolActionKind, ToolCallingState, ToolContext,
-    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolFuture,
-    ToolRequestPending, ToolWorkerOutput,
+    ShortTermMemory, Task, ToolAction, ToolActionKind, ToolCallingState, ToolContext, ToolError,
+    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolFuture, ToolRequestPending,
+    ToolWorkerOutput,
 };
 use harness::ecs::EntityIndex;
 use harness::systems::tools::builtin::scheduled::ListScheduledTasksTool;
@@ -51,8 +51,8 @@ fn test_channel() -> ChannelId {
 fn make_request(
     tool_name: &str,
     tool_call_id: &str,
-    task_id: Uuid,
-    agent_id: Uuid,
+    task_id: harness::domain::TaskId,
+    agent_id: harness::domain::AgentId,
 ) -> ToolExecutionRequestMessage {
     ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -79,10 +79,13 @@ fn make_request(
 }
 
 /// spawn 一个 Waiting(ToolExecution) 的 Task + ShortTermMemory，返回 (task_entity, task_id)。
-fn spawn_waiting_task(world: &mut World, content: &str) -> (Entity, Uuid) {
+fn spawn_waiting_task(world: &mut World, content: &str) -> (Entity, harness::domain::TaskId) {
     let mut task = Task::from_user_input(content, 3, test_channel());
     let task_id = task.id;
-    task.status = TaskStatus::Waiting(harness::domain::WaitingReason::ToolExecution);
+    task.mark_waiting(
+        harness::domain::WaitingReason::ToolExecution,
+        chrono::Utc::now(),
+    );
     let entity = world.spawn((task, ShortTermMemory::default())).id();
     // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
     // 供 tool_calling_orchestrator_system 等 O(1) 解析 TaskId → Entity。
@@ -94,7 +97,12 @@ fn spawn_waiting_task(world: &mut World, content: &str) -> (Entity, Uuid) {
 }
 
 /// spawn 一个 ToolCallingState（pending_tool_call_ids = given list）。
-fn spawn_calling_state(world: &mut World, task_id: Uuid, agent_id: Uuid, pending: &[&str]) {
+fn spawn_calling_state(
+    world: &mut World,
+    task_id: harness::domain::TaskId,
+    agent_id: harness::domain::AgentId,
+    pending: &[&str],
+) {
     world.spawn(ToolCallingState {
         task_id,
         agent_id,
@@ -184,7 +192,7 @@ fn e2e_full_chain_dispatch_to_restore() {
 
     // 1. Waiting(ToolExecution) Task + ToolCallingState(pending: ["e2e-call-1"])
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "list my tasks");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["e2e-call-1"]);
 
     // 2. 预置双账本各一条任务已在 world_with_list_tool 完成
@@ -244,7 +252,7 @@ fn e2e_full_chain_dispatch_to_restore() {
     // 8. 复用 tool_calling_orchestrator_system 验证 barrier 收齐后行为：
     //    pending_tool_call_ids 清空 + 结果 entity despawn + follow-up 请求 spawn
     world
-        .run_system_once(harness::systems::transform::tool_calling_orchestrator_system)
+        .run_system_once(harness::systems::tools::tool_calling_orchestrator_system)
         .unwrap();
 
     // barrier 收齐 → pending 清空
@@ -293,7 +301,7 @@ impl BuiltinTool for PanicAsyncTool {
 fn e2e_worker_panic_yields_exactly_one_error_result() {
     let mut world = world_with_async_tool(Box::new(PanicAsyncTool));
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "trigger panic");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["panic-1"]);
 
     let pending_entity = world
@@ -352,7 +360,7 @@ impl BuiltinTool for PendingForeverTool {
 fn e2e_sweeper_timeout_yields_error_and_barrier_continues() {
     let mut world = world_with_async_tool(Box::new(PendingForeverTool));
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "trigger pending forever");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["to-1"]);
 
     let pending_entity = world
@@ -414,7 +422,7 @@ fn e2e_channel_disconnect_is_swept() {
     // 第一阶段：移除 ToolResultReceiver 后 dispatch，worker send 失败但被吞（let _ =）
     let mut world = world_with_async_tool(Box::new(EchoAsyncTool));
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "channel disconnect");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["dc-1"]);
 
     // 移除 receiver 模拟通道断开（worker send 失败静默）
@@ -452,7 +460,7 @@ fn e2e_channel_disconnect_is_swept() {
     // 用一个新的 world 验证「恢复通道后 sweeper error 落地」语义：
     let mut world2 = world_with_async_tool(Box::new(PendingForeverTool));
     let (_task_entity2, task_id2) = spawn_waiting_task(&mut world2, "channel recover");
-    let agent_id2 = Uuid::new_v4();
+    let agent_id2 = harness::domain::AgentId::new();
     spawn_calling_state(&mut world2, task_id2, agent_id2, &["rc-1"]);
     let pending_entity2 = world2
         .spawn(make_request("pending_forever", "rc-1", task_id2, agent_id2))
@@ -506,7 +514,7 @@ impl BuiltinTool for SlowSuccessTool {
 fn e2e_sweeper_error_first_worker_late_success_dropped() {
     let mut world = world_with_async_tool(Box::new(SlowSuccessTool));
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "race test");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["race-1"]);
 
     let pending_entity = world
@@ -588,7 +596,7 @@ fn e2e_sweeper_error_first_worker_late_success_dropped() {
 fn e2e_barrier_waits_for_all_results_before_restore() {
     let mut world = world_with_async_tool(Box::new(EchoAsyncTool));
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "two tool calls batch");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     // 一批两个工具调用：pending = [c1, c2]
     spawn_calling_state(&mut world, task_id, agent_id, &["c1", "c2"]);
 
@@ -611,7 +619,7 @@ fn e2e_barrier_waits_for_all_results_before_restore() {
 
     // 跑 orchestrator：barrier 未收齐（pending 仍含 c2）→ 不 spawn follow-up
     world
-        .run_system_once(harness::systems::transform::tool_calling_orchestrator_system)
+        .run_system_once(harness::systems::tools::tool_calling_orchestrator_system)
         .unwrap();
     assert_eq!(
         count_entities::<AgentExecutionRequestMessage>(&mut world),
@@ -641,7 +649,7 @@ fn e2e_barrier_waits_for_all_results_before_restore() {
 
     // 跑 orchestrator：barrier 收齐 → pending 清空 + despawn 结果 + spawn follow-up
     world
-        .run_system_once(harness::systems::transform::tool_calling_orchestrator_system)
+        .run_system_once(harness::systems::tools::tool_calling_orchestrator_system)
         .unwrap();
     let mut q_state = world.query::<&ToolCallingState>();
     let state = q_state.iter(&world).next().expect("calling state");
@@ -774,7 +782,7 @@ fn world_with_delete_tool() -> World {
 /// 回送 existed=true）→ ingest（落地最终结果 + despawn 挂起实体）。
 fn run_delete_full_chain(world: &mut World, tool_call_id: &str) -> Entity {
     let (_task_entity, task_id) = spawn_waiting_task(world, "delete victim");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(world, task_id, agent_id, &[tool_call_id]);
 
     // 构造 delete_scheduled_task 请求，tool_input = {"kind": "victim"}

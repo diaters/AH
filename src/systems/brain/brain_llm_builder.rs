@@ -139,11 +139,10 @@ mod tests {
     use super::*;
     use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
     use crate::infrastructure::skills::{SkillEntry, SkillId};
-    use uuid::Uuid;
 
     fn make_persistent_agent(name: &str, tags: Vec<String>) -> Agent {
         Agent {
-            id: Uuid::new_v4(),
+            id: crate::domain::AgentId::new(),
             profile: AgentProfile {
                 name: name.to_string(),
                 model: "test-model".to_string(),

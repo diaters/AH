@@ -13,16 +13,16 @@ use bevy_ecs::system::RunSystemOnce;
 use common::async_tool_bridge::*;
 use harness::domain::{
     AgentExecutionRequest, AgentRequestKind, BuiltinTool, BuiltinToolExecutors, ChannelId,
-    FrontendKind, InFlightToolCall, OwnedToolContext, SkillCreationContext, Task, TaskStatus,
-    ToolAction, ToolActionKind, ToolContext, ToolError, ToolExecutionRequestMessage, ToolFuture,
+    FrontendKind, InFlightToolCall, OwnedToolContext, SkillCreationContext, Task, ToolAction,
+    ToolActionKind, ToolContext, ToolError, ToolExecutionRequestMessage, ToolFuture,
     ToolRequestPending, ToolWorkerOutput,
 };
 
 fn make_request(tool_name: &str, tool_call_id: &str) -> ToolExecutionRequestMessage {
     ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
-            task_id: uuid::Uuid::new_v4(),
-            agent_id: uuid::Uuid::new_v4(),
+            task_id: harness::domain::TaskId::new(),
+            agent_id: harness::domain::AgentId::new(),
             request_kind: AgentRequestKind::ToolExecution {
                 tool_name: tool_name.into(),
             },
@@ -183,33 +183,10 @@ fn dispatch_injects_current_origin_channel_from_task() {
         user_id: "tg-probe".to_string(),
         thread_id: None,
     };
-    let task_id = uuid::Uuid::new_v4();
-    let now = chrono::Utc::now();
-    let task = Task {
-        id: task_id,
-        content: "probe task".to_string(),
-        creator: uuid::Uuid::nil(),
-        delegate: None,
-        status: TaskStatus::Pending,
-        pending_confirmation_id: None,
-        input_summary: String::new(),
-        result_summary: String::new(),
-        priority: 0,
-        created_at: now,
-        updated_at: now,
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: false,
-        parent_task_id: None,
-        batch_id: None,
-        origin_channel: Some(telegram_channel.clone()),
-        routing_policy: harness::domain::TaskRoutingPolicy::conversational(
-            telegram_channel.clone(),
-        ),
-        last_evaluated_turn: None,
-    };
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("probe task", 3, telegram_channel.clone());
+    task.id = task_id;
+    task.multi_turn = false;
     let task_entity = world.spawn(task).id();
     world
         .resource_mut::<harness::ecs::EntityIndex>()
@@ -337,8 +314,8 @@ fn dispatch_injects_current_skill_dir_from_skill_creation_context() {
     world.insert_resource(harness::systems::HarnessSettings::default_test());
 
     // 构造带 SkillCreationContext 的 WorkItem entity（sandbox_dir 应注入 ctx）
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
     let sandbox = std::path::PathBuf::from("/tmp/probe-sandbox");
     let wi_entity = world
         .spawn(SkillCreationContext {

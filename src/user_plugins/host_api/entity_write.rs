@@ -1,7 +1,8 @@
 //! 插件对 World 的写指令。dispatcher 在 hook 完成后 replay。
 //!
-//! 注：每个变体都需在 `replay` 函数中提供对应匹配分支；部分变体当前为 deferred 占位，
-//! 详见 `user_plugins/dispatcher.rs`。
+//! 注：每个变体都需在 `dispatcher.rs` 的 `apply_world_command` 中提供对应
+//! 匹配分支；`SetTaskMetadata` / `SetTaskTag` 因 Task 暂无对应字段，当前为
+//! 记录日志的安全占位（详见 dispatcher 内注释）。
 
 use crossbeam_channel::Sender;
 use rhai::Engine;
@@ -9,8 +10,9 @@ use uuid::Uuid;
 
 /// 插件对 World 的写指令。dispatcher 在 hook 完成后 replay。
 ///
-/// 注：每个变体都需在 `replay` 函数中提供对应匹配分支；部分变体当前为 deferred 占位，
-/// 详见 `user_plugins/dispatcher.rs`。
+/// 注：每个变体都需在 `dispatcher.rs` 的 `apply_world_command` 中提供对应
+/// 匹配分支；`SetTaskMetadata` / `SetTaskTag` 因 Task 暂无对应字段，当前为
+/// 记录日志的安全占位（详见 dispatcher 内注释）。
 #[derive(Debug)]
 pub enum WorldCommand {
     CreateTask {
@@ -26,19 +28,6 @@ pub enum WorldCommand {
         task_id: Uuid,
         key: String,
         value: String,
-    },
-    CreateWorkItem {
-        task_id: Uuid,
-        kind: String,
-        payload: serde_json::Value,
-    },
-    SetApprovalDecision {
-        request_id: Uuid,
-        decision: String,
-    },
-    ExperienceSetPinned {
-        id: Uuid,
-        pinned: bool,
     },
 }
 
@@ -94,22 +83,6 @@ pub fn register(engine: &mut Engine, writer: WorldWriter) {
             }
         },
     );
-
-    let w = writer.clone();
-    engine.register_fn(
-        "create_work_item",
-        move |task_id: &str, kind: &str, payload: rhai::Dynamic| -> String {
-            if let Ok(tid) = Uuid::parse_str(task_id) {
-                let payload_json = rhai_dynamic_to_json(payload);
-                let _ = w.tx.send(WorldCommand::CreateWorkItem {
-                    task_id: tid,
-                    kind: kind.to_string(),
-                    payload: payload_json,
-                });
-            }
-            uuid::Uuid::nil().to_string()
-        },
-    );
 }
 
 pub fn rhai_dynamic_to_json(v: rhai::Dynamic) -> serde_json::Value {
@@ -123,7 +96,7 @@ pub fn rhai_dynamic_to_json(v: rhai::Dynamic) -> serde_json::Value {
         return serde_json::Value::from(v.as_int().unwrap());
     }
     if v.is::<f64>() {
-        return serde_json::json!(v.as_float().unwrap());
+        return serde_json::Value::from(v.as_float().unwrap());
     }
     if v.is::<String>() {
         return serde_json::Value::String(v.cast::<String>());
@@ -192,36 +165,6 @@ mod tests {
                 assert_eq!(task_id, id);
                 assert_eq!(key, "env");
                 assert_eq!(value, "ci");
-            }
-            _ => panic!("wrong cmd"),
-        }
-    }
-
-    #[test]
-    fn create_work_item_sends_payload_command() {
-        let (tx, rx) = unbounded();
-        let mut e = Engine::new();
-        register(&mut e, WorldWriter::new(tx));
-        let tid = uuid::Uuid::new_v4();
-        let script = format!(
-            r#"
-let p = #{{"topic": "ci-fail", "severity": 5}};
-create_work_item("{}", "triage", p)
-"#,
-            tid
-        );
-        let ret: String = e.eval(&script).unwrap();
-        assert_eq!(ret, uuid::Uuid::nil().to_string());
-        match rx.recv().unwrap() {
-            WorldCommand::CreateWorkItem {
-                task_id,
-                kind,
-                payload,
-            } => {
-                assert_eq!(task_id, tid);
-                assert_eq!(kind, "triage");
-                assert_eq!(payload["topic"], "ci-fail");
-                assert_eq!(payload["severity"], 5);
             }
             _ => panic!("wrong cmd"),
         }

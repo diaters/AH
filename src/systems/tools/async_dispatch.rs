@@ -275,7 +275,7 @@ pub fn async_tool_dispatch_system(
             let output_channel = index
                 .get_task(&request.request.task_id)
                 .and_then(|e| tasks.get(e).ok())
-                .and_then(|t| t.routing_policy.output_channel.clone());
+                .and_then(|t| t.routing_policy.output_channel().cloned());
 
             // 权限审计：Allow 认领（Confirm 路径由 sync 路径发审计，此处不重复）。
             // source 取当前 effective_permission 的来源；registry/agent 不可见时

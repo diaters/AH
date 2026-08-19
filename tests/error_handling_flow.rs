@@ -11,11 +11,10 @@ use harness::{
     domain::AgentToolPermissions, domain::ChannelId, domain::DispatchHint, domain::DispatchKind,
     domain::DispatchStrategy, domain::ExecutionError, domain::ExecutorFuture,
     domain::ExternalInput, domain::FrontendKind, domain::LongTermMemory, domain::PendingDispatch,
-    domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus, domain::WaitingReason,
-    llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::Task, domain::TaskStatus, domain::WaitingReason, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -30,7 +29,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -59,7 +58,7 @@ fn test_config() -> HarnessConfig {
 /// 供 `dispatch_system` 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
 fn spawn_default_agent(app: &mut bevy_app::App) {
     let agent = Agent {
-        id: Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "default-llm-agent".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -154,8 +153,8 @@ fn task_enters_retry_backoff_on_rate_limit_error() {
     let task = task.unwrap();
 
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::RetryBackoff),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::RetryBackoff),
         "Task should be in RetryBackoff after rate limit error"
     );
     assert_eq!(task.retry_count, 1, "Retry count should be incremented");
@@ -220,7 +219,7 @@ fn non_retryable_error_causes_immediate_failure() {
     let task = task.unwrap();
 
     assert!(
-        matches!(task.status, TaskStatus::Failed(_)),
+        matches!(task.status(), TaskStatus::Failed(_)),
         "Task should fail immediately on non-retryable error"
     );
 
@@ -348,7 +347,7 @@ fn large_input_is_handled() {
     spawn_default_agent(&mut app);
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
     let brain_agent = Agent {
-        id: Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "brain".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -402,7 +401,7 @@ fn large_input_is_handled() {
     // Task should be in a valid state (not crashed)
     let task = tasks.first().unwrap();
     assert!(
-        !matches!(task.status, TaskStatus::Failed(_)),
+        !matches!(task.status(), TaskStatus::Failed(_)),
         "Task with large input should not fail"
     );
 }
@@ -472,7 +471,7 @@ fn multiple_concurrent_tasks_are_handled() {
 
     let done_count = tasks
         .iter()
-        .filter(|t| t.status == TaskStatus::Done)
+        .filter(|t| t.status() == &TaskStatus::Done)
         .count();
     assert_eq!(
         done_count, task_count,
@@ -518,33 +517,11 @@ fn waiting_task_waits_for_user_input() {
     spawn_default_agent(&mut app);
 
     // Create a multi-turn task in Waiting(User) state
-    let task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: task_id,
-            content: "multi-turn".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "waiting".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        harness::domain::ShortTermMemory::default(),
-    ));
+    let mut task = Task::from_user_input("multi-turn", 3, default_channel());
+    task.input_summary = "waiting".to_string();
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
+    app.world_mut()
+        .spawn((task, harness::domain::ShortTermMemory::default()));
 
     // Run updates without providing user input
     for _ in 0..5 {
@@ -560,7 +537,7 @@ fn waiting_task_waits_for_user_input() {
 
     assert_eq!(tasks.len(), 1);
     assert!(
-        matches!(tasks[0].status, TaskStatus::Waiting(WaitingReason::User)),
+        matches!(tasks[0].status(), TaskStatus::Waiting(WaitingReason::User)),
         "Task should remain in Waiting(User) state"
     );
 }
@@ -620,12 +597,15 @@ fn task_failure_sets_error_message() {
     let task = task.unwrap();
 
     assert!(
-        matches!(task.status, TaskStatus::Failed(_)),
+        matches!(task.status(), TaskStatus::Failed(_)),
         "Task should be Failed"
     );
-    assert!(task.last_error.is_some(), "Task should have error message");
     assert!(
-        task.last_error.unwrap().contains("invalid credentials"),
+        task.last_error().is_some(),
+        "Task should have error message"
+    );
+    assert!(
+        task.last_error().unwrap().contains("invalid credentials"),
         "Error message should contain original error"
     );
 }

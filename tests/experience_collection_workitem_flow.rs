@@ -6,8 +6,8 @@ use common::mock_executor::NoOpExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
-    domain::Task, domain::TaskStatus, domain::WorkItem, domain::WorkItemStatus,
-    domain::WorkItemType, ecs::EntityIndex, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::Task, domain::WorkItem, domain::WorkItemType, ecs::EntityIndex, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -40,9 +40,9 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Done;
+    task.mark_done("done", chrono::Utc::now());
     let task_id = task.id;
-    let governing_agent_id = uuid::Uuid::new_v4();
+    let governing_agent_id = harness::domain::AgentId::new();
     task.delegate = Some(governing_agent_id);
     let task_entity = app
         .world_mut()
@@ -114,18 +114,18 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         None,
         vec![],
         vec![tool],
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
     );
     let work_item_id = work_item.id;
-    work_item.status = WorkItemStatus::Running;
-    work_item.assigned_agent = Some(uuid::Uuid::new_v4());
+    work_item.assign(harness::domain::AgentId::new());
+    work_item.start();
     app.world_mut().spawn(work_item);
 
     // 预置候选，模拟 tool 执行已完成
     let candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
         "test knowledge".to_string(),
         "test content".to_string(),
     );
@@ -135,7 +135,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
 
     let result = harness::domain::AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::new_v4(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: harness::domain::AgentRequestKind::LlmCompletion,
         result: Ok(harness::domain::AgentExecutionOutput {
             content: harness::domain::OutputContent::Text("done".to_string()),
@@ -207,9 +207,9 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     );
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let governing_agent_id = uuid::Uuid::new_v4();
-    let collector_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let governing_agent_id = harness::domain::AgentId::new();
+    let collector_id = harness::domain::AgentId::new();
 
     let agent_entity = app
         .world_mut()
@@ -243,7 +243,7 @@ fn experience_collection_completion_uses_governing_agent_not_collector() {
     let mut task = Task::from_user_input("governance target".to_string(), 3, default_channel());
     task.id = task_id;
     task.delegate = Some(governing_agent_id);
-    task.status = TaskStatus::Done;
+    task.mark_done("done", now);
     task.created_at = now;
     task.updated_at = now;
     let task_entity = app.world_mut().spawn(task).id();
@@ -292,14 +292,14 @@ fn child_task_experience_still_aggregates_into_parent_inbox() {
     use harness::{domain::ExperienceStore, domain::TaskId};
 
     let mut store = ExperienceStore::default();
-    let parent_task_id: TaskId = uuid::Uuid::new_v4();
-    let child_task_id: TaskId = uuid::Uuid::new_v4();
-    let parent_agent_id = uuid::Uuid::new_v4();
+    let parent_task_id: TaskId = harness::domain::TaskId::new();
+    let child_task_id: TaskId = harness::domain::TaskId::new();
+    let parent_agent_id = harness::domain::AgentId::new();
 
     let child_candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         child_task_id,
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
         "child fact".to_string(),
         "content".to_string(),
     );
@@ -334,10 +334,10 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
     );
     app.update();
 
-    let governing_agent_id = uuid::Uuid::new_v4();
+    let governing_agent_id = harness::domain::AgentId::new();
     let mut task = Task::from_user_input_ready("top task", 3, default_channel());
     task.delegate = Some(governing_agent_id);
-    task.status = harness::domain::TaskStatus::Waiting(harness::domain::WaitingReason::User);
+    task.mark_waiting(harness::domain::WaitingReason::User, chrono::Utc::now());
     let _task_id = task.id;
     app.world_mut()
         .spawn((task, harness::domain::ShortTermMemory::default()));

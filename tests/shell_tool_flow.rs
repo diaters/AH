@@ -19,7 +19,6 @@ use harness::{
     systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 // ============ 异步工具结果捕获基础设施 ============
 //
@@ -103,7 +102,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -126,8 +125,8 @@ fn test_config() -> HarnessConfig {
     }
 }
 
-fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
-    let id = Uuid::new_v4();
+fn spawn_shell_agent(world: &mut harness::prelude::World) -> harness::domain::AgentId {
+    let id = harness::domain::AgentId::new();
     let entity = world
         .spawn(Agent {
             id,
@@ -161,7 +160,7 @@ fn spawn_shell_agent(world: &mut harness::prelude::World) -> Uuid {
 fn spawn_shell_task(
     world: &mut harness::prelude::World,
     content: &str,
-) -> (harness::prelude::Entity, Uuid) {
+) -> (harness::prelude::Entity, harness::domain::TaskId) {
     let task = Task::from_user_input_ready(content, 3, default_channel());
     let task_id = task.id;
     let task_entity = world.spawn((task, ShortTermMemory::default())).id();
@@ -861,8 +860,8 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
 #[test]
 fn shell_input_returns_backend_backed_status() {
     let backend = harness::NativeProcessBackend::default();
-    let task_id = Uuid::new_v4();
-    let agent_id = Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let handle = backend
         .start_session(harness::domain::SessionStartRequest {
@@ -915,8 +914,10 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
 
     let agent_id = spawn_shell_agent(app.world_mut());
     let mut task = Task::from_user_input_ready("shell input missing stdin", 3, default_channel());
-    task.status =
-        harness::domain::TaskStatus::Waiting(harness::domain::WaitingReason::ToolExecution);
+    task.mark_waiting(
+        harness::domain::WaitingReason::ToolExecution,
+        chrono::Utc::now(),
+    );
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))
@@ -1029,8 +1030,8 @@ fn shell_read_backend_returns_latest_snapshot() {
             env: std::collections::HashMap::new(),
             timeout_secs: None,
             tail_lines: 2,
-            owner_task_id: Uuid::new_v4(),
-            owner_agent_id: Uuid::new_v4(),
+            owner_task_id: harness::domain::TaskId::new(),
+            owner_agent_id: harness::domain::AgentId::new(),
         })
         .expect("exec_blocking should succeed");
 
@@ -1417,8 +1418,8 @@ fn shell_input_and_stop_follow_simplified_contract() {
             env: std::collections::HashMap::new(),
             timeout_secs: None,
             tail_lines: 20,
-            owner_task_id: Uuid::new_v4(),
-            owner_agent_id: Uuid::new_v4(),
+            owner_task_id: harness::domain::TaskId::new(),
+            owner_agent_id: harness::domain::AgentId::new(),
         })
         .expect("start_session should succeed");
     let session_id = handle.handle_id.to_string();
@@ -1632,7 +1633,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
 
     {
         let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
-        task.status = harness::domain::TaskStatus::Done;
+        task.mark_done(String::new(), chrono::Utc::now());
     }
     app.update();
 
@@ -1658,8 +1659,8 @@ fn backend_session_handle_uses_snapshot_output_shape() {
             env: std::collections::HashMap::new(),
             timeout_secs: None,
             tail_lines: 2,
-            owner_task_id: Uuid::new_v4(),
-            owner_agent_id: Uuid::new_v4(),
+            owner_task_id: harness::domain::TaskId::new(),
+            owner_agent_id: harness::domain::AgentId::new(),
         })
         .expect("exec_blocking should succeed");
 
@@ -2087,7 +2088,7 @@ fn task_termination_stops_owned_shell_sessions() {
     // Mark task as Done
     {
         let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
-        task.status = harness::domain::TaskStatus::Done;
+        task.mark_done(String::new(), chrono::Utc::now());
     }
 
     // Drive app update to trigger task_termination_system
@@ -2161,8 +2162,11 @@ fn failed_task_also_stops_owned_shell_sessions() {
     // Mark task as Failed
     {
         let mut task = app.world_mut().get_mut::<Task>(task_entity).unwrap();
-        task.status =
-            harness::domain::TaskStatus::Failed(harness::domain::FailureReason::AgentError);
+        task.mark_failed_reason(
+            harness::domain::FailureReason::AgentError,
+            String::new(),
+            chrono::Utc::now(),
+        );
     }
 
     // Drive app update to trigger task_termination_system

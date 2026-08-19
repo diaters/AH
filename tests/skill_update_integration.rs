@@ -25,10 +25,10 @@ use harness::{
     domain::ExperienceWritebackDestination, domain::FrontendKind, domain::LongTermMemory,
     domain::ShortTermMemory, domain::SkillUpdateCompletedMessage, domain::SkillUpdateContext,
     domain::SkillUpdateOperation, domain::Task, domain::TaskExperiencePolicy,
-    domain::TaskInjectedSkill, domain::TaskRoutingPolicy, domain::TaskStatus,
-    domain::ToolCallingState, domain::ToolDefinition, domain::ToolExecutionRequestMessage,
-    domain::ToolPermission, domain::WorkItem, domain::WorkItemType, ecs::EntityIndex,
-    llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::TaskInjectedSkill, domain::TaskRoutingPolicy, domain::ToolCallingState,
+    domain::ToolDefinition, domain::ToolExecutionRequestMessage, domain::ToolPermission,
+    domain::WorkItem, domain::WorkItemType, ecs::EntityIndex, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -52,7 +52,7 @@ fn no_brain_test_config() -> HarnessConfig {
     }
 }
 
-fn make_persistent_agent(id: Uuid, name: &str, tags: Vec<&str>) -> Agent {
+fn make_persistent_agent(id: harness::domain::AgentId, name: &str, tags: Vec<&str>) -> Agent {
     Agent {
         id,
         profile: AgentProfile {
@@ -71,7 +71,11 @@ fn make_persistent_agent(id: Uuid, name: &str, tags: Vec<&str>) -> Agent {
     }
 }
 
-fn make_temporary_agent(id: Uuid, name: &str, parent_id: Uuid) -> Agent {
+fn make_temporary_agent(
+    id: harness::domain::AgentId,
+    name: &str,
+    parent_id: harness::domain::AgentId,
+) -> Agent {
     Agent {
         id,
         profile: AgentProfile {
@@ -90,31 +94,20 @@ fn make_temporary_agent(id: Uuid, name: &str, parent_id: Uuid) -> Agent {
     }
 }
 
-fn make_task(task_id: Uuid, delegate: Option<Uuid>, parent_task_id: Option<Uuid>) -> Task {
+fn make_task(
+    task_id: harness::domain::TaskId,
+    delegate: Option<harness::domain::AgentId>,
+    parent_task_id: Option<harness::domain::TaskId>,
+) -> Task {
     let now = chrono::Utc::now();
-    Task {
-        id: task_id,
-        content: "test task content".to_string(),
-        creator: Uuid::nil(),
-        delegate,
-        status: TaskStatus::Done,
-        pending_confirmation_id: None,
-        input_summary: String::new(),
-        result_summary: String::new(),
-        priority: 0,
-        created_at: now,
-        updated_at: now,
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: false,
-        parent_task_id,
-        batch_id: None,
-        origin_channel: Some(default_channel()),
-        routing_policy: TaskRoutingPolicy::event(None, None),
-        last_evaluated_turn: None,
-    }
+    let mut task = Task::from_user_input("test task content", 3, default_channel());
+    task.id = task_id;
+    task.delegate = delegate;
+    task.parent_task_id = parent_task_id;
+    task.multi_turn = false;
+    task.routing_policy = TaskRoutingPolicy::event(None, None);
+    task.mark_done("", now);
+    task
 }
 
 fn make_skill_entry(skill_id: SkillId, self_updatable: bool) -> SkillEntry {
@@ -132,8 +125,8 @@ fn make_skill_entry(skill_id: SkillId, self_updatable: bool) -> SkillEntry {
 
 /// 构造一个已进入 GovernancePending 状态的 Skill 类候选。
 fn make_governance_pending_skill_candidate(
-    producer_task_id: Uuid,
-    governing_agent_id: Uuid,
+    producer_task_id: harness::domain::TaskId,
+    governing_agent_id: harness::domain::AgentId,
 ) -> ExperienceCandidate {
     let mut c = ExperienceCandidate::skill(
         Uuid::new_v4(),
@@ -152,8 +145,8 @@ fn make_governance_pending_skill_candidate(
 
 /// 构造一个 Submitted 状态的 Skill 类候选（用于持久Agent 吸收路径）。
 fn make_submitted_skill_candidate(
-    producer_task_id: Uuid,
-    producer_agent_id: Uuid,
+    producer_task_id: harness::domain::TaskId,
+    producer_agent_id: harness::domain::AgentId,
 ) -> ExperienceCandidate {
     ExperienceCandidate::skill(
         Uuid::new_v4(),
@@ -169,8 +162,8 @@ fn make_submitted_skill_candidate(
 
 /// 构造一个 Submitted 状态的 Knowledge 类候选。
 fn make_submitted_knowledge_candidate(
-    producer_task_id: Uuid,
-    producer_agent_id: Uuid,
+    producer_task_id: harness::domain::TaskId,
+    producer_agent_id: harness::domain::AgentId,
 ) -> ExperienceCandidate {
     ExperienceCandidate::knowledge(
         Uuid::new_v4(),
@@ -218,8 +211,8 @@ fn persistent_agent_with_skill_skill_kind_triggers_skill_updater() {
     // 覆盖 SkillLoader 指向临时目录
     app.insert_resource(loader.clone());
 
-    let agent_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
 
     // Spawn 持久Agent（非 default，避免走 incubation 路径）
     let agent_entity = app
@@ -233,7 +226,7 @@ fn persistent_agent_with_skill_skill_kind_triggers_skill_updater() {
         .insert(agent_id, agent_entity);
 
     // Spawn skill-updater Agent（让 skill_update_workitem_system 能找到 handler）
-    let skill_updater_id = Uuid::new_v4();
+    let skill_updater_id = harness::domain::AgentId::new();
     app.world_mut().spawn(make_persistent_agent(
         skill_updater_id,
         "skill-updater",
@@ -312,8 +305,8 @@ fn persistent_agent_with_skill_skill_kind_triggers_skill_updater() {
 fn persistent_agent_with_skill_knowledge_kind_writes_ltm() {
     let mut app = create_test_app(no_brain_test_config());
 
-    let agent_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
     let skill_id = SkillId::new("worker-agent", "coding");
 
     let agent_entity = app
@@ -380,8 +373,8 @@ fn persistent_agent_with_skill_knowledge_kind_writes_ltm() {
 fn persistent_agent_without_skill_routes_to_governance() {
     let mut app = create_test_app(no_brain_test_config());
 
-    let agent_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
 
     // 非默认持久Agent
     let agent_entity = app
@@ -466,10 +459,10 @@ fn persistent_agent_without_skill_routes_to_governance() {
 fn temporary_agent_routes_to_parent_inbox() {
     let mut app = create_test_app(no_brain_test_config());
 
-    let parent_agent_id = Uuid::new_v4();
-    let parent_task_id = Uuid::new_v4();
-    let child_task_id = Uuid::new_v4();
-    let child_agent_id = Uuid::new_v4();
+    let parent_agent_id = harness::domain::AgentId::new();
+    let parent_task_id = harness::domain::TaskId::new();
+    let child_task_id = harness::domain::TaskId::new();
+    let child_agent_id = harness::domain::AgentId::new();
 
     // Spawn 父 Agent（持久）和子 Agent（临时）
     app.world_mut().spawn(make_persistent_agent(
@@ -561,8 +554,8 @@ fn spawn_work_item_with_context(
     base_version: u32,
     candidate_id: Uuid,
 ) -> (Uuid, Entity) {
-    let governing_agent_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
+    let governing_agent_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
     let mut work_item = WorkItem::skill_update(
         task_id,
         "prompt".to_string(),
@@ -596,8 +589,8 @@ fn make_completed_message(
 ) -> SkillUpdateCompletedMessage {
     SkillUpdateCompletedMessage {
         work_item_id,
-        task_id: Uuid::new_v4(),
-        agent_id: Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         skill_id,
         base_version,
         new_version,
@@ -607,11 +600,14 @@ fn make_completed_message(
 }
 
 /// 在 ExperienceStore 中插入一个 GovernanceResolved 状态的候选，返回 candidate_id。
-fn stage_resolved_candidate(store: &mut ExperienceStore, producer_task_id: Uuid) -> Uuid {
+fn stage_resolved_candidate(
+    store: &mut ExperienceStore,
+    producer_task_id: harness::domain::TaskId,
+) -> Uuid {
     let mut c = ExperienceCandidate::skill(
         Uuid::new_v4(),
         producer_task_id,
-        Uuid::new_v4(),
+        harness::domain::AgentId::new(),
         "title".to_string(),
         "skill-name".to_string(),
         "desc".to_string(),
@@ -639,7 +635,7 @@ fn skill_update_increments_version_and_keeps_history() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
@@ -717,7 +713,7 @@ fn skill_update_apply_failure_preserves_state() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
@@ -782,8 +778,8 @@ fn skill_update_apply_failure_preserves_state() {
 fn self_updatable_false_discards_candidate() {
     let mut app = create_test_app(no_brain_test_config());
 
-    let agent_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
     let skill_id = SkillId::new("worker-agent", "locked-skill");
 
     // 非默认持久Agent
@@ -873,8 +869,8 @@ fn self_updatable_false_discards_candidate() {
 fn experience_kind_filter_knowledge_only_discards_skill() {
     let mut app = create_test_app(no_brain_test_config());
 
-    let agent_id = Uuid::new_v4();
-    let task_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
     let skill_id = SkillId::new("worker-agent", "coding");
 
     let agent_entity = app
@@ -980,14 +976,14 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
 
     // 预置 GovernanceResolved 候选，让 completion_system 在 dry-run 通过路径下能推进到 Persisted。
     // dry-run 失败时候选状态应保持 GovernanceResolved。
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
     );
 
     // Spawn skill-updater Agent（持有 submit_skill_update 工具所需 tag）
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     let agent_entity = app
         .world_mut()
         .spawn(Agent {
@@ -1168,13 +1164,13 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
         .upsert(make_skill_entry(skill_id.clone(), true));
 
     // 预置 GovernanceResolved 候选，让 completion_system 能推进到 Persisted
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
     );
 
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     let agent_entity = app
         .world_mut()
         .spawn(Agent {
@@ -1330,14 +1326,14 @@ fn submit_skill_update_rejects_when_work_item_entity_is_none() {
         .upsert(make_skill_entry(skill_id.clone(), true));
 
     // 预置 GovernanceResolved 候选
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
     );
 
     // Spawn skill-updater Agent
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     app.world_mut().spawn(Agent {
         id: agent_id,
         profile: AgentProfile {
@@ -1503,7 +1499,7 @@ fn skill_update_subsection_operations_apply_correctly() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
@@ -1633,7 +1629,7 @@ fn skill_update_replace_body_keeps_frontmatter() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
@@ -1729,7 +1725,7 @@ fn skill_update_invalid_structure_after_replace_body_rolls_back() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
@@ -1809,13 +1805,13 @@ fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
     );
 
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     let agent_entity = app
         .world_mut()
         .spawn(Agent {
@@ -1988,13 +1984,13 @@ fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
         .resource_mut::<SkillRegistry>()
         .upsert(make_skill_entry(skill_id.clone(), true));
 
-    let producer_task_id = Uuid::new_v4();
+    let producer_task_id = harness::domain::TaskId::new();
     let candidate_id = stage_resolved_candidate(
         &mut app.world_mut().resource_mut::<ExperienceStore>(),
         producer_task_id,
     );
 
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     let agent_entity = app
         .world_mut()
         .spawn(Agent {

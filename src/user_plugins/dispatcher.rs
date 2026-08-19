@@ -26,6 +26,7 @@ use crate::user_plugins::host_api::message::MessageContext;
 use crate::user_plugins::host_api::plugin_resource::PluginRoots;
 use crate::user_plugins::host_api::skills_meta::SkillsSnapshot;
 use crate::user_plugins::host_api::temp_resource::TempResourceSlot;
+use crate::user_plugins::host_api::tool_control::ToolCallContext;
 use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
 
 /// 单次 hook 派发的累积结果。同一 hook 点多个订阅者顺序派发，
@@ -53,6 +54,9 @@ pub struct PluginContext {
     pub skills: SkillsSnapshot,
     pub message: MessageContext,
     pub temp_resource: TempResourceSlot,
+    /// 当前工具调用上下文：仅 `on_tool_called` 前置 hook 派发时由调用方填充，
+    /// 其余 hook 为默认空值（`tool_call_name()` 返回空串）。
+    pub tool: ToolCallContext,
 }
 
 /// Hook 派发参数。
@@ -200,9 +204,8 @@ pub fn flush_world_commands(world: &mut World, rx: &Receiver<WorldCommand>) {
 
 /// 应用单条 `WorldCommand`。
 ///
-/// v1 仅实现 `CreateTask` 与 `SetTaskMetadata`/`SetTaskTag`；
-/// 其余变体（`CreateWorkItem` / `SetApprovalDecision` / `ExperienceSetPinned`）
-/// 留作后续任务接入，先以 `debug!` 记录跳过。
+/// `SetTaskMetadata` / `SetTaskTag` 因 Task 暂无对应字段，当前为记录日志的
+/// 安全占位（不写回），其余变体均已实现。
 fn apply_world_command(world: &mut World, cmd: WorldCommand) {
     match cmd {
         WorldCommand::CreateTask { title, parent: _ } => {
@@ -258,16 +261,6 @@ fn apply_world_command(world: &mut World, cmd: WorldCommand) {
                 key = %key,
                 value = %value,
                 "SetTaskTag deferred: Task.tags 字段尚未添加"
-            );
-        }
-        WorldCommand::CreateWorkItem { .. }
-        | WorldCommand::SetApprovalDecision { .. }
-        | WorldCommand::ExperienceSetPinned { .. } => {
-            // 后续任务接入
-            debug!(
-                event = "WorldCommandDeferred",
-                ?cmd,
-                "WorldCommand 变体尚未实现"
             );
         }
     }

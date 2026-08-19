@@ -16,10 +16,8 @@ pub mod tool_executor;
 /// 核心 Host API 版本。manifest 的 `api_version` 必须与此相等才能加载。
 pub const API_VERSION: u32 = 1;
 
-use std::path::PathBuf;
-
 use crate::prelude::World;
-use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};
+use crate::user_plugins::loader::{load_plugins_from_dir, plugins_dir_from_env};
 
 /// Startup 系统：扫描 `.harness/plugins/` 并把 registry 插入 world。
 ///
@@ -27,9 +25,7 @@ use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};
 /// `systems::tools::register_plugin_tools_startup_system` 在本系统之后
 /// 主动拉取完成（方向反转，user_plugins 不反向调用 systems）。
 pub fn plugin_load_startup_system(world: &mut World) {
-    let plugins_dir = PathBuf::from(
-        std::env::var("HARNESS_PLUGINS_DIR").unwrap_or_else(|_| DEFAULT_PLUGINS_DIR.to_string()),
-    );
+    let plugins_dir = plugins_dir_from_env();
     let registry = load_plugins_from_dir(&plugins_dir);
     let loaded: Vec<String> = registry
         .plugins()

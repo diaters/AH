@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::prelude::Resource;
 use anyhow::Result;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::domain::{AgentConfig, AgentEntry, AgentToolsConfig, ModelChainEntry};
 
@@ -18,6 +18,38 @@ pub struct IncubatedAgentRecord {
     pub description: String,
     pub tools: Option<AgentToolsConfig>,
     pub skills: Option<Vec<String>>,
+}
+
+/// 读取并解析 `agents.toml`（agents 配置解析的唯一权威入口）。
+///
+/// 语义：
+/// - 文件不存在 → `Ok(None)`：调用方按需容错（如 warn 后跳过）；
+/// - 读取或解析失败 → `Err`：配置已损坏必须显式暴露，
+///   防止"容错吞掉 + 覆盖写回"导致既有数据丢失。
+pub fn load_agent_config(path: &Path) -> Result<Option<AgentConfig>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    let config = toml::from_str::<AgentConfig>(&content)
+        .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))?;
+    Ok(Some(config))
+}
+
+/// 启动期校验：配置存在时必须可解析且无重名 agent。
+///
+/// 供 `main` 在装配前调用，配置错误以进程退出码暴露而非运行期 panic。
+pub fn validate_agent_config(path: &str) -> Result<()> {
+    let Some(config) = load_agent_config(Path::new(path))? else {
+        return Ok(());
+    };
+    let mut seen = std::collections::HashSet::new();
+    for entry in &config.agent {
+        if !seen.insert(entry.name.as_str()) {
+            anyhow::bail!("duplicate agent name '{}' in {}", entry.name, path);
+        }
+    }
+    Ok(())
 }
 
 /// 孵化 Agent 注册持久化服务。
@@ -35,24 +67,9 @@ impl IncubatedAgentRegistry {
     pub fn append(&self, config_path: &str, record: &IncubatedAgentRecord) -> Result<()> {
         let config_path = Path::new(config_path);
 
-        // 读取现有配置
-        let mut config = if config_path.exists() {
-            let content = fs::read_to_string(config_path)?;
-            match toml::from_str::<AgentConfig>(&content) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(
-                        event = "IncubatedAgentConfigParseError",
-                        path = %config_path.display(),
-                        error = %e,
-                        "failed to parse agents.toml, starting fresh"
-                    );
-                    AgentConfig { agent: vec![] }
-                }
-            }
-        } else {
-            AgentConfig { agent: vec![] }
-        };
+        // 读取现有配置（解析失败显式报错，防止覆盖损坏文件丢失数据）
+        let mut config =
+            load_agent_config(config_path)?.unwrap_or_else(|| AgentConfig { agent: vec![] });
 
         // 按 name 去重
         if config.agent.iter().any(|a| a.name == record.name) {
@@ -108,16 +125,10 @@ impl IncubatedAgentRegistry {
     ) -> Result<()> {
         let config_path = Path::new(config_path);
 
-        // 读取现有配置以收集已存在的 name
-        let existing_names: std::collections::HashSet<String> = if config_path.exists() {
-            let content = fs::read_to_string(config_path)?;
-            match toml::from_str::<AgentConfig>(&content) {
-                Ok(c) => c.agent.iter().map(|a| a.name.clone()).collect(),
-                Err(_) => std::collections::HashSet::new(),
-            }
-        } else {
-            std::collections::HashSet::new()
-        };
+        // 读取现有配置以收集已存在的 name（解析失败显式报错）
+        let existing_names: std::collections::HashSet<String> = load_agent_config(config_path)?
+            .map(|c| c.agent.iter().map(|a| a.name.clone()).collect())
+            .unwrap_or_default();
 
         // 若 name 已存在，追加后缀直到唯一
         if existing_names.contains(&record.name) {
@@ -148,8 +159,8 @@ impl IncubatedAgentRegistry {
     ) -> Result<()> {
         let config_path = Path::new(config_path);
 
-        let content = fs::read_to_string(config_path)?;
-        let mut config = toml::from_str::<AgentConfig>(&content)?;
+        let mut config = load_agent_config(config_path)?
+            .ok_or_else(|| anyhow::anyhow!("agents.toml not found: {}", config_path.display()))?;
 
         let entry = config
             .agent

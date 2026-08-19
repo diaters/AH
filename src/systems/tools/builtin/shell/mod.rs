@@ -1,22 +1,19 @@
 //! 精简后的 shell builtin 只导出当前仍对 LLM 暴露的六个工具。
+//!
+//! 会话型五工具（start / read / list / input / stop）合并在 `shell_tools.rs`；
+//! `shell_exec` 体量独立，留在 `exec.rs`。
 
 use std::collections::HashMap;
 
 use crate::domain::ToolError;
 
 mod exec;
-mod input;
-mod list;
-mod read;
-mod start;
-mod stop;
+mod shell_tools;
 
 pub use exec::ShellExecTool;
-pub use input::ShellInputTool;
-pub use list::ShellListTool;
-pub use read::ShellReadTool;
-pub use start::ShellStartTool;
-pub use stop::ShellStopTool;
+pub use shell_tools::{
+    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
+};
 
 /// 解析 shell 工具输入中的环境变量对象。
 fn parse_env_map(input: &serde_json::Value) -> Result<HashMap<String, String>, ToolError> {

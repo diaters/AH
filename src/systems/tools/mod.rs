@@ -16,6 +16,7 @@ mod ingest_tool_results;
 mod orchestrator;
 mod result;
 mod tool_called_hook;
+mod tool_calling;
 mod tool_returned_hook;
 mod waiting;
 
@@ -30,7 +31,10 @@ pub use dispatch::tool_dispatch_system;
 pub use effect_commit::commit_tool_effects_system;
 pub use ingest_tool_results::ingest_tool_results_system;
 pub use result::tool_result_system;
+pub use tool_calling::tool_calling_orchestrator_system;
+
 pub use tool_called_hook::on_tool_called_hook_system;
+pub(crate) use tool_calling::{CallingStateInfo, find_calling_state, handle_tool_calls_response};
 pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
 
@@ -38,8 +42,8 @@ use bevy_ecs::change_detection::Mut;
 use bevy_ecs::world::World;
 
 use crate::domain::{
-    BuiltinToolExecutors, SpaceToolRegistry, ToolDefinition, ToolExecutorKind, ToolPermission,
-    ToolSchema,
+    BuiltinToolExecutors, FrontendKind, SpaceToolRegistry, ToolDefinition, ToolExecutorKind,
+    ToolPermission, ToolSchema,
 };
 
 use self::builtin::{
@@ -404,7 +408,7 @@ pub fn register_builtin_tools(
                     },
                     "output_channel": {
                         "type": "string",
-                        "enum": ["tui", "telegram", "qq", "feishu", "web"],
+                        "enum": FrontendKind::ALL.iter().map(|k| k.channel_name()).collect::<Vec<_>>(),
                         "description": "可选，显式指定输出通道类型"
                     },
                     "target": {

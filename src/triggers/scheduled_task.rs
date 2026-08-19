@@ -339,9 +339,9 @@ mod tests {
             is_once: false,
         };
         let policy = info.build_routing_policy();
-        assert_eq!(policy.output_channel, Some(channel.clone()));
-        assert_eq!(policy.approval_channel, Some(channel));
-        assert_eq!(policy.approval_context.as_deref(), Some("scheduled task"));
+        assert_eq!(policy.output_channel(), Some(&channel));
+        assert_eq!(policy.approval_channel(), Some(&channel));
+        assert_eq!(policy.approval_context(), Some("scheduled task"));
     }
 
     #[test]
@@ -352,8 +352,8 @@ mod tests {
             is_once: true,
         };
         let policy = info.build_routing_policy();
-        assert!(policy.output_channel.is_none());
-        assert!(policy.approval_channel.is_none());
+        assert!(policy.output_channel().is_none());
+        assert!(policy.approval_channel().is_none());
     }
 
     #[test]

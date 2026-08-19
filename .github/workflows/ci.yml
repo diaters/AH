@@ -34,6 +34,9 @@ jobs:
       - name: 模块依赖方向断言
         run: bash scripts/check_module_deps.sh
 
+      - name: Task/WorkItem 状态直接赋值断言
+        run: bash scripts/check_status_assignment.sh
+
       - name: cargo fmt
         run: cargo fmt --all --check
 

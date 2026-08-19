@@ -35,7 +35,7 @@ fn default_channel() -> ChannelId {
 /// 构造一个占位 Agent 用于测试。
 fn make_agent(kind: AgentKind) -> Agent {
     Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "test-agent".to_string(),
             model: "test-model".to_string(),

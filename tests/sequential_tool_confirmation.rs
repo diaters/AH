@@ -63,7 +63,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -89,7 +89,7 @@ fn test_config() -> HarnessConfig {
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut App) {
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    let brain_id = uuid::Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     let brain_entity = app
         .world_mut()
         .spawn((
@@ -117,7 +117,7 @@ fn spawn_default_agent(app: &mut App) {
         .agents
         .insert(brain_id, brain_entity);
 
-    let default_id = uuid::Uuid::new_v4();
+    let default_id = harness::domain::AgentId::new();
     let default_entity = app
         .world_mut()
         .spawn((

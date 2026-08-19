@@ -17,12 +17,11 @@ use bevy_ecs::system::RunSystemOnce;
 use common::async_tool_bridge::*;
 use harness::domain::{
     AgentExecutionRequest, AgentRequestKind, BuiltinTool, BuiltinToolExecutors, ChannelId,
-    FailureReason, FrontendKind, InFlightToolCall, ShortTermMemory, Task, TaskStatus,
-    ToolActionKind, ToolCallingState, ToolExecutionRequestMessage, ToolRequestPending,
+    FailureReason, FrontendKind, InFlightToolCall, ShortTermMemory, Task, ToolActionKind,
+    ToolCallingState, ToolExecutionRequestMessage, ToolRequestPending,
 };
 use harness::systems::tools::builtin::ShellExecTool;
 use std::time::{Duration, Instant};
-use uuid::Uuid;
 
 // ============ 共享 fixture ============
 
@@ -37,8 +36,8 @@ fn test_channel() -> ChannelId {
 fn make_request(
     tool_input: serde_json::Value,
     tool_call_id: &str,
-    task_id: Uuid,
-    agent_id: Uuid,
+    task_id: harness::domain::TaskId,
+    agent_id: harness::domain::AgentId,
 ) -> ToolExecutionRequestMessage {
     ToolExecutionRequestMessage {
         request: AgentExecutionRequest {
@@ -64,15 +63,23 @@ fn make_request(
     }
 }
 
-fn spawn_waiting_task(world: &mut World, content: &str) -> (Entity, Uuid) {
+fn spawn_waiting_task(world: &mut World, content: &str) -> (Entity, harness::domain::TaskId) {
     let mut task = Task::from_user_input(content, 3, test_channel());
     let task_id = task.id;
-    task.status = TaskStatus::Waiting(harness::domain::WaitingReason::ToolExecution);
+    task.mark_waiting(
+        harness::domain::WaitingReason::ToolExecution,
+        chrono::Utc::now(),
+    );
     let entity = world.spawn((task, ShortTermMemory::default())).id();
     (entity, task_id)
 }
 
-fn spawn_calling_state(world: &mut World, task_id: Uuid, agent_id: Uuid, pending: &[&str]) {
+fn spawn_calling_state(
+    world: &mut World,
+    task_id: harness::domain::TaskId,
+    agent_id: harness::domain::AgentId,
+    pending: &[&str],
+) {
     world.spawn(ToolCallingState {
         task_id,
         agent_id,
@@ -124,7 +131,7 @@ fn long_command_does_not_block_frame() {
 
     // 1. Waiting(ToolExecution) Task + ToolCallingState(pending: ["frame-1"])
     let (_task_entity, task_id) = spawn_waiting_task(&mut world, "run sleep 3");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["frame-1"]);
 
     // 2. spawn ToolExecutionRequestMessage（shell_exec, "frame-1", command=sleep 3）
@@ -202,7 +209,7 @@ fn parent_task_cancel_kills_worker_and_returns_cancelled_error() {
 
     // 1. spawn task + request for `sleep 5`（足够长，确保 cancel 先于自然完成）
     let (task_entity, task_id) = spawn_waiting_task(&mut world, "run sleep 5");
-    let agent_id = Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(&mut world, task_id, agent_id, &["cancel-1"]);
 
     let pending_entity = world
@@ -225,7 +232,11 @@ fn parent_task_cancel_kills_worker_and_returns_cancelled_error() {
     // 3. 父任务进入终态（UserCancelled）——模拟用户取消
     {
         let mut task = world.get_mut::<Task>(task_entity).unwrap();
-        task.status = TaskStatus::Failed(FailureReason::UserCancelled);
+        task.mark_failed_reason(
+            FailureReason::UserCancelled,
+            "user cancelled",
+            chrono::Utc::now(),
+        );
     }
 
     // 4. cancel_monitor：扫到终态父任务 → token.cancel() + claim

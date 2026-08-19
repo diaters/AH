@@ -26,6 +26,7 @@ fn parse_confirmation_option(content: &str) -> Option<String> {
 /// 用户输入路由系统：判断是创建新任务还是继续现有任务
 pub(crate) fn user_input_routing_system(
     mut commands: Commands,
+    clock: Res<Clock>,
     user_inputs: Query<(Entity, &UserInputMessage)>,
     mut tasks: Query<(Entity, &mut Task)>,
     ask_user_pendings: Query<&AskUserPending>,
@@ -120,7 +121,7 @@ pub(crate) fn user_input_routing_system(
                     });
                     commands.entity(task_entity).remove::<AskUserPending>();
                     // 恢复 task 状态为 Waiting(ToolExecution)，让 LLM loop 续跑
-                    task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                    task.mark_waiting(WaitingReason::ToolExecution, clock.0);
                 }
             }
             commands.entity(entity).despawn();
@@ -197,9 +198,8 @@ pub(crate) fn continue_task_system(
             let old_status = task.status.clone();
             let prev_content = task.content.clone();
             let prev_delegate = task.delegate;
-            task.status = TaskStatus::Ready;
+            task.mark_ready(clock.0);
             task.content = msg.user_input.clone();
-            task.updated_at = clock.0;
 
             // 追加用户输入到 ShortTermMemory
             if let Some(mut stm) = short_term {
@@ -320,9 +320,9 @@ mod tests {
     fn make_waiting_task(channel: ChannelId) -> Task {
         let now = chrono::Utc::now();
         Task {
-            id: uuid::Uuid::new_v4(),
+            id: crate::domain::TaskId::new(),
             content: "waiting".to_string(),
-            creator: uuid::Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: TaskStatus::Waiting(WaitingReason::User),
             pending_confirmation_id: None,
@@ -350,7 +350,7 @@ mod tests {
         task
     }
 
-    fn make_agent(id: uuid::Uuid, name: &str, kind: AgentKind) -> Agent {
+    fn make_agent(id: crate::domain::AgentId, name: &str, kind: AgentKind) -> Agent {
         Agent {
             id,
             profile: AgentProfile {
@@ -371,8 +371,8 @@ mod tests {
 
     fn make_task_with_delegate(
         channel: ChannelId,
-        delegate: Option<uuid::Uuid>,
-        parent: Option<uuid::Uuid>,
+        delegate: Option<crate::domain::AgentId>,
+        parent: Option<crate::domain::TaskId>,
     ) -> Task {
         let mut task = make_waiting_task(channel);
         task.delegate = delegate;
@@ -413,6 +413,7 @@ mod tests {
     fn cross_channel_input_not_routed_to_other_channel_waiting_task() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
         // Telegram 通道的 Waiting(User) 任务
         app.world_mut().spawn(make_waiting_task(telegram_channel()));
@@ -450,6 +451,7 @@ mod tests {
     fn same_channel_input_routed_to_waiting_task() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
         let task = make_waiting_task(telegram_channel());
         let task_id = task.id;
@@ -475,6 +477,7 @@ mod tests {
     fn text_confirmation_option_2_maps_to_allow_always() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
         let pending_id = uuid::Uuid::new_v4();
         let task = make_waiting_task_with_confirmation(telegram_channel(), pending_id);
@@ -526,6 +529,7 @@ mod tests {
     fn invalid_confirmation_text_prompts_retry() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
         let pending_id = uuid::Uuid::new_v4();
         app.world_mut().spawn(make_waiting_task_with_confirmation(
@@ -583,6 +587,7 @@ mod tests {
     fn no_pending_confirmation_routes_to_continue_task() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
         let task = make_waiting_task(telegram_channel());
         let task_id = task.id;
@@ -628,6 +633,7 @@ mod tests {
     fn command_during_pending_confirmation_still_executes() {
         let mut app = App::new();
         app.add_systems(Update, (user_input_routing_system, command_parse_system));
+        app.insert_resource(Clock::default());
         app.insert_resource(MemoryConfig::default());
         app.insert_resource(SharedKnowledgeBase::default());
         app.insert_resource(PendingKnowledgeWriteHooks::default());
@@ -685,7 +691,7 @@ mod tests {
         app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let task = make_task_with_delegate(telegram_channel(), Some(agent_id), None);
         let agent = make_agent(agent_id, "reused-agent", AgentKind::Persistent);
 
@@ -717,7 +723,7 @@ mod tests {
         app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let task = make_task_with_delegate(telegram_channel(), Some(agent_id), None);
         // 故意不 spawn 对应 agent（delegate 指向的 agent 已不存在 → stale）
 
@@ -736,8 +742,8 @@ mod tests {
         app.init_resource::<EntityIndex>();
         app.add_systems(Update, continue_task_system);
 
-        let agent_id = uuid::Uuid::new_v4();
-        let parent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let parent_id = crate::domain::TaskId::new();
         let task = make_task_with_delegate(telegram_channel(), Some(agent_id), Some(parent_id));
         let agent = make_agent(agent_id, "sub-agent", AgentKind::Persistent);
 
@@ -770,10 +776,10 @@ mod tests {
 
     fn make_ask_user_waiting_task(
         channel: ChannelId,
-        agent_id: uuid::Uuid,
+        agent_id: crate::domain::AgentId,
     ) -> (Task, AskUserPending) {
         let mut task = make_waiting_task(channel);
-        task.status = TaskStatus::Waiting(WaitingReason::AskUser);
+        task.mark_waiting(WaitingReason::AskUser, chrono::Utc::now());
         let pending = AskUserPending {
             tool_call_id: "test_call_id".to_string(),
             agent_id,
@@ -785,8 +791,9 @@ mod tests {
     fn ask_user_reply_routes_to_waiting_task() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         let task_id = task.id;
         let task_entity = app.world_mut().spawn(task).id();
@@ -818,8 +825,9 @@ mod tests {
     fn ask_user_reply_removes_pending_component() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         let task_entity = app.world_mut().spawn(task).id();
         app.world_mut().entity_mut(task_entity).insert(pending);
@@ -843,8 +851,9 @@ mod tests {
     fn ask_user_reply_restores_task_to_waiting_tool_execution() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         let task_entity = app.world_mut().spawn(task).id();
         app.world_mut().entity_mut(task_entity).insert(pending);
@@ -868,8 +877,9 @@ mod tests {
     fn cross_channel_input_not_routed_to_ask_user_task() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         app.world_mut().spawn(task).insert(pending);
 
@@ -904,8 +914,9 @@ mod tests {
     fn command_during_ask_user_still_executes() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let (task, pending) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         app.world_mut().spawn(task).insert(pending);
 
@@ -933,8 +944,9 @@ mod tests {
     fn multiple_ask_user_tasks_same_channel_picks_first() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
 
-        let agent_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         let (task1, pending1) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         let (task2, pending2) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         let task1_id = task1.id;

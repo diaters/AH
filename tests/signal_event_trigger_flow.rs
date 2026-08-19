@@ -90,7 +90,7 @@ fn registered_webhook_creates_task_and_routes_approval() {
     app.world_mut().spawn(ToolConfirmationRequestMessage {
         request_id: Uuid::new_v4(),
         task_id,
-        agent_id: Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({"command": "date"}),
         options: ConfirmationOption::default_options(),
@@ -155,7 +155,7 @@ fn registered_timer_creates_task_without_output_channel() {
         .find(|task| task.content == "执行每日摘要")
         .expect("timer should create task");
     assert_eq!(task.origin_channel, None);
-    assert_eq!(task.routing_policy.output_channel, None);
+    assert_eq!(task.routing_policy.output_channel(), None);
 }
 
 #[test]

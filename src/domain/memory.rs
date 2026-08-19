@@ -133,8 +133,8 @@ mod tests {
     fn long_term_memory_entry_carries_source_traceability() {
         let mut entry = LongTermMemoryEntry::new("traceable fact");
         entry.source_candidate_id = Some(uuid::Uuid::new_v4());
-        entry.source_task_id = Some(uuid::Uuid::new_v4());
-        entry.agent_id = Some(uuid::Uuid::new_v4());
+        entry.source_task_id = Some(crate::domain::TaskId::new());
+        entry.agent_id = Some(crate::domain::AgentId::new());
 
         assert!(entry.source_candidate_id.is_some());
         assert!(entry.source_task_id.is_some());

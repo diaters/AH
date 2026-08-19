@@ -235,10 +235,10 @@ fn on_approval_requested_removes_marker() {
         .spawn((
             harness::domain::ApprovalRequestMessage {
                 request_id: uuid::Uuid::new_v4(),
-                source_task_id: uuid::Uuid::nil(),
-                approval_task_id: uuid::Uuid::new_v4(),
-                parent_agent_id: uuid::Uuid::nil(),
-                child_agent_id: uuid::Uuid::nil(),
+                source_task_id: harness::domain::TaskId::nil(),
+                approval_task_id: harness::domain::TaskId::new(),
+                parent_agent_id: harness::domain::AgentId::nil(),
+                child_agent_id: harness::domain::AgentId::nil(),
                 tool_name: "shell_exec".to_string(),
                 tool_input: serde_json::json!({"command": "ls"}),
                 context: String::new(),
@@ -316,8 +316,8 @@ log_info("on_approval_resolved: task count = " + ids.len());
         .spawn((
             harness::domain::ApprovalResultMessage {
                 request_id: uuid::Uuid::new_v4(),
-                source_task_id: uuid::Uuid::nil(),
-                approval_task_id: uuid::Uuid::new_v4(),
+                source_task_id: harness::domain::TaskId::nil(),
+                approval_task_id: harness::domain::TaskId::new(),
                 decision: harness::domain::ApprovalDecision::Approved,
                 reasoning: "test".to_string(),
                 grant_mode: harness::domain::GrantMode::Once,

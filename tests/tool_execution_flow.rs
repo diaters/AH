@@ -34,7 +34,7 @@ fn test_config() -> HarnessConfig {
 
 /// 创建测试用的 Agent
 fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) -> AgentId {
-    let id = uuid::Uuid::new_v4();
+    let id = AgentId::new();
     let entity = world
         .spawn(Agent {
             id,
@@ -781,36 +781,18 @@ fn child_agent_confirm_routes_to_parent() {
     );
 
     // 创建父 Task（delegate 绑定父 Agent，用于审批路由）
-    let parent_task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: parent_task_id,
-            content: "parent task".to_string(),
-            creator: parent_id,
-            delegate: Some(parent_id),
-            status: TaskStatus::Ready,
-            pending_confirmation_id: None,
-            input_summary: String::new(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: false,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: harness::domain::TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let parent_task_id = harness::domain::TaskId::new();
+    let mut parent_task = Task::from_user_input("parent task", 3, default_channel());
+    parent_task.id = parent_task_id;
+    parent_task.creator = parent_id;
+    parent_task.delegate = Some(parent_id);
+    parent_task.multi_turn = false;
+    parent_task.mark_ready(chrono::Utc::now());
+    app.world_mut()
+        .spawn((parent_task, ShortTermMemory::default()));
 
     // 创建子 Agent
-    let child_id = uuid::Uuid::new_v4();
+    let child_id = harness::domain::AgentId::new();
     let mut child_task = Task::from_user_input_ready("child task", 3, default_channel());
     child_task.parent_task_id = Some(parent_task_id);
     let task_entity = app
@@ -931,36 +913,18 @@ fn confirmation_denied_rejects_tool() {
     );
 
     // 创建父 Task（delegate 绑定父 Agent，用于审批路由）
-    let parent_task_id = uuid::Uuid::new_v4();
-    app.world_mut().spawn((
-        Task {
-            id: parent_task_id,
-            content: "parent task".to_string(),
-            creator: parent_id,
-            delegate: Some(parent_id),
-            status: TaskStatus::Ready,
-            pending_confirmation_id: None,
-            input_summary: String::new(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: false,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: harness::domain::TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let parent_task_id = harness::domain::TaskId::new();
+    let mut parent_task = Task::from_user_input("parent task", 3, default_channel());
+    parent_task.id = parent_task_id;
+    parent_task.creator = parent_id;
+    parent_task.delegate = Some(parent_id);
+    parent_task.multi_turn = false;
+    parent_task.mark_ready(chrono::Utc::now());
+    app.world_mut()
+        .spawn((parent_task, ShortTermMemory::default()));
 
     // 创建子 Agent
-    let child_id = uuid::Uuid::new_v4();
+    let child_id = harness::domain::AgentId::new();
     let mut child_task = Task::from_user_input_ready("child task", 3, default_channel());
     child_task.parent_task_id = Some(parent_task_id);
     let task_entity = app
@@ -1077,7 +1041,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
     );
 
     // 创建子 Agent（echo Confirm 权限）
-    let child_id = uuid::Uuid::new_v4();
+    let child_id = harness::domain::AgentId::new();
     let task_entity = app
         .world_mut()
         .spawn((
@@ -1172,7 +1136,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         query
             .iter(world)
             .find(|t| t.id == task_id)
-            .map(|t| t.status.clone())
+            .map(|t| t.status().clone())
     };
     assert_eq!(
         task_status,

@@ -9,8 +9,8 @@ use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
     domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
-    domain::FrontendKind, domain::Task, domain::TaskRoutingPolicy, domain::TaskStatus,
-    domain::ToolPermission, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::FrontendKind, domain::Task, domain::ToolPermission, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -28,7 +28,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -68,7 +68,7 @@ fn chat_with_agent_creates_chat_subtask() {
     );
 
     // 创建 Persistent Agent 作为 chat target
-    let reviewer_id = Uuid::new_v4();
+    let reviewer_id = harness::domain::AgentId::new();
     let reviewer_entity = app
         .world_mut()
         .spawn((
@@ -97,7 +97,7 @@ fn chat_with_agent_creates_chat_subtask() {
         .insert(reviewer_id, reviewer_entity);
 
     // 创建父 Agent（Allow 权限以直接执行工具）
-    let parent_agent_id = Uuid::new_v4();
+    let parent_agent_id = harness::domain::AgentId::new();
     let perms = AgentToolPermissions {
         default_permission: ToolPermission::Allow,
         ..Default::default()
@@ -129,35 +129,14 @@ fn chat_with_agent_creates_chat_subtask() {
         .agents
         .insert(parent_agent_id, parent_agent_entity);
 
-    let parent_task_id = Uuid::new_v4();
+    let parent_task_id = harness::domain::TaskId::new();
+    let mut parent_task = Task::from_user_input_ready("review doc", 3, default_channel());
+    parent_task.id = parent_task_id;
+    parent_task.delegate = Some(parent_agent_id);
+    parent_task.multi_turn = true;
     let parent_task_entity = app
         .world_mut()
-        .spawn((
-            Task {
-                id: parent_task_id,
-                content: "review doc".to_string(),
-                creator: Uuid::nil(),
-                delegate: Some(parent_agent_id),
-                status: TaskStatus::Ready,
-                pending_confirmation_id: None,
-                input_summary: "review doc".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            harness::domain::ShortTermMemory::default(),
-        ))
+        .spawn((parent_task, harness::domain::ShortTermMemory::default()))
         .id();
     app.world_mut()
         .resource_mut::<harness::ecs::EntityIndex>()
@@ -249,7 +228,7 @@ fn chat_with_agent_multi_round_via_handle() {
     );
 
     // 创建 Persistent Agent 作为 chat target
-    let reviewer_id = Uuid::new_v4();
+    let reviewer_id = harness::domain::AgentId::new();
     let reviewer_entity = app
         .world_mut()
         .spawn((
@@ -278,7 +257,7 @@ fn chat_with_agent_multi_round_via_handle() {
         .insert(reviewer_id, reviewer_entity);
 
     // 创建父 Agent（Allow 权限）
-    let parent_agent_id = Uuid::new_v4();
+    let parent_agent_id = harness::domain::AgentId::new();
     let perms = AgentToolPermissions {
         default_permission: ToolPermission::Allow,
         ..Default::default()
@@ -310,35 +289,14 @@ fn chat_with_agent_multi_round_via_handle() {
         .agents
         .insert(parent_agent_id, parent_agent_entity);
 
-    let parent_task_id = Uuid::new_v4();
+    let parent_task_id = harness::domain::TaskId::new();
+    let mut parent_task = Task::from_user_input_ready("review doc", 3, default_channel());
+    parent_task.id = parent_task_id;
+    parent_task.delegate = Some(parent_agent_id);
+    parent_task.multi_turn = true;
     let parent_task_entity = app
         .world_mut()
-        .spawn((
-            Task {
-                id: parent_task_id,
-                content: "review doc".to_string(),
-                creator: Uuid::nil(),
-                delegate: Some(parent_agent_id),
-                status: TaskStatus::Ready,
-                pending_confirmation_id: None,
-                input_summary: "review doc".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            harness::domain::ShortTermMemory::default(),
-        ))
+        .spawn((parent_task, harness::domain::ShortTermMemory::default()))
         .id();
     app.world_mut()
         .resource_mut::<harness::ecs::EntityIndex>()
@@ -378,7 +336,7 @@ fn chat_with_agent_multi_round_via_handle() {
     }
 
     // 找到创建的对话子任务
-    let handle: Uuid = {
+    let handle: harness::domain::TaskId = {
         let world = app.world_mut();
         let mut query = world.query::<(&harness::domain::Task, &harness::domain::ChatSession)>();
         query
@@ -419,7 +377,7 @@ fn chat_with_agent_multi_round_via_handle() {
     }
 
     // 验证子任务仍然只有一个（没有创建新的）
-    let chat_tasks_after: Vec<Uuid> = {
+    let chat_tasks_after: Vec<harness::domain::TaskId> = {
         let world = app.world_mut();
         let mut query = world.query::<&harness::domain::Task>();
         query
@@ -457,7 +415,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
         harness::channels::ChannelManager::empty().0,
     );
 
-    let reviewer_id = Uuid::new_v4();
+    let reviewer_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: reviewer_id,
@@ -478,7 +436,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
         harness::domain::LongTermMemory::default(),
     ));
 
-    let parent_agent_id = Uuid::new_v4();
+    let parent_agent_id = harness::domain::AgentId::new();
     let perms = AgentToolPermissions {
         default_permission: ToolPermission::Allow,
         ..Default::default()
@@ -503,37 +461,22 @@ fn chat_round_completion_preserves_parent_waiting_status() {
         harness::domain::LongTermMemory::default(),
     ));
 
-    let parent_task_id = Uuid::new_v4();
+    let parent_task_id = harness::domain::TaskId::new();
     let batch_id = Uuid::new_v4();
-    let child_task_id = Uuid::new_v4();
+    let child_task_id = harness::domain::TaskId::new();
 
     // 直接创建一个处于 Waiting(SubTaskBatch) 的父任务
-    app.world_mut().spawn((
-        Task {
-            id: parent_task_id,
-            content: "test".to_string(),
-            creator: parent_agent_id,
-            delegate: Some(parent_agent_id),
-            status: TaskStatus::Waiting(harness::domain::WaitingReason::SubTaskBatch { batch_id }),
-            pending_confirmation_id: None,
-            input_summary: "test".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
-        harness::domain::ShortTermMemory::default(),
-    ));
+    let mut parent_task = Task::from_user_input_ready("test", 3, default_channel());
+    parent_task.id = parent_task_id;
+    parent_task.creator = parent_agent_id;
+    parent_task.delegate = Some(parent_agent_id);
+    parent_task.multi_turn = true;
+    parent_task.mark_waiting(
+        harness::domain::WaitingReason::SubTaskBatch { batch_id },
+        chrono::Utc::now(),
+    );
+    app.world_mut()
+        .spawn((parent_task, harness::domain::ShortTermMemory::default()));
 
     // 模拟子任务完成，发出 ChatRoundReadyMessage
     app.world_mut()
@@ -557,7 +500,7 @@ fn chat_round_completion_preserves_parent_waiting_status() {
         query
             .iter(world)
             .find(|t| t.id == parent_task_id)
-            .map(|t| t.status.clone())
+            .map(|t| t.status().clone())
             .expect("parent task should exist")
     };
 

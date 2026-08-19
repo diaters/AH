@@ -1,11 +1,9 @@
 //! Brain 决策辅助类型与 prompt 构建
 //!
-//! 旧的 `brain_dispatch_system` 已在派发架构统一中移除（参见
-//! `docs/design/2026-07-18-dispatch-architecture-unification-design.md`）。
-//! 顶层任务现在通过 `PendingDispatch(BrainLlm)` 流入 `dispatch_system`，
+//! 顶层任务通过 `PendingDispatch(BrainLlm)` 流入 `dispatch_system`，
 //! Brain LLM 请求由 `brain_llm_builder::build_brain_execution_request` 构造。
 //!
-//! 本模块保留：
+//! 本模块提供：
 //! - `AgentDescription` / `SkillSummary`：候选 Agent 与其名下 skill 的精简视图
 //! - `brain_user_prompt_from_descriptions`：Brain LLM user prompt 构建
 //! - `build_prompt_with_history`：注入短期记忆历史

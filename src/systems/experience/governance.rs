@@ -417,7 +417,7 @@ mod tests {
     use crate::infrastructure::skills::{SkillEntry, SkillId};
 
     /// 构造测试用 Agent（tags 决定是否为 default agent）。
-    fn make_agent(id: uuid::Uuid, name: &str, tags: &[&str]) -> Agent {
+    fn make_agent(id: crate::domain::AgentId, name: &str, tags: &[&str]) -> Agent {
         Agent {
             id,
             profile: AgentProfile {
@@ -441,7 +441,7 @@ mod tests {
         Task {
             id: task_id,
             content: "test task".to_string(),
-            creator: uuid::Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: TaskStatus::Done,
             pending_confirmation_id: None,
@@ -572,7 +572,11 @@ mod tests {
 
     #[test]
     fn is_default_agent_detects_by_tag_not_name() {
-        let default_agent = make_agent(uuid::Uuid::new_v4(), "custom-default", &["default", "llm"]);
+        let default_agent = make_agent(
+            crate::domain::AgentId::new(),
+            "custom-default",
+            &["default", "llm"],
+        );
         assert!(is_default_agent(&default_agent));
     }
 
@@ -581,8 +585,8 @@ mod tests {
     fn governance_routes_self_updatable_skill_to_skill_update_destination() {
         let mut app = make_governance_app();
 
-        let agent_id = uuid::Uuid::new_v4();
-        let task_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "test-skill");
 
@@ -642,8 +646,8 @@ mod tests {
     fn governance_discards_non_self_updatable_skill_candidate() {
         let mut app = make_governance_app();
 
-        let agent_id = uuid::Uuid::new_v4();
-        let task_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "locked-skill");
 
@@ -698,8 +702,8 @@ mod tests {
     fn governance_routes_non_injected_skill_to_skill_package() {
         let mut app = make_governance_app();
 
-        let agent_id = uuid::Uuid::new_v4();
-        let task_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let candidate_id = uuid::Uuid::new_v4();
 
         register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));
@@ -736,8 +740,8 @@ mod tests {
     fn governance_routes_default_agent_skill_to_incubation() {
         let mut app = make_governance_app();
 
-        let agent_id = uuid::Uuid::new_v4();
-        let task_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("default", "some-skill");
 
@@ -792,8 +796,8 @@ mod tests {
     fn governance_skill_not_in_registry_falls_back_to_skill_package() {
         let mut app = make_governance_app();
 
-        let agent_id = uuid::Uuid::new_v4();
-        let task_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let candidate_id = uuid::Uuid::new_v4();
         let skill_id = SkillId::new("owner-agent", "missing-skill");
 
@@ -842,8 +846,8 @@ mod tests {
     fn governance_routes_is_new_skill_to_skill_creation() {
         let mut app = make_governance_app();
 
-        let agent_id = uuid::Uuid::new_v4();
-        let task_id = uuid::Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let candidate_id = uuid::Uuid::new_v4();
 
         register_agent(&mut app, agent_id, make_agent(agent_id, "worker", &["llm"]));

@@ -19,7 +19,6 @@ use harness::{
     systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 fn qq_channel(user_id: &str) -> ChannelId {
     ChannelId {
@@ -49,7 +48,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -75,7 +74,7 @@ fn test_config() -> HarnessConfig {
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut bevy_app::App) {
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    let brain_id = uuid::Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     let brain_entity = app
         .world_mut()
         .spawn((
@@ -103,7 +102,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
         .agents
         .insert(brain_id, brain_entity);
 
-    let default_id = uuid::Uuid::new_v4();
+    let default_id = harness::domain::AgentId::new();
     let default_entity = app
         .world_mut()
         .spawn((
@@ -178,7 +177,7 @@ fn scheduled_task_approval_request_routes_to_output_channel() {
     app.update();
     spawn_default_agent(&mut app);
 
-    let task_id = Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let kind = format!("scheduled:{}", task_id);
     let output_channel = qq_channel("qq-test-group");
 
@@ -238,12 +237,12 @@ fn scheduled_task_approval_request_routes_to_output_channel() {
         .world_mut()
         .query::<&Task>()
         .iter(app.world())
-        .find(|task| task.routing_policy.output_channel == Some(output_channel.clone()))
+        .find(|task| task.routing_policy.output_channel() == Some(&output_channel))
         .expect("scheduled task 应已创建");
 
     assert!(
-        !matches!(task.status, TaskStatus::Failed(_)),
+        !matches!(task.status(), TaskStatus::Failed(_)),
         "任务不应进入 Failed 状态，当前状态: {:?}",
-        task.status
+        task.status()
     );
 }

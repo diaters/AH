@@ -16,8 +16,8 @@ use harness::{
 
 fn sample_request(kind: AgentRequestKind) -> AgentExecutionRequest {
     AgentExecutionRequest {
-        task_id: uuid::Uuid::new_v4(),
-        agent_id: uuid::Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: kind,
         prompt: "hello".to_string(),
         system_prompt: None,

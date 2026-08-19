@@ -44,8 +44,8 @@ fn async_result_can_carry_effect() {
 fn pending_entity_spawn_and_query() {
     let mut world = setup_bridge_world();
     let req = AgentExecutionRequest {
-        task_id: uuid::Uuid::new_v4(),
-        agent_id: uuid::Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: AgentRequestKind::ToolExecution {
             tool_name: "list_scheduled_tasks".into(),
         },

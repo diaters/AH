@@ -152,7 +152,7 @@ impl Default for HarnessConfig {
             max_tool_iterations: 5,
             llm: LlmProviderConfig {
                 provider: LlmProviderKind::OpenAi,
-                model: "gpt-4.1-mini".to_string(),
+                model: Some("gpt-4.1-mini".to_string()),
                 api_key: Some("test-api-key".to_string()),
                 api_base: None,
             },

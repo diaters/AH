@@ -11,7 +11,9 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::channels::config::QqConfig;
-use crate::channels::traits::{Channel, ChannelError, ChannelInboundMessage, InboundConfirmation};
+use crate::channels::traits::{
+    Channel, ChannelError, ChannelInboundMessage, InboundConfirmation, parse_callback_data,
+};
 
 const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
 const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
@@ -275,7 +277,7 @@ fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, Channe
 }
 
 /// 从 ReplyMarkup::InlineKeyboard 的 callback_data 中提取 request_id 与选项列表。
-/// callback_data 格式：`<request_id>:<option_id>`，由 ChannelFrontend 生成。
+/// callback_data 格式由 `traits::make_callback_data` 单点定义。
 fn extract_approval_info(
     markup: &crate::channels::traits::ReplyMarkup,
 ) -> Option<(Uuid, Vec<crate::domain::ApprovalOption>)> {
@@ -287,16 +289,16 @@ fn extract_approval_info(
             let mut options = Vec::new();
             for row in rows {
                 for button in row {
-                    let Some((rid, opt_id)) = button.callback_data.split_once(':') else {
+                    // 第一个有效 button 解析出 request_id，后续 button 复用同一 request_id
+                    let Some((rid, opt_id)) = parse_callback_data(&button.callback_data) else {
                         continue;
                     };
-                    // 第一个有效 button 解析出 request_id，后续 button 复用同一 request_id
                     if request_id.is_none() {
-                        request_id = Uuid::parse_str(rid).ok();
+                        request_id = Some(rid);
                     }
                     if request_id.is_some() {
                         options.push(ApprovalOption {
-                            id: opt_id.to_string(),
+                            id: opt_id,
                             label: button.text.clone(),
                             description: String::new(),
                         });
@@ -646,28 +648,14 @@ impl QqChannel {
         user_openid: &str,
         path: &std::path::Path,
     ) -> Result<(), ChannelError> {
-        use crate::channels::config::ChannelConfigs;
-        // 关键：必须解析为 ChannelConfigs 而非 QqConfig，否则会丢失 [telegram] 等其他段。
-        let mut configs: ChannelConfigs = tokio::fs::read_to_string(path)
-            .await
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default();
-        let qq = configs.qq.get_or_insert_with(|| self.config.clone());
-        if !qq.allowed_users.iter().any(|u| u == user_openid) {
-            qq.allowed_users.push(user_openid.to_string());
-        }
-        let content = toml::to_string_pretty(&configs).map_err(|e| ChannelError::Api {
-            code: 0,
-            message: e.to_string(),
-        })?;
-        tokio::fs::write(path, content)
-            .await
-            .map_err(|e| ChannelError::Api {
-                code: 0,
-                message: e.to_string(),
-            })?;
-        Ok(())
+        // 配置写入知识收口在 ChannelConfigs（全量读写保证 [telegram] 等段不丢失）
+        crate::channels::config::ChannelConfigs::append_qq_allowed_user(
+            path,
+            user_openid,
+            self.config.clone(),
+        )
+        .await
+        .map_err(|message| ChannelError::Api { code: 0, message })
     }
 
     /// 记录待处理审批请求（同 recipient 覆盖旧的）。
@@ -956,8 +944,8 @@ impl QqChannel {
                             .iter()
                             .map(|btn| {
                                 // 从 callback_data 提取 option_id 作为按钮 id
-                                let option_id =
-                                    btn.callback_data.split(':').nth(1).unwrap_or("unknown");
+                                let option_id = parse_callback_data(&btn.callback_data)
+                                    .map_or_else(|| "unknown".to_string(), |(_, o)| o);
                                 json!({
                                     "id": format!("btn_{option_id}"),
                                     "render_data": {

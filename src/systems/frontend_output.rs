@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 
 use crate::contracts::FrontendRegistry;
 use crate::domain::{
-    Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, FrontendKind, MessageRole,
+    Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, MessageRole,
     SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
     UserOutputMessage, WaitingReason, WaitingReasonKind,
 };
@@ -36,7 +36,7 @@ pub(crate) fn frontend_output_system(
         let Some(target) = index
             .get_task(&output.task_id)
             .and_then(|e| all_tasks.get(e).ok())
-            .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+            .and_then(|(_, t)| t.routing_policy.output_channel().cloned())
             .map(|channel| EventTarget::Directed(vec![channel]))
         else {
             debug!(
@@ -71,7 +71,7 @@ pub(crate) fn frontend_output_system(
         let Some(target) = index
             .get_task(&output.task_id)
             .and_then(|e| all_tasks.get(e).ok())
-            .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+            .and_then(|(_, t)| t.routing_policy.output_channel().cloned())
             .map(|channel| EventTarget::Directed(vec![channel]))
         else {
             debug!(
@@ -110,8 +110,8 @@ pub(crate) fn frontend_output_system(
 
         let Some(target) = task
             .routing_policy
-            .output_channel
-            .clone()
+            .output_channel()
+            .cloned()
             .map(|channel| EventTarget::Directed(vec![channel]))
         else {
             debug!(
@@ -192,11 +192,13 @@ pub(crate) fn frontend_output_system(
             continue;
         };
 
-        let Some(approval_channel) = task.routing_policy.approval_channel.clone() else {
+        let Some(approval_channel) = task.routing_policy.approval_channel().cloned() else {
             let mut failed_task = task.clone();
-            failed_task.status = TaskStatus::Failed(FailureReason::Unknown);
-            failed_task.last_error =
-                Some("missing approval channel for event task approval request".to_string());
+            failed_task.mark_failed_reason(
+                FailureReason::Unknown,
+                "missing approval channel for event task approval request",
+                chrono::Utc::now(),
+            );
             commands.entity(task_entity).insert(failed_task);
             warn!(
                 event = "FrontendApprovalRouteMissing",
@@ -212,19 +214,16 @@ pub(crate) fn frontend_output_system(
         if task.origin_channel.is_none()
             && !registry.has_frontend(approval_channel.frontend.clone())
         {
-            let frontend_name = match approval_channel.frontend {
-                FrontendKind::Tui => "tui",
-                FrontendKind::Telegram => "telegram",
-                FrontendKind::Web => "web",
-                FrontendKind::QQ => "qq",
-                FrontendKind::Feishu => "feishu",
-            };
+            let frontend_name = approval_channel.frontend.channel_name();
             let mut failed_task = task.clone();
-            failed_task.status = TaskStatus::Failed(FailureReason::Unknown);
-            failed_task.last_error = Some(format!(
-                "approval channel frontend '{}' is not enabled",
-                frontend_name
-            ));
+            failed_task.mark_failed_reason(
+                FailureReason::Unknown,
+                format!(
+                    "approval channel frontend '{}' is not enabled",
+                    frontend_name
+                ),
+                chrono::Utc::now(),
+            );
             commands.entity(task_entity).insert(failed_task);
             warn!(
                 event = "FrontendApprovalRouteInvalid",
@@ -377,7 +376,7 @@ mod tests {
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
-            agent_id: Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::Value::Null,
             options: ConfirmationOption::default_options(),
@@ -442,7 +441,7 @@ mod tests {
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
-            agent_id: Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "date"}),
             options: ConfirmationOption::default_options(),
@@ -582,7 +581,7 @@ mod tests {
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
-            agent_id: Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "date"}),
             options: ConfirmationOption::default_options(),
@@ -646,7 +645,7 @@ mod tests {
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
-            agent_id: Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "date"}),
             options: ConfirmationOption::default_options(),
@@ -714,7 +713,7 @@ mod tests {
         app.world_mut().spawn(ToolConfirmationRequestMessage {
             request_id: Uuid::new_v4(),
             task_id,
-            agent_id: Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::Value::Null,
             options: ConfirmationOption::default_options(),
@@ -779,7 +778,7 @@ mod tests {
                 .iter_mut(app.world_mut())
                 .find(|t| t.id == task_id)
                 .unwrap();
-            task.status = TaskStatus::Running;
+            task.mark_running(chrono::Utc::now());
         }
         app.update();
 
@@ -791,7 +790,7 @@ mod tests {
                 .iter_mut(app.world_mut())
                 .find(|t| t.id == task_id)
                 .unwrap();
-            task.status = TaskStatus::Done;
+            task.mark_done("done", chrono::Utc::now());
         }
         app.update();
 
@@ -922,7 +921,7 @@ mod tests {
                 .iter_mut(app.world_mut())
                 .find(|t| t.id == task_id)
                 .unwrap();
-            task.status = TaskStatus::Running;
+            task.mark_running(chrono::Utc::now());
         }
         app.update();
 
@@ -934,7 +933,7 @@ mod tests {
                 .iter_mut(app.world_mut())
                 .find(|t| t.id == task_id)
                 .unwrap();
-            task.status = TaskStatus::Done;
+            task.mark_done("done", chrono::Utc::now());
         }
         app.update();
 
@@ -1003,7 +1002,7 @@ mod tests {
                 .iter_mut(app.world_mut())
                 .find(|t| t.id == task_id)
                 .unwrap();
-            task.status = TaskStatus::Running;
+            task.mark_running(chrono::Utc::now());
         }
         app.update();
 
@@ -1040,8 +1039,8 @@ mod tests {
             thread_id: None,
         };
         let mut task = Task::from_user_input("test", 3, origin_channel);
-        task.delegate = Some(Uuid::nil());
-        task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+        task.delegate = Some(crate::domain::AgentId::nil());
+        task.mark_waiting(WaitingReason::ToolExecution, chrono::Utc::now());
         let task_id = task.id;
         let task_entity = app.world_mut().spawn(task).id();
         app.world_mut()
@@ -1050,7 +1049,7 @@ mod tests {
             .insert(task_id, task_entity);
 
         let agent = Agent {
-            id: Uuid::nil(),
+            id: crate::domain::AgentId::nil(),
             profile: AgentProfile {
                 name: "TestAgent".to_string(),
                 model: "test-model".to_string(),
@@ -1069,7 +1068,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<EntityIndex>()
             .agents
-            .insert(Uuid::nil(), agent_entity);
+            .insert(crate::domain::AgentId::nil(), agent_entity);
 
         app.update();
 
@@ -1110,7 +1109,7 @@ mod tests {
         };
         let mut task = Task::from_user_input("test", 3, origin_channel);
         // 不设置 delegate（保持 None），也不 spawn agent entity
-        task.status = TaskStatus::Waiting(WaitingReason::Agent);
+        task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
         let task_id = task.id;
         let task_entity = app.world_mut().spawn(task).id();
         app.world_mut()

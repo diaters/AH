@@ -36,7 +36,6 @@ fn update_with_yield(app: &mut bevy_app::App, n: usize) {
     }
 }
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 /// Mock executor: 第一次返回 ToolCalls，后续返回 Text
 struct ToolCallingMockExecutor;
@@ -147,7 +146,7 @@ fn test_config() -> HarnessConfig {
 }
 
 fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) -> AgentId {
-    let id = Uuid::new_v4();
+    let id = AgentId::new();
     world.spawn(Agent {
         id,
         profile: AgentProfile {
@@ -193,7 +192,7 @@ fn get_all_tools(world: &World) -> Vec<ToolDefinition> {
 /// task_dispatch_system from creating a duplicate request.
 fn spawn_task_with_stm(world: &mut World) -> (Entity, Task) {
     let mut task = Task::from_user_input_ready("test prompt", 3, default_channel());
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let entity = world.spawn((task.clone(), ShortTermMemory::default())).id();
     // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
     // 供 tool_calling_orchestrator_system 等 O(1) 解析 TaskId → Entity。
@@ -255,9 +254,9 @@ fn llm_tool_calling_complete_loop() {
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Done),
+        matches!(task.status(), TaskStatus::Done),
         "Task should be Done after tool calling loop, got {:?}",
-        task.status
+        task.status()
     );
 
     let has_calling_state = {
@@ -322,16 +321,15 @@ fn tool_calling_exceeds_max_iterations() {
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Failed(_)),
+        matches!(task.status(), TaskStatus::Failed(_)),
         "Task should be Failed after exceeding max iterations, got {:?}",
-        task.status
+        task.status()
     );
     assert!(
-        task.last_error
-            .as_ref()
+        task.last_error()
             .is_some_and(|e| e.contains("absolute hard limit") || e.contains("max iterations")),
         "Error should mention limit, got: {:?}",
-        task.last_error
+        task.last_error()
     );
 }
 
@@ -453,9 +451,9 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Waiting(WaitingReason::User)),
+        matches!(task.status(), TaskStatus::Waiting(WaitingReason::User)),
         "Task should be Waiting(User) after soft limit, got {:?}",
-        task.status
+        task.status()
     );
 }
 
@@ -511,15 +509,14 @@ fn tool_calling_hard_limit_forces_failure() {
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Failed(_)),
+        matches!(task.status(), TaskStatus::Failed(_)),
         "Task should be Failed after exceeding absolute hard limit, got {:?}",
-        task.status
+        task.status()
     );
     assert!(
-        task.last_error
-            .as_ref()
+        task.last_error()
             .is_some_and(|e| e.contains("absolute hard limit")),
         "Error should mention absolute hard limit, got: {:?}",
-        task.last_error
+        task.last_error()
     );
 }

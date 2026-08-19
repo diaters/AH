@@ -191,8 +191,12 @@ pub(crate) fn skill_update_workitem_system(
         //    Bug C 修复：之前 prompt 只展示 instructions 文本，LLM 看不到实际 section 结构，
         //    凭"markdown 应该有 Instruction section"的常识幻觉出不存在的 section 名。
         //    现在把完整 SKILL.md 给 LLM，让它能看到真实 section 列表。
+        let trigger_skill_dir = skill_loader.skill_dir(
+            &request.skill_id.owner_agent_name,
+            &request.skill_id.skill_name,
+        );
         let skill_md_path = skill_loader.skill_md_path(&request.skill_id);
-        let Ok(skill_md_content) = std::fs::read_to_string(&skill_md_path) else {
+        let Ok(skill_md_content) = skill_loader.read_skill_md_in(&trigger_skill_dir) else {
             warn!(
                 event = "SkillMdReadFailed",
                 task_id = %request.task_id,
@@ -341,12 +345,9 @@ pub(crate) fn skill_update_completion_system(
             continue;
         };
 
-        // 2. 计算 SKILL.md 路径与 skill 目录
-        let skill_path = skill_loader.skill_md_path(&msg.skill_id);
-        let skill_dir = skill_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+        // 2. 计算 SKILL.md 路径与 skill 目录（布局知识由 SkillLoader 收口）
+        let skill_dir =
+            skill_loader.skill_dir(&msg.skill_id.owner_agent_name, &msg.skill_id.skill_name);
 
         // 3. ADR-006：目录级快照备份（失败 → 候选状态保持不变）
         let backup_result =
@@ -391,7 +392,7 @@ pub(crate) fn skill_update_completion_system(
             crate::infrastructure::skills::apply_skill_operations_multi(&skill_dir, &msg.operations)
         } else {
             // 向后兼容：纯 SKILL.md 操作（无 path 字段）
-            let content = match std::fs::read_to_string(&skill_path) {
+            let content = match skill_loader.read_skill_md_in(&skill_dir) {
                 Ok(c) => c,
                 Err(e) => {
                     warn!(
@@ -413,7 +414,7 @@ pub(crate) fn skill_update_completion_system(
                         &new_content,
                         msg.new_version,
                     );
-                    match std::fs::write(&skill_path, &new_content) {
+                    match skill_loader.write_skill_md_in(&skill_dir, &new_content) {
                         Ok(()) => Ok(()),
                         Err(e) => Err(crate::infrastructure::skills::ApplyError::SectionNotFound(
                             format!("write SKILL.md failed: {}", e),
@@ -454,12 +455,14 @@ pub(crate) fn skill_update_completion_system(
         // 4.5 将 new_version 写入 SKILL.md frontmatter（多文件路径下系统管理版本号）
         // 仅在多文件路径下需要（单文件路径已在上面 set_frontmatter_version 处理）
         if has_multi_file_ops {
-            let skill_md_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
+            let skill_md_content = skill_loader
+                .read_skill_md_in(&skill_dir)
+                .unwrap_or_default();
             let updated = crate::infrastructure::skills::diff::set_frontmatter_version(
                 &skill_md_content,
                 msg.new_version,
             );
-            if let Err(e) = std::fs::write(&skill_path, &updated) {
+            if let Err(e) = skill_loader.write_skill_md_in(&skill_dir, &updated) {
                 warn!(
                     event = "SkillMdVersionWriteFailed",
                     task_id = %msg.task_id,
@@ -499,7 +502,9 @@ pub(crate) fn skill_update_completion_system(
 
         // 8. 解析新内容；解析成功后再校验依赖（存在性 + 环），校验失败走既有回滚路径
         // ADR-006：从磁盘重新读取 SKILL.md（apply 可能是多文件的）
-        let new_skill_md_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
+        let new_skill_md_content = skill_loader
+            .read_skill_md_in(&skill_dir)
+            .unwrap_or_default();
         let parsed_skill = crate::infrastructure::skills::loader::parse_skill_md(
             &new_skill_md_content,
             skill_dir.clone(),
@@ -679,6 +684,69 @@ fn writeback_to_long_term_memory_for_persistent_agent(
     );
 }
 
+/// 处理 SkillUpdate WorkItem LLM 响应的路由分支。
+///
+/// 自 `transform/llm_response.rs` 按知识域归位至此（P2 重组，纯搬家）。
+///
+/// - ToolCalls（submit_skill_update）：放行给 tool calling loop 处理，
+///   orchestrator 会 spawn SkillUpdateCompletedMessage，由
+///   skill_update_completion_system 消费并 despawn WorkItem。
+/// - text / error：LLM 未调用工具，无 operations 可应用；
+///   直接 despawn WorkItem + result entity，候选状态保持 GovernanceResolved，
+///   由后续治理重新评估。
+///
+/// 返回 `true` 表示该响应已处理完毕（调用方应 `continue`）；
+/// 返回 `false` 表示 ToolCalls 放行给 tool calling loop 处理。
+pub(crate) fn handle_skill_update_llm_response(
+    commands: &mut Commands,
+    result_entity: Entity,
+    work_item_entity: Entity,
+    work_item: &WorkItem,
+    result: &crate::domain::AgentExecutionResult,
+) -> bool {
+    match &result.result {
+        Ok(crate::domain::AgentExecutionOutput {
+            content: crate::domain::OutputContent::ToolCalls(_),
+            ..
+        }) => {
+            // 放行给 tool calling loop 处理 tool calls
+            false
+        }
+        Ok(_) => {
+            warn!(
+                event = "SkillUpdateWorkItemNoToolCall",
+                work_item_id = %work_item.id,
+                task_id = %work_item.task_id,
+                error = "LLM returned text without calling submit_skill_update",
+                error_type = "NoToolCall",
+                "skill update LLM finished without tool call, cleaning up work item"
+            );
+            commands
+                .entity(work_item_entity)
+                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            true
+        }
+        Err(_) => {
+            warn!(
+                event = "SkillUpdateWorkItemLlmFailed",
+                work_item_id = %work_item.id,
+                task_id = %work_item.task_id,
+                error = "LLM execution returned Err",
+                error_type = "LlmExecutionFailed",
+                "skill update LLM failed, cleaning up work item"
+            );
+            commands
+                .entity(work_item_entity)
+                .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,15 +762,15 @@ mod tests {
         match kind {
             ExperienceKindHint::Knowledge => ExperienceCandidate::knowledge(
                 Uuid::new_v4(),
-                Uuid::new_v4(),
-                Uuid::new_v4(),
+                crate::domain::TaskId::new(),
+                crate::domain::AgentId::new(),
                 "title".to_string(),
                 "content".to_string(),
             ),
             ExperienceKindHint::Skill => ExperienceCandidate::skill(
                 Uuid::new_v4(),
-                Uuid::new_v4(),
-                Uuid::new_v4(),
+                crate::domain::TaskId::new(),
+                crate::domain::AgentId::new(),
                 "skill-title".to_string(),
                 "skill-name".to_string(),
                 "skill-desc".to_string(),
@@ -732,15 +800,15 @@ mod tests {
         ExperienceCollectionCompletedMessage {
             task_id,
             parent_task_id,
-            agent_id: Uuid::new_v4(),
-            governing_agent_id: Uuid::new_v4(),
+            agent_id: crate::domain::AgentId::new(),
+            governing_agent_id: crate::domain::AgentId::new(),
         }
     }
 
     /// 构造最小化的 Persistent Agent。
     fn make_persistent_agent() -> Agent {
         Agent {
-            id: Uuid::new_v4(),
+            id: crate::domain::AgentId::new(),
             profile: AgentProfile {
                 name: "test-persistent".to_string(),
                 model: "test-model".to_string(),
@@ -760,9 +828,9 @@ mod tests {
     /// 构造测试用 Task（仅填关键字段，保留 plan 要求的 task 参数签名）。
     fn make_task() -> Task {
         Task {
-            id: Uuid::new_v4(),
+            id: crate::domain::TaskId::new(),
             content: "test task".to_string(),
-            creator: Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: crate::domain::TaskStatus::Done,
             pending_confirmation_id: None,
@@ -993,7 +1061,7 @@ mod tests {
         let task = make_task();
         let mut msg = make_msg(task.id, None);
         // 用固定 governing_agent_id 便于断言
-        let governing_agent_id = Uuid::new_v4();
+        let governing_agent_id = crate::domain::AgentId::new();
         msg.governing_agent_id = governing_agent_id;
 
         let mut world = World::new();
@@ -1033,7 +1101,7 @@ mod tests {
 
         let task = make_task();
         let mut msg = make_msg(task.id, None);
-        let governing_agent_id = Uuid::new_v4();
+        let governing_agent_id = crate::domain::AgentId::new();
         msg.governing_agent_id = governing_agent_id;
 
         let mut world = World::new();
@@ -1101,8 +1169,8 @@ mod completion_system_tests {
         base_version: u32,
     ) -> (Uuid, Uuid, Entity) {
         let candidate_id = Uuid::new_v4();
-        let governing_agent_id = Uuid::new_v4();
-        let task_id = Uuid::new_v4();
+        let governing_agent_id = crate::domain::AgentId::new();
+        let task_id = crate::domain::TaskId::new();
         let mut work_item = WorkItem::skill_update(
             task_id,
             "prompt".to_string(),
@@ -1130,8 +1198,8 @@ mod completion_system_tests {
     fn stage_resolved_candidate(store: &mut ExperienceStore) -> Uuid {
         let mut c = ExperienceCandidate::skill(
             Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "title".to_string(),
             "skill-name".to_string(),
             "desc".to_string(),
@@ -1154,8 +1222,8 @@ mod completion_system_tests {
     ) -> SkillUpdateCompletedMessage {
         SkillUpdateCompletedMessage {
             work_item_id,
-            task_id: Uuid::new_v4(),
-            agent_id: Uuid::new_v4(),
+            task_id: crate::domain::TaskId::new(),
+            agent_id: crate::domain::AgentId::new(),
             skill_id,
             base_version,
             new_version,
@@ -1196,8 +1264,8 @@ mod completion_system_tests {
         let candidate_id = stage_resolved_candidate(&mut world.resource_mut::<ExperienceStore>());
         let (work_item_id, work_item_entity) = {
             // 用同样的 skill_id 调用 spawn helper，但手动覆盖 candidate_id
-            let governing_agent_id = Uuid::new_v4();
-            let task_id = Uuid::new_v4();
+            let governing_agent_id = crate::domain::AgentId::new();
+            let task_id = crate::domain::TaskId::new();
             let mut work_item = WorkItem::skill_update(
                 task_id,
                 "prompt".to_string(),
@@ -1795,8 +1863,8 @@ mod workitem_system_tests {
     fn stage_submitted_skill_candidate(store: &mut ExperienceStore) -> Uuid {
         let c = ExperienceCandidate::skill(
             Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "test skill".to_string(),
             "test-skill".to_string(),
             "desc".to_string(),
@@ -1811,10 +1879,10 @@ mod workitem_system_tests {
     /// 构造 SkillUpdateRequestMessage。
     fn make_request_message(skill_id: SkillId, candidate_id: Uuid) -> SkillUpdateRequestMessage {
         SkillUpdateRequestMessage {
-            task_id: Uuid::new_v4(),
+            task_id: crate::domain::TaskId::new(),
             skill_id,
             experience_candidate_id: candidate_id,
-            governing_agent_id: Uuid::new_v4(),
+            governing_agent_id: crate::domain::AgentId::new(),
         }
     }
 

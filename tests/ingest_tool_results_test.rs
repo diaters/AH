@@ -8,8 +8,8 @@ use harness::domain::{
 
 fn spawn_pending(world: &mut bevy_ecs::prelude::World, call_id: &str) -> bevy_ecs::prelude::Entity {
     let req = AgentExecutionRequest {
-        task_id: uuid::Uuid::new_v4(),
-        agent_id: uuid::Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: AgentRequestKind::ToolExecution {
             tool_name: "t".into(),
         },

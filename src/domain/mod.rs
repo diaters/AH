@@ -38,10 +38,88 @@ use std::{future::Future, pin::Pin};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-// ============ 类型别名 ============
+// ============ ID newtype ============
 
-pub type TaskId = Uuid;
-pub type AgentId = Uuid;
+/// Task 唯一标识 newtype：与 `Uuid` 在类型层面隔离，杜绝 Task/Agent/Session ID 互传。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TaskId(pub Uuid);
+
+impl TaskId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn nil() -> Self {
+        Self(Uuid::nil())
+    }
+}
+
+impl Default for TaskId {
+    fn default() -> Self {
+        Self::nil()
+    }
+}
+
+impl std::fmt::Display for TaskId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for TaskId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
+impl std::ops::Deref for TaskId {
+    type Target = Uuid;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Agent 唯一标识 newtype：与 `Uuid` 在类型层面隔离。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentId(pub Uuid);
+
+impl AgentId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn nil() -> Self {
+        Self(Uuid::nil())
+    }
+}
+
+impl Default for AgentId {
+    fn default() -> Self {
+        Self::nil()
+    }
+}
+
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for AgentId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
+impl std::ops::Deref for AgentId {
+    type Target = Uuid;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub type ExecutorFuture =
     Pin<Box<dyn Future<Output = Result<AgentExecutionOutput, ExecutionError>> + Send>>;
 
@@ -93,7 +171,9 @@ pub use execution::{
 };
 
 // attachment
-pub use attachment::{AttachmentKind, ChannelAttachment, extract_attachments};
+pub use attachment::{
+    ATTACHMENT_MARKER_SYNTAX_HINT, AttachmentKind, ChannelAttachment, extract_attachments,
+};
 
 // frontend
 pub use frontend::{
@@ -269,7 +349,7 @@ mod tests {
             .insert("test_tool".to_string(), ToolPermission::Allow);
 
         let agent = Agent {
-            id: Uuid::nil(),
+            id: AgentId::nil(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "test-model".to_string(),
@@ -298,7 +378,7 @@ mod tests {
     #[test]
     fn agent_grant_permission_updates_overrides() {
         let mut agent = Agent {
-            id: Uuid::nil(),
+            id: AgentId::nil(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "test-model".to_string(),

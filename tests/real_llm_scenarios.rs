@@ -46,7 +46,6 @@ use harness::{
 };
 use serde::Deserialize;
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 // ============ 场景文件模型（TOML 声明式，设计 §5.1） ============
 
@@ -302,7 +301,7 @@ fn scenario_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("scenario-test-key".to_string()),
             api_base: None,
         },
@@ -335,7 +334,7 @@ fn scenario_channel() -> ChannelId {
 
 fn spawn_scenario_agent(app: &mut bevy_app::App) {
     let agent = Agent {
-        id: Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "default-llm-agent".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -433,7 +432,7 @@ fn scenario_settled(app: &mut bevy_app::App) -> bool {
     let world = app.world_mut();
     let mut task_query = world.query::<&Task>();
     let tasks_settled = task_query.iter(world).all(|t| {
-        t.status.is_terminal() || matches!(t.status, TaskStatus::Waiting(WaitingReason::User))
+        t.status().is_terminal() || matches!(t.status(), TaskStatus::Waiting(WaitingReason::User))
     });
     if !tasks_settled {
         return false;
@@ -583,7 +582,7 @@ fn execute_scenario(
         let all_terminal = {
             let world = app.world_mut();
             let mut query = world.query::<&Task>();
-            !query.iter(world).any(|t| !t.status.is_terminal())
+            !query.iter(world).any(|t| !t.status().is_terminal())
         };
         if all_terminal {
             break;
@@ -610,7 +609,7 @@ fn execute_scenario(
     let mut task_query = world.query::<&Task>();
     for task in task_query.iter(world) {
         if trace.task_status.is_none() {
-            trace.task_status = Some(format!("{:?}", task.status));
+            trace.task_status = Some(format!("{:?}", task.status()));
             // 多轮：/finish 的 mark_done 会把 result_summary 覆盖为
             // "finished by user"，最后一轮真实回复在 input_summary
             // （llm_response multi_turn 分支写入）；单轮：result_summary 即回复。
@@ -624,7 +623,7 @@ fn execute_scenario(
     let mut wi_query = world.query::<&WorkItem>();
     for wi in wi_query.iter(world) {
         if wi.is_terminal() {
-            trace.workitem_statuses.push(format!("{:?}", wi.status));
+            trace.workitem_statuses.push(format!("{:?}", wi.status()));
         }
     }
     // 工具调用记录来自 STM（tool_result_system 写入，稳定来源）
@@ -645,8 +644,8 @@ fn execute_scenario(
 
 fn build_judge_request(data: &JudgePromptData) -> AgentExecutionRequest {
     AgentExecutionRequest {
-        task_id: Uuid::nil(),
-        agent_id: Uuid::nil(),
+        task_id: harness::domain::TaskId::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::Evaluation,
         prompt: build_judge_user_prompt(data),
         system_prompt: Some(judge_system_prompt()),
@@ -1537,7 +1536,7 @@ fn judge_executor_from_env() -> Option<Arc<dyn AgentExecutor>> {
     };
     let config = harness::llm::LlmProviderConfig {
         provider: kind,
-        model,
+        model: Some(model),
         api_key: std::env::var("HARNESS_TEST_JUDGE_API_KEY").ok(),
         api_base: std::env::var("HARNESS_TEST_JUDGE_API_BASE").ok(),
     };

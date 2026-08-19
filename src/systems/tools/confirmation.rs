@@ -25,8 +25,8 @@ use crate::{
 use super::dispatch::emit_permission_audit;
 
 use super::orchestrator::{
-    clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
-    spawn_tool_error,
+    ToolResources, ToolWorldQueries, clear_task_pending_confirmation_id, handle_tool_action,
+    restore_task_after_tool, spawn_tool_error,
 };
 
 /// Tool 确认响应处理 System
@@ -69,6 +69,7 @@ pub fn tool_confirmation_result_system(
     ),
 ) {
     let index = &index_clock_loader_frontends.0;
+    let clock = &index_clock_loader_frontends.1;
     let frontend_registry = &index_clock_loader_frontends.3;
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -219,7 +220,7 @@ pub fn tool_confirmation_result_system(
                     let output_channel = index
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
-                        .and_then(|(_, t)| t.routing_policy.output_channel.clone());
+                        .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
                     emit_permission_audit(
                         frontend_registry,
                         output_channel.as_ref(),
@@ -303,7 +304,7 @@ pub fn tool_confirmation_result_system(
                         .and_then(|e| tasks.get_mut(e).ok())
                         && task.status == TaskStatus::Waiting(WaitingReason::User)
                     {
-                        task.status = TaskStatus::Waiting(WaitingReason::ToolExecution);
+                        task.mark_waiting(WaitingReason::ToolExecution, clock.0);
                     }
                     commands.entity(entity).despawn();
                     continue;
@@ -325,7 +326,7 @@ pub fn tool_confirmation_result_system(
                 if let Some(target) = index
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
-                    .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+                    .and_then(|(_, t)| t.routing_policy.output_channel().cloned())
                     .map(|channel| EventTarget::Directed(vec![channel]))
                 {
                     let event = EngineEvent::ToolCallStarted {
@@ -380,19 +381,23 @@ pub fn tool_confirmation_result_system(
                         task_entity,
                         tool_request,
                         action,
-                        &mut tasks,
-                        &agents,
-                        &chat_sessions,
-                        &mut short_term_memories,
-                        &*backend,
-                        &mut experience_store,
-                        &mut pending_experience_hooks,
+                        &mut ToolWorldQueries {
+                            tasks: &mut tasks,
+                            agents: &agents,
+                            chat_sessions: &chat_sessions,
+                            short_term_memories: &mut short_term_memories,
+                            context_queries: &context_queries,
+                            calling_states: &calling_states,
+                        },
+                        &mut ToolResources {
+                            backend: &*backend,
+                            experience_store: &mut experience_store,
+                            pending_experience_hooks: &mut pending_experience_hooks,
+                            skill_loader: &index_clock_loader_frontends.2,
+                            frontend_registry,
+                            clock: &index_clock_loader_frontends.1,
+                        },
                         None,
-                        &index_clock_loader_frontends.1,
-                        &context_queries,
-                        &index_clock_loader_frontends.2,
-                        &calling_states,
-                        frontend_registry,
                     );
                 }
 
@@ -489,7 +494,7 @@ mod tests {
         world
     }
 
-    fn dummy_task(task_id: Uuid) -> Task {
+    fn dummy_task(task_id: crate::domain::TaskId) -> Task {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
@@ -498,7 +503,7 @@ mod tests {
         Task {
             id: task_id,
             content: "test".to_string(),
-            creator: Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: TaskStatus::Waiting(WaitingReason::User),
             pending_confirmation_id: None,
@@ -521,8 +526,8 @@ mod tests {
     }
 
     fn dummy_request(
-        task_id: Uuid,
-        agent_id: Uuid,
+        task_id: crate::domain::TaskId,
+        agent_id: crate::domain::AgentId,
         request_id: Uuid,
     ) -> ToolExecutionRequestMessage {
         ToolExecutionRequestMessage {
@@ -552,8 +557,8 @@ mod tests {
     #[test]
     fn confirmation_denied_clears_task_pending_id() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         let mut task = dummy_task(task_id);
@@ -585,8 +590,8 @@ mod tests {
     #[test]
     fn confirmation_approved_clears_task_pending_id() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         let mut task = dummy_task(task_id);
@@ -649,8 +654,8 @@ mod tests {
     #[test]
     fn async_confirmation_restores_task_to_waiting_tool_execution() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         // 注册 async dummy executor
@@ -660,7 +665,7 @@ mod tests {
 
         // task 模拟 dispatch.rs:317 后的状态：Waiting(User) + pending_confirmation_id = Some
         let mut task = dummy_task(task_id);
-        task.status = TaskStatus::Waiting(WaitingReason::User);
+        task.mark_waiting(WaitingReason::User, Utc::now());
         task.pending_confirmation_id = Some(request_id);
         let task_entity = world.spawn(task).id();
         world

@@ -22,7 +22,7 @@ use harness::{
     domain::AgentExecutor, domain::ChannelId, domain::ExistingAgentProfile,
     domain::ExperienceStore, domain::FrontendKind, domain::LlmToolCall, domain::OutputContent,
     domain::ProfileGenerationKind, domain::ProfileGenerationRequestMessage,
-    domain::ShortTermMemory, domain::Task, domain::TaskStatus, domain::ToolExecutionRequestMessage,
+    domain::ShortTermMemory, domain::Task, domain::ToolExecutionRequestMessage,
     domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
@@ -160,14 +160,14 @@ fn update_flow_modifies_agents_toml_and_ecs() {
     // 第一帧：加载 agents.toml 中的 Agent
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     // Spawn 占位 Task（Waiting(Agent) 防止 task_dispatch_system 重复派发），
     // 供 llm_response_system 处理 ToolCalls 时创建 ToolCallingState
     let mut task = Task::from_user_input_ready("profile update", 3, default_channel());
     task.id = task_id;
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))
@@ -298,12 +298,12 @@ fn skip_profile_update_silently_ends() {
     );
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let mut task = Task::from_user_input_ready("profile update skip", 3, default_channel());
     task.id = task_id;
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))

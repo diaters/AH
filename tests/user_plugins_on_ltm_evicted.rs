@@ -21,7 +21,7 @@ mod common;
 
 fn make_agent() -> Agent {
     Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "test-agent".to_string(),
             model: "test-model".to_string(),

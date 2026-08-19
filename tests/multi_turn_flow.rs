@@ -30,7 +30,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -60,7 +60,7 @@ fn test_config() -> HarnessConfig {
 fn spawn_default_agent(app: &mut bevy_app::App) {
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
     let brain_agent = Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "brain".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -86,7 +86,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
         .insert(brain_id, brain_entity);
 
     let default_agent = Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "default-llm-agent".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -132,35 +132,14 @@ fn multi_turn_task_lifecycle() {
     spawn_default_agent(&mut app);
 
     // Create a task in Waiting(User) state
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("multi-turn task", 3, default_channel());
+    task.id = task_id;
+    task.input_summary = "multi-turn task".to_string();
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
     let entity_id = app
         .world_mut()
-        .spawn((
-            Task {
-                id: task_id,
-                content: "multi-turn task".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Waiting(WaitingReason::User),
-                pending_confirmation_id: None,
-                input_summary: "multi-turn task".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ))
+        .spawn((task, ShortTermMemory::default()))
         .id();
     // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
     // 模拟阶段 1 spawn 封装的索引维护（生产代码经 spawn_task 自动写入）
@@ -194,8 +173,8 @@ fn multi_turn_task_lifecycle() {
         .expect("task should exist");
 
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "multi-turn task should return to Waiting(User) after response"
     );
 
@@ -234,34 +213,13 @@ fn short_term_memory_tracks_turns() {
     spawn_default_agent(&mut app);
 
     // Create a task with short-term memory
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("test", 3, default_channel());
+    task.id = task_id;
+    task.input_summary = "test".to_string();
+    task.mark_running(chrono::Utc::now());
     let entity_id = {
-        let entity = app.world_mut().spawn((
-            Task {
-                id: task_id,
-                content: "test".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Running,
-                pending_confirmation_id: None,
-                input_summary: "test".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ));
+        let entity = app.world_mut().spawn((task, ShortTermMemory::default()));
         entity.id()
     };
 
@@ -318,7 +276,7 @@ fn agent_has_long_term_memory() {
     spawn_default_agent(&mut app);
 
     // Spawn a persistent agent manually
-    let agent_id = uuid::Uuid::new_v4();
+    let agent_id = harness::domain::AgentId::new();
     app.world_mut().spawn(Agent {
         id: agent_id,
         profile: AgentProfile {
@@ -372,7 +330,7 @@ fn experience_collection_triggered_on_agent_termination() {
     spawn_default_agent(&mut app);
 
     // Create parent agent with memory
-    let parent_id = uuid::Uuid::new_v4();
+    let parent_id = harness::domain::AgentId::new();
     let parent_entity = app
         .world_mut()
         .spawn((
@@ -402,8 +360,8 @@ fn experience_collection_triggered_on_agent_termination() {
         .insert(parent_id, parent_entity);
 
     // Create child task-scoped agent
-    let child_id = uuid::Uuid::new_v4();
-    let task_id = uuid::Uuid::new_v4();
+    let child_id = harness::domain::AgentId::new();
+    let task_id = harness::domain::TaskId::new();
     let child_entity = app
         .world_mut()
         .spawn((
@@ -433,32 +391,13 @@ fn experience_collection_triggered_on_agent_termination() {
         .insert(child_id, child_entity);
 
     // Create a task for the terminated message to reference
-    let task_entity = app
-        .world_mut()
-        .spawn(Task {
-            id: task_id,
-            content: "test task".to_string(),
-            creator: parent_id,
-            delegate: Some(child_id),
-            status: TaskStatus::Done,
-            pending_confirmation_id: None,
-            input_summary: "test".to_string(),
-            result_summary: "completed".to_string(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        })
-        .id();
+    let mut task = Task::from_user_input("test task", 3, default_channel());
+    task.id = task_id;
+    task.creator = parent_id;
+    task.delegate = Some(child_id);
+    task.input_summary = "test".to_string();
+    task.mark_done("completed", chrono::Utc::now());
+    let task_entity = app.world_mut().spawn(task).id();
     // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
     app.world_mut()
         .resource_mut::<EntityIndex>()
@@ -481,7 +420,7 @@ fn experience_collection_triggered_on_agent_termination() {
         .query::<&Task>()
         .iter(app.world())
         .find(|t| t.id == task_id)
-        .map(|t| (t.status.clone(), t.delegate));
+        .map(|t| (t.status().clone(), t.delegate));
 
     // 运行一帧，让 Execution 阶段的经验收集触发系统处理 TaskTerminatedMessage
     app.update();
@@ -545,35 +484,14 @@ fn multi_turn_memory_records_user_and_assistant() {
     spawn_default_agent(&mut app);
 
     // 创建 Waiting(User) 状态的任务和 ShortTermMemory
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("initial task", 3, default_channel());
+    task.id = task_id;
+    task.input_summary = "initial task".to_string();
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
     let entity_id = app
         .world_mut()
-        .spawn((
-            Task {
-                id: task_id,
-                content: "initial task".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Waiting(WaitingReason::User),
-                pending_confirmation_id: None,
-                input_summary: "initial task".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ))
+        .spawn((task, ShortTermMemory::default()))
         .id();
     // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
     app.world_mut()
@@ -639,13 +557,13 @@ fn multi_turn_full_conversation_flow() {
         .world_mut()
         .query::<(Entity, &Task)>()
         .iter(app.world())
-        .find(|(_, t)| t.status == TaskStatus::Waiting(WaitingReason::User))
+        .find(|(_, t)| t.status() == &TaskStatus::Waiting(WaitingReason::User))
         .map(|(e, t)| (e, t.clone()))
         .expect("should have a task in Waiting(User)");
 
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "task should be waiting for user after first response"
     );
 
@@ -726,33 +644,14 @@ fn prompt_includes_conversation_history() {
     // 老的 brain_dispatch_system 兜底路径已移除，TopLevelTask 必须通过
     // PendingDispatch 流入 dispatch_system 才能触发 Brain LLM 调用。
     // Brain LLM 的 prompt 由 build_prompt_with_history 构造，会注入 [Conversation history]。
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("current question", 3, default_channel());
+    task.id = task_id;
+    task.mark_ready(chrono::Utc::now());
     let _entity_id = app
         .world_mut()
         .spawn((
-            Task {
-                id: task_id,
-                content: "current question".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Ready,
-                pending_confirmation_id: None,
-                input_summary: String::new(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
+            task,
             ShortTermMemory {
                 entries: vec![
                     harness::domain::MemoryEntry::new(EntryRole::User, "previous question"),
@@ -843,13 +742,13 @@ fn initial_user_input_recorded_in_short_term_memory() {
         .world_mut()
         .query::<(Entity, &Task)>()
         .iter(app.world())
-        .find(|(_, t)| t.status == TaskStatus::Waiting(WaitingReason::User))
+        .find(|(_, t)| t.status() == &TaskStatus::Waiting(WaitingReason::User))
         .map(|(e, t)| (e, t.clone()))
         .expect("should have a task in Waiting(User)");
 
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "task should be waiting for user after first response"
     );
 
@@ -904,7 +803,7 @@ fn three_turn_conversation_maintains_correct_order() {
         .world_mut()
         .query::<(Entity, &Task)>()
         .iter(app.world())
-        .find(|(_, t)| t.status == TaskStatus::Waiting(WaitingReason::User))
+        .find(|(_, t)| t.status() == &TaskStatus::Waiting(WaitingReason::User))
         .map(|(e, t)| (e, t.clone()))
         .expect("should have a task in Waiting(User)");
 
@@ -1011,33 +910,14 @@ fn second_dispatch_prompt_includes_correct_history() {
     spawn_default_agent(&mut app);
 
     // 创建 Waiting(User) 状态的任务，并预填充对话历史
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("original question", 3, default_channel());
+    task.id = task_id;
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
     let entity_id = app
         .world_mut()
         .spawn((
-            Task {
-                id: task_id,
-                content: "original question".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Waiting(WaitingReason::User),
-                pending_confirmation_id: None,
-                input_summary: String::new(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
+            task,
             ShortTermMemory {
                 entries: vec![
                     harness::domain::MemoryEntry::new(EntryRole::User, "previous question"),
@@ -1122,35 +1002,13 @@ fn task_content_updates_on_continue() {
     spawn_default_agent(&mut app);
 
     // 创建 Waiting(User) 状态的任务
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let mut task = Task::from_user_input("original question", 3, default_channel());
+    task.id = task_id;
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
     let entity_id = app
         .world_mut()
-        .spawn((
-            Task {
-                id: task_id,
-                content: "original question".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Waiting(WaitingReason::User),
-                pending_confirmation_id: None,
-                input_summary: String::new(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ))
+        .spawn((task, ShortTermMemory::default()))
         .id();
     // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
     app.world_mut()

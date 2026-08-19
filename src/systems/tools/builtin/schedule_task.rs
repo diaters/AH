@@ -121,19 +121,8 @@ fn build_output_channel(
     inherited: Option<ChannelId>,
 ) -> Result<Option<ChannelId>, ToolError> {
     if let Some(frontend_str) = output_channel_str {
-        let frontend = match frontend_str {
-            "tui" => FrontendKind::Tui,
-            "telegram" => FrontendKind::Telegram,
-            "web" => FrontendKind::Web,
-            "qq" => FrontendKind::QQ,
-            "feishu" => FrontendKind::Feishu,
-            _ => {
-                return Err(ToolError::InvalidInput(format!(
-                    "unknown output_channel: {}",
-                    frontend_str
-                )));
-            }
-        };
+        let frontend = FrontendKind::from_channel_name(frontend_str)
+            .map_err(|e| ToolError::InvalidInput(format!("unknown output_channel: {e}")))?;
         let user_id = target
             .ok_or_else(|| {
                 ToolError::InvalidInput(
@@ -215,8 +204,8 @@ mod tests {
                 shell_default_exec_timeout_secs: 60,
                 shell_default_stop_timeout_secs: 5,
                 tool_inflight_timeout_secs: 300,
-                current_task_id: Uuid::new_v4(),
-                current_agent_id: Uuid::new_v4(),
+                current_task_id: crate::domain::TaskId::new(),
+                current_agent_id: crate::domain::AgentId::new(),
                 current_origin_channel: None,
                 current_skill_dir: None,
             },
@@ -429,13 +418,8 @@ mod tests {
     #[test]
     fn all_frontend_kinds_accepted() {
         use crate::domain::FrontendKind;
-        for (name, expected) in [
-            ("tui", FrontendKind::Tui),
-            ("telegram", FrontendKind::Telegram),
-            ("web", FrontendKind::Web),
-            ("qq", FrontendKind::QQ),
-            ("feishu", FrontendKind::Feishu),
-        ] {
+        for expected in FrontendKind::ALL {
+            let name = expected.channel_name();
             let input = serde_json::json!({
                 "content": "x",
                 "schedule": format!("once:{}", future_local_iso()),

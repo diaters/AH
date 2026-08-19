@@ -50,8 +50,8 @@ fn persistent_agent_knowledge_candidate_persists_to_ltm() {
     let mut store = ExperienceStore::default();
     let candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
+        harness::domain::TaskId::new(),
+        harness::domain::AgentId::new(),
         "shell timeout fact".to_string(),
         "shell_stop 默认等待退出".to_string(),
     );
@@ -78,8 +78,8 @@ fn persistent_agent_skill_candidate_generates_skill_package_after_approval() {
 
     let candidate = ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
-        producer_task_id: uuid::Uuid::new_v4(),
-        producer_agent_id: uuid::Uuid::new_v4(),
+        producer_task_id: harness::domain::TaskId::new(),
+        producer_agent_id: harness::domain::AgentId::new(),
         title: "smoke test skill".to_string(),
         kind_hint: ExperienceKindHint::Skill,
         payload: ExperienceCandidatePayload::Skill {
@@ -124,8 +124,8 @@ fn persistent_agent_skill_candidate_generates_skill_package_after_approval() {
 #[test]
 fn default_agent_private_candidate_spawns_incubation_proposal() {
     let mut store = ExperienceStore::default();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
     let candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
@@ -163,8 +163,8 @@ fn default_agent_private_candidate_spawns_incubation_proposal() {
 #[test]
 fn top_level_governance_consumes_root_and_aggregated_candidates() {
     let mut store = harness::domain::ExperienceStore::default();
-    let top_task_id = uuid::Uuid::new_v4();
-    let top_agent_id = uuid::Uuid::new_v4();
+    let top_task_id = harness::domain::TaskId::new();
+    let top_agent_id = harness::domain::AgentId::new();
 
     // 顶层自身候选
     let root = harness::domain::ExperienceCandidate::knowledge(
@@ -180,8 +180,8 @@ fn top_level_governance_consumes_root_and_aggregated_candidates() {
     // 子层候选：先进入 inbox，再标记为 Aggregated
     let child = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
+        harness::domain::TaskId::new(),
+        harness::domain::AgentId::new(),
         "child".to_string(),
         "child content".to_string(),
     );
@@ -213,8 +213,8 @@ fn top_level_governance_consumes_root_and_aggregated_candidates() {
 #[test]
 fn default_agent_merges_multiple_private_candidates_into_single_task_level_proposal() {
     let mut store = harness::domain::ExperienceStore::default();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let profile = harness::domain::AgentProfile {
         name: "physics-specialist".to_string(),
@@ -267,8 +267,8 @@ fn default_agent_merges_multiple_private_candidates_into_single_task_level_propo
 fn failed_writeback_marks_candidate_writeback_failed() {
     let mut candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
+        harness::domain::TaskId::new(),
+        harness::domain::AgentId::new(),
         "bad".to_string(),
         "content".to_string(),
     );
@@ -309,8 +309,8 @@ fn experience_governance_confirmation_skips_tool_execution() {
     app.update();
 
     let request_id = uuid::Uuid::new_v4();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     // 模拟 spawn_experience_confirmation 的输出：配对的确认请求和执行请求
     app.world_mut().spawn(ToolConfirmationRequestMessage {
@@ -398,8 +398,8 @@ fn approved_candidate_spawns_writeback_request() {
     );
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
     let candidate_id = uuid::Uuid::new_v4();
     let request_id = uuid::Uuid::new_v4();
     let agent_name = "test-agent".to_string();
@@ -535,8 +535,8 @@ fn approval_to_writeback_completes_in_same_frame() {
     );
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
     let request_id = uuid::Uuid::new_v4();
 
     // 设置候选和 proposal
@@ -659,8 +659,8 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
     );
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     // 创建 3 个候选绑定到同一 proposal
     let candidate_ids: Vec<uuid::Uuid> = {
@@ -799,10 +799,10 @@ fn aggregated_child_candidates_writeback_idempotently() {
     );
     app.update();
 
-    let parent_task_id = uuid::Uuid::new_v4();
-    let child_task_id_1 = uuid::Uuid::new_v4();
-    let child_task_id_2 = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let parent_task_id = harness::domain::TaskId::new();
+    let child_task_id_1 = harness::domain::TaskId::new();
+    let child_task_id_2 = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let (root_id, child_id_1, child_id_2, request_ids): (
         uuid::Uuid,

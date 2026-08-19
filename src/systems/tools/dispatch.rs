@@ -13,7 +13,7 @@ use crate::{
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
         ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
         PermissionSource, ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory,
-        SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task, TaskStatus,
+        SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task,
         ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolPermission, WaitingReason, WorkItem,
     },
@@ -24,7 +24,7 @@ use crate::{
 };
 
 use super::orchestrator::restore_task_after_tool;
-use super::orchestrator::{handle_tool_action, spawn_tool_error};
+use super::orchestrator::{ToolResources, ToolWorldQueries, handle_tool_action, spawn_tool_error};
 
 /// Tool 分发 System
 ///
@@ -66,6 +66,7 @@ pub fn tool_dispatch_system(
     ),
 ) {
     let index = &index_clock_loader.0;
+    let clock = &index_clock_loader.1;
     let frontend_registry = &index_clock_loader.3;
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
@@ -130,7 +131,7 @@ pub fn tool_dispatch_system(
             let output_channel = index
                 .get_task(&request.request.task_id)
                 .and_then(|e| tasks.get(e).ok())
-                .and_then(|(_, t)| t.routing_policy.output_channel.clone());
+                .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
             emit_permission_audit(
                 frontend_registry,
                 output_channel.as_ref(),
@@ -160,7 +161,7 @@ pub fn tool_dispatch_system(
         let output_channel = index
             .get_task(&request.request.task_id)
             .and_then(|e| tasks.get(e).ok())
-            .and_then(|(_, t)| t.routing_policy.output_channel.clone());
+            .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
 
         debug!(
             event = "ToolDispatch",
@@ -213,7 +214,7 @@ pub fn tool_dispatch_system(
                 if let Some(target) = index
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
-                    .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+                    .and_then(|(_, t)| t.routing_policy.output_channel().cloned())
                     .map(|channel| EventTarget::Directed(vec![channel]))
                 {
                     let event = EngineEvent::ToolCallStarted {
@@ -316,19 +317,23 @@ pub fn tool_dispatch_system(
                         task_entity,
                         &request,
                         action,
-                        &mut tasks,
-                        &agents,
-                        &chat_sessions,
-                        &mut short_term_memories,
-                        &*backend,
-                        &mut experience_store,
-                        &mut pending_experience_hooks,
+                        &mut ToolWorldQueries {
+                            tasks: &mut tasks,
+                            agents: &agents,
+                            chat_sessions: &chat_sessions,
+                            short_term_memories: &mut short_term_memories,
+                            context_queries: &context_queries,
+                            calling_states: &calling_states,
+                        },
+                        &mut ToolResources {
+                            backend: &*backend,
+                            experience_store: &mut experience_store,
+                            pending_experience_hooks: &mut pending_experience_hooks,
+                            skill_loader: &index_clock_loader.2,
+                            frontend_registry,
+                            clock: &index_clock_loader.1,
+                        },
                         parent_agent_id,
-                        &index_clock_loader.1,
-                        &context_queries,
-                        &index_clock_loader.2,
-                        &calling_states,
-                        frontend_registry,
                     );
                 }
 
@@ -413,7 +418,7 @@ pub fn tool_dispatch_system(
                         .iter_mut()
                         .find(|(_, t)| t.id == request.request.task_id)
                     {
-                        task.status = TaskStatus::Waiting(WaitingReason::Approval);
+                        task.mark_waiting(WaitingReason::Approval, clock.0);
                     }
 
                     let request_id = Uuid::new_v4();
@@ -425,7 +430,7 @@ pub fn tool_dispatch_system(
                             parent_agent_id,
                             child_agent_id: agent.id,
                             tool_input: request.tool_input.clone(),
-                            approval_task_id: Uuid::new_v4(),
+                            approval_task_id: crate::domain::TaskId::new(),
                             context: String::new(),
                         },
                         ApprovalRequestedHookPending,
@@ -455,7 +460,7 @@ pub fn tool_dispatch_system(
                     .iter_mut()
                     .find(|(_, t)| t.id == request.request.task_id)
                 {
-                    task.status = TaskStatus::Waiting(WaitingReason::User);
+                    task.mark_waiting(WaitingReason::User, clock.0);
                 }
 
                 let request_id = Uuid::new_v4();
@@ -577,7 +582,6 @@ mod tests {
     use bevy_ecs::prelude::*;
     use chrono::Utc;
     use std::collections::HashMap;
-    use uuid::Uuid;
 
     #[test]
     fn sequential_confirmation_only_one_pending_at_a_time() {
@@ -615,8 +619,8 @@ mod tests {
             std::path::PathBuf::from("/nonexistent_skills_root"),
         ));
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
@@ -757,7 +761,7 @@ mod tests {
             user_id: "test".to_string(),
             thread_id: None,
         };
-        let agent_id = Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
 
         emit_permission_audit(
             &registry,
@@ -809,7 +813,7 @@ mod tests {
         emit_permission_audit(
             &registry,
             None,
-            Uuid::nil(),
+            crate::domain::AgentId::nil(),
             "test-agent",
             "shell_exec",
             PermissionAction::Allow,

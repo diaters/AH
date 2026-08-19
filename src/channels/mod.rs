@@ -1,6 +1,5 @@
 pub mod config;
 pub mod frontend;
-pub mod lark;
 pub mod manager;
 pub mod qq;
 pub mod send_tool;

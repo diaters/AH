@@ -38,6 +38,7 @@ use crate::user_plugins::host_api::{
     plugin_resource::PluginRoots,
     skills_meta::SkillsSnapshot,
     temp_resource::TempResourceSlot,
+    tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
 
@@ -155,27 +156,19 @@ fn handle_workitem_failure_by_context(world: &mut World, entity: Entity, work_it
     {
         match task.status {
             TaskStatus::Waiting(WaitingReason::Evaluator) => {
-                let old_status = task.status.clone();
-                task.status = TaskStatus::Ready;
-                task.updated_at = clock;
+                task.mark_ready(clock);
                 debug!(
                     event = "TaskStatusRestoredAfterWorkItemFailed",
                     task_id = %task.id,
-                    from_status = ?old_status,
-                    to_status = ?task.status,
                     work_type = ?work_item.work_type,
                     "task restored to Ready after work item failed"
                 );
             }
             TaskStatus::Waiting(WaitingReason::Summarization) => {
-                let old_status = task.status.clone();
-                task.status = TaskStatus::Waiting(WaitingReason::User);
-                task.updated_at = clock;
+                task.mark_waiting(WaitingReason::User, clock);
                 debug!(
                     event = "TaskStatusRestoredAfterWorkItemFailed",
                     task_id = %task.id,
-                    from_status = ?old_status,
-                    to_status = ?task.status,
                     work_type = ?work_item.work_type,
                     "task restored to Waiting(User) after work item failed"
                 );
@@ -212,7 +205,6 @@ fn dispatch_workitem_lifecycle_hook(
                 plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                 approval: ApprovalContext {
                     current_request_id: None,
-                    tx: writer_tx.clone(),
                 },
                 experience: ExperienceContext {
                     store: Arc::new(
@@ -221,7 +213,6 @@ fn dispatch_workitem_lifecycle_hook(
                             .cloned()
                             .unwrap_or_default(),
                     ),
-                    tx: writer_tx.clone(),
                 },
                 skills: SkillsSnapshot::empty(),
                 message: MessageContext {
@@ -229,6 +220,7 @@ fn dispatch_workitem_lifecycle_hook(
                     tx: message_tx.clone(),
                 },
                 temp_resource: TempResourceSlot::new(),
+                tool: ToolCallContext::default(),
             }
         }),
     };
@@ -255,7 +247,7 @@ mod tests {
     /// 构造一个占位 WorkItem 用于测试派发路径。
     fn make_work_item(status: WorkItemStatus) -> WorkItem {
         let mut wi = WorkItem::new(
-            uuid::Uuid::nil(),
+            crate::domain::TaskId::nil(),
             WorkItemType::Evaluation,
             WorkItemInput::new("test".to_string()),
             WorkItemOrigin::Evaluation,

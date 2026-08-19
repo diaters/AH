@@ -88,7 +88,7 @@ fn turn_limit_creates_evaluation_workitem() {
 
     // 创建一个 Running 状态的任务，并添加 STM 条目（2 轮 = 4 条目）
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Running;
+    task.mark_running(chrono::Utc::now());
     let task_id = task.id;
 
     let mut stm = harness::domain::ShortTermMemory::default();
@@ -125,7 +125,7 @@ fn turn_limit_creates_evaluation_workitem() {
 
     // 添加评估器 Agent
     app.world_mut().spawn(harness::domain::Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -179,12 +179,12 @@ fn turn_limit_creates_evaluation_workitem() {
     let tasks: Vec<_> = app.world_mut().query::<&Task>().iter(app.world()).collect();
 
     assert_eq!(tasks.len(), 1);
-    println!("Task status: {:?}", tasks[0].status);
+    println!("Task status: {:?}", tasks[0].status());
     assert_eq!(
-        tasks[0].status,
-        TaskStatus::Waiting(WaitingReason::Evaluator),
+        tasks[0].status(),
+        &TaskStatus::Waiting(WaitingReason::Evaluator),
         "task should be waiting for evaluator, but got {:?}",
-        tasks[0].status
+        tasks[0].status()
     );
 }
 
@@ -193,7 +193,7 @@ fn setup_eval_test_app(
     stm_entries: u32,
     max_turns: u32,
     offtrack_policy: OffTrackPolicy,
-) -> (App, uuid::Uuid) {
+) -> (App, harness::domain::TaskId) {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -209,7 +209,7 @@ fn setup_eval_test_app(
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Running;
+    task.mark_running(chrono::Utc::now());
     let task_id = task.id;
 
     let mut stm = ShortTermMemory::default();
@@ -231,7 +231,7 @@ fn setup_eval_test_app(
         .insert(task_id, task_entity);
 
     app.world_mut().spawn(harness::domain::Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -262,7 +262,7 @@ fn setup_eval_test_app(
 /// 任务处于 Waiting(Evaluator)，WorkItem 已存在，无 agent 干扰
 fn setup_manual_eval_scenario(
     offtrack_policy: OffTrackPolicy,
-) -> (App, uuid::Uuid, uuid::Uuid, MockFrontend) {
+) -> (App, harness::domain::TaskId, uuid::Uuid, MockFrontend) {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -282,7 +282,7 @@ fn setup_manual_eval_scenario(
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Waiting(WaitingReason::Evaluator);
+    task.mark_waiting(WaitingReason::Evaluator, chrono::Utc::now());
     task.last_evaluated_turn = Some(2);
     let task_id = task.id;
 
@@ -352,7 +352,10 @@ fn evaluation_failure_does_not_retrigger_at_same_progress() {
         .iter(app.world())
         .find(|t| t.id == task_id)
         .unwrap();
-    assert_eq!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator));
+    assert_eq!(
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::Evaluator)
+    );
     assert_eq!(task.last_evaluated_turn, Some(2));
 
     // 手动模拟评估失败：despawn WorkItem，恢复任务到 Ready 再到 Running
@@ -375,7 +378,7 @@ fn evaluation_failure_does_not_retrigger_at_same_progress() {
         .iter_mut(app.world_mut())
         .find(|t| t.id == task_id)
         .unwrap();
-    task_mut.status = TaskStatus::Running;
+    task_mut.mark_running(chrono::Utc::now());
 
     // 第二轮：相同进度不应再次触发
     app.update();
@@ -428,7 +431,7 @@ fn offtrack_autocorrect_injects_governance_context() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task is drifting","suggested_action":"refocus on original goal"}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
@@ -455,8 +458,8 @@ fn offtrack_autocorrect_injects_governance_context() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Ready,
+        task.status(),
+        &TaskStatus::Ready,
         "AutoCorrect should restore task to Ready"
     );
 
@@ -490,7 +493,7 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task is drifting","suggested_action":"ask user for guidance"}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
@@ -516,8 +519,8 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "AskUser should set task to Waiting(User)"
     );
 
@@ -542,7 +545,7 @@ fn offtrack_fail_sets_error_and_status() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task went off track completely","suggested_action":null}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
@@ -567,16 +570,15 @@ fn offtrack_fail_sets_error_and_status() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Failed(FailureReason::AgentError),
+        task.status(),
+        &TaskStatus::Failed(FailureReason::AgentError),
         "Fail policy should set task to Failed(AgentError)"
     );
     assert!(
-        task.last_error
-            .as_ref()
+        task.last_error()
             .is_some_and(|e| e.contains("Evaluation OffTrack")),
         "last_error should contain 'Evaluation OffTrack', got: {:?}",
-        task.last_error
+        task.last_error()
     );
 }
 
@@ -633,7 +635,7 @@ fn offtrack_askuser_injects_stm_context() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task is drifting","suggested_action":"ask user for guidance"}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
@@ -693,8 +695,8 @@ fn offtrack_askuser_injects_stm_context() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "AskUser should set task to Waiting(User)"
     );
 }

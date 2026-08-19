@@ -27,7 +27,6 @@ use harness::domain::{
     OutputContent, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
 };
 use harness::llm::{LlmProviderConfig, LlmProviderKind, create_executor_from_config};
-use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -56,7 +55,7 @@ fn smoke_provider_config() -> LlmProviderConfig {
 
     LlmProviderConfig {
         provider,
-        model,
+        model: Some(model),
         api_key,
         api_base,
     }
@@ -119,8 +118,8 @@ fn sample_tool(name: &str, description: &str, param: &str) -> ToolDefinition {
 
 fn smoke_request(prompt: &str, tools: Vec<ToolDefinition>) -> AgentExecutionRequest {
     AgentExecutionRequest {
-        task_id: Uuid::new_v4(),
-        agent_id: Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: AgentRequestKind::LlmCompletion,
         prompt: prompt.to_string(),
         system_prompt: None,
@@ -311,7 +310,7 @@ async fn openai_compatible_custom_endpoint_roundtrip() {
 fn compatible_config_with_base(api_base: String) -> LlmProviderConfig {
     LlmProviderConfig {
         provider: LlmProviderKind::OpenAiCompatible,
-        model: "test-model".to_string(),
+        model: Some("test-model".to_string()),
         api_key: Some("invalid-key".to_string()),
         api_base: Some(api_base),
     }

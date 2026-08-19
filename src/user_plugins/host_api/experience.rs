@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
-use crossbeam_channel::Sender;
 use rhai::Engine;
 
 use crate::domain::ExperienceStore;
-use crate::user_plugins::host_api::entity_write::WorldCommand;
 
 #[derive(Clone)]
 pub struct ExperienceContext {
     pub store: Arc<ExperienceStore>,
-    pub tx: Sender<WorldCommand>,
 }
 
 pub fn register(engine: &mut Engine, ctx: ExperienceContext) {
@@ -40,30 +37,19 @@ pub fn register(engine: &mut Engine, ctx: ExperienceContext) {
             }
         },
     );
-
-    let c = ctx.clone();
-    engine.register_fn("experience_set_pinned", move |id: &str, pinned: bool| {
-        if let Ok(u) = uuid::Uuid::parse_str(id) {
-            let _ =
-                c.tx.send(WorldCommand::ExperienceSetPinned { id: u, pinned });
-        }
-    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam_channel::unbounded;
 
     #[test]
     fn unknown_candidate_returns_unit() {
-        let (tx, _rx) = unbounded();
         let mut e = Engine::new();
         register(
             &mut e,
             ExperienceContext {
                 store: Arc::new(ExperienceStore::default()),
-                tx,
             },
         );
         let v: () = e

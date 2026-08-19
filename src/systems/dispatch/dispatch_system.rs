@@ -33,9 +33,8 @@ use crate::{
     },
 };
 
-use super::{
-    build_brain_execution_request, find_brain_agent, prompt_builder::build_prompt_with_context,
-};
+use super::prompt_builder::build_prompt_with_context;
+use crate::systems::brain::{build_brain_execution_request, find_brain_agent};
 
 /// 从 STM 还原结构化对话消息序列。
 ///
@@ -552,7 +551,9 @@ pub fn dispatch_system(
                 // 找不到 Agent → 检查 spawn_spec
                 if let Some(spec) = &hint.agent_spawn_spec {
                     // spawn 新 Agent（参考 brain_dispatch.rs 中 SubTask 路径）
-                    let parent_agent_id = spec.parent_agent_id.unwrap_or(uuid::Uuid::nil());
+                    let parent_agent_id = spec
+                        .parent_agent_id
+                        .unwrap_or(crate::domain::AgentId::nil());
                     commands.spawn(AgentSpawnRequestMessage {
                         parent_agent_id,
                         task_id: task.id,
@@ -565,8 +566,7 @@ pub fn dispatch_system(
                     });
 
                     // Agent 尚未生成，无法设置 delegate；仅切到 Waiting(Agent)
-                    task.status = TaskStatus::Waiting(WaitingReason::Agent);
-                    task.updated_at = clock.0;
+                    task.mark_waiting(WaitingReason::Agent, clock.0);
 
                     commands.entity(task_entity).remove::<PendingDispatch>();
 

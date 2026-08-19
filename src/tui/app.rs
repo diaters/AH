@@ -7,8 +7,8 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, FrontendKind, MessageRole,
-    TaskStatusKind, UserAction,
+    AgentId, AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, FrontendKind, MessageRole,
+    TaskId, TaskStatusKind, UserAction,
 };
 
 use super::chat::{ApprovalCardState, ChatMessage, ChatPanel};
@@ -37,7 +37,7 @@ pub enum AppMode {
 /// Agent 前端状态
 #[derive(Debug, Clone)]
 pub struct AgentState {
-    pub id: uuid::Uuid,
+    pub id: AgentId,
     pub name: String,
     pub status: AgentStatusKind,
 }
@@ -45,11 +45,11 @@ pub struct AgentState {
 /// Task 前端状态
 #[derive(Debug, Clone)]
 pub struct TaskState {
-    pub id: uuid::Uuid,
+    pub id: TaskId,
     pub name: String,
     pub status: TaskStatusKind,
     pub result: Option<String>,
-    pub parent_id: Option<uuid::Uuid>,
+    pub parent_id: Option<TaskId>,
     pub subtask_count: u32,
     pub completed_count: u32,
     /// 任务来源的前端通道
@@ -321,7 +321,7 @@ impl App {
         use std::collections::HashMap;
 
         // Build parent -> children map in O(n)
-        let mut parent_to_children: HashMap<Uuid, Vec<_>> = HashMap::new();
+        let mut parent_to_children: HashMap<TaskId, Vec<_>> = HashMap::new();
         for task in &self.tasks {
             if let Some(parent_id) = task.parent_id {
                 parent_to_children
@@ -740,7 +740,7 @@ impl App {
         let now = std::time::Instant::now();
 
         // 找出需要清理的主任务 ID
-        let expired_main_ids: Vec<Uuid> = self
+        let expired_main_ids: Vec<TaskId> = self
             .tasks
             .iter()
             .filter(|t| {
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn handle_agent_status_adds_agent() {
         let mut app = test_app();
-        let agent_id = Uuid::new_v4();
+        let agent_id = crate::domain::AgentId::new();
         app.handle_engine_event(EngineEvent::AgentStatusChanged {
             target: EventTarget::Broadcast,
             agent_id,
@@ -867,7 +867,7 @@ mod tests {
     #[test]
     fn handle_task_status_adds_task() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
             task_id,
@@ -890,9 +890,9 @@ mod tests {
     #[test]
     fn subtask_progress_calculated_correctly() {
         let mut app = test_app();
-        let main_id = Uuid::new_v4();
-        let sub1_id = Uuid::new_v4();
-        let sub2_id = Uuid::new_v4();
+        let main_id = crate::domain::TaskId::new();
+        let sub1_id = crate::domain::TaskId::new();
+        let sub2_id = crate::domain::TaskId::new();
 
         // 添加主任务
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
@@ -1137,9 +1137,9 @@ mod tests {
     #[test]
     fn failed_status_counted_as_completed() {
         let mut app = test_app();
-        let main_id = Uuid::new_v4();
-        let sub1_id = Uuid::new_v4();
-        let sub2_id = Uuid::new_v4();
+        let main_id = crate::domain::TaskId::new();
+        let sub1_id = crate::domain::TaskId::new();
+        let sub2_id = crate::domain::TaskId::new();
 
         // 添加主任务
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
@@ -1192,7 +1192,7 @@ mod tests {
     #[test]
     fn main_task_without_subtasks_has_zero_progress() {
         let mut app = test_app();
-        let main_id = Uuid::new_v4();
+        let main_id = crate::domain::TaskId::new();
 
         // 添加主任务
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
@@ -1209,7 +1209,7 @@ mod tests {
         });
 
         // 触发另一个任务更新，确保零进度保持
-        let other_id = Uuid::new_v4();
+        let other_id = crate::domain::TaskId::new();
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
             task_id: other_id,
@@ -1231,7 +1231,7 @@ mod tests {
     #[test]
     fn task_state_origin_channel_from_event() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         let qq_channel = ChannelId {
             frontend: FrontendKind::QQ,
             user_id: "qq_user".to_string(),
@@ -1256,7 +1256,7 @@ mod tests {
     #[test]
     fn task_completed_at_set_on_terminal_status() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
             task_id,
@@ -1275,7 +1275,7 @@ mod tests {
     #[test]
     fn same_task_id_does_not_duplicate() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
             task_id,
@@ -1307,8 +1307,8 @@ mod tests {
     #[test]
     fn cleanup_removes_expired_completed_tasks() {
         let mut app = test_app();
-        let main_id = Uuid::new_v4();
-        let sub_id = Uuid::new_v4();
+        let main_id = crate::domain::TaskId::new();
+        let sub_id = crate::domain::TaskId::new();
 
         // 添加已完成的主任务
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
@@ -1353,7 +1353,7 @@ mod tests {
     #[test]
     fn cleanup_keeps_recent_completed_tasks() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
 
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
@@ -1380,7 +1380,7 @@ mod tests {
     #[test]
     fn cleanup_keeps_active_tasks() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
 
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
@@ -1538,7 +1538,8 @@ mod tests {
     #[test]
     fn tool_call_started_converted_to_system_message() {
         let mut app = test_app();
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         app.handle_engine_event(EngineEvent::ToolCallStarted {
             target: EventTarget::Broadcast,
             task_id,
@@ -1556,7 +1557,8 @@ mod tests {
     #[test]
     fn tool_call_started_without_summary_omits_colon() {
         let mut app = test_app();
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         app.handle_engine_event(EngineEvent::ToolCallStarted {
             target: EventTarget::Broadcast,
             task_id,
@@ -1574,7 +1576,7 @@ mod tests {
     #[test]
     fn task_status_changed_persists_agent_name_and_waiting_reason() {
         let mut app = test_app();
-        let task_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
             task_id,
@@ -1595,8 +1597,8 @@ mod tests {
     #[test]
     fn task_cleared_removes_task_and_children() {
         let mut app = test_app();
-        let main_id = Uuid::new_v4();
-        let child_id = Uuid::new_v4();
+        let main_id = crate::domain::TaskId::new();
+        let child_id = crate::domain::TaskId::new();
         app.handle_engine_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Broadcast,
             task_id: main_id,

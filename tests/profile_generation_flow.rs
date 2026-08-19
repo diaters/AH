@@ -18,8 +18,8 @@ use harness::{
     domain::ExperienceStore, domain::ExperienceWritebackDestination, domain::FrontendKind,
     domain::LlmToolCall, domain::OutputContent, domain::ProfileGenerationKind,
     domain::ProfileGenerationRequestMessage, domain::ShortTermMemory, domain::Task,
-    domain::TaskStatus, domain::ToolExecutionRequestMessage, domain::WaitingReason,
-    llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::ToolExecutionRequestMessage, domain::WaitingReason, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -130,14 +130,14 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
     // 第一帧：加载 agents.toml 中的 Agent
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     // Spawn 一个占位 Task（Waiting(Agent) 防止 task_dispatch_system 重复派发），
     // 供 llm_response_system 处理 ToolCalls 时创建 ToolCallingState
     let mut task = Task::from_user_input_ready("profile generation", 3, default_channel());
     task.id = task_id;
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))
@@ -289,8 +289,8 @@ default_permission = "Allow"
     );
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let candidate_id = uuid::Uuid::new_v4();
     let candidate = harness::domain::ExperienceCandidate {
@@ -440,13 +440,13 @@ fn profile_generation_does_not_loop_after_successful_submit() {
     // 第一帧：加载 agents.toml 中的 Agent
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     // Spawn 占位 Task（Waiting(Agent) 防止 task_dispatch_system 重复派发）
     let mut task = Task::from_user_input_ready("profile generation", 3, default_channel());
     task.id = task_id;
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))

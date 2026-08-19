@@ -40,13 +40,22 @@ fn default_channel() -> ChannelId {
 /// 构造指定状态的 WorkItem。
 fn make_work_item(status: WorkItemStatus) -> WorkItem {
     let mut wi = WorkItem::new(
-        uuid::Uuid::nil(),
+        harness::domain::TaskId::nil(),
         WorkItemType::Evaluation,
         WorkItemInput::new("test".to_string()),
         WorkItemOrigin::Evaluation,
         WorkItemWritebackTarget::TaskResult,
     );
-    wi.status = status;
+    match status {
+        WorkItemStatus::Pending => {}
+        WorkItemStatus::Assigned => wi.assign(harness::domain::AgentId::nil()),
+        WorkItemStatus::Running => {
+            wi.assign(harness::domain::AgentId::nil());
+            wi.start();
+        }
+        WorkItemStatus::Completed => wi.complete(),
+        WorkItemStatus::Failed => wi.fail(),
+    }
     wi
 }
 

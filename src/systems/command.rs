@@ -609,9 +609,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -683,9 +683,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq parent".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -753,9 +753,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -824,9 +824,9 @@ mod tests {
         );
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -890,12 +890,12 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         app.world_mut().spawn((
             Task {
                 id: task_id,
                 content: "active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Running,
                 pending_confirmation_id: None,
@@ -951,8 +951,8 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
-        let creator_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let creator_id = crate::domain::AgentId::new();
         app.world_mut().spawn((
             Task {
                 id: task_id,
@@ -1017,8 +1017,8 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
-        let delegate_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let delegate_id = crate::domain::AgentId::new();
         // 注册 Agent 实体
         let agent_entity = app
             .world_mut()
@@ -1048,7 +1048,7 @@ mod tests {
             Task {
                 id: task_id,
                 content: "active task".to_string(),
-                creator: uuid::Uuid::new_v4(),
+                creator: crate::domain::AgentId::new(),
                 delegate: Some(delegate_id),
                 status: TaskStatus::Running,
                 pending_confirmation_id: None,
@@ -1108,9 +1108,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Running,
                 pending_confirmation_id: None,
@@ -1170,9 +1170,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,

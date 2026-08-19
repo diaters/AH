@@ -29,11 +29,14 @@ impl TaskStatus {
 }
 
 /// 定义任务的普通输出与审批输出去向。
+///
+/// 字段私有：合法组合仅经 `conversational`/`event`/`scheduled_task` 工厂构造，
+/// 读取经访问器完成。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskRoutingPolicy {
-    pub output_channel: Option<ChannelId>,
-    pub approval_channel: Option<ChannelId>,
-    pub approval_context: Option<String>,
+    output_channel: Option<ChannelId>,
+    approval_channel: Option<ChannelId>,
+    approval_context: Option<String>,
 }
 
 impl TaskRoutingPolicy {
@@ -64,6 +67,21 @@ impl TaskRoutingPolicy {
             approval_context: Some(approval_context.to_string()),
         }
     }
+
+    /// 普通输出去向。
+    pub fn output_channel(&self) -> Option<&ChannelId> {
+        self.output_channel.as_ref()
+    }
+
+    /// 审批请求去向。
+    pub fn approval_channel(&self) -> Option<&ChannelId> {
+        self.approval_channel.as_ref()
+    }
+
+    /// 审批上下文说明。
+    pub fn approval_context(&self) -> Option<&str> {
+        self.approval_context.as_deref()
+    }
 }
 
 /// 任务实体
@@ -73,7 +91,8 @@ pub struct Task {
     pub content: String,
     pub creator: AgentId,
     pub delegate: Option<AgentId>,
-    pub status: TaskStatus,
+    /// 任务状态（收窄为 crate 内可见：读取经 `status()`，转换经 `mark_*` 方法）
+    pub(crate) status: TaskStatus,
     /// 当前正在等待用户确认的工具请求 ID（仅当 status == Waiting(User) 且等待工具确认时存在）
     pub pending_confirmation_id: Option<Uuid>,
     pub input_summary: String,
@@ -84,7 +103,8 @@ pub struct Task {
     pub retry_count: u32,
     pub max_retries: u32,
     pub next_retry_at: Option<DateTime<Utc>>,
-    pub last_error: Option<String>,
+    /// 最近一次错误（收窄为 crate 内可见：读取经 `last_error()`）
+    pub(crate) last_error: Option<String>,
     /// 是否支持多轮对话
     pub multi_turn: bool,
     /// 父 Task ID（子任务回传用）
@@ -178,6 +198,16 @@ pub struct AskUserPending {
 }
 
 impl Task {
+    /// 只读状态访问器（字段已收窄为 `pub(crate)`，转换一律经 `mark_*` 方法）。
+    pub fn status(&self) -> &TaskStatus {
+        &self.status
+    }
+
+    /// 只读最近错误访问器。
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
     /// 任务结果应送达的通道：优先路由策略的 `output_channel`，回退到发起来源 `origin_channel`。
     ///
     /// 对话任务经 `from_user_input` 同时设置 `origin_channel` 与
@@ -200,9 +230,9 @@ impl Task {
         let now = Utc::now();
 
         Self {
-            id: Uuid::new_v4(),
+            id: TaskId::new(),
             content: content.clone(),
-            creator: Uuid::nil(),
+            creator: AgentId::nil(),
             delegate: None,
             status: TaskStatus::Pending,
             pending_confirmation_id: None,
@@ -234,9 +264,9 @@ impl Task {
         let now = Utc::now();
 
         Self {
-            id: Uuid::new_v4(),
+            id: TaskId::new(),
             content: content.clone(),
-            creator: Uuid::nil(),
+            creator: AgentId::nil(),
             delegate: None,
             status: TaskStatus::Ready,
             pending_confirmation_id: None,
@@ -267,9 +297,9 @@ impl Task {
         let content = content.into();
         let now = Utc::now();
         Self {
-            id: Uuid::new_v4(),
+            id: TaskId::new(),
             content: content.clone(),
-            creator: Uuid::nil(),
+            creator: AgentId::nil(),
             delegate: None,
             status: TaskStatus::Pending,
             pending_confirmation_id: None,
@@ -289,6 +319,24 @@ impl Task {
             routing_policy,
             last_evaluated_turn: None,
         }
+    }
+
+    /// 将任务标记为等待指定原因的通用转换。
+    ///
+    /// 适用于 ToolExecution/User/AskUser/Evaluator/Summarization 等等待场景；
+    /// 等待 Agent 分发请优先使用 `mark_waiting_for_agent`。
+    pub fn mark_waiting(&mut self, reason: WaitingReason, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
+        self.status = TaskStatus::Waiting(reason);
+        self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            reason = "mark_waiting",
+            "task waiting"
+        );
     }
 
     /// 将任务标记为分发等待状态。
@@ -408,6 +456,50 @@ impl Task {
         );
     }
 
+    /// 以显式失败原因将任务标记为最终失败（无 `ExecutionError` 实例的场景）。
+    pub fn mark_failed_reason(
+        &mut self,
+        reason: FailureReason,
+        error: impl Into<String>,
+        now: DateTime<Utc>,
+    ) {
+        let old_status = self.status.clone();
+        let error_msg = error.into();
+        self.last_error = Some(error_msg.clone());
+        self.status = TaskStatus::Failed(reason.clone());
+        self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            retry_count = self.retry_count,
+            max_retries = self.max_retries,
+            error = %error_msg,
+            failure_reason = ?reason,
+            reason = "mark_failed_reason",
+            "task marked as failed with explicit reason"
+        );
+    }
+
+    /// 将任务置回 Ready 以进入下一次调度（不清理重试计划）。
+    ///
+    /// 与 `mark_ready_for_retry` 的区别：本方法仅恢复调度状态，
+    /// 不触碰 `next_retry_at`；重试回退结束场景请使用 `mark_ready_for_retry`。
+    pub fn mark_ready(&mut self, now: DateTime<Utc>) {
+        let old_status = self.status.clone();
+        self.status = TaskStatus::Ready;
+        self.updated_at = now;
+        debug!(
+            event = "TaskStatusTransition",
+            task_id = %self.id,
+            from_status = ?old_status,
+            to_status = ?self.status,
+            reason = "mark_ready",
+            "task ready for scheduling"
+        );
+    }
+
     /// 将任务重新置回 Ready 以进入下一次调度。
     pub fn mark_ready_for_retry(&mut self, now: DateTime<Utc>) {
         let old_status = self.status.clone();
@@ -497,8 +589,11 @@ mod tests {
             ),
         );
         assert_eq!(task.origin_channel, None);
-        assert_eq!(task.routing_policy.output_channel, None);
-        assert_eq!(task.routing_policy.approval_channel, Some(approval_channel));
+        assert_eq!(task.routing_policy.output_channel(), None);
+        assert_eq!(
+            task.routing_policy.approval_channel(),
+            Some(&approval_channel)
+        );
     }
 
     #[test]
@@ -509,9 +604,9 @@ mod tests {
             thread_id: None,
         };
         let policy = TaskRoutingPolicy::scheduled_task(Some(channel.clone()), "scheduled task");
-        assert_eq!(policy.output_channel, Some(channel.clone()));
-        assert_eq!(policy.approval_channel, Some(channel));
-        assert_eq!(policy.approval_context.as_deref(), Some("scheduled task"));
+        assert_eq!(policy.output_channel(), Some(&channel));
+        assert_eq!(policy.approval_channel(), Some(&channel));
+        assert_eq!(policy.approval_context(), Some("scheduled task"));
     }
 
     #[test]
@@ -528,11 +623,7 @@ mod tests {
         };
         // 模拟 scheduled 任务：origin 有值但路由策略显式指定了 output_channel。
         let task = Task {
-            routing_policy: TaskRoutingPolicy {
-                output_channel: Some(output.clone()),
-                approval_channel: None,
-                approval_context: None,
-            },
+            routing_policy: TaskRoutingPolicy::scheduled_task(Some(output.clone()), "test"),
             ..Task::from_user_input("test", 3, base)
         };
         assert_eq!(task.delivery_channel(), Some(&output));

@@ -66,11 +66,62 @@ impl SkillLoader {
     /// 路径约定：`<base_dir>/<owner_agent_name>/skills/<skill_name>/SKILL.md`
     ///（`base_dir` 本身就是 `agents/` 目录，与 `load_skills` / `build_registry` 语义一致）。
     pub fn skill_md_path(&self, skill_id: &SkillId) -> PathBuf {
-        self.base_dir
-            .join(&skill_id.owner_agent_name)
-            .join("skills")
-            .join(&skill_id.skill_name)
+        self.skill_dir(&skill_id.owner_agent_name, &skill_id.skill_name)
             .join("SKILL.md")
+    }
+
+    /// skill 正式目录：`<base_dir>/<agent_name>/skills/<skill_name>`。
+    ///
+    /// skill 目录布局的唯一权威；上层模块不得自行拼接该路径。
+    pub fn skill_dir(&self, agent_name: &str, skill_name: &str) -> PathBuf {
+        self.base_dir
+            .join(agent_name)
+            .join("skills")
+            .join(skill_name)
+    }
+
+    /// sandbox 草稿目录：`<base_dir>/<agent_name>/skills/.sandbox/<draft_name>`。
+    pub fn sandbox_dir(&self, agent_name: &str, draft_name: &str) -> PathBuf {
+        self.base_dir
+            .join(agent_name)
+            .join("skills")
+            .join(".sandbox")
+            .join(draft_name)
+    }
+
+    /// 创建 sandbox 草稿目录（含全部父目录），返回目录路径。
+    pub fn create_sandbox(&self, agent_name: &str, draft_name: &str) -> std::io::Result<PathBuf> {
+        let dir = self.sandbox_dir(agent_name, draft_name);
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    /// 将 sandbox 草稿发布为正式 skill 目录（原子 rename），返回目标路径。
+    ///
+    /// 调用方需先确认目标（`skill_dir`）不存在。
+    pub fn publish_sandbox(
+        &self,
+        sandbox: &std::path::Path,
+        agent_name: &str,
+        skill_name: &str,
+    ) -> std::io::Result<PathBuf> {
+        let target = self.skill_dir(agent_name, skill_name);
+        std::fs::rename(sandbox, &target)?;
+        Ok(target)
+    }
+
+    /// 读取 skill 目录（正式目录或 sandbox）下的 SKILL.md 内容。
+    pub fn read_skill_md_in(&self, skill_dir: &std::path::Path) -> std::io::Result<String> {
+        std::fs::read_to_string(skill_dir.join("SKILL.md"))
+    }
+
+    /// 覆盖写入 skill 目录下的 SKILL.md。
+    pub fn write_skill_md_in(
+        &self,
+        skill_dir: &std::path::Path,
+        content: &str,
+    ) -> std::io::Result<()> {
+        std::fs::write(skill_dir.join("SKILL.md"), content)
     }
 
     /// 扫描指定 Agent 的 skills 目录，返回所有已加载的 Skill。

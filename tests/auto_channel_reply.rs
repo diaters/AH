@@ -17,7 +17,6 @@ use harness::{
     systems::{BrainConfig, HarnessConfig},
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -41,7 +40,7 @@ fn brain_enabled_config() -> HarnessConfig {
 /// brain_agent_id → Entity（ADR-005 §3 阶段 2 要求）。
 fn spawn_brain_and_default_agent(app: &mut bevy_app::App) {
     let brain_agent = Agent {
-        id: Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "brain".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -67,7 +66,7 @@ fn spawn_brain_and_default_agent(app: &mut bevy_app::App) {
         .insert(brain_id, brain_entity);
 
     let default_agent = Agent {
-        id: Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "default-llm-agent".to_string(),
             model: "gpt-4.1-mini".to_string(),
@@ -126,7 +125,7 @@ fn auto_channel_reply() {
         let channel = Arc::new(TelegramChannel::new(cfg).with_base_url(mock_server.uri()))
             as Arc<dyn Channel>;
         let (channel_manager, _channel_handle, channel_frontends) =
-            ChannelManager::new(vec![channel], input_tx.clone());
+            ChannelManager::new(vec![channel], input_tx.clone()).expect("valid channel names");
 
         let config = HarnessConfig {
             agents_config_path: "/nonexistent_agents.toml".to_string(),
@@ -205,7 +204,7 @@ fn multi_task_channel_reply_has_different_short_ids() {
         let channel = Arc::new(TelegramChannel::new(cfg).with_base_url(mock_server.uri()))
             as Arc<dyn Channel>;
         let (channel_manager, _channel_handle, channel_frontends) =
-            ChannelManager::new(vec![channel], input_tx.clone());
+            ChannelManager::new(vec![channel], input_tx.clone()).expect("valid channel names");
 
         let config = HarnessConfig {
             agents_config_path: "/nonexistent_agents.toml".to_string(),

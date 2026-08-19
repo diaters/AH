@@ -76,7 +76,6 @@ impl Frontend for TuiFrontend {
 #[cfg(test)]
 mod tests {
     use crossbeam_channel::unbounded;
-    use uuid::Uuid;
 
     use crate::domain::{ChannelId, Frontend, MessageRole, TaskStatusKind};
 
@@ -96,7 +95,7 @@ mod tests {
         };
         frontend.push_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Directed(vec![qq_channel]),
-            task_id: Uuid::new_v4(),
+            task_id: crate::domain::TaskId::new(),
             name: "qq task".to_string(),
             status: TaskStatusKind::Running,
             old_status: None,

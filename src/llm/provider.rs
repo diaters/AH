@@ -8,7 +8,12 @@ pub use crate::domain::LlmProviderKind;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LlmProviderConfig {
     pub provider: LlmProviderKind,
-    pub model: String,
+    /// 默认模型名。
+    ///
+    /// `None` 表示该配置不携带默认模型（如 `providers.toml` 多 provider 注册表：
+    /// 模型由请求的 `model_override` 指定）。若请求也未携带 `model_override`，
+    /// 执行器将直接报错，而不是发送伪模型名。
+    pub model: Option<String>,
     /// 显式 API key（仅 openai-compatible 必填；标准 provider 由 genai 从环境变量自动读取）
     pub api_key: Option<String>,
     /// 自定义 API endpoint（仅 openai-compatible 必填）
@@ -27,7 +32,7 @@ impl LlmProviderConfig {
 
         let config = Self {
             provider,
-            model,
+            model: Some(model),
             api_key,
             api_base,
         };
@@ -38,7 +43,11 @@ impl LlmProviderConfig {
 
     /// 校验 provider 配置是否满足启动条件。
     pub fn validate(&self) -> Result<()> {
-        if self.model.trim().is_empty() {
+        if self
+            .model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
             bail!("HARNESS_MODEL must not be empty");
         }
 
@@ -86,7 +95,7 @@ mod tests {
     fn rejects_compatible_provider_without_api_base() {
         let config = LlmProviderConfig {
             provider: LlmProviderKind::OpenAiCompatible,
-            model: "test-model".to_string(),
+            model: Some("test-model".to_string()),
             api_key: Some("test-key".to_string()),
             api_base: None,
         };
@@ -108,7 +117,7 @@ mod tests {
     fn rejects_compatible_provider_without_api_key() {
         let config = LlmProviderConfig {
             provider: LlmProviderKind::OpenAiCompatible,
-            model: "test-model".to_string(),
+            model: Some("test-model".to_string()),
             api_key: None,
             api_base: Some("https://example.com/v1".to_string()),
         };
@@ -130,7 +139,7 @@ mod tests {
     fn accepts_compatible_provider_with_full_config() {
         let config = LlmProviderConfig {
             provider: LlmProviderKind::OpenAiCompatible,
-            model: "test-model".to_string(),
+            model: Some("test-model".to_string()),
             api_key: Some("test-key".to_string()),
             api_base: Some("https://example.com/v1".to_string()),
         };
@@ -145,7 +154,7 @@ mod tests {
     fn accepts_standard_provider_without_explicit_config() {
         let config = LlmProviderConfig {
             provider: LlmProviderKind::OpenAi,
-            model: "test-model".to_string(),
+            model: Some("test-model".to_string()),
             api_key: None,
             api_base: None,
         };

@@ -25,8 +25,8 @@ use crate::{
 use super::dispatch::emit_permission_audit;
 
 use super::orchestrator::{
-    clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
-    spawn_tool_error,
+    ToolResources, ToolWorldQueries, clear_task_pending_confirmation_id, handle_tool_action,
+    restore_task_after_tool, spawn_tool_error,
 };
 
 /// 审批分发 System
@@ -234,7 +234,7 @@ pub fn approval_result_system(
                     let output_channel = index
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
-                        .and_then(|(_, t)| t.routing_policy.output_channel.clone());
+                        .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
                     emit_permission_audit(
                         frontend_registry,
                         output_channel.as_ref(),
@@ -301,7 +301,7 @@ pub fn approval_result_system(
                 if let Some(target) = index
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
-                    .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+                    .and_then(|(_, t)| t.routing_policy.output_channel().cloned())
                     .map(|channel| EventTarget::Directed(vec![channel]))
                 {
                     let event = EngineEvent::ToolCallStarted {
@@ -356,19 +356,23 @@ pub fn approval_result_system(
                         task_entity,
                         tool_request,
                         action,
-                        &mut tasks,
-                        &agents,
-                        &chat_sessions,
-                        &mut short_term_memories,
-                        &*backend,
-                        &mut experience_store,
-                        &mut pending_experience_hooks,
+                        &mut ToolWorldQueries {
+                            tasks: &mut tasks,
+                            agents: &agents,
+                            chat_sessions: &chat_sessions,
+                            short_term_memories: &mut short_term_memories,
+                            context_queries: &context_queries,
+                            calling_states: &calling_states,
+                        },
+                        &mut ToolResources {
+                            backend: &*backend,
+                            experience_store: &mut experience_store,
+                            pending_experience_hooks: &mut pending_experience_hooks,
+                            skill_loader: &index_clock_loader_frontends.2,
+                            frontend_registry,
+                            clock: &index_clock_loader_frontends.1,
+                        },
                         None,
-                        &index_clock_loader_frontends.1,
-                        &context_queries,
-                        &index_clock_loader_frontends.2,
-                        &calling_states,
-                        frontend_registry,
                     );
                 }
 
@@ -413,7 +417,7 @@ mod tests {
         world
     }
 
-    fn dummy_task(task_id: Uuid) -> Task {
+    fn dummy_task(task_id: crate::domain::TaskId) -> Task {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
@@ -422,7 +426,7 @@ mod tests {
         Task {
             id: task_id,
             content: "test".to_string(),
-            creator: Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: TaskStatus::Waiting(WaitingReason::Approval),
             pending_confirmation_id: None,
@@ -445,8 +449,8 @@ mod tests {
     }
 
     fn dummy_request(
-        task_id: Uuid,
-        agent_id: Uuid,
+        task_id: crate::domain::TaskId,
+        agent_id: crate::domain::AgentId,
         request_id: Uuid,
     ) -> ToolExecutionRequestMessage {
         ToolExecutionRequestMessage {
@@ -476,8 +480,8 @@ mod tests {
     #[test]
     fn approval_rejected_clears_task_pending_id() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         let mut task = dummy_task(task_id);
@@ -492,7 +496,7 @@ mod tests {
         world.spawn(ApprovalResultMessage {
             request_id,
             source_task_id: task_id,
-            approval_task_id: Uuid::new_v4(),
+            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Rejected,
             reasoning: "no".to_string(),
             grant_mode: GrantMode::Once,
@@ -510,8 +514,8 @@ mod tests {
     #[test]
     fn approval_approved_clears_task_pending_id() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         let mut task = dummy_task(task_id);
@@ -526,7 +530,7 @@ mod tests {
         world.spawn(ApprovalResultMessage {
             request_id,
             source_task_id: task_id,
-            approval_task_id: Uuid::new_v4(),
+            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Approved,
             reasoning: "yes".to_string(),
             grant_mode: GrantMode::Once,

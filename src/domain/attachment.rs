@@ -17,6 +17,12 @@ pub enum AttachmentKind {
     Voice,
 }
 
+/// 附件 marker 语法的 LLM 说明文本（单点维护）。
+///
+/// 所有向 LLM 解释 `[IMAGE:path]` 等标记语法的 prompt 片段都引用本常量，
+/// 与 `extract_attachments` 的解析实现保持同一出处，避免说明与解析脱节。
+pub const ATTACHMENT_MARKER_SYNTAX_HINT: &str = "Use markers like [IMAGE:/path/to/file.png], [DOCUMENT:/path/to/file.pdf], [VIDEO:...], [AUDIO:...], [VOICE:...]. The target path may be relative or absolute, a file:// URL, or an HTTP(S) URL.";
+
 /// 从内容中解析附件标记，返回剩余文本与附件列表。
 ///
 /// 支持的标记：`[IMAGE:path]`、`[DOCUMENT:path]`、`[VIDEO:path]`、

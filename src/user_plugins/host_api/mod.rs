@@ -27,7 +27,7 @@ pub fn register_all(engine: &mut Engine, ctx: &PluginContext) {
     state::register(engine);
     entity_query::register(engine, ctx.snapshot.clone());
     entity_write::register(engine, ctx.writer.clone());
-    tool_control::register(engine, ctx.outcome.clone());
+    tool_control::register(engine, ctx.outcome.clone(), ctx.tool.clone());
     plugin_resource::register(engine, ctx.plugin_roots.clone());
     approval::register(engine, ctx.approval.clone());
     experience::register(engine, ctx.experience.clone());

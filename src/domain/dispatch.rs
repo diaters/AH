@@ -115,7 +115,7 @@ mod tests {
             parent_agent_id: None,
         };
         let awaiting = AwaitingBrainDecision {
-            task_id: uuid::Uuid::nil(),
+            task_id: crate::domain::TaskId::nil(),
             spawn_spec: Some(spec),
         };
         assert!(awaiting.spawn_spec.is_some());

@@ -21,7 +21,7 @@ use crate::user_plugins::dispatcher::{
 use crate::user_plugins::host_api::{
     approval::ApprovalContext, entity_query::WorldSnapshot, entity_write::WorldWriter,
     experience::ExperienceContext, message::MessageContext, plugin_resource::PluginRoots,
-    skills_meta::SkillsSnapshot, temp_resource::TempResourceSlot,
+    skills_meta::SkillsSnapshot, temp_resource::TempResourceSlot, tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::PluginRegistry;
 
@@ -83,7 +83,6 @@ fn dispatch_experience_hook(world: &mut World, registry: &mut PluginRegistry, po
                     plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                     approval: ApprovalContext {
                         current_request_id: None,
-                        tx: writer_tx.clone(),
                     },
                     experience: ExperienceContext {
                         store: std::sync::Arc::new(
@@ -92,7 +91,6 @@ fn dispatch_experience_hook(world: &mut World, registry: &mut PluginRegistry, po
                                 .cloned()
                                 .unwrap_or_default(),
                         ),
-                        tx: writer_tx.clone(),
                     },
                     skills: SkillsSnapshot::empty(),
                     message: MessageContext {
@@ -100,6 +98,7 @@ fn dispatch_experience_hook(world: &mut World, registry: &mut PluginRegistry, po
                         tx: message_tx.clone(),
                     },
                     temp_resource: TempResourceSlot::new(),
+                    tool: ToolCallContext::default(),
                 }
             },
         ),

@@ -14,8 +14,7 @@ use harness::{
     domain::AgentToolPermissions, domain::ChannelId, domain::ExecutorFuture,
     domain::ExperienceCandidate, domain::ExperienceCandidateStatus, domain::FrontendKind,
     domain::LongTermMemory, domain::ShortTermMemory, domain::SkillCreationContext, domain::Task,
-    domain::WorkItem, domain::WorkItemStatus, domain::WorkItemType, llm::ExecutorRegistry,
-    systems::HarnessConfig,
+    domain::WorkItem, domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -44,7 +43,7 @@ fn test_config() -> HarnessConfig {
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -75,7 +74,7 @@ fn setup_with(
     submit_candidate: bool,
     sandbox_dir: std::path::PathBuf,
     spawn_result: bool,
-) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+) -> (bevy_app::App, harness::domain::TaskId, uuid::Uuid) {
     let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(TextExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -95,7 +94,7 @@ fn setup_with(
     app.world_mut().spawn((task, ShortTermMemory::default()));
 
     // 治理请求的 agent 需存在，否则 governance 系统会直接 despawn 请求
-    let governing_agent_id = uuid::Uuid::new_v4();
+    let governing_agent_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: governing_agent_id,
@@ -124,8 +123,8 @@ fn setup_with(
         governing_agent_id,
     );
     let work_item_id = work_item.id;
-    work_item.status = WorkItemStatus::Running;
-    work_item.assigned_agent = Some(governing_agent_id);
+    work_item.assign(governing_agent_id);
+    work_item.start();
     app.world_mut().spawn((
         work_item,
         SkillCreationContext {
@@ -178,7 +177,7 @@ fn setup_with(
 }
 
 /// 默认场景：提交候选 + 触发治理推进。
-fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+fn setup(submit_candidate: bool) -> (bevy_app::App, harness::domain::TaskId, uuid::Uuid) {
     setup_with(
         submit_candidate,
         std::path::PathBuf::from("/tmp/test-sandbox"),
@@ -187,7 +186,7 @@ fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
 }
 
 /// 隔离的批准场景：不触发治理系统，直接测试批准→写回路径。
-fn setup_for_approval() -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+fn setup_for_approval() -> (bevy_app::App, harness::domain::TaskId, uuid::Uuid) {
     setup_with(true, std::path::PathBuf::from("/tmp/test-sandbox"), false)
 }
 
@@ -257,7 +256,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
         .spawn(harness::domain::ToolExecutionRequestMessage {
             request: AgentExecutionRequest {
                 task_id,
-                agent_id: uuid::Uuid::nil(),
+                agent_id: harness::domain::AgentId::nil(),
                 request_kind: AgentRequestKind::ToolExecution {
                     tool_name: "experience_governance".to_string(),
                 },

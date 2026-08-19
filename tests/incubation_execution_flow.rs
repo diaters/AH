@@ -97,8 +97,8 @@ fn duplicate_incubation_skips_if_name_exists() {
 #[test]
 fn proposal_status_advances_to_executed() {
     let mut store = harness::domain::ExperienceStore::default();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
@@ -153,8 +153,8 @@ fn proposal_store_persists_and_loads_proposals() {
         dir.path().join("proposals"),
     );
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
     let mut proposal = harness::domain::IncubationProposal::new(
         task_id,
         agent_id,
