@@ -14,16 +14,18 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    contracts::Clock,
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResultMessage, AgentKind, AgentRequestKind,
         AwaitingBrainDecision, DispatchHint, DispatchKind, DispatchStrategy, FailureReason,
-        OutputContent, PendingDispatch, Task, TaskStatus,
+        OutputContent, PendingDispatch, Task,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillRegistry,
-    systems::dispatch::parse_brain_skill_selection,
+    systems::HarnessSettings,
 };
+
+use super::brain_dispatch::parse_brain_skill_selection;
 
 /// Brain 决策 System
 ///
@@ -66,6 +68,13 @@ pub fn brain_decision_system(
             .get_task(&result.task_id)
             .and_then(|e| tasks.get_mut(e).ok())
         else {
+            warn!(
+                event = "BrainDecisionTaskNotFound",
+                task_id = %result.task_id,
+                request_kind = ?result.request_kind,
+                "brain decision result references task not found in EntityIndex, \
+                 dropping result (task may remain stuck in Waiting)"
+            );
             commands.entity(entity).despawn();
             continue;
         };
@@ -83,19 +92,18 @@ pub fn brain_decision_system(
 
                     if !agent_exists {
                         // Brain 选了不存在的 Agent，直接 Failed（不 fallback）
-                        let old_status = task.status.clone();
-                        task.last_error = Some(format!(
-                            "brain selected agent '{}' but no such persistent agent",
-                            agent_name
-                        ));
-                        task.status = TaskStatus::Failed(FailureReason::AgentError);
-                        task.updated_at = clock.0;
+                        task.mark_failed_reason(
+                            FailureReason::AgentError,
+                            format!(
+                                "brain selected agent '{}' but no such persistent agent",
+                                agent_name
+                            ),
+                            clock.0,
+                        );
                         warn!(
                             event = "BrainDecisionAgentNotFound",
                             task_id = %task.id,
                             selected_agent = %agent_name,
-                            from_status = ?old_status,
-                            to_status = ?TaskStatus::Failed(FailureReason::AgentError),
                             "brain selected non-existent agent, marking task as failed"
                         );
                         commands
@@ -161,18 +169,17 @@ pub fn brain_decision_system(
                 }
                 Err(e) => {
                     // JSON 解析失败，直接 Failed
-                    let old_status = task.status.clone();
-                    task.last_error = Some(format!("brain skill selection parse failed: {:?}", e));
-                    task.status = TaskStatus::Failed(FailureReason::AgentError);
-                    task.updated_at = clock.0;
+                    task.mark_failed_reason(
+                        FailureReason::AgentError,
+                        format!("brain skill selection parse failed: {:?}", e),
+                        clock.0,
+                    );
                     warn!(
                         event = "BrainDecisionParseFailed",
                         task_id = %task.id,
                         error = ?e,
                         raw_len = content.len(),
                         raw_preview = %content.chars().take(200).collect::<String>(),
-                        from_status = ?old_status,
-                        to_status = ?TaskStatus::Failed(FailureReason::AgentError),
                         "brain skill selection JSON parse failed, marking task as failed"
                     );
                     commands
@@ -205,14 +212,13 @@ pub fn brain_decision_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{BrainConfig, HarnessConfig, HarnessSettings};
     use crate::domain::{
-        AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, FrontendKind,
+        AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, FrontendKind, TaskStatus,
         ToolPermission, WaitingReason,
     };
     use crate::ecs::EntityIndex;
+    use crate::systems::{BrainConfig, HarnessConfig, HarnessSettings};
     use std::collections::HashMap;
-    use uuid::Uuid;
 
     /// 构造最小 Bevy App，注册 brain_decision_system 及其所需资源。
     fn make_brain_decision_test_app() -> App {
@@ -231,7 +237,7 @@ mod tests {
 
     /// 在 app world 中 spawn 一个 task（Waiting(Agent)）+ AwaitingBrainDecision，
     /// 返回 task_id。
-    fn spawn_brain_awaiting_task(app: &mut App) -> Uuid {
+    fn spawn_brain_awaiting_task(app: &mut App) -> crate::domain::TaskId {
         let task = Task::from_user_input(
             "test subtask".to_string(),
             3,
@@ -262,7 +268,7 @@ mod tests {
     /// 在 app world 中 spawn 一个 Persistent Agent，返回其 entity。
     fn spawn_persistent_agent(app: &mut App, name: &str) -> Entity {
         let agent = Agent {
-            id: Uuid::new_v4(),
+            id: crate::domain::AgentId::new(),
             profile: AgentProfile {
                 name: name.to_string(),
                 model: "test-model".to_string(),
@@ -285,16 +291,19 @@ mod tests {
         app.world_mut()
             .resource_mut::<EntityIndex>()
             .agents
-            .insert(Uuid::new_v4(), entity);
+            .insert(crate::domain::AgentId::new(), entity);
         entity
     }
 
     /// 构造一个 BrainDecision 类型的 AgentExecutionResultMessage（Text 内容）。
-    fn make_brain_text_result(task_id: Uuid, content: &str) -> AgentExecutionResultMessage {
+    fn make_brain_text_result(
+        task_id: crate::domain::TaskId,
+        content: &str,
+    ) -> AgentExecutionResultMessage {
         AgentExecutionResultMessage {
             result: crate::domain::AgentExecutionResult {
                 task_id,
-                agent_id: Uuid::nil(),
+                agent_id: crate::domain::AgentId::nil(),
                 request_kind: AgentRequestKind::BrainDecision,
                 result: Ok(AgentExecutionOutput {
                     content: OutputContent::Text(content.to_string()),
@@ -311,7 +320,7 @@ mod tests {
     }
 
     /// 获取指定 task 的当前状态。
-    fn get_task_status(app: &mut App, task_id: Uuid) -> Option<TaskStatus> {
+    fn get_task_status(app: &mut App, task_id: crate::domain::TaskId) -> Option<TaskStatus> {
         app.world_mut()
             .query::<&Task>()
             .iter(app.world())
@@ -320,7 +329,7 @@ mod tests {
     }
 
     /// 获取指定 task 的 last_error。
-    fn get_task_last_error(app: &mut App, task_id: Uuid) -> Option<String> {
+    fn get_task_last_error(app: &mut App, task_id: crate::domain::TaskId) -> Option<String> {
         app.world_mut()
             .query::<&Task>()
             .iter(app.world())
@@ -329,7 +338,7 @@ mod tests {
     }
 
     /// 检查指定 task 是否仍有 AwaitingBrainDecision 组件。
-    fn has_awaiting_brain_decision(app: &mut App, task_id: Uuid) -> bool {
+    fn has_awaiting_brain_decision(app: &mut App, task_id: crate::domain::TaskId) -> bool {
         let Some(entity) = app.world().resource::<EntityIndex>().get_task(&task_id) else {
             return false;
         };
@@ -482,7 +491,7 @@ mod tests {
             },
         );
         // Simulate a task that is waiting for brain decision
-        task.status = TaskStatus::Waiting(WaitingReason::Agent);
+        task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
         let task_id = task.id;
         let entity = app
             .world_mut()

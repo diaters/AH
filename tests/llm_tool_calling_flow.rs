@@ -7,11 +7,13 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentId,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, FrontendKind,
-    HarnessConfig, LlmToolCall, ShortTermMemory, SpaceToolRegistry, Task, TaskStatus,
-    ToolCallingState, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema, WaitingReason,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentKind,
+    domain::AgentProfile, domain::AgentRequestKind, domain::AgentToolPermissions,
+    domain::ChannelId, domain::FrontendKind, domain::LlmToolCall, domain::ShortTermMemory,
+    domain::SpaceToolRegistry, domain::Task, domain::TaskStatus, domain::ToolCallingState,
+    domain::ToolDefinition, domain::ToolExecutorKind, domain::ToolPermission, domain::ToolSchema,
+    domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -34,24 +36,23 @@ fn update_with_yield(app: &mut bevy_app::App, n: usize) {
     }
 }
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 /// Mock executor: 第一次返回 ToolCalls，后续返回 Text
 struct ToolCallingMockExecutor;
 
 impl AgentExecutor for ToolCallingMockExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let has_conversation = request.conversation.is_some();
         let response = if has_conversation {
             AgentExecutionOutput {
-                content: harness::OutputContent::Text(
+                content: harness::domain::OutputContent::Text(
                     "final answer based on tool results".to_string(),
                 ),
                 reasoning_content: None,
             }
         } else {
             AgentExecutionOutput {
-                content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
+                content: harness::domain::OutputContent::ToolCalls(vec![LlmToolCall {
                     id: "call_test123".to_string(),
                     name: "shell_exec".to_string(),
                     arguments: r#"{"command":"echo hello"}"#.to_string(),
@@ -67,20 +68,20 @@ impl AgentExecutor for ToolCallingMockExecutor {
 struct InfiniteToolCallExecutor;
 
 impl AgentExecutor for InfiniteToolCallExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let iteration = request
             .conversation
             .as_ref()
             .map(|c| {
                 c.iter()
-                    .filter(|m| matches!(m, harness::ConversationMessage::Tool { .. }))
+                    .filter(|m| matches!(m, harness::domain::ConversationMessage::Tool { .. }))
                     .count()
             })
             .unwrap_or(0);
         let call_id = format!("call_iter_{}", iteration);
         Box::pin(async move {
             Ok(AgentExecutionOutput {
-                content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
+                content: harness::domain::OutputContent::ToolCalls(vec![LlmToolCall {
                     id: call_id,
                     name: "shell_exec".to_string(),
                     arguments: r#"{"command":"echo loop"}"#.to_string(),
@@ -95,10 +96,10 @@ impl AgentExecutor for InfiniteToolCallExecutor {
 struct BudgetAwareMockExecutor;
 
 impl AgentExecutor for BudgetAwareMockExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let has_budget_exhausted = request.conversation.as_ref().is_some_and(|conv| {
             conv.iter().any(|m| {
-                matches!(m, harness::ConversationMessage::Tool { content, .. }
+                matches!(m, harness::domain::ConversationMessage::Tool { content, .. }
                         if content.contains("TOOL_BUDGET_EXHAUSTED"))
             })
         });
@@ -107,7 +108,7 @@ impl AgentExecutor for BudgetAwareMockExecutor {
             .as_ref()
             .map(|c| {
                 c.iter()
-                    .filter(|m| matches!(m, harness::ConversationMessage::Tool { .. }))
+                    .filter(|m| matches!(m, harness::domain::ConversationMessage::Tool { .. }))
                     .count()
             })
             .unwrap_or(0);
@@ -116,7 +117,7 @@ impl AgentExecutor for BudgetAwareMockExecutor {
         if has_budget_exhausted {
             Box::pin(async move {
                 Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text(
+                    content: harness::domain::OutputContent::Text(
                         "我已达到工具调用上限，请决定是否继续。".to_string(),
                     ),
                     reasoning_content: None,
@@ -125,7 +126,7 @@ impl AgentExecutor for BudgetAwareMockExecutor {
         } else {
             Box::pin(async move {
                 Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::ToolCalls(vec![LlmToolCall {
+                    content: harness::domain::OutputContent::ToolCalls(vec![LlmToolCall {
                         id: call_id,
                         name: "shell_exec".to_string(),
                         arguments: r#"{"command":"echo loop"}"#.to_string(),
@@ -145,7 +146,7 @@ fn test_config() -> HarnessConfig {
 }
 
 fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) -> AgentId {
-    let id = Uuid::new_v4();
+    let id = AgentId::new();
     world.spawn(Agent {
         id,
         profile: AgentProfile {
@@ -191,7 +192,7 @@ fn get_all_tools(world: &World) -> Vec<ToolDefinition> {
 /// task_dispatch_system from creating a duplicate request.
 fn spawn_task_with_stm(world: &mut World) -> (Entity, Task) {
     let mut task = Task::from_user_input_ready("test prompt", 3, default_channel());
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let entity = world.spawn((task.clone(), ShortTermMemory::default())).id();
     // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
     // 供 tool_calling_orchestrator_system 等 O(1) 解析 TaskId → Entity。
@@ -247,15 +248,15 @@ fn llm_tool_calling_complete_loop() {
         model_override: None,
     };
     app.world_mut()
-        .spawn(harness::AgentExecutionRequestMessage { request });
+        .spawn(harness::domain::AgentExecutionRequestMessage { request });
 
     update_with_yield(&mut app, 10);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Done),
+        matches!(task.status(), TaskStatus::Done),
         "Task should be Done after tool calling loop, got {:?}",
-        task.status
+        task.status()
     );
 
     let has_calling_state = {
@@ -314,22 +315,21 @@ fn tool_calling_exceeds_max_iterations() {
         model_override: None,
     };
     app.world_mut()
-        .spawn(harness::AgentExecutionRequestMessage { request });
+        .spawn(harness::domain::AgentExecutionRequestMessage { request });
 
     update_with_yield(&mut app, 30);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Failed(_)),
+        matches!(task.status(), TaskStatus::Failed(_)),
         "Task should be Failed after exceeding max iterations, got {:?}",
-        task.status
+        task.status()
     );
     assert!(
-        task.last_error
-            .as_ref()
+        task.last_error()
             .is_some_and(|e| e.contains("absolute hard limit") || e.contains("max iterations")),
         "Error should mention limit, got: {:?}",
-        task.last_error
+        task.last_error()
     );
 }
 
@@ -378,7 +378,7 @@ fn tool_calling_records_to_short_term_memory() {
         model_override: None,
     };
     app.world_mut()
-        .spawn(harness::AgentExecutionRequestMessage { request });
+        .spawn(harness::domain::AgentExecutionRequestMessage { request });
 
     update_with_yield(&mut app, 15);
 
@@ -445,15 +445,15 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
         model_override: None,
     };
     app.world_mut()
-        .spawn(harness::AgentExecutionRequestMessage { request });
+        .spawn(harness::domain::AgentExecutionRequestMessage { request });
 
     update_with_yield(&mut app, 50);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Waiting(WaitingReason::User)),
+        matches!(task.status(), TaskStatus::Waiting(WaitingReason::User)),
         "Task should be Waiting(User) after soft limit, got {:?}",
-        task.status
+        task.status()
     );
 }
 
@@ -503,21 +503,20 @@ fn tool_calling_hard_limit_forces_failure() {
         model_override: None,
     };
     app.world_mut()
-        .spawn(harness::AgentExecutionRequestMessage { request });
+        .spawn(harness::domain::AgentExecutionRequestMessage { request });
 
     update_with_yield(&mut app, 50);
 
     let task = app.world().get::<Task>(task_entity).unwrap();
     assert!(
-        matches!(task.status, TaskStatus::Failed(_)),
+        matches!(task.status(), TaskStatus::Failed(_)),
         "Task should be Failed after exceeding absolute hard limit, got {:?}",
-        task.status
+        task.status()
     );
     assert!(
-        task.last_error
-            .as_ref()
+        task.last_error()
             .is_some_and(|e| e.contains("absolute hard limit")),
         "Error should mention absolute hard limit, got: {:?}",
-        task.last_error
+        task.last_error()
     );
 }

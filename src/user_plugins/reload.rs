@@ -8,7 +8,7 @@ use crate::prelude::World;
 use crate::domain::{Agent, BuiltinToolExecutors, SpaceToolRegistry};
 use crate::infrastructure::skills::PluginSkillContributions;
 use crate::user_plugins::integrate::integrate_plugin_contributions;
-use crate::user_plugins::loader::{DEFAULT_PLUGINS_DIR, load_plugins_from_dir};
+use crate::user_plugins::loader::{load_plugins_from_dir, plugins_dir_from_env};
 use crate::user_plugins::registry::PluginRegistry;
 
 /// 执行 /reload-plugins：清除所有插件贡献，重新扫描并集成。
@@ -82,9 +82,7 @@ pub fn reload_plugins(world: &mut World) {
     }
 
     // 6) 重新扫描磁盘
-    let plugins_dir = std::path::PathBuf::from(
-        std::env::var("HARNESS_PLUGINS_DIR").unwrap_or_else(|_| DEFAULT_PLUGINS_DIR.to_string()),
-    );
+    let plugins_dir = plugins_dir_from_env();
     let new_registry = load_plugins_from_dir(&plugins_dir);
 
     // 7) 重新集成贡献

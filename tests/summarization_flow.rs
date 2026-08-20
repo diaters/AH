@@ -6,11 +6,13 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId, DispatchHint,
-    DispatchKind, DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory,
-    PendingDispatch, ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus, WaitingReason,
-    build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy, domain::ExecutorFuture,
+    domain::FrontendKind, domain::LongTermMemory, domain::PendingDispatch, domain::ShortTermMemory,
+    domain::Task, domain::TaskStatus, domain::WaitingReason, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -43,17 +45,17 @@ impl AgentExecutor for SummarizationMockExecutor {
             match request.request_kind {
                 AgentRequestKind::Summarization => {
                     summarization_called.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
                 }
-                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
+                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
                 AgentRequestKind::BrainDecision => {
-                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
                 AgentRequestKind::ToolExecution { .. } => {
-                    Err(harness::ExecutionError::Unknown("Not supported".to_string()))
+                    Err(harness::domain::ExecutionError::Unknown("Not supported".to_string()))
                 }
                 AgentRequestKind::Evaluation => {
-                    Ok(AgentExecutionOutput { content: harness::OutputContent::Text(r#"{"decision":"Continue","reasoning":"test"}"#.to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"decision":"Continue","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
             }
         })
@@ -63,9 +65,9 @@ impl AgentExecutor for SummarizationMockExecutor {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -93,7 +95,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
     // Spawn default LLM agent
     app.world_mut().spawn((
         Agent {
-            id: uuid::Uuid::new_v4(),
+            id: harness::domain::AgentId::new(),
             profile: AgentProfile {
                 name: "default-llm-agent".to_string(),
                 model: "gpt-4.1-mini".to_string(),
@@ -114,7 +116,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
     // Spawn summarizer agent for summarization work items
     app.world_mut().spawn((
         Agent {
-            id: uuid::Uuid::new_v4(),
+            id: harness::domain::AgentId::new(),
             profile: AgentProfile {
                 name: "summarizer".to_string(),
                 model: "gpt-4.1-mini".to_string(),
@@ -157,37 +159,22 @@ fn task_completion_does_not_trigger_summarization() {
     spawn_default_agent(&mut app);
 
     // Create a single-turn task with ShortTermMemory containing entries
-    let task_id = uuid::Uuid::new_v4();
+    let mut task = Task::from_user_input_ready("test task", 3, default_channel());
+    task.input_summary = String::new();
     let entity_id = app
         .world_mut()
         .spawn((
-            Task {
-                id: task_id,
-                content: "test task".to_string(),
-                creator: uuid::Uuid::nil(),
-                delegate: None,
-                status: TaskStatus::Ready,
-                pending_confirmation_id: None,
-                input_summary: String::new(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: false,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
+            task,
             ShortTermMemory {
                 entries: vec![
-                    harness::MemoryEntry::new(harness::EntryRole::User, "user message"),
-                    harness::MemoryEntry::new(harness::EntryRole::Assistant, "assistant response"),
+                    harness::domain::MemoryEntry::new(
+                        harness::domain::EntryRole::User,
+                        "user message",
+                    ),
+                    harness::domain::MemoryEntry::new(
+                        harness::domain::EntryRole::Assistant,
+                        "assistant response",
+                    ),
                 ],
                 summary_prefix: None,
                 estimated_tokens: 100,
@@ -215,7 +202,7 @@ fn task_completion_does_not_trigger_summarization() {
     let task = app.world_mut().get::<Task>(entity_id).cloned();
     assert!(task.is_some());
     let task = task.unwrap();
-    assert_eq!(task.status, TaskStatus::Done, "Task should be Done");
+    assert_eq!(task.status(), &TaskStatus::Done, "Task should be Done");
 
     // Verify summarization was NOT triggered on task completion
     // (TaskComplete trigger was removed as STM has no consumer after terminal state)
@@ -248,35 +235,18 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
     spawn_default_agent(&mut app);
 
     // Create a multi-turn task in Waiting(User) state
-    let task_id = uuid::Uuid::new_v4();
+    let mut task = Task::from_user_input("multi-turn task", 3, default_channel());
+    task.input_summary = "waiting for user".to_string();
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
     app.world_mut().spawn((
-        Task {
-            id: task_id,
-            content: "multi-turn task".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "waiting for user".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(default_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-            last_evaluated_turn: None,
-        },
+        task,
         ShortTermMemory {
             entries: vec![
-                harness::MemoryEntry::new(harness::EntryRole::User, "user message"),
-                harness::MemoryEntry::new(harness::EntryRole::Assistant, "assistant response"),
+                harness::domain::MemoryEntry::new(harness::domain::EntryRole::User, "user message"),
+                harness::domain::MemoryEntry::new(
+                    harness::domain::EntryRole::Assistant,
+                    "assistant response",
+                ),
             ],
             summary_prefix: None,
             estimated_tokens: 100,
@@ -324,7 +294,10 @@ fn summarization_preserves_terminal_task_status() {
         .spawn((
             Task::from_user_input_ready("complete this task", 3, default_channel()),
             ShortTermMemory {
-                entries: vec![harness::MemoryEntry::new(harness::EntryRole::User, "hello")],
+                entries: vec![harness::domain::MemoryEntry::new(
+                    harness::domain::EntryRole::User,
+                    "hello",
+                )],
                 summary_prefix: None,
                 estimated_tokens: 50,
                 last_cached_tokens: None,
@@ -348,7 +321,7 @@ fn summarization_preserves_terminal_task_status() {
 
         // Check if task is still Done after each update
         if let Some(task) = app.world_mut().get::<Task>(entity_id).cloned()
-            && task.status == TaskStatus::Done
+            && task.status() == &TaskStatus::Done
         {
             // Run a few more updates to ensure summarization doesn't change status
             for _ in 0..5 {
@@ -366,8 +339,8 @@ fn summarization_preserves_terminal_task_status() {
         .cloned()
         .expect("Task should exist");
     assert_eq!(
-        task.status,
-        TaskStatus::Done,
+        task.status(),
+        &TaskStatus::Done,
         "Task status should remain Done after summarization"
     );
 }
@@ -403,8 +376,8 @@ fn execution_populates_memory_but_does_not_trigger_summarization() {
         .spawn((
             Task::from_user_input_ready("test", 3, default_channel()),
             ShortTermMemory {
-                entries: vec![harness::MemoryEntry::new(
-                    harness::EntryRole::User,
+                entries: vec![harness::domain::MemoryEntry::new(
+                    harness::domain::EntryRole::User,
                     "user input",
                 )],
                 summary_prefix: None,
@@ -433,7 +406,7 @@ fn execution_populates_memory_but_does_not_trigger_summarization() {
     let task = app.world_mut().get::<Task>(entity_id).cloned();
     assert!(task.is_some());
     let task = task.unwrap();
-    assert_eq!(task.status, TaskStatus::Done, "Task should be Done");
+    assert_eq!(task.status(), &TaskStatus::Done, "Task should be Done");
 
     // Verify summarization was NOT triggered (TaskComplete trigger was removed:
     // STM has no consumer after terminal state, so no summarization needed)

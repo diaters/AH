@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutorFuture,
-    OutputContent,
+    domain::AgentExecutionOutput, domain::AgentExecutionRequest, domain::AgentExecutor,
+    domain::AgentRequestKind, domain::ExecutorFuture, domain::OutputContent,
 };
 
 /// 构造纯文本输出（`reasoning_content` 为 None）。

@@ -6,8 +6,9 @@ use crate::prelude::*;
 use tracing::{debug, info};
 
 use crate::{
-    app::{Clock, FrontendRegistry, MemoryConfig},
-    contracts::SessionBackend,
+    contracts::{Clock, FrontendRegistry},
+    domain::MemoryConfig,
+    domain::SessionBackend,
     domain::{
         Agent, ClearTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
         EventTarget, ExperienceCandidateStatus, ExperienceStore, FailureReason, FinishTaskMessage,
@@ -423,7 +424,7 @@ pub fn clear_task_system(
         let target = index
             .get_task(&msg.task_id)
             .and_then(|e| tasks.get(e).ok())
-            .and_then(|t| t.routing_policy.output_channel.clone())
+            .and_then(|t| t.routing_policy.output_channel().cloned())
             .map(|channel| EventTarget::Directed(vec![channel]));
         if let Some(target) = target {
             let event = EngineEvent::TaskCleared {
@@ -566,7 +567,7 @@ mod tests {
     /// 注册 `init_previous_task_status_system` 与 `task_termination_system`，
     /// 并插入所需资源（`MemoryConfig`、`NativeProcessBackend`）。
     fn make_termination_test_app() -> App {
-        use crate::app::{HarnessConfig, HarnessSettings};
+        use crate::systems::{HarnessConfig, HarnessSettings};
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
@@ -590,7 +591,7 @@ mod tests {
             .count()
     }
 
-    fn spawn_pending_task(app: &mut App) -> uuid::Uuid {
+    fn spawn_pending_task(app: &mut App) -> crate::domain::TaskId {
         let task = Task::from_user_input(
             "test".to_string(),
             3,
@@ -610,7 +611,11 @@ mod tests {
 
     /// 修改 task 字段，避开返回类型 `Mut<Task>` 的生命周期问题。
     /// 闭包内可对 task 进行任何 mutable 操作。
-    fn with_task_mut<R>(app: &mut App, task_id: uuid::Uuid, f: impl FnOnce(&mut Task) -> R) -> R {
+    fn with_task_mut<R>(
+        app: &mut App,
+        task_id: crate::domain::TaskId,
+        f: impl FnOnce(&mut Task) -> R,
+    ) -> R {
         let mut task_mut = app
             .world_mut()
             .query::<&mut Task>()
@@ -680,7 +685,7 @@ mod tests {
         let task_id = spawn_pending_task(&mut app);
 
         // Pending → Ready
-        with_task_mut(&mut app, task_id, |t| t.status = TaskStatus::Ready);
+        with_task_mut(&mut app, task_id, |t| t.mark_ready(chrono::Utc::now()));
         app.update();
         assert_eq!(count_terminated_messages(&mut app), 0);
 
@@ -735,7 +740,7 @@ mod tests {
             },
         );
         let task_id = task.id;
-        task.status = TaskStatus::Waiting(WaitingReason::User);
+        task.mark_waiting(WaitingReason::User, chrono::Utc::now());
         task.pending_confirmation_id = None;
         let task_entity = world.spawn(task).id();
         world
@@ -747,7 +752,7 @@ mod tests {
         let calling_state_entity = world
             .spawn(ToolCallingState {
                 task_id,
-                agent_id: uuid::Uuid::nil(),
+                agent_id: crate::domain::AgentId::nil(),
                 pending_tool_call_ids: vec!["functions.shell_exec:0".to_string()],
                 iteration: 1,
                 max_iterations: 20,
@@ -764,7 +769,7 @@ mod tests {
         world.spawn(ToolExecutionRequestMessage {
             request: AgentExecutionRequest {
                 task_id,
-                agent_id: uuid::Uuid::nil(),
+                agent_id: crate::domain::AgentId::nil(),
                 request_kind: AgentRequestKind::LlmCompletion,
                 prompt: String::new(),
                 system_prompt: None,
@@ -809,8 +814,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
-        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::domain::MemoryConfig::default());
+        app.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, clear_task_system);
@@ -821,14 +826,14 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         let entity = app
             .world_mut()
             .spawn((
                 Task {
                     id: task_id,
                     content: "to clear".to_string(),
-                    creator: uuid::Uuid::nil(),
+                    creator: crate::domain::AgentId::nil(),
                     delegate: None,
                     status: TaskStatus::Running,
                     pending_confirmation_id: None,
@@ -895,8 +900,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
-        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::domain::MemoryConfig::default());
+        app.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
@@ -907,14 +912,14 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         let entity = app
             .world_mut()
             .spawn((
                 Task {
                     id: task_id,
                     content: "to clear".to_string(),
-                    creator: uuid::Uuid::nil(),
+                    creator: crate::domain::AgentId::nil(),
                     delegate: None,
                     status: TaskStatus::Running,
                     pending_confirmation_id: None,
@@ -973,8 +978,8 @@ mod tests {
 
         let mut app = App::new();
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
-        app.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        app.insert_resource(crate::domain::MemoryConfig::default());
+        app.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, (clear_task_system, task_termination_system));
@@ -985,7 +990,7 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
 
         let mut stm = ShortTermMemory::default();
         stm.add_entry(
@@ -999,7 +1004,7 @@ mod tests {
                 Task {
                     id: task_id,
                     content: "to clear".to_string(),
-                    creator: uuid::Uuid::nil(),
+                    creator: crate::domain::AgentId::nil(),
                     delegate: None,
                     status: TaskStatus::Running,
                     pending_confirmation_id: None,
@@ -1052,7 +1057,7 @@ mod tests {
     fn clear_task_system_pushes_task_cleared_event() {
         use std::sync::{Arc, Mutex};
 
-        use crate::app::FrontendRegistry;
+        use crate::contracts::FrontendRegistry;
         use crate::domain::{
             ChannelId, ClearTaskMessage, EngineEvent, EventTarget, Frontend, FrontendKind,
             PreviousTaskStatus, ShortTermMemory, Task, TaskStatus, UserAction,
@@ -1082,7 +1087,7 @@ mod tests {
             })],
         });
         app.init_resource::<EntityIndex>();
-        app.insert_resource(crate::app::MemoryConfig::default());
+        app.insert_resource(crate::domain::MemoryConfig::default());
         app.insert_resource(crate::systems::NativeProcessBackend::default());
         app.insert_resource(ExperienceStore::default());
         app.add_systems(Update, clear_task_system);
@@ -1093,14 +1098,14 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         let entity = app
             .world_mut()
             .spawn((
                 Task {
                     id: task_id,
                     content: "to clear".to_string(),
-                    creator: uuid::Uuid::nil(),
+                    creator: crate::domain::AgentId::nil(),
                     delegate: None,
                     status: TaskStatus::Running,
                     pending_confirmation_id: None,

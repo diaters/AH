@@ -1,4 +1,7 @@
-//! Session backend 契约
+//! Session backend 领域契约
+//!
+//! 同步接口：Phase 1 的 NativeProcessBackend 通过内部线程和互斥状态管理子进程，
+//! 避免在 Bevy system 中使用嵌套 runtime block_on。
 
 use tokio_util::sync::CancellationToken;
 
@@ -7,11 +10,6 @@ use crate::domain::{
     SessionSummary, TaskId,
 };
 
-/// SessionBackend 保持同步接口。
-///
-/// Phase 1 的 NativeProcessBackend 通过内部线程和互斥状态管理子进程，
-/// 避免在 Bevy system 中使用嵌套 runtime block_on。
-///
 /// `Debug` bound 让 `OwnedToolContext` 等持有 `Arc<dyn SessionBackend>` 的
 /// 结构体可 derive `Debug`（worker panic catch_unwind 路径会打印 ctx）。
 pub trait SessionBackend: std::fmt::Debug + Send + Sync + 'static {

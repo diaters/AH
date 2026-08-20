@@ -25,7 +25,7 @@ use harness::systems::tools::builtin::ListExperienceCandidatesTool;
 fn ctx_with_candidates(candidates: Vec<ExperienceCandidate>) -> OwnedToolContext {
     OwnedToolContext {
         experience_candidates: Some(Arc::new(candidates)),
-        current_task_id: Some(uuid::Uuid::nil()),
+        current_task_id: Some(harness::domain::TaskId::nil()),
         tool_inflight_timeout_secs: 300,
         ..Default::default()
     }
@@ -35,8 +35,8 @@ fn ctx_with_candidates(candidates: Vec<ExperienceCandidate>) -> OwnedToolContext
 /// 让状态流（Submitted → InInbox）与生产运行时一致。dispatch 抓快照时也是走
 /// `list_for_task`，因此测试用同一路径构造快照最具代表性。
 fn snapshot_from_store(
-    task_id: uuid::Uuid,
-    agent_id: uuid::Uuid,
+    task_id: harness::domain::TaskId,
+    agent_id: harness::domain::AgentId,
     candidates: Vec<ExperienceCandidate>,
 ) -> Vec<ExperienceCandidate> {
     let mut store = ExperienceStore::default();
@@ -66,8 +66,8 @@ fn execute_returns_internal_state_error() {
         shell_default_exec_timeout_secs: 60,
         shell_default_stop_timeout_secs: 5,
         tool_inflight_timeout_secs: 300,
-        current_task_id: uuid::Uuid::nil(),
-        current_agent_id: uuid::Uuid::nil(),
+        current_task_id: harness::domain::TaskId::nil(),
+        current_agent_id: harness::domain::AgentId::nil(),
         current_origin_channel: None,
         current_skill_dir: None,
     };
@@ -95,8 +95,8 @@ fn run_async_empty_inbox_returns_empty_array() {
 
 #[test]
 fn run_async_knowledge_short_content_matches_golden() {
-    let task_id = uuid::Uuid::nil();
-    let agent_id = uuid::Uuid::nil();
+    let task_id = harness::domain::TaskId::nil();
+    let agent_id = harness::domain::AgentId::nil();
     let candidate_id = uuid::Uuid::nil();
     let candidate = ExperienceCandidate::knowledge(
         candidate_id,
@@ -132,8 +132,8 @@ fn run_async_knowledge_short_content_matches_golden() {
 
 #[test]
 fn run_async_knowledge_long_content_truncates_to_200_chars() {
-    let task_id = uuid::Uuid::nil();
-    let agent_id = uuid::Uuid::nil();
+    let task_id = harness::domain::TaskId::nil();
+    let agent_id = harness::domain::AgentId::nil();
     let candidate_id = uuid::Uuid::nil();
     // 250 个字符，触发 >200 截断逻辑
     let long_content = "a".repeat(250);
@@ -164,8 +164,8 @@ fn run_async_knowledge_long_content_truncates_to_200_chars() {
 
 #[test]
 fn run_async_skill_summary_uses_description() {
-    let task_id = uuid::Uuid::nil();
-    let agent_id = uuid::Uuid::nil();
+    let task_id = harness::domain::TaskId::nil();
+    let agent_id = harness::domain::AgentId::nil();
     let candidate_id = uuid::Uuid::nil();
     let candidate = ExperienceCandidate::skill(
         candidate_id,
@@ -208,7 +208,7 @@ fn run_async_missing_snapshot_returns_internal_state_error() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     // 缺 experience_candidates（None）
     let ctx = OwnedToolContext {
-        current_task_id: Some(uuid::Uuid::nil()),
+        current_task_id: Some(harness::domain::TaskId::nil()),
         ..Default::default()
     };
     let result = rt.block_on(tool.run_async(serde_json::json!({}), ctx));

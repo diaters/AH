@@ -2,7 +2,7 @@
 //!
 //! 定义 ECS 中使用的各种消息组件。
 
-use crate::prelude::{Component, Entity};
+use crate::prelude::{Component, Entity, Resource};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use uuid::Uuid;
@@ -11,7 +11,7 @@ use super::{
     AgentExecutionRequest, AgentExecutionResult, AgentId, SignalSource, SummarizationTrigger,
     TaskId, TaskRoutingPolicy, TaskTrigger,
 };
-use crate::infrastructure::skills::SkillId;
+use crate::domain::SkillId;
 
 // ============ 信号与输入 ============
 
@@ -583,7 +583,7 @@ pub struct PendingChannelSend {
     /// （优先 `routing_policy.output_channel`，其次 `origin_channel`）。
     pub recipient: Option<String>,
     pub content: String,
-    pub attachments: Vec<crate::channels::ChannelAttachment>,
+    pub attachments: Vec<crate::domain::ChannelAttachment>,
     pub tool_call_id: Option<String>,
     pub task_id: TaskId,
     pub agent_id: AgentId,
@@ -600,6 +600,32 @@ pub struct ModelChainStateUpdate {
     pub previous_model: String,
     pub new_model: String,
 }
+
+// ============ ECS 资源桥（通道端点） ============
+
+/// 外部输入通道接收端，作为 Resource 注入 World（ingress 系统消费）。
+#[derive(Resource)]
+pub struct InputReceiver(pub crossbeam_channel::Receiver<ExternalInput>);
+
+/// 执行结果通道发送端，作为 Resource 注入 World（execution 系统发送）。
+#[derive(Resource)]
+pub struct ExecutionResultSender(pub tokio::sync::mpsc::UnboundedSender<AgentExecutionResult>);
+
+/// 执行结果通道接收端，作为 Resource 注入 World（ingest 系统消费）。
+#[derive(Resource)]
+pub struct ExecutionResultReceiver(pub tokio::sync::mpsc::UnboundedReceiver<AgentExecutionResult>);
+
+/// 模型链状态更新通道发送端，作为 Resource 注入 World。
+#[derive(Resource)]
+pub struct ModelChainStateUpdateSender(
+    pub tokio::sync::mpsc::UnboundedSender<ModelChainStateUpdate>,
+);
+
+/// 模型链状态更新通道接收端，作为 Resource 注入 World。
+#[derive(Resource)]
+pub struct ModelChainStateUpdateReceiver(
+    pub tokio::sync::mpsc::UnboundedReceiver<ModelChainStateUpdate>,
+);
 
 #[cfg(test)]
 mod tests {

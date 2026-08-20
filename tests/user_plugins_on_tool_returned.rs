@@ -17,8 +17,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, ToolCallingState,
-    ToolExecutionResultMessage, ToolReturnedHookPending, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
+    domain::ToolCallingState, domain::ToolExecutionResultMessage, domain::ToolReturnedHookPending,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
@@ -87,15 +88,15 @@ tool_set_result("replaced");
 /// 同时添加 `ToolCallingState` 使 `tool_result_system` 保留结果 entity
 /// （不 despawn），允许后续检查字段值。
 fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> Entity {
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::nil();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::nil();
     // 确保 Task 存在（tool_result_system 需要匹配 task_id）。
     let channel = ChannelId {
         frontend: FrontendKind::Tui,
         user_id: "test".to_string(),
         thread_id: None,
     };
-    let mut task = harness::Task::from_user_input("test", 0, channel);
+    let mut task = harness::domain::Task::from_user_input("test", 0, channel);
     task.id = task_id;
     world.spawn(task);
 
@@ -108,16 +109,16 @@ fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> En
         max_iterations: 10,
         conversation: vec![],
         tools: vec![],
-        request_kind: harness::AgentRequestKind::LlmCompletion,
+        request_kind: harness::domain::AgentRequestKind::LlmCompletion,
         work_item_id: None,
     });
 
-    let execution_result = harness::AgentExecutionResult {
+    let execution_result = harness::domain::AgentExecutionResult {
         task_id,
         agent_id,
-        request_kind: harness::AgentRequestKind::LlmCompletion,
-        result: Ok(harness::AgentExecutionOutput {
-            content: harness::OutputContent::Text("tool executed".to_string()),
+        request_kind: harness::domain::AgentRequestKind::LlmCompletion,
+        result: Ok(harness::domain::AgentExecutionOutput {
+            content: harness::domain::OutputContent::Text("tool executed".to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),

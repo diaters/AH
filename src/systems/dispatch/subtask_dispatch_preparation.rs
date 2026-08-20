@@ -11,7 +11,7 @@ use crate::prelude::*;
 use tracing::{debug, trace};
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{
         AgentSpawnSpec, BatchTaskState, DispatchHint, DispatchKind, DispatchStrategy,
         PendingDispatch, SubTaskBatchState, SubTaskConfig, Task, TaskStatus,

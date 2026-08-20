@@ -152,7 +152,7 @@ mod tests {
     }
 
     /// 构造 scheduled 任务：`origin_channel` 为 None，仅 `routing_policy.output_channel` 指向 QQ 群。
-    fn scheduled_task(task_id: uuid::Uuid) -> Task {
+    fn scheduled_task(task_id: crate::domain::TaskId) -> Task {
         let output = ChannelId {
             frontend: FrontendKind::QQ,
             user_id: "group:xxx".to_string(),
@@ -162,7 +162,7 @@ mod tests {
         Task {
             id: task_id,
             content: "scheduled report".to_string(),
-            creator: uuid::Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: TaskStatus::Pending,
             pending_confirmation_id: None,
@@ -192,12 +192,13 @@ mod tests {
             recipients: recipients.clone(),
         }) as Arc<dyn Channel>;
         let (input_tx, _input_rx) = unbounded::<crate::domain::ExternalInput>();
-        let (manager, _handle, _frontends) = ChannelManager::new(vec![channel], input_tx);
+        let (manager, _handle, _frontends) =
+            ChannelManager::new(vec![channel], input_tx).expect("valid channel names");
 
         let mut world = World::new();
         world.insert_resource(manager);
 
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         world.spawn(scheduled_task(task_id));
 
         let request_entity = world.spawn_empty().id();
@@ -208,7 +209,7 @@ mod tests {
             attachments: vec![],
             tool_call_id: None,
             task_id,
-            agent_id: uuid::Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             request_entity,
         });
 

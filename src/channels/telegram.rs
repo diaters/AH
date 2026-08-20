@@ -18,7 +18,7 @@ use crate::channels::config::TelegramConfig;
 use super::traits::{
     AttachmentKind, Channel, ChannelAttachment, ChannelError, ChannelInboundMessage,
     ChannelOutboundMessage, ChannelParseMode, InboundConfirmation, ReplyMarkup,
-    extract_attachments,
+    extract_attachments, parse_callback_data,
 };
 
 /// Telegram 用户待处理反馈记录：用户点击 "reject_with_feedback" 后
@@ -1438,15 +1438,6 @@ fn is_outside_tag(html: &str, idx: usize) -> bool {
     !in_tag
 }
 
-fn parse_callback_data(data: &str) -> Option<(Uuid, String)> {
-    let (uuid_part, option_part) = data.split_once(':')?;
-    if option_part.is_empty() {
-        return None;
-    }
-    let request_id = Uuid::parse_str(uuid_part).ok()?;
-    Some((request_id, option_part.to_string()))
-}
-
 #[derive(Debug, Deserialize)]
 struct TelegramGetUpdatesResponse {
     result: Vec<TelegramUpdate>,
@@ -1757,32 +1748,6 @@ allowed_users = ["qq_user"]
         let chunks = split_text(&s, 4096);
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].len(), 4096);
-    }
-
-    #[test]
-    fn parse_callback_query_data() {
-        let data = "01912345-6789-7abc-8def-0123456789ab:allow_once";
-        let (request_id, option) = parse_callback_data(data).unwrap();
-        assert_eq!(
-            request_id.to_string(),
-            "01912345-6789-7abc-8def-0123456789ab"
-        );
-        assert_eq!(option, "allow_once");
-    }
-
-    #[test]
-    fn parse_callback_query_data_rejects_invalid_uuid() {
-        assert!(parse_callback_data("not-a-uuid:allow_once").is_none());
-    }
-
-    #[test]
-    fn parse_callback_query_data_rejects_missing_separator() {
-        assert!(parse_callback_data("01912345-6789-7abc-8def-0123456789ab").is_none());
-    }
-
-    #[test]
-    fn parse_callback_query_data_rejects_empty_option() {
-        assert!(parse_callback_data("01912345-6789-7abc-8def-0123456789ab:").is_none());
     }
 
     #[test]

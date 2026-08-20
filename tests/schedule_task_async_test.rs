@@ -61,8 +61,8 @@ fn schedule_task_execute_is_async_only_defense() {
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             tool_inflight_timeout_secs: 300,
-            current_task_id: uuid::Uuid::new_v4(),
-            current_agent_id: uuid::Uuid::new_v4(),
+            current_task_id: harness::domain::TaskId::new(),
+            current_agent_id: harness::domain::AgentId::new(),
             current_origin_channel: None,
             current_skill_dir: None,
         },
@@ -308,13 +308,8 @@ fn run_async_rejects_invalid_cron() {
 fn run_async_all_frontend_kinds_accepted() {
     let tool = ScheduleTaskTool;
     let rt = tokio::runtime::Runtime::new().unwrap();
-    for (name, expected) in [
-        ("tui", FrontendKind::Tui),
-        ("telegram", FrontendKind::Telegram),
-        ("web", FrontendKind::Web),
-        ("qq", FrontendKind::QQ),
-        ("feishu", FrontendKind::Feishu),
-    ] {
+    for expected in FrontendKind::ALL {
+        let name = expected.channel_name();
         let input = serde_json::json!({
             "content": "x",
             "schedule": format!("once:{}", future_local_iso()),

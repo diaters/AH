@@ -13,7 +13,9 @@ use harness::domain::{
     ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, FailureReason, Frontend,
     FrontendKind, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationRequestMessage, UserAction,
 };
-use harness::{AgentExecutor, HarnessConfig, build_harness_app, llm::ExecutorRegistry};
+use harness::{
+    app::build_harness_app, domain::AgentExecutor, llm::ExecutorRegistry, systems::HarnessConfig,
+};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -78,7 +80,7 @@ fn disabled_approval_channel_marks_event_task_failed() {
     app.world_mut().spawn(ToolConfirmationRequestMessage {
         request_id: Uuid::new_v4(),
         task_id,
-        agent_id: Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({"command": "date"}),
         options: ConfirmationOption::default_options(),
@@ -98,12 +100,12 @@ fn disabled_approval_channel_marks_event_task_failed() {
         .clone();
 
     assert_eq!(
-        task.status,
-        TaskStatus::Failed(FailureReason::Unknown),
+        task.status(),
+        &TaskStatus::Failed(FailureReason::Unknown),
         "任务应进入 Failed(Unknown) 状态"
     );
     assert_eq!(
-        task.last_error.as_deref(),
+        task.last_error(),
         Some("approval channel frontend 'qq' is not enabled"),
         "last_error 应指出 QQ frontend 未启用"
     );

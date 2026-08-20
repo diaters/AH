@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task,
-    TaskRoutingPolicy, TaskStatus, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::ExternalInput,
+    domain::FrontendKind, domain::ShortTermMemory, domain::Task, domain::TaskStatus,
+    domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -32,30 +33,9 @@ fn test_config() -> HarnessConfig {
 }
 
 fn make_waiting_task(channel: ChannelId) -> Task {
-    let now = chrono::Utc::now();
-    Task {
-        id: uuid::Uuid::new_v4(),
-        content: "waiting".to_string(),
-        creator: uuid::Uuid::nil(),
-        delegate: None,
-        status: TaskStatus::Waiting(WaitingReason::User),
-        pending_confirmation_id: None,
-        input_summary: String::new(),
-        result_summary: String::new(),
-        priority: 0,
-        created_at: now,
-        updated_at: now,
-        retry_count: 0,
-        max_retries: 3,
-        next_retry_at: None,
-        last_error: None,
-        multi_turn: true,
-        parent_task_id: None,
-        batch_id: None,
-        origin_channel: Some(channel.clone()),
-        routing_policy: TaskRoutingPolicy::conversational(channel.clone()),
-        last_evaluated_turn: None,
-    }
+    let mut task = Task::from_user_input("waiting".to_string(), 3, channel);
+    task.mark_waiting(WaitingReason::User, chrono::Utc::now());
+    task
 }
 
 #[test]
@@ -76,7 +56,7 @@ fn cross_channel_plain_text_does_not_takeover_waiting_task() {
     app.update();
 
     // Telegram 通道的 Waiting(User) 任务
-    let tg_task_id = uuid::Uuid::new_v4();
+    let tg_task_id = harness::domain::TaskId::new();
     let mut tg_task = make_waiting_task(telegram_channel());
     tg_task.id = tg_task_id;
     app.world_mut().spawn((tg_task, ShortTermMemory::default()));
@@ -100,8 +80,8 @@ fn cross_channel_plain_text_does_not_takeover_waiting_task() {
         .find(|t| t.id == tg_task_id)
         .expect("Telegram task should still exist");
     assert_eq!(
-        tg_task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        tg_task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "Telegram task should still be Waiting(User), not taken over by QQ input"
     );
 
@@ -134,33 +114,10 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
 
     // QQ 通道的活跃任务（Waiting(User) 状态，避免被 task_dispatch 自动派发并完成，
     // 否则任务进入终态后 /btw 会无条件走回退分支，无法区分是通道过滤生效还是终态回退）。
-    let now = chrono::Utc::now();
-    app.world_mut().spawn((
-        Task {
-            id: uuid::Uuid::new_v4(),
-            content: "qq active".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "qq".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: now,
-            updated_at: now,
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(qq_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(qq_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let mut qq_task = Task::from_user_input("qq active".to_string(), 3, qq_channel());
+    qq_task.input_summary = "qq".to_string();
+    qq_task.mark_waiting(WaitingReason::User, chrono::Utc::now());
+    app.world_mut().spawn((qq_task, ShortTermMemory::default()));
 
     // 从 Telegram 通道发起 /btw
     input_tx
@@ -213,34 +170,12 @@ fn cross_channel_finish_does_not_finish_other_channel_task() {
 
     // QQ 通道的活跃任务（Waiting(User) 状态，避免被 task_dispatch 自动派发并完成，
     // 这样终态判定只受 /finish 命令影响，能更准确地验证跨通道隔离）。
-    let qq_task_id = uuid::Uuid::new_v4();
-    let now = chrono::Utc::now();
-    app.world_mut().spawn((
-        Task {
-            id: qq_task_id,
-            content: "qq active".to_string(),
-            creator: uuid::Uuid::nil(),
-            delegate: None,
-            status: TaskStatus::Waiting(WaitingReason::User),
-            pending_confirmation_id: None,
-            input_summary: "qq".to_string(),
-            result_summary: String::new(),
-            priority: 0,
-            created_at: now,
-            updated_at: now,
-            retry_count: 0,
-            max_retries: 3,
-            next_retry_at: None,
-            last_error: None,
-            multi_turn: true,
-            parent_task_id: None,
-            batch_id: None,
-            origin_channel: Some(qq_channel()),
-            routing_policy: TaskRoutingPolicy::conversational(qq_channel()),
-            last_evaluated_turn: None,
-        },
-        ShortTermMemory::default(),
-    ));
+    let qq_task_id = harness::domain::TaskId::new();
+    let mut qq_task = Task::from_user_input("qq active".to_string(), 3, qq_channel());
+    qq_task.id = qq_task_id;
+    qq_task.input_summary = "qq".to_string();
+    qq_task.mark_waiting(WaitingReason::User, chrono::Utc::now());
+    app.world_mut().spawn((qq_task, ShortTermMemory::default()));
 
     // 从 Telegram 通道发起 /finish
     input_tx
@@ -262,7 +197,7 @@ fn cross_channel_finish_does_not_finish_other_channel_task() {
         .find(|t| t.id == qq_task_id)
         .expect("QQ task should still exist");
     assert!(
-        !qq_task.status.is_terminal(),
+        !qq_task.status().is_terminal(),
         "QQ task should not be terminated by Telegram /finish"
     );
 }

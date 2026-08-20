@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{AgentId, TaskId};
+use super::{ATTACHMENT_MARKER_SYNTAX_HINT, AgentId, TaskId};
 
 /// 前端类型
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -11,7 +11,42 @@ pub enum FrontendKind {
     Telegram,
     Web,
     QQ,
-    Feishu,
+}
+
+impl FrontendKind {
+    /// 全部变体，按注册顺序排列。
+    pub const ALL: [FrontendKind; 4] = [
+        FrontendKind::Tui,
+        FrontendKind::Telegram,
+        FrontendKind::Web,
+        FrontendKind::QQ,
+    ];
+
+    /// 通道名（`FrontendKind` 与字符串通道名的唯一权威映射）。
+    pub fn channel_name(&self) -> &'static str {
+        match self {
+            FrontendKind::Tui => "tui",
+            FrontendKind::Telegram => "telegram",
+            FrontendKind::Web => "web",
+            FrontendKind::QQ => "qq",
+        }
+    }
+
+    /// 按通道名解析 `FrontendKind`，未知名字返回错误（替代散落的 panic）。
+    pub fn from_channel_name(name: &str) -> Result<Self, String> {
+        match name {
+            "tui" => Ok(FrontendKind::Tui),
+            "telegram" => Ok(FrontendKind::Telegram),
+            "web" => Ok(FrontendKind::Web),
+            "qq" => Ok(FrontendKind::QQ),
+            _ => Err(format!("unknown channel name: {name}")),
+        }
+    }
+
+    /// IM 通道名列表（供 `channel_send` 等工具 schema 生成枚举）。
+    pub fn im_channel_names() -> &'static [&'static str] {
+        &["telegram", "qq"]
+    }
 }
 
 /// 标识一个前端通道中的具体用户
@@ -25,20 +60,14 @@ pub struct ChannelId {
 impl ChannelId {
     /// 返回用于注入 LLM prompt 的通道上下文字符串。
     pub fn to_prompt_context(&self) -> String {
-        let channel_name = match self.frontend {
-            FrontendKind::Tui => "tui",
-            FrontendKind::Telegram => "telegram",
-            FrontendKind::Web => "web",
-            FrontendKind::QQ => "qq",
-            FrontendKind::Feishu => "feishu",
-        };
+        let channel_name = self.frontend.channel_name();
         let thread_hint = self
             .thread_id
             .as_deref()
             .map(|t| format!(", thread_id={t}"))
             .unwrap_or_default();
         format!(
-            "[Current channel]\nchannel={channel_name}, chat_id={user_id}{thread_hint}\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='{channel_name}' and omit the target; include the file as [DOCUMENT:path] or [IMAGE:path] or [VIDEO:path].",
+            "[Current channel]\nchannel={channel_name}, chat_id={user_id}{thread_hint}\n\nWhen the user asks to send a file or message back, use the `channel_send` tool with channel='{channel_name}' and omit the target; {ATTACHMENT_MARKER_SYNTAX_HINT}",
             user_id = self.user_id
         )
     }
@@ -439,7 +468,7 @@ mod tests {
         let target = EventTarget::Directed(vec![channel]);
         let event = EngineEvent::PermissionAudit {
             target: target.clone(),
-            agent_id: Uuid::nil(),
+            agent_id: crate::domain::AgentId::nil(),
             agent_name: "test-agent".to_string(),
             tool_name: "shell_exec".to_string(),
             action: PermissionAction::Allow,

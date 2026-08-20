@@ -10,10 +10,9 @@ use std::{
 use crate::prelude::Resource;
 use chrono::Utc;
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::{
-    contracts::SessionBackend,
+    domain::SessionBackend,
     domain::{
         SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest,
         SessionOutputSnapshot, SessionReadRequest, SessionStartRequest, SessionStatus,
@@ -84,7 +83,7 @@ impl std::fmt::Debug for NativeProcessBackend {
 
 impl SessionBackend for NativeProcessBackend {
     fn exec_blocking(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
-        let handle_id = Uuid::new_v4();
+        let handle_id = SessionHandleId::new();
         let mut command = StdCommand::new("sh");
         command.arg("-c").arg(&request.command);
         if let Some(cwd) = request.cwd.as_ref() {
@@ -208,7 +207,7 @@ impl SessionBackend for NativeProcessBackend {
         request: SessionStartRequest,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<SessionHandle, String> {
-        let handle_id = Uuid::new_v4();
+        let handle_id = SessionHandleId::new();
         let mut command = StdCommand::new("sh");
         command.arg("-c").arg(&request.command);
         if let Some(cwd) = request.cwd.as_ref() {
@@ -336,7 +335,7 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn start_session(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
-        let handle_id = Uuid::new_v4();
+        let handle_id = SessionHandleId::new();
         let command_text = request.command.clone();
         let session_name = request.session_name.clone();
         let cwd = request.cwd.clone();

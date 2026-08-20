@@ -6,10 +6,13 @@ use common::mock_executor::MockExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
-    AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentExecutor,
-    AgentRequestKind, ChannelId, EngineEvent, EntryMetadata, EntryRole, FailureReason, Frontend,
-    FrontendKind, HarnessConfig, OffTrackPolicy, ShortTermMemory, Task, TaskStatus, UserAction,
-    WaitingReason, WorkItem, WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionResult,
+    domain::AgentExecutionResultMessage, domain::AgentExecutor, domain::AgentRequestKind,
+    domain::ChannelId, domain::EngineEvent, domain::EntryMetadata, domain::EntryRole,
+    domain::FailureReason, domain::Frontend, domain::FrontendKind, domain::OffTrackPolicy,
+    domain::ShortTermMemory, domain::Task, domain::TaskStatus, domain::UserAction,
+    domain::WaitingReason, domain::WorkItem, domain::WorkItemType, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -85,31 +88,31 @@ fn turn_limit_creates_evaluation_workitem() {
 
     // 创建一个 Running 状态的任务，并添加 STM 条目（2 轮 = 4 条目）
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Running;
+    task.mark_running(chrono::Utc::now());
     let task_id = task.id;
 
-    let mut stm = harness::ShortTermMemory::default();
+    let mut stm = harness::domain::ShortTermMemory::default();
     // 第一轮
     stm.add_entry(
-        harness::EntryRole::User,
+        harness::domain::EntryRole::User,
         "user message 1",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     stm.add_entry(
-        harness::EntryRole::Assistant,
+        harness::domain::EntryRole::Assistant,
         "assistant response 1",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     // 第二轮
     stm.add_entry(
-        harness::EntryRole::User,
+        harness::domain::EntryRole::User,
         "user message 2",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
     stm.add_entry(
-        harness::EntryRole::Assistant,
+        harness::domain::EntryRole::Assistant,
         "assistant response 2",
-        harness::EntryMetadata::default(),
+        harness::domain::EntryMetadata::default(),
     );
 
     let task_entity = app.world_mut().spawn((task, stm)).id();
@@ -121,30 +124,30 @@ fn turn_limit_creates_evaluation_workitem() {
         .insert(task_id, task_entity);
 
     // 添加评估器 Agent
-    app.world_mut().spawn(harness::Agent {
-        id: uuid::Uuid::new_v4(),
-        profile: harness::AgentProfile {
+    app.world_mut().spawn(harness::domain::Agent {
+        id: harness::domain::AgentId::new(),
+        profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
-        capabilities: harness::AgentCapabilities {
+        capabilities: harness::domain::AgentCapabilities {
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::AgentKind::Persistent,
+        kind: harness::domain::AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
+        tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
 
     // 配置评估：启用，最大 2 轮
     app.world_mut()
-        .insert_resource(harness::TaskEvaluationConfig {
+        .insert_resource(harness::domain::TaskEvaluationConfig {
             enabled: true,
             max_turns: Some(2),
             evaluator_agent_name: "evaluator".to_string(),
-            offtrack_policy: harness::OffTrackPolicy::AskUser,
+            offtrack_policy: harness::domain::OffTrackPolicy::AskUser,
         });
 
     // 运行系统
@@ -176,12 +179,12 @@ fn turn_limit_creates_evaluation_workitem() {
     let tasks: Vec<_> = app.world_mut().query::<&Task>().iter(app.world()).collect();
 
     assert_eq!(tasks.len(), 1);
-    println!("Task status: {:?}", tasks[0].status);
+    println!("Task status: {:?}", tasks[0].status());
     assert_eq!(
-        tasks[0].status,
-        TaskStatus::Waiting(WaitingReason::Evaluator),
+        tasks[0].status(),
+        &TaskStatus::Waiting(WaitingReason::Evaluator),
         "task should be waiting for evaluator, but got {:?}",
-        tasks[0].status
+        tasks[0].status()
     );
 }
 
@@ -190,7 +193,7 @@ fn setup_eval_test_app(
     stm_entries: u32,
     max_turns: u32,
     offtrack_policy: OffTrackPolicy,
-) -> (App, uuid::Uuid) {
+) -> (App, harness::domain::TaskId) {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -206,7 +209,7 @@ fn setup_eval_test_app(
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Running;
+    task.mark_running(chrono::Utc::now());
     let task_id = task.id;
 
     let mut stm = ShortTermMemory::default();
@@ -227,25 +230,25 @@ fn setup_eval_test_app(
         .tasks
         .insert(task_id, task_entity);
 
-    app.world_mut().spawn(harness::Agent {
-        id: uuid::Uuid::new_v4(),
-        profile: harness::AgentProfile {
+    app.world_mut().spawn(harness::domain::Agent {
+        id: harness::domain::AgentId::new(),
+        profile: harness::domain::AgentProfile {
             name: "evaluator".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
-        capabilities: harness::AgentCapabilities {
+        capabilities: harness::domain::AgentCapabilities {
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::AgentKind::Persistent,
+        kind: harness::domain::AgentKind::Persistent,
         parent_id: None,
         bound_task_id: None,
-        tool_permissions: harness::AgentToolPermissions::default(),
+        tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
 
     app.world_mut()
-        .insert_resource(harness::TaskEvaluationConfig {
+        .insert_resource(harness::domain::TaskEvaluationConfig {
             enabled: true,
             max_turns: Some(max_turns),
             evaluator_agent_name: "evaluator".to_string(),
@@ -259,7 +262,7 @@ fn setup_eval_test_app(
 /// 任务处于 Waiting(Evaluator)，WorkItem 已存在，无 agent 干扰
 fn setup_manual_eval_scenario(
     offtrack_policy: OffTrackPolicy,
-) -> (App, uuid::Uuid, uuid::Uuid, MockFrontend) {
+) -> (App, harness::domain::TaskId, uuid::Uuid, MockFrontend) {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -279,7 +282,7 @@ fn setup_manual_eval_scenario(
     app.update();
 
     let mut task = Task::from_user_input_ready("test task", 3, default_channel());
-    task.status = TaskStatus::Waiting(WaitingReason::Evaluator);
+    task.mark_waiting(WaitingReason::Evaluator, chrono::Utc::now());
     task.last_evaluated_turn = Some(2);
     let task_id = task.id;
 
@@ -307,7 +310,7 @@ fn setup_manual_eval_scenario(
     app.world_mut().spawn(work_item);
 
     app.world_mut()
-        .insert_resource(harness::TaskEvaluationConfig {
+        .insert_resource(harness::domain::TaskEvaluationConfig {
             enabled: true,
             max_turns: Some(2),
             evaluator_agent_name: "evaluator".to_string(),
@@ -349,7 +352,10 @@ fn evaluation_failure_does_not_retrigger_at_same_progress() {
         .iter(app.world())
         .find(|t| t.id == task_id)
         .unwrap();
-    assert_eq!(task.status, TaskStatus::Waiting(WaitingReason::Evaluator));
+    assert_eq!(
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::Evaluator)
+    );
     assert_eq!(task.last_evaluated_turn, Some(2));
 
     // 手动模拟评估失败：despawn WorkItem，恢复任务到 Ready 再到 Running
@@ -372,7 +378,7 @@ fn evaluation_failure_does_not_retrigger_at_same_progress() {
         .iter_mut(app.world_mut())
         .find(|t| t.id == task_id)
         .unwrap();
-    task_mut.status = TaskStatus::Running;
+    task_mut.mark_running(chrono::Utc::now());
 
     // 第二轮：相同进度不应再次触发
     app.update();
@@ -425,10 +431,10 @@ fn offtrack_autocorrect_injects_governance_context() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task is drifting","suggested_action":"refocus on original goal"}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -452,8 +458,8 @@ fn offtrack_autocorrect_injects_governance_context() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Ready,
+        task.status(),
+        &TaskStatus::Ready,
         "AutoCorrect should restore task to Ready"
     );
 
@@ -487,10 +493,10 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task is drifting","suggested_action":"ask user for guidance"}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -513,8 +519,8 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "AskUser should set task to Waiting(User)"
     );
 
@@ -539,10 +545,10 @@ fn offtrack_fail_sets_error_and_status() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task went off track completely","suggested_action":null}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -564,16 +570,15 @@ fn offtrack_fail_sets_error_and_status() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Failed(FailureReason::AgentError),
+        task.status(),
+        &TaskStatus::Failed(FailureReason::AgentError),
         "Fail policy should set task to Failed(AgentError)"
     );
     assert!(
-        task.last_error
-            .as_ref()
+        task.last_error()
             .is_some_and(|e| e.contains("Evaluation OffTrack")),
         "last_error should contain 'Evaluation OffTrack', got: {:?}",
-        task.last_error
+        task.last_error()
     );
 }
 
@@ -630,10 +635,10 @@ fn offtrack_askuser_injects_stm_context() {
     let eval_json = r#"{"decision":"OffTrack","reasoning":"task is drifting","suggested_action":"ask user for guidance"}"#;
     let result = AgentExecutionResult {
         task_id,
-        agent_id: uuid::Uuid::nil(),
+        agent_id: harness::domain::AgentId::nil(),
         request_kind: AgentRequestKind::LlmCompletion,
         result: Ok(AgentExecutionOutput {
-            content: harness::OutputContent::Text(eval_json.to_string()),
+            content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
         }),
         prompt: String::new(),
@@ -690,8 +695,8 @@ fn offtrack_askuser_injects_stm_context() {
         .find(|t| t.id == task_id)
         .unwrap();
     assert_eq!(
-        task.status,
-        TaskStatus::Waiting(WaitingReason::User),
+        task.status(),
+        &TaskStatus::Waiting(WaitingReason::User),
         "AskUser should set task to Waiting(User)"
     );
 }

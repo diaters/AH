@@ -5,7 +5,7 @@
 //! - Contribution absorption persists to disk
 
 use harness::{
-    LongTermMemory, LongTermMemoryEntry,
+    domain::{LongTermMemory, LongTermMemoryEntry},
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 

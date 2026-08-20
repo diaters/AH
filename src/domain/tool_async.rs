@@ -28,9 +28,9 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::contracts::SessionBackend;
+use crate::domain::ScheduleSpec;
+use crate::domain::SessionBackend;
 use crate::domain::{AgentExecutionRequest, ChannelId, ExperienceCandidate, TaskId, ToolError};
-use crate::triggers::scheduled_task::ScheduleSpec;
 
 // ============ 通道消息 ============
 

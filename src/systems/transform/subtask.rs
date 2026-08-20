@@ -6,7 +6,7 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{
         BatchTaskState, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskCompletedMessage,
         Task, TaskStatus, ToolCallingState, WaitingReason,
@@ -36,10 +36,12 @@ pub fn sub_task_batch_block_system(
                 task_count = msg.tasks.len(),
                 "parent task blocked waiting for sub-task batch completion"
             );
-            parent_task.status = TaskStatus::Waiting(WaitingReason::SubTaskBatch {
-                batch_id: msg.batch_id,
-            });
-            parent_task.updated_at = clock.0;
+            parent_task.mark_waiting(
+                WaitingReason::SubTaskBatch {
+                    batch_id: msg.batch_id,
+                },
+                clock.0,
+            );
         }
         commands.entity(entity).despawn();
     }

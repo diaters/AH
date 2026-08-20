@@ -2,13 +2,14 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutor,
-    AgentKind, AgentProfile, AgentToolPermissions, BrainConfig, ChannelId, DispatchHint,
-    DispatchKind, DispatchStrategy, ExecutorFuture, FrontendKind, HarnessConfig, LongTermMemory,
-    PendingDispatch, Task, TaskStatus, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentToolPermissions, domain::ChannelId, domain::DispatchHint, domain::DispatchKind,
+    domain::DispatchStrategy, domain::ExecutorFuture, domain::FrontendKind, domain::LongTermMemory,
+    domain::PendingDispatch, domain::Task, domain::TaskStatus, llm::ExecutorRegistry,
+    systems::BrainConfig, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 fn default_channel() -> ChannelId {
     ChannelId {
@@ -23,43 +24,46 @@ struct BrainMockExecutor;
 impl AgentExecutor for BrainMockExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         match request.request_kind {
-            harness::AgentRequestKind::BrainDecision => {
+            harness::domain::AgentRequestKind::BrainDecision => {
                 // 任务 3.1 起，brain_decision_system 使用 parse_brain_skill_selection
                 // 解析 Brain 输出，期望 JSON 格式：{"agent_name": "...", "skill_name": ...}
                 let decision = r#"{"agent_name":"default-llm-agent","skill_name":null}"#;
                 Box::pin(async move {
                     Ok(AgentExecutionOutput {
-                        content: harness::OutputContent::Text(decision.to_string()),
+                        content: harness::domain::OutputContent::Text(decision.to_string()),
                         reasoning_content: None,
                     })
                 })
             }
-            harness::AgentRequestKind::LlmCompletion => Box::pin(async move {
+            harness::domain::AgentRequestKind::LlmCompletion => Box::pin(async move {
                 Ok(AgentExecutionOutput {
-                    content: harness::OutputContent::Text(format!("echo: {}", request.prompt)),
+                    content: harness::domain::OutputContent::Text(format!(
+                        "echo: {}",
+                        request.prompt
+                    )),
                     reasoning_content: None,
                 })
             }),
-            harness::AgentRequestKind::ToolExecution { .. } => {
+            harness::domain::AgentRequestKind::ToolExecution { .. } => {
                 // Tool 执行由专门的 tool_execution_system 处理，此处不应到达
                 Box::pin(async move {
-                    Err(harness::ExecutionError::Unknown(
+                    Err(harness::domain::ExecutionError::Unknown(
                         "ToolExecution not supported in mock executor".to_string(),
                     ))
                 })
             }
-            harness::AgentRequestKind::Summarization => {
+            harness::domain::AgentRequestKind::Summarization => {
                 // Summarization 由专门的 summarization system 处理，此处不应到达
                 Box::pin(async move {
-                    Err(harness::ExecutionError::Unknown(
+                    Err(harness::domain::ExecutionError::Unknown(
                         "Summarization not supported in mock executor".to_string(),
                     ))
                 })
             }
-            harness::AgentRequestKind::Evaluation => {
+            harness::domain::AgentRequestKind::Evaluation => {
                 // Evaluation 由专门的 workitem_dispatch 处理，此处不应到达
                 Box::pin(async move {
-                    Err(harness::ExecutionError::Unknown(
+                    Err(harness::domain::ExecutionError::Unknown(
                         "Evaluation not supported in mock executor".to_string(),
                     ))
                 })
@@ -71,9 +75,9 @@ impl AgentExecutor for BrainMockExecutor {
 fn brain_test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -116,7 +120,7 @@ fn completes_brain_dispatch_flow() {
     app.update();
 
     // 手动创建 Brain Agent
-    let brain_id = Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     let brain_entity = app
         .world_mut()
         .spawn((
@@ -147,7 +151,7 @@ fn completes_brain_dispatch_flow() {
         .insert(brain_id, brain_entity);
 
     // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
-    let default_agent_id = Uuid::new_v4();
+    let default_agent_id = harness::domain::AgentId::new();
     let default_entity = app
         .world_mut()
         .spawn((
@@ -184,7 +188,7 @@ fn completes_brain_dispatch_flow() {
         .world_mut()
         .spawn((
             task,
-            harness::ShortTermMemory::default(),
+            harness::domain::ShortTermMemory::default(),
             PendingDispatch {
                 kind: DispatchKind::Task,
                 hint: DispatchHint {
@@ -215,7 +219,7 @@ fn completes_brain_dispatch_flow() {
     };
 
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, TaskStatus::Done);
+    assert_eq!(tasks[0].status(), &TaskStatus::Done);
 }
 
 /// 验证 Brain 不启用时，MVP 流程不受影响。
@@ -241,7 +245,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     app.update();
 
     // 手动创建 Brain Agent
-    let brain_id = Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: brain_id,
@@ -263,7 +267,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     ));
 
     // 手动创建 default-llm-agent（Brain 会调度到这个 agent）
-    let default_agent_id = Uuid::new_v4();
+    let default_agent_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: default_agent_id,
@@ -287,7 +291,7 @@ fn mvp_flow_unchanged_when_brain_disabled() {
     // 创建一个 Ready 状态的任务
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
     app.world_mut()
-        .spawn((task, harness::ShortTermMemory::default()));
+        .spawn((task, harness::domain::ShortTermMemory::default()));
 
     for _ in 0..8 {
         app.update();

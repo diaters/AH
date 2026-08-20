@@ -5,12 +5,23 @@ use rhai::{AST, Dynamic, Engine};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
 use crate::user_plugins::manifest::{ManifestError, PluginManifest};
 use crate::user_plugins::registry::{LoadedPlugin, PluginLoadFailure, PluginRegistry};
 
 /// 默认插件根目录
 pub const DEFAULT_PLUGINS_DIR: &str = ".harness/plugins";
+
+/// 解析插件根目录：`HARNESS_PLUGINS_DIR` 环境变量优先，未设置时使用
+/// `DEFAULT_PLUGINS_DIR`（目录不存在则不加载任何插件）。
+///
+/// 启动加载（`plugin_load_startup_system`）与 `/reload-plugins` 共用此单点，
+/// 避免默认值读取逻辑漂移。
+pub fn plugins_dir_from_env() -> PathBuf {
+    PathBuf::from(
+        std::env::var("HARNESS_PLUGINS_DIR").unwrap_or_else(|_| DEFAULT_PLUGINS_DIR.to_string()),
+    )
+}
 
 /// 扫描 `plugins_dir` 下每个子目录的 `manifest.toml`，加载校验通过的插件。
 ///

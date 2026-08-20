@@ -168,7 +168,7 @@ mod tests {
         overrides.insert("shell_exec".to_string(), ToolPermission::Allow);
 
         let agent = Agent {
-            id: uuid::Uuid::nil(),
+            id: crate::domain::AgentId::nil(),
             profile: AgentProfile {
                 name: "memory-agent".to_string(),
                 model: "test-model".to_string(),
@@ -240,7 +240,7 @@ mod tests {
 
     fn make_agent_with_default(default: ToolPermission, explicit: bool) -> Agent {
         Agent {
-            id: uuid::Uuid::nil(),
+            id: crate::domain::AgentId::nil(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "m".to_string(),

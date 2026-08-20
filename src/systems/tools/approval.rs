@@ -6,7 +6,7 @@ use crate::prelude::*;
 use tracing::{debug, info, warn};
 
 use crate::{
-    app::{Clock, FrontendRegistry, HarnessSettings},
+    contracts::{Clock, FrontendRegistry},
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, EngineEvent, EventTarget,
@@ -18,14 +18,15 @@ use crate::{
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
+    systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
 
 use super::dispatch::emit_permission_audit;
 
 use super::orchestrator::{
-    clear_task_pending_confirmation_id, handle_tool_action, restore_task_after_tool,
-    spawn_tool_error,
+    ToolResources, ToolWorldQueries, clear_task_pending_confirmation_id, handle_tool_action,
+    restore_task_after_tool, spawn_tool_error,
 };
 
 /// 审批分发 System
@@ -127,14 +128,14 @@ pub fn approval_result_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在 Approved 路径推送 ToolCallStarted 事件。
-    index_clock_loader_frontends: (
-        Res<EntityIndex>,
+    mut index_clock_loader_frontends: (
+        ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
     ),
 ) {
-    let index = &index_clock_loader_frontends.0;
+    let index = &mut index_clock_loader_frontends.0;
     let frontend_registry = &index_clock_loader_frontends.3;
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -233,7 +234,7 @@ pub fn approval_result_system(
                     let output_channel = index
                         .get_task(&tool_request.request.task_id)
                         .and_then(|e| tasks.get(e).ok())
-                        .and_then(|(_, t)| t.routing_policy.output_channel.clone());
+                        .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
                     emit_permission_audit(
                         frontend_registry,
                         output_channel.as_ref(),
@@ -300,7 +301,7 @@ pub fn approval_result_system(
                 if let Some(target) = index
                     .get_task(&tool_request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
-                    .and_then(|(_, t)| t.routing_policy.output_channel.clone())
+                    .and_then(|(_, t)| t.routing_policy.output_channel().cloned())
                     .map(|channel| EventTarget::Directed(vec![channel]))
                 {
                     let event = EngineEvent::ToolCallStarted {
@@ -355,19 +356,24 @@ pub fn approval_result_system(
                         task_entity,
                         tool_request,
                         action,
-                        &mut tasks,
-                        &agents,
-                        &chat_sessions,
-                        &mut short_term_memories,
-                        &*backend,
-                        &mut experience_store,
-                        &mut pending_experience_hooks,
+                        &mut ToolWorldQueries {
+                            tasks: &mut tasks,
+                            agents: &agents,
+                            chat_sessions: &chat_sessions,
+                            short_term_memories: &mut short_term_memories,
+                            context_queries: &context_queries,
+                            calling_states: &calling_states,
+                        },
+                        &mut ToolResources {
+                            backend: &*backend,
+                            experience_store: &mut experience_store,
+                            pending_experience_hooks: &mut pending_experience_hooks,
+                            skill_loader: &index_clock_loader_frontends.2,
+                            frontend_registry,
+                            clock: &index_clock_loader_frontends.1,
+                        },
                         None,
-                        &index_clock_loader_frontends.1,
-                        &context_queries,
-                        &index_clock_loader_frontends.2,
-                        &calling_states,
-                        frontend_registry,
+                        &mut *index,
                     );
                 }
 
@@ -383,13 +389,14 @@ pub fn approval_result_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Clock, HarnessConfig, HarnessSettings};
+    use crate::contracts::Clock;
     use crate::domain::{
         AgentExecutionRequest, AgentRequestKind, ApprovalDecision, ApprovalResultMessage,
         ChannelId, FrontendKind, GrantMode, Task, TaskStatus, ToolExecutionRequestMessage,
         WaitingReason,
     };
     use crate::systems::NativeProcessBackend;
+    use crate::systems::{HarnessConfig, HarnessSettings};
     use bevy_ecs::system::RunSystemOnce;
     use chrono::Utc;
     use uuid::Uuid;
@@ -407,11 +414,11 @@ mod tests {
         world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
             std::path::PathBuf::from("/nonexistent_skills_root"),
         ));
-        world.insert_resource(crate::app::FrontendRegistry { frontends: vec![] });
+        world.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         world
     }
 
-    fn dummy_task(task_id: Uuid) -> Task {
+    fn dummy_task(task_id: crate::domain::TaskId) -> Task {
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "test".to_string(),
@@ -420,7 +427,7 @@ mod tests {
         Task {
             id: task_id,
             content: "test".to_string(),
-            creator: Uuid::nil(),
+            creator: crate::domain::AgentId::nil(),
             delegate: None,
             status: TaskStatus::Waiting(WaitingReason::Approval),
             pending_confirmation_id: None,
@@ -443,8 +450,8 @@ mod tests {
     }
 
     fn dummy_request(
-        task_id: Uuid,
-        agent_id: Uuid,
+        task_id: crate::domain::TaskId,
+        agent_id: crate::domain::AgentId,
         request_id: Uuid,
     ) -> ToolExecutionRequestMessage {
         ToolExecutionRequestMessage {
@@ -474,8 +481,8 @@ mod tests {
     #[test]
     fn approval_rejected_clears_task_pending_id() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         let mut task = dummy_task(task_id);
@@ -490,7 +497,7 @@ mod tests {
         world.spawn(ApprovalResultMessage {
             request_id,
             source_task_id: task_id,
-            approval_task_id: Uuid::new_v4(),
+            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Rejected,
             reasoning: "no".to_string(),
             grant_mode: GrantMode::Once,
@@ -508,8 +515,8 @@ mod tests {
     #[test]
     fn approval_approved_clears_task_pending_id() {
         let mut world = test_world();
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = Uuid::new_v4();
 
         let mut task = dummy_task(task_id);
@@ -524,7 +531,7 @@ mod tests {
         world.spawn(ApprovalResultMessage {
             request_id,
             source_task_id: task_id,
-            approval_task_id: Uuid::new_v4(),
+            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Approved,
             reasoning: "yes".to_string(),
             grant_mode: GrantMode::Once,

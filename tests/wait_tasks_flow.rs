@@ -2,11 +2,11 @@
 
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentId, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-    ExperienceStore, FrontendKind, HarnessConfig, SharedKnowledgeBase, ToolContext,
-    WaitingForTasksInfo,
+    domain::Agent, domain::AgentCapabilities, domain::AgentId, domain::AgentKind,
+    domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId, domain::ExperienceStore,
+    domain::FrontendKind, domain::SharedKnowledgeBase, domain::ToolContext,
+    domain::WaitingForTasksInfo, systems::HarnessConfig,
 };
-use uuid::Uuid;
 
 #[allow(dead_code)]
 fn default_channel() -> ChannelId {
@@ -25,7 +25,7 @@ fn test_config() -> HarnessConfig {
 /// 创建测试用的 Agent
 #[allow(dead_code)]
 fn create_test_agent(world: &mut World) -> AgentId {
-    let id = Uuid::new_v4();
+    let id = AgentId::new();
     world.spawn(Agent {
         id,
         profile: AgentProfile {
@@ -62,8 +62,8 @@ fn test_wait_tasks_tool_parsing() {
         shell_default_exec_timeout_secs: 300,
         shell_default_stop_timeout_secs: 10,
         tool_inflight_timeout_secs: 300,
-        current_task_id: uuid::Uuid::new_v4(),
-        current_agent_id: uuid::Uuid::new_v4(),
+        current_task_id: harness::domain::TaskId::new(),
+        current_agent_id: AgentId::new(),
         current_origin_channel: None,
         current_skill_dir: None,
     };
@@ -120,10 +120,10 @@ fn test_waiting_for_tasks_info_creation() {
     let timeout_at = now + chrono::Duration::seconds(60);
 
     let info = WaitingForTasksInfo {
-        target_task_ids: vec![Uuid::new_v4()],
+        target_task_ids: vec![harness::domain::TaskId::new()],
         timeout_at,
         tool_call_id: "test-call-id".to_string(),
-        agent_id: Uuid::new_v4(),
+        agent_id: harness::domain::AgentId::new(),
     };
 
     assert_eq!(info.target_task_ids.len(), 1);

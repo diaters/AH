@@ -10,13 +10,14 @@ use common::mock_executor::{
     MockExecutor, NoOpExecutor, PanickingExecutor, PromptEchoExecutor, text_output,
 };
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, OutputContent,
+    domain::AgentExecutionOutput, domain::AgentExecutionRequest, domain::AgentExecutor,
+    domain::AgentRequestKind, domain::OutputContent,
 };
 
 fn sample_request(kind: AgentRequestKind) -> AgentExecutionRequest {
     AgentExecutionRequest {
-        task_id: uuid::Uuid::new_v4(),
-        agent_id: uuid::Uuid::new_v4(),
+        task_id: harness::domain::TaskId::new(),
+        agent_id: harness::domain::AgentId::new(),
         request_kind: kind,
         prompt: "hello".to_string(),
         system_prompt: None,

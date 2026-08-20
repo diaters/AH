@@ -26,8 +26,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    app::{AsyncRuntime, Clock, FrontendRegistry, HarnessSettings},
-    contracts::SessionBackend,
+    contracts::{AsyncRuntime, Clock, FrontendRegistry},
+    domain::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
         PermissionAction, PermissionAuditContext, PermissionSource, ScheduledTaskInfoSnapshot,
@@ -36,6 +36,7 @@ use crate::{
         ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
     },
     ecs::EntityIndex,
+    systems::HarnessSettings,
     triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
 };
 
@@ -274,7 +275,7 @@ pub fn async_tool_dispatch_system(
             let output_channel = index
                 .get_task(&request.request.task_id)
                 .and_then(|e| tasks.get(e).ok())
-                .and_then(|t| t.routing_policy.output_channel.clone());
+                .and_then(|t| t.routing_policy.output_channel().cloned());
 
             // 权限审计：Allow 认领（Confirm 路径由 sync 路径发审计，此处不重复）。
             // source 取当前 effective_permission 的来源；registry/agent 不可见时

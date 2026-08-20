@@ -10,7 +10,7 @@ use crate::domain::{
 };
 
 use super::traits::{ChannelOutboundMessage, MessageKind, OutboundEntry};
-use super::traits::{ChannelParseMode, InlineKeyboardButton, ReplyMarkup};
+use super::traits::{ChannelParseMode, InlineKeyboardButton, ReplyMarkup, make_callback_data};
 
 /// 将 EngineEvent 路由到对应 IM 通道出向发送队列的 Frontend 实现。
 ///
@@ -237,7 +237,7 @@ impl Frontend for ChannelFrontend {
                             .iter()
                             .map(|opt| InlineKeyboardButton {
                                 text: opt.label.clone(),
-                                callback_data: format!("{}:{}", request_id, opt.id),
+                                callback_data: make_callback_data(request_id, &opt.id),
                             })
                             .collect()
                     })
@@ -422,7 +422,8 @@ mod tests {
     fn prefixes_agent_text_with_task_short_id() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         fe.push_event(text_event_with_task(
             EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -458,7 +459,8 @@ mod tests {
     fn prefixes_system_text_with_task_short_id() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         fe.push_event(EngineEvent::Text {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -477,7 +479,8 @@ mod tests {
     fn renders_task_status_change_with_transition() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         fe.push_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -586,10 +589,8 @@ mod tests {
 
     #[test]
     fn queues_text_with_task_prefix() {
-        use uuid::Uuid;
-
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         fe.push_event(EngineEvent::Text {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -607,10 +608,8 @@ mod tests {
 
     #[test]
     fn queues_status_change_with_transition() {
-        use uuid::Uuid;
-
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         fe.push_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -634,10 +633,8 @@ mod tests {
 
     #[test]
     fn queues_status_change_without_old_status() {
-        use uuid::Uuid;
-
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         fe.push_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -681,7 +678,8 @@ mod tests {
     fn tool_call_started_does_not_push_to_channel() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         fe.push_event(EngineEvent::ToolCallStarted {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -703,7 +701,8 @@ mod tests {
     fn renders_task_status_change_with_name_and_agent() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         fe.push_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Directed(vec![ChannelId {
                 frontend: FrontendKind::Telegram,
@@ -732,7 +731,8 @@ mod tests {
     fn renders_task_status_change_with_long_name_truncated() {
         use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id = Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap();
+        let task_id =
+            crate::domain::TaskId(Uuid::parse_str("a1b2c3d4-1111-2222-3333-444444444444").unwrap());
         let long_name = "测".repeat(40);
         fe.push_event(EngineEvent::TaskStatusChanged {
             target: EventTarget::Directed(vec![ChannelId {
@@ -768,9 +768,8 @@ mod tests {
 
     #[test]
     fn task_status_rolling_recall() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
 
         // 第一条状态消息（Pending→Running）
         fe.push_event(EngineEvent::TaskStatusChanged {
@@ -823,9 +822,8 @@ mod tests {
 
     #[test]
     fn llm_reply_recalls_last_status() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
 
         // 发送状态消息
         fe.push_event(EngineEvent::TaskStatusChanged {
@@ -867,9 +865,8 @@ mod tests {
 
     #[test]
     fn task_failed_preserves_final_status() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
 
         // 发送 Running 状态消息
         fe.push_event(EngineEvent::TaskStatusChanged {
@@ -917,9 +914,8 @@ mod tests {
 
     #[test]
     fn task_cleared_cleans_up_state() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
 
         // 发送状态消息
         fe.push_event(EngineEvent::TaskStatusChanged {
@@ -981,9 +977,8 @@ mod tests {
 
     #[test]
     fn normal_status_transition_does_not_recall_new_msg() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         let cid = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
@@ -1060,9 +1055,8 @@ mod tests {
 
     #[test]
     fn llm_reply_recalls_pending_status() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         let cid = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
@@ -1124,9 +1118,8 @@ mod tests {
 
     #[test]
     fn pending_recall_cleaned_on_task_cleared() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         let cid = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),
@@ -1186,9 +1179,8 @@ mod tests {
 
     #[test]
     fn pending_recall_not_set_if_last_status_exists() {
-        use uuid::Uuid;
         let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
-        let task_id: TaskId = Uuid::nil();
+        let task_id: TaskId = TaskId::nil();
         let cid = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "u1".to_string(),

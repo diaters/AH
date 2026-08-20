@@ -1,3 +1,4 @@
+mod brain;
 mod command;
 mod dispatch;
 mod evaluation;
@@ -12,6 +13,7 @@ mod maintenance;
 mod memory;
 mod memory_hook;
 mod routing;
+mod runtime_config;
 mod summarization;
 mod sweeper;
 pub mod tools;
@@ -19,6 +21,7 @@ pub mod transform;
 
 use bevy_ecs::schedule::SystemSet;
 
+pub(crate) use brain::brain_decision_system;
 pub(crate) use command::{
     command_parse_system, reload_plugins_system, reload_triggers_message_consumer_system,
 };
@@ -57,11 +60,13 @@ pub(crate) use tools::{
     channel_send_dispatch_system, check_waiting_tasks_system, on_approval_requested_hook_system,
     on_approval_resolved_hook_system, on_subtask_completed_check_waiting,
     on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
-    tool_confirmation_result_system, tool_dispatch_system, tool_result_system,
+    tool_calling_orchestrator_system, tool_confirmation_result_system, tool_dispatch_system,
+    tool_result_system,
 };
 // `async_tool_dispatch_system` 供集成测试经 `harness::systems::async_tool_dispatch_system`
 // 调用 `world.run_system_once(...)`，故单独 `pub use`（其余 tools 内部系统保持
 // `pub(crate)` 仅 crate 内可见）。
+pub use runtime_config::{BrainConfig, HarnessConfig, HarnessSettings};
 pub use sweeper::sweep_inflight_tool_calls;
 pub use tools::async_tool_dispatch_system;
 pub use tools::cancel_monitor_system;
@@ -69,13 +74,13 @@ pub use tools::commit_tool_effects_system;
 pub use tools::ingest_tool_results_system;
 pub use transform::TaskTerminalDispatched;
 pub(crate) use transform::{
-    brain_decision_system, chat_round_block_system, chat_round_completion_system,
-    chat_session_cleanup_system, clear_task_system, finish_task_system,
-    ingest_execution_results_system, init_previous_task_status_system, llm_response_system,
-    on_llm_response_hook_system, on_task_created_hook_system, retry_ready_system,
-    signal_ingest_system, sub_task_batch_block_system, sub_task_completion_system,
-    task_completion_hook_system, task_termination_system, tool_calling_orchestrator_system,
-    tool_calling_turn_reset_system, trigger_task_routing_system, user_message_to_task_system,
+    chat_round_block_system, chat_round_completion_system, chat_session_cleanup_system,
+    clear_task_system, finish_task_system, ingest_execution_results_system,
+    init_previous_task_status_system, llm_response_system, on_llm_response_hook_system,
+    on_task_created_hook_system, retry_ready_system, signal_ingest_system,
+    sub_task_batch_block_system, sub_task_completion_system, task_completion_hook_system,
+    task_termination_system, tool_calling_turn_reset_system, trigger_task_routing_system,
+    user_message_to_task_system,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]

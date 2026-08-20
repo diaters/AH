@@ -54,11 +54,11 @@ impl WorldSnapshot {
 pub fn register(engine: &mut Engine, snapshot: WorldSnapshot) {
     let snap = snapshot.clone();
     engine.register_fn("get_task", move |id: &str| -> Dynamic {
-        match Uuid::parse_str(id) {
-            Ok(uuid) => snap
+        match Uuid::parse_str(id).map(crate::domain::TaskId) {
+            Ok(task_id) => snap
                 .tasks
                 .iter()
-                .find(|t| t.id == uuid)
+                .find(|t| t.id == task_id)
                 .map(task_to_map)
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT),
@@ -89,7 +89,7 @@ pub fn register(engine: &mut Engine, snapshot: WorldSnapshot) {
     engine.register_fn(
         "get_work_item_ids_for",
         move |task_id: &str| -> Vec<String> {
-            match Uuid::parse_str(task_id) {
+            match Uuid::parse_str(task_id).map(crate::domain::TaskId) {
                 Ok(tid) => snap
                     .work_items
                     .iter()
@@ -156,13 +156,13 @@ mod tests {
             thread_id: None,
         };
         let mut t = Task::from_user_input(content.to_string(), 0, channel);
-        t.id = uuid::Uuid::new_v4();
+        t.id = crate::domain::TaskId::new();
         t
     }
 
     fn make_agent(name: &str) -> Agent {
         Agent {
-            id: uuid::Uuid::new_v4(),
+            id: crate::domain::AgentId::new(),
             profile: AgentProfile {
                 name: name.to_string(),
                 model: "test-model".to_string(),
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn get_work_item_ids_for_filters_by_task() {
-        let tid = uuid::Uuid::new_v4();
+        let tid = crate::domain::TaskId::new();
         let w = WorkItem::execution(tid, "do thing".to_string());
         let snap = WorldSnapshot {
             tasks: Arc::new(Vec::new()),

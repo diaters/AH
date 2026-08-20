@@ -5,7 +5,7 @@
 use crate::prelude::*;
 
 use crate::{
-    app::Clock,
+    contracts::Clock,
     domain::{SubTaskCompletedMessage, Task, WaitingForTasksInfo},
     ecs::EntityIndex,
 };

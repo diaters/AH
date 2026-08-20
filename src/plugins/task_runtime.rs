@@ -5,7 +5,7 @@
 use crate::prelude::*;
 
 use crate::{
-    app::MemoryConfig,
+    domain::MemoryConfig,
     domain::TaskEvaluationConfig,
     systems::{
         HarnessSet, chat_round_block_system, chat_round_completion_system,

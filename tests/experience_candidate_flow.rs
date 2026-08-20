@@ -7,8 +7,11 @@
 //! - Governance system processes ExperienceGovernanceRequestMessage correctly
 
 use harness::{
-    ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus, ExperienceKindHint,
-    ExperienceStore, LongTermMemory, SkillFileRef, SkillFileRole,
+    domain::{
+        ExperienceCandidate, ExperienceCandidatePayload, ExperienceCandidateStatus,
+        ExperienceKindHint,
+    },
+    domain::{ExperienceStore, LongTermMemory, SkillFileRef, SkillFileRole},
     infrastructure::memory::{JsonFileMemoryStore, LongTermMemoryService, MemoryRepository},
 };
 
@@ -16,8 +19,8 @@ use harness::{
 #[test]
 fn knowledge_candidate_is_persisted_for_persistent_agent() {
     let mut store = ExperienceStore::default();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
     let candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
@@ -39,8 +42,8 @@ fn knowledge_candidate_is_persisted_for_persistent_agent() {
 fn skill_candidate_requires_user_approval() {
     let candidate = ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
-        producer_task_id: uuid::Uuid::new_v4(),
-        producer_agent_id: uuid::Uuid::new_v4(),
+        producer_task_id: harness::domain::TaskId::new(),
+        producer_agent_id: harness::domain::AgentId::new(),
         title: "shell smoke test".to_string(),
         kind_hint: ExperienceKindHint::Skill,
         payload: ExperienceCandidatePayload::Skill {
@@ -66,8 +69,8 @@ fn skill_candidate_requires_user_approval() {
 #[test]
 fn confirmation_response_approves_and_rejects_candidates() {
     let mut store = ExperienceStore::default();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     let mut candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
@@ -115,8 +118,8 @@ fn confirmation_response_approves_and_rejects_candidates() {
 fn candidate_conversion_to_long_term_memory() {
     let knowledge_candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
+        harness::domain::TaskId::new(),
+        harness::domain::AgentId::new(),
         "test fact".to_string(),
         "some content".to_string(),
     );
@@ -124,8 +127,8 @@ fn candidate_conversion_to_long_term_memory() {
 
     let skill_candidate = ExperienceCandidate {
         candidate_id: uuid::Uuid::new_v4(),
-        producer_task_id: uuid::Uuid::new_v4(),
-        producer_agent_id: uuid::Uuid::new_v4(),
+        producer_task_id: harness::domain::TaskId::new(),
+        producer_agent_id: harness::domain::AgentId::new(),
         title: "test skill".to_string(),
         kind_hint: ExperienceKindHint::Skill,
         payload: ExperienceCandidatePayload::Skill {
@@ -148,8 +151,8 @@ fn candidate_conversion_to_long_term_memory() {
 fn knowledge_candidate_without_assets_does_not_require_approval() {
     let candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
+        harness::domain::TaskId::new(),
+        harness::domain::AgentId::new(),
         "simple fact".to_string(),
         "simple content".to_string(),
     );
@@ -169,8 +172,8 @@ fn governance_persists_knowledge_candidate_content_via_service() {
 
     let candidate = ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
+        harness::domain::TaskId::new(),
+        harness::domain::AgentId::new(),
         "governance fact".to_string(),
         "governance-persisted content".to_string(),
     );

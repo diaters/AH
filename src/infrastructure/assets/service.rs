@@ -178,7 +178,7 @@ mod tests {
             description: "验证 shell 工具链是否正常工作".to_string(),
             instructions: "## Usage\n\n1. 运行脚本\n2. 检查输出".to_string(),
             file_refs: vec![],
-            source_task_id: Some(uuid::Uuid::new_v4()),
+            source_task_id: Some(crate::domain::TaskId::new()),
             source_candidate_id: Some(uuid::Uuid::new_v4()),
         };
 

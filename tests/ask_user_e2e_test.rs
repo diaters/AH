@@ -16,14 +16,14 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutor, AgentKind, AgentProfile,
-    AgentRequestKind, AgentToolPermissions, ChannelId, ExternalInput, FrontendKind, HarnessConfig,
-    LongTermMemory, ShortTermMemory, Task, TaskRoutingPolicy, TaskStatus,
-    ToolExecutionRequestMessage, ToolPermission, WaitingReason, build_harness_app,
-    llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::ExternalInput, domain::FrontendKind, domain::LongTermMemory, domain::ShortTermMemory,
+    domain::Task, domain::TaskStatus, domain::ToolExecutionRequestMessage, domain::ToolPermission,
+    domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
-use uuid::Uuid;
 
 use common::mock_executor::EchoExecutor;
 
@@ -40,9 +40,9 @@ fn default_channel() -> ChannelId {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -82,7 +82,7 @@ fn e2e_ask_user_full_flow() {
     );
 
     // 创建父 Agent（Allow 权限以直接执行工具，无需审批）
-    let parent_agent_id = Uuid::new_v4();
+    let parent_agent_id = harness::domain::AgentId::new();
     let perms = AgentToolPermissions {
         default_permission: ToolPermission::Allow,
         ..Default::default()
@@ -116,35 +116,15 @@ fn e2e_ask_user_full_flow() {
 
     // 创建父 Task。TaskRoutingPolicy::conversational 会设置 output_channel = Some(channel)，
     // ask_user orchestrator 依赖 output_channel 推送问题。
-    let parent_task_id = Uuid::new_v4();
+    let parent_task_id = harness::domain::TaskId::new();
+    let mut parent_task = Task::from_user_input("test ask_user".to_string(), 3, default_channel());
+    parent_task.id = parent_task_id;
+    parent_task.delegate = Some(parent_agent_id);
+    parent_task.input_summary = "test ask_user".to_string();
+    parent_task.mark_ready(chrono::Utc::now());
     let parent_task_entity = app
         .world_mut()
-        .spawn((
-            Task {
-                id: parent_task_id,
-                content: "test ask_user".to_string(),
-                creator: Uuid::nil(),
-                delegate: Some(parent_agent_id),
-                status: TaskStatus::Ready,
-                pending_confirmation_id: None,
-                input_summary: "test ask_user".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ))
+        .spawn((parent_task, ShortTermMemory::default()))
         .id();
     app.world_mut()
         .resource_mut::<harness::ecs::EntityIndex>()
@@ -186,11 +166,11 @@ fn e2e_ask_user_full_flow() {
     // 断言阶段 1：task 进入 Waiting(AskUser)，且挂载了 AskUserPending
     let (task_status, has_ask_user_pending): (TaskStatus, bool) = {
         let world = app.world_mut();
-        let mut query = world.query::<(&Task, Option<&harness::AskUserPending>)>();
+        let mut query = world.query::<(&Task, Option<&harness::domain::AskUserPending>)>();
         query
             .iter(world)
             .find(|(t, _)| t.id == parent_task_id)
-            .map(|(t, p)| (t.status.clone(), p.is_some()))
+            .map(|(t, p)| (t.status().clone(), p.is_some()))
             .expect("parent task should exist after ask_user dispatch")
     };
     assert_eq!(
@@ -257,7 +237,7 @@ fn e2e_ask_user_full_flow() {
     // 断言阶段 3：AskUserPending 组件被移除
     let still_pending: bool = {
         let world = app.world_mut();
-        let mut query = world.query::<(&Task, Option<&harness::AskUserPending>)>();
+        let mut query = world.query::<(&Task, Option<&harness::domain::AskUserPending>)>();
         query
             .iter(world)
             .find(|(t, _)| t.id == parent_task_id)
@@ -276,7 +256,7 @@ fn e2e_ask_user_full_flow() {
         query
             .iter(world)
             .find(|t| t.id == parent_task_id)
-            .map(|t| t.status.clone())
+            .map(|t| t.status().clone())
             .expect("parent task should still exist after user reply")
     };
     assert_eq!(

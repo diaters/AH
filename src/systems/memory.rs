@@ -2,7 +2,7 @@ use crate::prelude::*;
 use tracing::debug;
 
 use crate::{
-    app::MemoryConfig,
+    domain::MemoryConfig,
     domain::{
         Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
         MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn compression_skips_when_summarization_workitem_inflight() {
-        use crate::domain::{SummarizationTrigger, WorkItem, WorkItemStatus};
+        use crate::domain::{SummarizationTrigger, WorkItem};
         use bevy_ecs::system::RunSystemOnce;
 
         let mut world = World::new();
@@ -476,7 +476,7 @@ mod tests {
             100,
             SummarizationTrigger::TokenThreshold,
         );
-        wi.status = WorkItemStatus::Running;
+        wi.start();
         world.spawn(wi);
 
         // 前置条件：STM 必须明确超过阈值，否则测试退化为"未触发"而非"在飞保护"

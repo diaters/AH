@@ -5,6 +5,8 @@
 //!   `ToolCalledHookPending` 标记被 companion 系统移除。
 //! - 当插件调用 `tool_deny` 时，请求被替换为 `PermissionDenied` 错误结果，
 //!   不产出成功的 `ToolExecutionResultMessage`，请求 entity 被销毁。
+//! - 插件可依据 `tool_call_name()` / `tool_call_input_json()` 做条件拒绝：
+//!   仅命中条件的请求被拒绝，其余请求正常放行。
 
 use std::sync::{Arc, Mutex};
 
@@ -15,8 +17,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, ToolCalledHookPending,
-    ToolExecutionResultMessage, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
+    domain::ToolCalledHookPending, domain::ToolExecutionResultMessage, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 mod common;
@@ -54,14 +57,22 @@ script = "hooks/hook.rhai"
 /// 直接在 world 中 spawn 一个带 `ToolCalledHookPending` 标记的占位
 /// `ToolExecutionRequestMessage`，便于在不需要走 LLM 的前提下测试
 /// companion 系统的 hook 派发路径。
-fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::TaskId) {
-    use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+fn spawn_tool_request(
+    world: &mut World,
+    tool_name: &str,
+    tool_input: serde_json::Value,
+    task_id: harness::domain::TaskId,
+) {
+    use harness::{
+        domain::AgentExecutionRequest, domain::AgentRequestKind,
+        domain::ToolExecutionRequestMessage,
+    };
 
     world.spawn((
         ToolExecutionRequestMessage {
             request: AgentExecutionRequest {
                 task_id,
-                agent_id: uuid::Uuid::nil(),
+                agent_id: harness::domain::AgentId::nil(),
                 request_kind: AgentRequestKind::ToolExecution {
                     tool_name: tool_name.to_string(),
                 },
@@ -73,7 +84,7 @@ fn spawn_tool_request(world: &mut World, tool_name: &str, task_id: harness::Task
                 model_override: None,
             },
             tool_name: tool_name.to_string(),
-            tool_input: serde_json::json!({}),
+            tool_input,
             pending_confirmation_id: None,
             tool_call_id: Some("test-call-id".to_string()),
             pending_confirmation_options: None,
@@ -122,7 +133,7 @@ log_info("on_tool_called: observing, no deny");
     let mut app = build_app(&dir);
 
     let task_id = {
-        use harness::Task;
+        use harness::domain::Task;
         let channel = default_channel();
         let task = Task::from_user_input("owner-task", 0, channel);
         let id = task.id;
@@ -131,7 +142,12 @@ log_info("on_tool_called: observing, no deny");
         id
     };
 
-    spawn_tool_request(app.world_mut(), "shell_exec", task_id);
+    spawn_tool_request(
+        app.world_mut(),
+        "shell_exec",
+        serde_json::json!({}),
+        task_id,
+    );
 
     // 推一帧：Dispatch 之前 companion 系统派发 hook，再由 tool_dispatch_system 处理。
     app.update();
@@ -149,7 +165,7 @@ log_info("on_tool_called: observing, no deny");
     let denied_count = world
         .query::<&ToolExecutionResultMessage>()
         .iter(world)
-        .filter(|m| matches!(&m.tool_output, Err(e) if matches!(e, harness::ToolError::PermissionDenied(_))))
+        .filter(|m| matches!(&m.tool_output, Err(e) if matches!(e, harness::domain::ToolError::PermissionDenied(_))))
         .count();
     assert_eq!(denied_count, 0, "未拒绝时不应出现 PermissionDenied 结果");
 }
@@ -174,9 +190,12 @@ tool_deny("blocked by test");
     let mut app = build_app(&dir);
 
     let request_entity = {
-        use harness::{AgentExecutionRequest, AgentRequestKind, ToolExecutionRequestMessage};
+        use harness::{
+            domain::AgentExecutionRequest, domain::AgentRequestKind,
+            domain::ToolExecutionRequestMessage,
+        };
         let task_id = {
-            use harness::Task;
+            use harness::domain::Task;
             let channel = default_channel();
             let task = Task::from_user_input("owner-task", 0, channel);
             let id = task.id;
@@ -189,7 +208,7 @@ tool_deny("blocked by test");
                 ToolExecutionRequestMessage {
                     request: AgentExecutionRequest {
                         task_id,
-                        agent_id: uuid::Uuid::nil(),
+                        agent_id: harness::domain::AgentId::nil(),
                         request_kind: AgentRequestKind::ToolExecution {
                             tool_name: "shell_exec".to_string(),
                         },
@@ -230,7 +249,7 @@ tool_deny("blocked by test");
         .filter(|m| {
             matches!(
                 &m.tool_output,
-                Err(harness::ToolError::PermissionDenied(reason))
+                Err(harness::domain::ToolError::PermissionDenied(reason))
                     if reason.contains("denied by plugin")
             )
         })
@@ -249,5 +268,89 @@ tool_deny("blocked by test");
     assert_eq!(
         ok_count, 0,
         "被拒绝时不应有 Ok 类型的 ToolExecutionResultMessage"
+    );
+}
+
+/// 条件拒绝：插件依据 `tool_call_name()` + `tool_call_input_json()` 判断，
+/// 仅拒绝命中条件的请求，其余请求正常放行。
+#[test]
+fn tool_call_conditionally_denied_by_name_and_input() {
+    let dir = TempDir::new().unwrap();
+    write_plugin(
+        dir.path(),
+        "on_tool_called",
+        r#"
+if tool_call_name() == "shell_exec" && tool_call_input_json().contains("rm -rf") {
+    tool_deny("destructive command blocked");
+}
+"#,
+    );
+
+    let _env_guard = PLUGIN_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // SAFETY: 同 `tests/user_plugins_on_task_created.rs` 中 SAFETY 论证。
+    unsafe {
+        std::env::set_var("HARNESS_PLUGINS_DIR", dir.path());
+    }
+
+    let mut app = build_app(&dir);
+
+    let task_id = {
+        use harness::domain::Task;
+        let channel = default_channel();
+        let task = Task::from_user_input("owner-task", 0, channel);
+        let id = task.id;
+        app.world_mut().spawn(task);
+        id
+    };
+
+    // A：命中条件（shell_exec + rm -rf）→ 应被拒绝。
+    spawn_tool_request(
+        app.world_mut(),
+        "shell_exec",
+        serde_json::json!({"command": "rm -rf /"}),
+        task_id,
+    );
+    // B：同名工具但入参不含危险命令 → 应放行。
+    spawn_tool_request(
+        app.world_mut(),
+        "shell_exec",
+        serde_json::json!({"command": "ls"}),
+        task_id,
+    );
+    // C：不同名工具 → 应放行。
+    spawn_tool_request(
+        app.world_mut(),
+        "read_file",
+        serde_json::json!({"path": "a.txt"}),
+        task_id,
+    );
+
+    app.update();
+
+    let world = app.world_mut();
+
+    // 仅 A 应产出插件拒绝结果（以 "denied by plugin" 前缀区分权限系统拒绝）。
+    let plugin_denied: Vec<&ToolExecutionResultMessage> = world
+        .query::<&ToolExecutionResultMessage>()
+        .iter(world)
+        .filter(|m| {
+            matches!(
+                &m.tool_output,
+                Err(harness::domain::ToolError::PermissionDenied(reason))
+                    if reason.contains("denied by plugin")
+            )
+        })
+        .collect();
+    assert_eq!(
+        plugin_denied.len(),
+        1,
+        "仅条件命中的 shell_exec + rm -rf 请求应被插件拒绝"
+    );
+    assert_eq!(plugin_denied[0].tool_name, "shell_exec");
+    assert!(
+        matches!(&plugin_denied[0].tool_output,
+            Err(harness::domain::ToolError::PermissionDenied(reason))
+                if reason.contains("destructive command blocked")),
+        "拒绝原因应携带插件给出的理由"
     );
 }

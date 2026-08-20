@@ -33,7 +33,8 @@ fn parse_and_resolve(
     let handle = input
         .get("handle")
         .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok());
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .map(TaskId);
 
     let agent_name = input
         .get("agent")
@@ -75,7 +76,6 @@ fn parse_and_resolve(
 mod tests {
     use super::*;
     use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
-    use uuid::Uuid;
 
     fn tool_context() -> ToolContext<'static> {
         let knowledge = Box::leak(Box::new(SharedKnowledgeBase::default()));
@@ -89,8 +89,8 @@ mod tests {
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             tool_inflight_timeout_secs: 300,
-            current_task_id: Uuid::new_v4(),
-            current_agent_id: Uuid::new_v4(),
+            current_task_id: crate::domain::TaskId::new(),
+            current_agent_id: crate::domain::AgentId::new(),
             current_origin_channel: None,
             current_skill_dir: None,
         }
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn parse_allows_handle_only() {
-        let handle = Uuid::new_v4();
+        let handle = crate::domain::TaskId::new();
         let input = serde_json::json!({
             "message": "continue",
             "handle": handle.to_string()

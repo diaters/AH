@@ -5,8 +5,8 @@
 use crate::prelude::*;
 use uuid::Uuid;
 
+use crate::domain::HookPoint;
 use crate::domain::{AgentId, ConversationMessage, SummarizationTrigger, TaskId, ToolDefinition};
-use crate::user_plugins::hook_point::HookPoint;
 
 /// 工作项类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,10 +154,10 @@ pub struct WorkItem {
     pub work_type: WorkItemType,
     /// 输入
     pub input: WorkItemInput,
-    /// 状态
-    pub status: WorkItemStatus,
-    /// 分配的 Agent
-    pub assigned_agent: Option<AgentId>,
+    /// 状态（收窄为 crate 内可见：读取经 `status()`，转换经 `assign`/`start`/`complete`/`fail`）
+    pub(crate) status: WorkItemStatus,
+    /// 分配的 Agent（收窄为 crate 内可见：读取经 `assigned_agent()`，写入经 `assign`）
+    pub(crate) assigned_agent: Option<AgentId>,
     /// 原任务治理者（仅经验收集等场景使用）
     pub governing_agent_id: Option<AgentId>,
     /// 来源
@@ -356,6 +356,16 @@ impl WorkItem {
         self.status = WorkItemStatus::Assigned;
     }
 
+    /// 只读状态访问器。
+    pub fn status(&self) -> WorkItemStatus {
+        self.status
+    }
+
+    /// 只读分配 Agent 访问器。
+    pub fn assigned_agent(&self) -> Option<AgentId> {
+        self.assigned_agent
+    }
+
     /// 标记为执行中
     pub fn start(&mut self) {
         self.status = WorkItemStatus::Running;
@@ -419,7 +429,7 @@ mod tests {
 
     #[test]
     fn work_item_execution_creation() {
-        let task_id = Uuid::nil();
+        let task_id = crate::domain::TaskId::nil();
         let work_item = WorkItem::execution(task_id, "test prompt".to_string());
         assert_eq!(work_item.work_type, WorkItemType::Execution);
         assert_eq!(work_item.status, WorkItemStatus::Pending);
@@ -428,11 +438,11 @@ mod tests {
 
     #[test]
     fn work_item_state_transitions() {
-        let task_id = Uuid::nil();
+        let task_id = crate::domain::TaskId::nil();
         let mut work_item = WorkItem::execution(task_id, "test".to_string());
 
         assert!(work_item.is_pending());
-        work_item.assign(Uuid::new_v4());
+        work_item.assign(crate::domain::AgentId::new());
         assert_eq!(work_item.status, WorkItemStatus::Assigned);
 
         work_item.start();
@@ -445,7 +455,7 @@ mod tests {
 
     #[test]
     fn work_item_summarization() {
-        let task_id = Uuid::nil();
+        let task_id = crate::domain::TaskId::nil();
         let work_item = WorkItem::summarization(
             task_id,
             "content to summarize".to_string(),
@@ -462,7 +472,7 @@ mod tests {
 
     #[test]
     fn work_item_evaluation_creation() {
-        let task_id = uuid::Uuid::nil();
+        let task_id = crate::domain::TaskId::nil();
         let work_item = WorkItem::evaluation(
             task_id,
             "请评估当前任务状态".to_string(),
@@ -488,7 +498,7 @@ mod tests {
 
     #[test]
     fn work_item_evaluation_without_reasoning_hint() {
-        let task_id = uuid::Uuid::nil();
+        let task_id = crate::domain::TaskId::nil();
         let work_item = WorkItem::evaluation(task_id, "请评估当前任务状态".to_string(), None);
 
         // Verify the prompt is unchanged when no reasoning hint is provided
@@ -502,8 +512,8 @@ mod tests {
     fn work_item_experience_collection_creation() {
         use crate::domain::{ToolExecutorKind, ToolPermission, ToolSchema};
 
-        let task_id = uuid::Uuid::nil();
-        let parent_task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::nil();
+        let parent_task_id = crate::domain::TaskId::new();
         let tool = ToolDefinition {
             name: "submit_experience_candidate".to_string(),
             description: "submit experience candidate".to_string(),
@@ -520,7 +530,7 @@ mod tests {
                 content: "user goal".to_string(),
             }],
             vec![tool],
-            uuid::Uuid::new_v4(),
+            crate::domain::AgentId::new(),
         );
 
         assert_eq!(work_item.work_type, WorkItemType::ExperienceCollection);

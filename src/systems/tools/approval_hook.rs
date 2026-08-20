@@ -11,6 +11,7 @@
 use crate::prelude::*;
 use tracing::debug;
 
+use crate::domain::HookPoint;
 use crate::domain::{
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage,
@@ -19,11 +20,10 @@ use crate::user_plugins::dispatcher::{
     HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
     flush_world_commands,
 };
-use crate::user_plugins::hook_point::HookPoint;
 use crate::user_plugins::host_api::{
     approval::ApprovalContext, entity_query::WorldSnapshot, entity_write::WorldWriter,
     experience::ExperienceContext, message::MessageContext, plugin_resource::PluginRoots,
-    skills_meta::SkillsSnapshot, temp_resource::TempResourceSlot,
+    skills_meta::SkillsSnapshot, temp_resource::TempResourceSlot, tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::PluginRegistry;
 
@@ -135,10 +135,7 @@ fn dispatch_approval_hook(
                     writer: WorldWriter::new(writer_tx.clone()),
                     outcome: local_outcome,
                     plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
-                    approval: ApprovalContext {
-                        current_request_id,
-                        tx: writer_tx.clone(),
-                    },
+                    approval: ApprovalContext { current_request_id },
                     experience: ExperienceContext {
                         store: std::sync::Arc::new(
                             world
@@ -146,7 +143,6 @@ fn dispatch_approval_hook(
                                 .cloned()
                                 .unwrap_or_default(),
                         ),
-                        tx: writer_tx.clone(),
                     },
                     skills: SkillsSnapshot::empty(),
                     message: MessageContext {
@@ -154,6 +150,7 @@ fn dispatch_approval_hook(
                         tx: message_tx.clone(),
                     },
                     temp_resource: TempResourceSlot::new(),
+                    tool: ToolCallContext::default(),
                 }
             },
         ),
@@ -177,10 +174,10 @@ mod tests {
     fn make_approval_request() -> ApprovalRequestMessage {
         ApprovalRequestMessage {
             request_id: uuid::Uuid::new_v4(),
-            source_task_id: uuid::Uuid::nil(),
-            approval_task_id: uuid::Uuid::new_v4(),
-            parent_agent_id: uuid::Uuid::nil(),
-            child_agent_id: uuid::Uuid::nil(),
+            source_task_id: crate::domain::TaskId::nil(),
+            approval_task_id: crate::domain::TaskId::new(),
+            parent_agent_id: crate::domain::AgentId::nil(),
+            child_agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "ls"}),
             context: String::new(),
@@ -190,8 +187,8 @@ mod tests {
     fn make_approval_result() -> ApprovalResultMessage {
         ApprovalResultMessage {
             request_id: uuid::Uuid::new_v4(),
-            source_task_id: uuid::Uuid::nil(),
-            approval_task_id: uuid::Uuid::new_v4(),
+            source_task_id: crate::domain::TaskId::nil(),
+            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Approved,
             reasoning: "test".to_string(),
             grant_mode: GrantMode::Once,

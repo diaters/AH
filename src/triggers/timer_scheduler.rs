@@ -16,8 +16,9 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::domain::{ExternalInput, SignalSource};
+use crate::triggers::ScheduleSpec;
 use crate::triggers::config::build_schedules;
-use crate::triggers::scheduled_task::{ScheduleSpec, ScheduledItem, SchedulerState};
+use crate::triggers::scheduled_task::{ScheduledItem, SchedulerState};
 
 /// 启动 timer scheduler。
 ///

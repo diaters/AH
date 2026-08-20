@@ -10,17 +10,16 @@ use crossbeam_channel::unbounded;
 use tracing::{debug, info};
 
 use crate::{
-    app::HarnessSettings,
     domain::{
         CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
-        NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
+        HookPoint, NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
     },
+    systems::HarnessSettings,
     user_plugins::{
         dispatcher::{
             HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
             flush_world_commands,
         },
-        hook_point::HookPoint,
         host_api::{
             approval::ApprovalContext,
             entity_query::WorldSnapshot,
@@ -30,6 +29,7 @@ use crate::{
             plugin_resource::PluginRoots,
             skills_meta::SkillsSnapshot,
             temp_resource::TempResourceSlot,
+            tool_control::ToolCallContext,
         },
         registry::PluginRegistry,
     },
@@ -168,7 +168,6 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
                     plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                     approval: ApprovalContext {
                         current_request_id: None,
-                        tx: writer_tx.clone(),
                     },
                     experience: ExperienceContext {
                         store: Arc::new(
@@ -177,7 +176,6 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
                                 .cloned()
                                 .unwrap_or_default(),
                         ),
-                        tx: writer_tx.clone(),
                     },
                     skills: SkillsSnapshot::empty(),
                     message: MessageContext {
@@ -185,6 +183,7 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
                         tx: message_tx.clone(),
                     },
                     temp_resource: TempResourceSlot::new(),
+                    tool: ToolCallContext::default(),
                 }
             },
         ),

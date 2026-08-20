@@ -22,6 +22,7 @@ use crate::prelude::*;
 use crossbeam_channel::unbounded;
 use tracing::{debug, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     AgentExecutionResult, ExecutionError, ToolCalledHookPending, ToolError,
     ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
@@ -30,7 +31,6 @@ use crate::user_plugins::dispatcher::{
     HookDispatchInput, HookOutcome, PluginContext, SharedHookOutcome, dispatch_hook,
     flush_world_commands,
 };
-use crate::user_plugins::hook_point::HookPoint;
 use crate::user_plugins::host_api::{
     approval::ApprovalContext,
     entity_query::WorldSnapshot,
@@ -40,6 +40,7 @@ use crate::user_plugins::host_api::{
     plugin_resource::PluginRoots,
     skills_meta::SkillsSnapshot,
     temp_resource::TempResourceSlot,
+    tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
 
@@ -157,7 +158,6 @@ fn dispatch_on_tool_called(
                 plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                 approval: ApprovalContext {
                     current_request_id: None,
-                    tx: writer_tx.clone(),
                 },
                 experience: ExperienceContext {
                     store: Arc::new(
@@ -166,7 +166,6 @@ fn dispatch_on_tool_called(
                             .cloned()
                             .unwrap_or_default(),
                     ),
-                    tx: writer_tx.clone(),
                 },
                 skills: SkillsSnapshot::empty(),
                 message: MessageContext {
@@ -174,6 +173,7 @@ fn dispatch_on_tool_called(
                     tx: message_tx.clone(),
                 },
                 temp_resource: TempResourceSlot::new(),
+                tool: ToolCallContext::new(&request.tool_name, request.tool_input.clone()),
             }
         }),
     };
@@ -204,7 +204,7 @@ mod tests {
         ToolExecutionRequestMessage {
             request: AgentExecutionRequest {
                 task_id,
-                agent_id: uuid::Uuid::nil(),
+                agent_id: crate::domain::AgentId::nil(),
                 request_kind: AgentRequestKind::ToolExecution {
                     tool_name: "shell_exec".to_string(),
                 },

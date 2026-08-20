@@ -6,8 +6,9 @@ use crate::prelude::*;
 use tracing::{debug, warn};
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    contracts::Clock,
     domain::{ShortTermMemory, Task, ToolCallingState, ToolExecutionResultMessage},
+    systems::HarnessSettings,
 };
 
 /// Tool 结果处理 System

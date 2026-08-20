@@ -14,11 +14,13 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ChannelId,
-    ExperienceGovernanceDecision, ExperienceStore, ExperienceWritebackDestination, FrontendKind,
-    HarnessConfig, LlmToolCall, OutputContent, ProfileGenerationKind,
-    ProfileGenerationRequestMessage, ShortTermMemory, Task, TaskStatus,
-    ToolExecutionRequestMessage, WaitingReason, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionRequest,
+    domain::AgentExecutor, domain::ChannelId, domain::ExperienceGovernanceDecision,
+    domain::ExperienceStore, domain::ExperienceWritebackDestination, domain::FrontendKind,
+    domain::LlmToolCall, domain::OutputContent, domain::ProfileGenerationKind,
+    domain::ProfileGenerationRequestMessage, domain::ShortTermMemory, domain::Task,
+    domain::ToolExecutionRequestMessage, domain::WaitingReason, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -37,7 +39,7 @@ fn default_channel() -> ChannelId {
 struct ProfileDesignerMockExecutor;
 
 impl AgentExecutor for ProfileDesignerMockExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> harness::ExecutorFuture {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
         let has_messages = request.conversation.as_ref().is_some_and(|c| !c.is_empty());
         let is_regeneration = request.prompt.contains("用户评审反馈");
         let response = if has_messages {
@@ -171,14 +173,14 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
     // 第一帧：加载 agents.toml 中的 Agent
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
     // Spawn 一个占位 Task（Waiting(Agent) 防止 task_dispatch_system 重复派发），
     // 供 llm_response_system 处理 ToolCalls 时创建 ToolCallingState
     let mut task = Task::from_user_input_ready("profile generation", 3, default_channel());
     task.id = task_id;
-    task.status = TaskStatus::Waiting(WaitingReason::Agent);
+    task.mark_waiting(WaitingReason::Agent, chrono::Utc::now());
     let task_entity = app
         .world_mut()
         .spawn((task, ShortTermMemory::default()))
@@ -190,17 +192,17 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
 
     // 预置候选到 ExperienceStore
     let candidate_id = uuid::Uuid::new_v4();
-    let candidate = harness::ExperienceCandidate {
+    let candidate = harness::domain::ExperienceCandidate {
         candidate_id,
         producer_task_id: task_id,
         producer_agent_id: agent_id,
         title: "physics fact".to_string(),
-        kind_hint: harness::ExperienceKindHint::Knowledge,
-        payload: harness::ExperienceCandidatePayload::Knowledge {
+        kind_hint: harness::domain::ExperienceKindHint::Knowledge,
+        payload: harness::domain::ExperienceCandidatePayload::Knowledge {
             content: "E=mc^2".to_string(),
         },
         dependency_refs: vec![],
-        status: harness::ExperienceCandidateStatus::ProfileGenerationPending,
+        status: harness::domain::ExperienceCandidateStatus::ProfileGenerationPending,
         governing_agent_id: Some(agent_id),
         derived_from_candidate_ids: vec![],
     };
@@ -249,7 +251,7 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
 
     // 阶段 2：用户拒绝并反馈，触发 experience_approval_result_system spawn 重生成请求
     app.world_mut()
-        .spawn(harness::ToolConfirmationResponseMessage {
+        .spawn(harness::domain::ToolConfirmationResponseMessage {
             request_id: first_request_id,
             selected_option: "reject_with_feedback".to_string(),
             feedback: Some("name too generic, be more specific".to_string()),
@@ -271,7 +273,7 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
 
     // 阶段 4：用户审批通过重生成的 profile
     app.world_mut()
-        .spawn(harness::ToolConfirmationResponseMessage {
+        .spawn(harness::domain::ToolConfirmationResponseMessage {
             request_id: second_request_id,
             selected_option: "approve".to_string(),
             feedback: None,

@@ -18,11 +18,12 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
-use harness::user_plugins::hook_point::HookPoint;
+use harness::domain::HookPoint;
 use harness::{
-    AgentExecutor, ChannelId, FrontendKind, HarnessConfig, WorkItem, WorkItemInput,
-    WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
-    WorkItemWritebackTarget, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
+    domain::WorkItem, domain::WorkItemInput, domain::WorkItemLifecycleHookPending,
+    domain::WorkItemOrigin, domain::WorkItemStatus, domain::WorkItemType,
+    domain::WorkItemWritebackTarget, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
@@ -39,13 +40,22 @@ fn default_channel() -> ChannelId {
 /// 构造指定状态的 WorkItem。
 fn make_work_item(status: WorkItemStatus) -> WorkItem {
     let mut wi = WorkItem::new(
-        uuid::Uuid::nil(),
+        harness::domain::TaskId::nil(),
         WorkItemType::Evaluation,
         WorkItemInput::new("test".to_string()),
         WorkItemOrigin::Evaluation,
         WorkItemWritebackTarget::TaskResult,
     );
-    wi.status = status;
+    match status {
+        WorkItemStatus::Pending => {}
+        WorkItemStatus::Assigned => wi.assign(harness::domain::AgentId::nil()),
+        WorkItemStatus::Running => {
+            wi.assign(harness::domain::AgentId::nil());
+            wi.start();
+        }
+        WorkItemStatus::Completed => wi.complete(),
+        WorkItemStatus::Failed => wi.fail(),
+    }
     wi
 }
 

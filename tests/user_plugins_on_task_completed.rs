@@ -17,8 +17,9 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutor, ChannelId, ExternalInput, FrontendKind, HarnessConfig, ShortTermMemory, Task,
-    TaskStatus, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::ExternalInput,
+    domain::FrontendKind, domain::ShortTermMemory, domain::Task, domain::TaskStatus,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
@@ -107,7 +108,7 @@ fn on_task_completed_dispatches_on_finish_command() {
 
     // 构造一个 Ready → 等待用户态的 task，发 `/finish` 触发 mark_done。
     let mut task = make_ready_task();
-    task.status = TaskStatus::Waiting(harness::WaitingReason::User);
+    task.mark_waiting(harness::domain::WaitingReason::User, chrono::Utc::now());
     let task_id = task.id;
     let task_entity = app
         .world_mut()
@@ -141,7 +142,7 @@ fn on_task_completed_dispatches_on_finish_command() {
         .query::<&Task>()
         .iter(app.world())
         .find(|t| t.id == task_id)
-        .map(|t| t.status.clone());
+        .map(|t| t.status().clone());
     match task_status {
         Some(TaskStatus::Done) => {}
         other => panic!("预期 Task 进入 Done，实际：{:?}", other),
@@ -198,7 +199,11 @@ fn on_task_failed_dispatches_on_direct_failure_mutation() {
         let mut task_q = app.world_mut().query::<&mut Task>();
         for mut t in task_q.iter_mut(app.world_mut()) {
             if t.id == task_id {
-                t.status = TaskStatus::Failed(harness::FailureReason::AgentError);
+                t.mark_failed_reason(
+                    harness::domain::FailureReason::AgentError,
+                    "agent error for test",
+                    chrono::Utc::now(),
+                );
             }
         }
     }

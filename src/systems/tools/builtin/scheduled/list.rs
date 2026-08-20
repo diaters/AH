@@ -1,10 +1,10 @@
 use tracing::warn;
 
+use crate::domain::compute_next_trigger;
 use crate::domain::{
     BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolContext, ToolError, ToolFuture,
     ToolWorkerOutput,
 };
-use crate::triggers::scheduled_task::compute_next_trigger;
 
 pub struct ListScheduledTasksTool;
 

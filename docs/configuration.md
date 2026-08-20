@@ -225,9 +225,10 @@ Telegram 通道配置位于 `HARNESS_CHANNELS_CONFIG` 指向的 TOML 文件（�
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `HARNESS_PLUGINS_DIR` | 无（不加载插件） | 插件根目录路径，其下每个子目录视为一个插件 |
+| `HARNESS_PLUGINS_DIR` | `.harness/plugins` | 插件根目录路径，其下每个子目录视为一个插件 |
 
-当 `HARNESS_PLUGINS_DIR` 未设置时，插件系统不启用，所有 hook 派发为 noop。
+当 `HARNESS_PLUGINS_DIR` 未设置时，使用默认目录 `.harness/plugins`（相对当前工作目录）；
+该目录不存在时不加载任何插件，所有 hook 派发为 noop。
 
 ### 插件清单格式
 

@@ -1,13 +1,13 @@
 use crate::prelude::*;
 use tracing::{debug, info, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     Agent, ExperienceCandidateStatus, ExperienceStore, ExperienceWritebackDestination,
     ExperienceWritebackRequestMessage, GeneratedProfile, LongTermMemory, PendingExperienceHooks,
     ProfileGenerationContext, TaskId, WorkItem,
 };
 use crate::infrastructure::memory::LongTermMemoryService;
-use crate::user_plugins::hook_point::HookPoint;
 
 fn build_incubated_agent_description(
     store: &crate::domain::ExperienceStore,
@@ -66,7 +66,7 @@ pub(crate) fn experience_writeback_system(
     asset_service: Res<crate::infrastructure::assets::AgentAssetService>,
     proposal_store: Res<crate::infrastructure::incubation::proposal_store::IncubationProposalStore>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
-    settings: Res<crate::app::HarnessSettings>,
+    settings: Res<crate::systems::HarnessSettings>,
     requests: Query<(Entity, &ExperienceWritebackRequestMessage)>,
     profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
 ) {
@@ -457,7 +457,9 @@ fn writeback_incubation_proposal(
             );
 
             // 派发 on_agent_incubated hook（写入 agents.toml 成功后触发）
-            pending_hooks.0.push((HookPoint::OnAgentIncubated, task_id));
+            pending_hooks
+                .0
+                .push((HookPoint::OnAgentIncubated, task_id.0));
 
             Ok(())
         }
@@ -498,8 +500,8 @@ mod tests {
     #[test]
     fn description_builds_from_candidate_titles() {
         let mut store = crate::domain::ExperienceStore::default();
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let c1 = crate::domain::ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
@@ -546,8 +548,8 @@ mod tests {
 
         let mut store = ExperienceStore::default();
         let mut pending_hooks = PendingExperienceHooks::default();
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
@@ -611,8 +613,8 @@ mod tests {
 
         let mut store = ExperienceStore::default();
         let mut pending_hooks = PendingExperienceHooks::default();
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
@@ -696,8 +698,8 @@ description = "existing"
 
         let mut store = ExperienceStore::default();
         let mut pending_hooks = PendingExperienceHooks::default();
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),

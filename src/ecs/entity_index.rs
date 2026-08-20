@@ -4,7 +4,10 @@
 //!
 //! 本文件提供 `EntityIndex` Resource 与 `RemovedComponents` 兜底清理系统。
 //! 两表的写入由 `spawn_*` / `despawn_*` 中心封装负责
-//! （封装内同步维护映射）；本文件的监听作为双保险之一，在组件移除的下一帧自动摘除陈旧映射。
+//! （封装内同步维护映射）；`create_tasks` 创建子 Task 时也会经
+//! `index.tasks.insert` 直接登记（子 Task 暂不带 `PendingDispatch`，无法复用
+//! `spawn_task` 封装），两类写入都保持"索引与 ECS 实体同步"的一致不变量；
+//! 本文件的监听作为双保险之一，在组件移除的下一帧自动摘除陈旧映射。
 
 use crate::domain::{
     Agent, AgentId, NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task, TaskId,

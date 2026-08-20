@@ -9,6 +9,31 @@ pub struct ChannelConfigs {
 }
 
 impl ChannelConfigs {
+    /// 将 `user` 追加到 `[qq].allowed_users` 并持久化到 `path`。
+    ///
+    /// 配置文件 IO 与格式知识收口于此（通道模块不直接写配置）：
+    /// 内部以 `ChannelConfigs` 全量读写而非仅 `[qq]` 段，
+    /// 确保 `[telegram]` 等其他段不丢失；文件缺失时以 `default_qq` 初始化。
+    pub async fn append_qq_allowed_user(
+        path: &std::path::Path,
+        user: &str,
+        default_qq: QqConfig,
+    ) -> Result<(), String> {
+        let mut configs: Self = tokio::fs::read_to_string(path)
+            .await
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
+        let qq = configs.qq.get_or_insert(default_qq);
+        if !qq.allowed_users.iter().any(|u| u == user) {
+            qq.allowed_users.push(user.to_string());
+        }
+        let content = toml::to_string_pretty(&configs).map_err(|e| e.to_string())?;
+        tokio::fs::write(path, content)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// 展开配置文件中的环境变量引用。
     ///
     /// 当前处理 Telegram 和 QQ 的凭证字段：

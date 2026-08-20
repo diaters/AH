@@ -6,14 +6,15 @@ use crate::prelude::*;
 
 use tracing::{debug, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
-    DispatchHint, DispatchKind, DispatchStrategy, ExperienceCandidateStatus, ExperienceStore,
+    AgentExecutionOutput, AgentExecutionResult, DispatchHint, DispatchKind, DispatchStrategy,
+    ExperienceCandidateStatus, ExperienceGovernanceRequestMessage, ExperienceStore, OutputContent,
     PendingDispatch, SkillCreationContext, SkillCreationRequestMessage,
     SkillCreationWritebackMessage, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
     WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::infrastructure::skills::{LoadedSkill, SkillEntry, SkillId, SkillLoader, SkillRegistry};
-use crate::user_plugins::hook_point::HookPoint;
 
 /// skill 创建 WorkItem 创建系统：消费 SkillCreationRequestMessage，创建 sandbox 目录，
 /// 构造 prompt 与工具列表，spawn WorkItem + SkillCreationContext + PendingDispatch。
@@ -29,28 +30,24 @@ pub(crate) fn skill_creation_workitem_system(
             &request.agent_name
         };
 
-        // 1. 创建 sandbox 目录：<base_dir>/<agent_name>/skills/.sandbox/_draft_<timestamp>/
+        // 1. 创建 sandbox 目录（布局知识由 SkillLoader 收口）
         let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-        let sandbox_dir = skill_loader
-            .base_dir()
-            .join(agent_name)
-            .join("skills")
-            .join(".sandbox")
-            .join(format!("_draft_{}", timestamp));
-
-        if let Err(e) = std::fs::create_dir_all(&sandbox_dir) {
-            warn!(
-                event = "SkillCreationSandboxDirFailed",
-                task_id = %request.task_id,
-                agent_name = agent_name,
-                sandbox_dir = ?sandbox_dir,
-                error = %e,
-                error_type = "DirectoryCreationFailed",
-                "failed to create sandbox directory, skipping skill creation"
-            );
-            commands.entity(entity).despawn();
-            continue;
-        }
+        let sandbox_dir =
+            match skill_loader.create_sandbox(agent_name, &format!("_draft_{timestamp}")) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    warn!(
+                        event = "SkillCreationSandboxDirFailed",
+                        task_id = %request.task_id,
+                        agent_name = agent_name,
+                        error = %e,
+                        error_type = "DirectoryCreationFailed",
+                        "failed to create sandbox directory, skipping skill creation"
+                    );
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+            };
 
         // 2. 获取现有 skill 列表
         let existing_skills = skill_loader.load_skills(agent_name);
@@ -244,12 +241,8 @@ pub(crate) fn skill_creation_writeback_system(
             continue;
         }
 
-        // 2. 检查目标目录是否已存在（同名冲突）
-        let target_dir = skill_loader
-            .base_dir()
-            .join(&context.agent_name)
-            .join("skills")
-            .join(&context.skill_name);
+        // 2. 检查目标目录是否已存在（同名冲突；路径由 SkillLoader 布局接口给出）
+        let target_dir = skill_loader.skill_dir(&context.agent_name, &context.skill_name);
 
         // 防御性路径安全检查：target_dir 必须在 skills/ 目录下
         if let (Ok(target_canonical), Ok(skills_canonical)) = (
@@ -296,7 +289,7 @@ pub(crate) fn skill_creation_writeback_system(
 
         // 3. 读取并解析 sandbox SKILL.md（rename 前校验依赖，避免落盘不可信声明）
         let mut parsed_skill: Option<LoadedSkill> = None;
-        match std::fs::read_to_string(context.sandbox_dir.join("SKILL.md")) {
+        match skill_loader.read_skill_md_in(&context.sandbox_dir) {
             Ok(content) => {
                 match crate::infrastructure::skills::loader::parse_skill_md(
                     &content,
@@ -358,8 +351,12 @@ pub(crate) fn skill_creation_writeback_system(
             }
         }
 
-        // 4. 执行 rename（原子移动）
-        if let Err(e) = std::fs::rename(&context.sandbox_dir, &target_dir) {
+        // 4. 执行 rename 发布（原子移动，经 SkillLoader 布局接口）
+        if let Err(e) = skill_loader.publish_sandbox(
+            &context.sandbox_dir,
+            &context.agent_name,
+            &context.skill_name,
+        ) {
             warn!(
                 event = "SkillCreationRenameFailed",
                 task_id = %msg.task_id,
@@ -433,6 +430,119 @@ fn make_tool_def(
     }
 }
 
+/// 处理 SkillCreation WorkItem LLM 响应的路由分支。
+///
+/// 自 `transform/llm_response.rs` 按知识域归位至此（P2 重组，纯搬家）。
+///
+/// - ToolCalls（write_skill_file / submit_skill）：放行给 tool calling loop，
+///   由其处理后续迭代。
+/// - text：skill-creator 结束。有候选提交则推进治理
+///   （Submitted → GovernancePending + spawn 治理请求，
+///   复用统一收束入口 collect_top_level_governance_candidates）；
+///   无候选提交则 fail。最终文本继续走通用路径，
+///   用户仍能收到创建结果回复。
+/// - error：对齐 SkillUpdate 错误路径。
+///
+/// 返回 `true` 表示该响应已处理完毕（调用方应 `continue`）；
+/// 返回 `false` 表示放行给 tool calling loop / 通用路径处理。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_skill_creation_llm_response(
+    commands: &mut Commands,
+    experience_store: &mut ExperienceStore,
+    skill_creation_contexts: &Query<&SkillCreationContext>,
+    work_items: &mut Query<(Entity, &mut WorkItem)>,
+    result_entity: Entity,
+    work_item_entity: Entity,
+    work_item: &WorkItem,
+    result: &AgentExecutionResult,
+) -> bool {
+    match &result.result {
+        Ok(AgentExecutionOutput {
+            content: OutputContent::ToolCalls(_),
+            ..
+        }) => {
+            // 放行给 tool calling loop 处理 tool calls
+            false
+        }
+        Ok(_) => {
+            // 统一收束入口：root 候选 Submitted → GovernancePending。
+            // 以 advanced 是否非空作为"有候选/无候选"的唯一判断，
+            // 避免 has_experience_submission（含 inbox 口径）
+            // 与收束入口口径不一致导致的静默完成。
+            let advanced =
+                experience_store.collect_top_level_governance_candidates(work_item.task_id);
+
+            if advanced.is_empty() {
+                warn!(
+                    event = "SkillCreationWorkItemNoSubmission",
+                    work_item_id = %work_item.id,
+                    task_id = %work_item.task_id,
+                    error = "LLM finished without successful submit_skill",
+                    error_type = "NoCandidateSubmission",
+                    "skill creation LLM finished without candidate, \
+                     cleaning up work item"
+                );
+                if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                    wi.1.fail();
+                    commands
+                        .entity(work_item_entity)
+                        .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+                }
+                // 无候选提交，despawn WorkItem；不 despawn result entity
+                commands.entity(work_item_entity).despawn();
+            } else {
+                let agent_id = skill_creation_contexts
+                    .get(work_item_entity)
+                    .ok()
+                    .map(|c| c.agent_id)
+                    .unwrap_or_else(|| {
+                        work_item
+                            .governing_agent_id
+                            .unwrap_or_else(crate::domain::AgentId::nil)
+                    });
+                commands.spawn(ExperienceGovernanceRequestMessage {
+                    task_id: work_item.task_id,
+                    agent_id,
+                });
+                debug!(
+                    event = "SkillCreationGovernanceRequested",
+                    task_id = %work_item.task_id,
+                    candidate_count = advanced.len(),
+                    "skill creation candidate promoted to governance"
+                );
+                if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                    wi.1.complete();
+                    commands
+                        .entity(work_item_entity)
+                        .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemCompleted));
+                }
+                // 保留 WorkItem entity 不 despawn，确保治理批准后
+                // SkillCreationContext 能被写回系统读取并执行 rename。
+            }
+            false
+        }
+        Err(_) => {
+            warn!(
+                event = "SkillCreationWorkItemLlmFailed",
+                work_item_id = %work_item.id,
+                task_id = %work_item.task_id,
+                error = "LLM execution returned Err",
+                error_type = "LlmExecutionFailed",
+                "skill creation LLM failed, cleaning up work item"
+            );
+            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                wi.1.fail();
+                commands
+                    .entity(work_item_entity)
+                    .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+            }
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,8 +557,8 @@ mod tests {
     /// 构造 SkillCreationRequestMessage。
     fn make_request(agent_name: &str, intent: &str) -> SkillCreationRequestMessage {
         SkillCreationRequestMessage {
-            task_id: Uuid::new_v4(),
-            agent_id: Uuid::new_v4(),
+            task_id: crate::domain::TaskId::new(),
+            agent_id: crate::domain::AgentId::new(),
             agent_name: agent_name.to_string(),
             intent: intent.to_string(),
         }
@@ -458,8 +568,8 @@ mod tests {
     fn stage_skill_new_candidate(store: &mut ExperienceStore) -> Uuid {
         let c = ExperienceCandidate::skill_new(
             Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "new skill title".to_string(),
             "new-skill".to_string(),
             "desc".to_string(),
@@ -580,8 +690,8 @@ mod tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let mut work_item =
             WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
         work_item.start();
@@ -677,8 +787,8 @@ mod tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let mut work_item =
             WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
         work_item.start();
@@ -736,8 +846,8 @@ mod tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let mut work_item =
             WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
         work_item.start();
@@ -788,8 +898,8 @@ mod tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let mut work_item =
             WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
         work_item.start();
@@ -874,8 +984,8 @@ mod tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let mut work_item =
             WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
         work_item.start();
@@ -952,8 +1062,8 @@ mod tests {
         world.insert_resource(SkillRegistry::default());
         world.insert_resource(loader);
 
-        let task_id = Uuid::new_v4();
-        let agent_id = Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let mut work_item =
             WorkItem::skill_creation(task_id, "prompt".to_string(), vec![], vec![], agent_id);
         work_item.start();

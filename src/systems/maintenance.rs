@@ -3,16 +3,16 @@ use std::fs;
 use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use crate::{
-    app::{Clock, HarnessSettings},
+    contracts::Clock,
     domain::{
         Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
         AgentProfile, AgentSpawnRequestMessage, AgentStoppingHookPending, AgentToolPermissions,
         FailureReason, MessageDispatchedHookPending, SpaceToolRegistry, Task, TaskId,
         TaskTerminatedMessage, ToolPermission,
     },
+    systems::HarnessSettings,
 };
 
 /// Startup 系统：加载持久化 Agent
@@ -83,9 +83,11 @@ fn load_persistent_agents(
 ) {
     let config_path = &settings.0.agents_config_path;
 
-    let content = match fs::read_to_string(config_path) {
-        Ok(content) => content,
-        Err(_) => {
+    let config = match crate::infrastructure::incubation::agent_registry::load_agent_config(
+        std::path::Path::new(config_path),
+    ) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
             warn!(
                 event = "AgentsConfigNotFound",
                 config_path = %config_path,
@@ -93,25 +95,29 @@ fn load_persistent_agents(
             );
             return;
         }
-    };
-
-    let config: crate::domain::AgentConfig = match toml::from_str(&content) {
-        Ok(config) => config,
         Err(err) => {
+            // 启动期 validate_agent_config 已做 fail-fast；此处为防御兜底
             error!(
                 event = "AgentsConfigParseError",
                 config_path = %config_path,
                 error = %err,
-                "failed to parse agents config"
+                "failed to parse agents config, skipping persistent agent load"
             );
-            panic!("invalid agents config: {err}");
+            return;
         }
     };
 
     let mut seen_names = std::collections::HashSet::new();
     for entry in &config.agent {
         if !seen_names.insert(entry.name.clone()) {
-            panic!("duplicate agent name '{}' in config", entry.name);
+            // 启动期校验已拦截；此处为防御兜底，跳过而非 panic
+            error!(
+                event = "AgentsConfigDuplicateName",
+                config_path = %config_path,
+                agent_name = %entry.name,
+                "duplicate agent name in config, skipping persistent agent load"
+            );
+            return;
         }
     }
 
@@ -189,7 +195,7 @@ fn spawn_persistent_agent_from_entry(
     entry: &crate::domain::AgentEntry,
     registry: &crate::llm::ExecutorRegistry,
 ) {
-    let id = Uuid::new_v4();
+    let id = crate::domain::AgentId::new();
 
     // 确定模型链
     let models = if !entry.models.is_empty() {
@@ -374,7 +380,7 @@ fn handle_spawn_request(
         .clone()
         .unwrap_or_else(|| parent_agent.profile.model.clone());
 
-    let id = Uuid::new_v4();
+    let id = crate::domain::AgentId::new();
     debug!(
         event = "TaskScopedAgentSpawned",
         agent_id = %id,
@@ -513,9 +519,7 @@ fn mark_task_failed(
 ) {
     // UUID 寻址改用 EntityIndex O(1) 解析
     if let Some(mut task) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
-        task.last_error = Some(error_message.to_string());
-        task.status = crate::domain::TaskStatus::Failed(FailureReason::AgentError);
-        task.updated_at = clock.0;
+        task.mark_failed_reason(FailureReason::AgentError, error_message, clock.0);
     }
 }
 
@@ -585,7 +589,7 @@ mod o2_inheritance_tests {
         overrides: HashMap<String, ToolPermission>,
     ) -> Agent {
         Agent {
-            id: Uuid::nil(),
+            id: crate::domain::AgentId::nil(),
             profile: AgentProfile {
                 name: "parent".to_string(),
                 model: "m".to_string(),
@@ -717,7 +721,7 @@ mod required_tag_tests {
 
     fn make_agent_with_tags(tags: Vec<String>) -> Agent {
         Agent {
-            id: Uuid::nil(),
+            id: crate::domain::AgentId::nil(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "m".to_string(),

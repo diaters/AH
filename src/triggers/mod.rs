@@ -8,18 +8,18 @@
 //! - 统一的 `SchedulerState`（静态路由 + 动态任务）
 
 pub mod config;
-pub mod prompt_template;
 pub mod scheduled_task;
 pub mod timer_scheduler;
 pub mod webhook_server;
 
+pub use crate::domain::ScheduleSpec;
 pub use config::{
     TimerConfig, TimerRouteConfig, TriggerConfig, WebhookConfig, WebhookRouteConfig,
     build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
 };
 pub use scheduled_task::{
-    DynamicScheduledTask, ScheduleSpec, ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry,
-    SchedulerRoutes, SchedulerState, SchedulerStateWatcher, update_scheduler_state,
+    DynamicScheduledTask, ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerRoutes,
+    SchedulerState, SchedulerStateWatcher, update_scheduler_state,
     update_scheduler_state_with_watcher,
 };
 pub use timer_scheduler::run_timer_scheduler;
@@ -28,7 +28,7 @@ pub use webhook_server::run_webhook_server;
 use bevy_ecs::prelude::World;
 use tracing::{error, info, warn};
 
-use crate::app::HarnessSettings;
+use crate::domain::TriggersConfigPath;
 
 /// `/reload-triggers` 系统。
 ///
@@ -38,8 +38,8 @@ use crate::app::HarnessSettings;
 /// 通过 `update_scheduler_state` 提交静态路由，保留 `SchedulerState.dynamic_tasks` 不变。
 pub fn reload_triggers_system(world: &mut World) {
     let path = world
-        .get_resource::<HarnessSettings>()
-        .and_then(|s| s.0.triggers_config_path.as_ref())
+        .get_resource::<TriggersConfigPath>()
+        .and_then(|s| s.0.as_ref())
         .map(std::path::PathBuf::from);
 
     let Some(path) = path else {

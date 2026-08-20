@@ -6,9 +6,10 @@ use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam_channel::unbounded;
 use harness::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, DispatchHint, DispatchKind,
-    DispatchStrategy, ExecutorFuture, HarnessConfig, PendingDispatch, WorkItem, WorkItemStatus,
-    WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionRequest,
+    domain::AgentExecutor, domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy,
+    domain::ExecutorFuture, domain::PendingDispatch, domain::WorkItem, domain::WorkItemStatus,
+    domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -19,7 +20,10 @@ impl AgentExecutor for MockExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         Box::pin(async move {
             Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text(format!("response: {}", request.prompt)),
+                content: harness::domain::OutputContent::Text(format!(
+                    "response: {}",
+                    request.prompt
+                )),
                 reasoning_content: None,
             })
         })
@@ -29,9 +33,9 @@ impl AgentExecutor for MockExecutor {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -74,7 +78,7 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
     app.update();
 
     // Create an evaluation work item
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::evaluation(task_id, "评估任务状态".to_string(), None);
     let work_item_id = work_item.id;
     app.world_mut().spawn((
@@ -101,13 +105,13 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
         .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Running,
         "Work item should be in Running status after dispatch"
     );
     assert_eq!(states[0].id, work_item_id);
     assert!(
-        states[0].assigned_agent.is_some(),
+        states[0].assigned_agent().is_some(),
         "Work item should have assigned agent"
     );
 }
@@ -132,12 +136,12 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
     app.update();
 
     // Create a summarization work item
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::summarization(
         task_id,
         "Content to summarize".to_string(),
         500,
-        harness::SummarizationTrigger::TaskComplete,
+        harness::domain::SummarizationTrigger::TaskComplete,
     );
     let work_item_id = work_item.id;
     app.world_mut().spawn((
@@ -164,13 +168,13 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
         .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Running,
         "Work item should be in Running status after dispatch"
     );
     assert_eq!(states[0].id, work_item_id);
     assert!(
-        states[0].assigned_agent.is_some(),
+        states[0].assigned_agent().is_some(),
         "Work item should have assigned agent"
     );
 }
@@ -199,7 +203,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
 
     // Create an Execution work item
     // (The narrow dispatcher only handles Evaluation/Summarization, so this is not dispatched)
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::execution(task_id, "Execute this task".to_string());
     app.world_mut().spawn((
         work_item,
@@ -223,7 +227,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
     // Verify no execution request was created
     let requests: Vec<_> = app
         .world_mut()
-        .query::<&harness::AgentExecutionRequestMessage>()
+        .query::<&harness::domain::AgentExecutionRequestMessage>()
         .iter(app.world())
         .collect();
     assert_eq!(requests.len(), 0, "Should not create execution request");
@@ -236,7 +240,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
         .collect();
     assert_eq!(states.len(), 1, "Should have one work item");
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Failed,
         "Work item should be marked Failed when no matching agent"
     );
@@ -260,13 +264,15 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
 
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let tool = harness::ToolDefinition {
+    let task_id = harness::domain::TaskId::new();
+    let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
-        parameters: harness::ToolSchema::default(),
-        default_permission: harness::ToolPermission::Allow,
-        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        parameters: harness::domain::ToolSchema::default(),
+        default_permission: harness::domain::ToolPermission::Allow,
+        executor: harness::domain::ToolExecutorKind::Builtin(
+            "submit_experience_candidate".to_string(),
+        ),
         required_tag: None,
     };
     let work_item = WorkItem::experience_collection(
@@ -275,7 +281,7 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         None,
         vec![],
         vec![tool],
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
     );
     let work_item_id = work_item.id;
     app.world_mut().spawn((
@@ -299,9 +305,9 @@ fn pending_experience_collection_workitem_is_dispatched_to_collector() {
         .iter(app.world())
         .collect();
     assert_eq!(states.len(), 1);
-    assert_eq!(states[0].status, WorkItemStatus::Running);
+    assert_eq!(states[0].status(), WorkItemStatus::Running);
     assert_eq!(states[0].id, work_item_id);
-    assert!(states[0].assigned_agent.is_some());
+    assert!(states[0].assigned_agent().is_some());
 }
 
 /// Test: ExperienceCollection WorkItem without collector agent is marked Failed
@@ -324,13 +330,15 @@ fn experience_collection_workitem_without_collector_is_failed() {
 
     app.update();
 
-    let task_id = uuid::Uuid::new_v4();
-    let tool = harness::ToolDefinition {
+    let task_id = harness::domain::TaskId::new();
+    let tool = harness::domain::ToolDefinition {
         name: "submit_experience_candidate".to_string(),
         description: "submit".to_string(),
-        parameters: harness::ToolSchema::default(),
-        default_permission: harness::ToolPermission::Allow,
-        executor: harness::ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
+        parameters: harness::domain::ToolSchema::default(),
+        default_permission: harness::domain::ToolPermission::Allow,
+        executor: harness::domain::ToolExecutorKind::Builtin(
+            "submit_experience_candidate".to_string(),
+        ),
         required_tag: None,
     };
     let work_item = WorkItem::experience_collection(
@@ -339,7 +347,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
         None,
         vec![],
         vec![tool],
-        uuid::Uuid::new_v4(),
+        harness::domain::AgentId::new(),
     );
     app.world_mut().spawn((
         work_item,
@@ -366,7 +374,7 @@ fn experience_collection_workitem_without_collector_is_failed() {
         .collect();
     assert_eq!(states.len(), 1);
     assert_eq!(
-        states[0].status,
+        states[0].status(),
         WorkItemStatus::Failed,
         "ExperienceCollection WorkItem should be Failed when no collector agent"
     );

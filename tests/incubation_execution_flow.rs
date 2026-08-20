@@ -96,11 +96,11 @@ fn duplicate_incubation_skips_if_name_exists() {
 /// 验证写回成功后 proposal 状态为 Executed。
 #[test]
 fn proposal_status_advances_to_executed() {
-    let mut store = harness::ExperienceStore::default();
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
+    let mut store = harness::domain::ExperienceStore::default();
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
 
-    let candidate = harness::ExperienceCandidate::knowledge(
+    let candidate = harness::domain::ExperienceCandidate::knowledge(
         uuid::Uuid::new_v4(),
         task_id,
         agent_id,
@@ -113,30 +113,36 @@ fn proposal_status_advances_to_executed() {
     store.merge_into_proposal(
         task_id,
         agent_id,
-        harness::AgentProfile {
+        harness::domain::AgentProfile {
             name: "incubated-test".to_string(),
             model: "gpt-4.1-mini".to_string(),
         },
         &candidate,
     );
     if let Some(proposal) = store.proposals.get_mut(&task_id) {
-        proposal.status = harness::IncubationProposalStatus::Approved;
+        proposal.status = harness::domain::IncubationProposalStatus::Approved;
     }
 
     // 模拟 writeback_incubation_proposal 的状态推进逻辑
     // （实际由 ECS system 驱动，此处直接验证状态机）
     if let Some(proposal) = store.proposals.get_mut(&task_id) {
-        assert_eq!(proposal.status, harness::IncubationProposalStatus::Approved);
-        proposal.status = harness::IncubationProposalStatus::Executing;
+        assert_eq!(
+            proposal.status,
+            harness::domain::IncubationProposalStatus::Approved
+        );
+        proposal.status = harness::domain::IncubationProposalStatus::Executing;
         proposal.updated_at = chrono::Utc::now();
     }
     if let Some(proposal) = store.proposals.get_mut(&task_id) {
-        proposal.status = harness::IncubationProposalStatus::Executed;
+        proposal.status = harness::domain::IncubationProposalStatus::Executed;
         proposal.updated_at = chrono::Utc::now();
     }
 
     let proposal = store.proposals.get(&task_id).unwrap();
-    assert_eq!(proposal.status, harness::IncubationProposalStatus::Executed);
+    assert_eq!(
+        proposal.status,
+        harness::domain::IncubationProposalStatus::Executed
+    );
 }
 
 /// 验证 IncubationProposal 可以被持久化和加载。
@@ -147,12 +153,12 @@ fn proposal_store_persists_and_loads_proposals() {
         dir.path().join("proposals"),
     );
 
-    let task_id = uuid::Uuid::new_v4();
-    let agent_id = uuid::Uuid::new_v4();
-    let mut proposal = harness::IncubationProposal::new(
+    let task_id = harness::domain::TaskId::new();
+    let agent_id = harness::domain::AgentId::new();
+    let mut proposal = harness::domain::IncubationProposal::new(
         task_id,
         agent_id,
-        harness::AgentProfile {
+        harness::domain::AgentProfile {
             name: "test-agent".to_string(),
             model: "test".to_string(),
         },

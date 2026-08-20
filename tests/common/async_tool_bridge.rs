@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use harness::app::{AsyncRuntime, Clock};
+use harness::contracts::{AsyncRuntime, Clock};
 use harness::domain::{
     BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolAsyncResult, ToolContext,
     ToolError, ToolFuture, ToolResultReceiver, ToolResultSender, ToolWorkerOutput,

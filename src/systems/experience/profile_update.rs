@@ -9,13 +9,13 @@
 use crate::prelude::*;
 use tracing::{debug, info, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     Agent, AgentCapabilities, ExistingAgentProfile, ExperienceCandidateStatus, ExperienceStore,
     PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationKind,
     ProfileGenerationRequestMessage, WorkItem, sanitize_tags,
 };
 use crate::ecs::EntityIndex;
-use crate::user_plugins::hook_point::HookPoint;
 
 /// Profile 更新触发系统：检测 LTM/SkillPackage 写回成功后，触发 profile 更新评估。
 ///
@@ -129,7 +129,7 @@ pub(crate) fn profile_update_writeback_system(
     mut pending_hooks: ResMut<PendingExperienceHooks>,
     profile_contexts: Query<(Entity, &ProfileGenerationContext, &WorkItem)>,
     agent_registry: Res<crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry>,
-    settings: Res<crate::app::HarnessSettings>,
+    settings: Res<crate::systems::HarnessSettings>,
 ) {
     // 先收集需要处理的候选（避免迭代时可变借用）。
     // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component。
@@ -234,7 +234,7 @@ pub(crate) fn profile_update_writeback_system(
                 // 派发 on_agent_profile_updated hook（写回成功后触发）
                 pending_hooks
                     .0
-                    .push((HookPoint::OnAgentProfileUpdated, task_id));
+                    .push((HookPoint::OnAgentProfileUpdated, task_id.0));
             }
             Err(e) => {
                 // 文件写入失败
@@ -336,8 +336,8 @@ mod tests {
     /// profile_update_trigger_system：持久型 Agent 的 Persisted 候选触发更新评估
     #[test]
     fn trigger_system_spawns_update_request_for_persistent_agent() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate =
@@ -368,8 +368,8 @@ mod tests {
     /// profile_update_trigger_system：default Agent 的候选不触发更新评估
     #[test]
     fn trigger_system_skips_default_agent() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate =
@@ -396,8 +396,8 @@ mod tests {
     /// profile_update_trigger_system：已触发的候选不重复触发
     #[test]
     fn trigger_system_does_not_retrigger() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate =
@@ -427,8 +427,8 @@ mod tests {
     /// profile_update_trigger_system：非 Persisted 候选不触发
     #[test]
     fn trigger_system_skips_non_persisted_candidates() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -470,8 +470,8 @@ description = "old description"
 "#;
         std::fs::write(&config_path, initial).unwrap();
 
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -487,10 +487,12 @@ description = "old description"
         world.insert_resource(store);
         world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
-        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
-            agents_config_path: config_path.to_str().unwrap().to_string(),
-            ..Default::default()
-        }));
+        world.insert_resource(crate::systems::HarnessSettings(
+            crate::systems::HarnessConfig {
+                agents_config_path: config_path.to_str().unwrap().to_string(),
+                ..Default::default()
+            },
+        ));
         world.spawn(agent);
         // 通过 spawn WorkItem + ProfileGenerationContext Component 注入 Update context
         world.spawn((
@@ -553,8 +555,8 @@ description = "old description"
     fn writeback_system_marks_failed_on_file_error() {
         use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
 
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -570,10 +572,12 @@ description = "old description"
         world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
         // 使用不存在的配置路径
-        world.insert_resource(crate::app::HarnessSettings(crate::app::HarnessConfig {
-            agents_config_path: "/nonexistent/path/agents.toml".to_string(),
-            ..Default::default()
-        }));
+        world.insert_resource(crate::systems::HarnessSettings(
+            crate::systems::HarnessConfig {
+                agents_config_path: "/nonexistent/path/agents.toml".to_string(),
+                ..Default::default()
+            },
+        ));
         // 通过 spawn WorkItem + ProfileGenerationContext Component 注入 Update context
         world.spawn((
             WorkItem::profile_generation(
@@ -617,8 +621,8 @@ description = "old description"
     fn writeback_system_skips_candidates_without_update_context() {
         use crate::infrastructure::incubation::agent_registry::IncubatedAgentRegistry;
 
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
         let candidate = make_test_candidate(
@@ -634,8 +638,8 @@ description = "old description"
         world.insert_resource(store);
         world.insert_resource(PendingExperienceHooks::default());
         world.insert_resource(IncubatedAgentRegistry);
-        world.insert_resource(crate::app::HarnessSettings(
-            crate::app::HarnessConfig::default(),
+        world.insert_resource(crate::systems::HarnessSettings(
+            crate::systems::HarnessConfig::default(),
         ));
 
         world

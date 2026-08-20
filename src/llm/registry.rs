@@ -21,7 +21,9 @@ impl ExecutorRegistry {
         for entry in &config.provider {
             let llm_config = crate::llm::LlmProviderConfig {
                 provider: entry.kind.clone(),
-                model: "placeholder".to_string(), // 模型由请求覆盖
+                // 多 provider 注册表不携带默认模型：模型由请求的 model_override 指定，
+                // 请求未指定时执行器会显式报错。
+                model: None,
                 api_key: std::env::var(&entry.api_key_env).ok(),
                 api_base: entry.api_base.clone(),
             };

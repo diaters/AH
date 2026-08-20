@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{AgentId, TaskId};
-use crate::infrastructure::skills::SkillId;
-use crate::user_plugins::hook_point::HookPoint;
+use crate::domain::HookPoint;
+use crate::domain::SkillId;
 
 /// 经验候选类型提示。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -814,12 +814,12 @@ mod tests {
 
     #[test]
     fn experience_store_queues_candidate_for_parent_task() {
-        let owner_task_id = uuid::Uuid::new_v4();
-        let owner_agent_id = uuid::Uuid::new_v4();
+        let owner_task_id = crate::domain::TaskId::new();
+        let owner_agent_id = crate::domain::AgentId::new();
         let candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "shell timeout knowledge".to_string(),
             "shell_stop 默认会等待退出".to_string(),
         );
@@ -874,8 +874,8 @@ mod tests {
     #[test]
     fn inbox_has_pending_and_consumed_states() {
         let inbox = ExperienceInbox {
-            owner_task_id: uuid::Uuid::new_v4(),
-            owner_agent_id: uuid::Uuid::new_v4(),
+            owner_task_id: crate::domain::TaskId::new(),
+            owner_agent_id: crate::domain::AgentId::new(),
             candidate_ids: vec![],
             status: ExperienceInboxStatus::Pending,
         };
@@ -884,13 +884,13 @@ mod tests {
 
     #[test]
     fn experience_store_marks_inbox_consumed_and_aggregates() {
-        let owner_task_id = uuid::Uuid::new_v4();
-        let owner_agent_id = uuid::Uuid::new_v4();
-        let producer_task_id = uuid::Uuid::new_v4();
+        let owner_task_id = crate::domain::TaskId::new();
+        let owner_agent_id = crate::domain::AgentId::new();
+        let producer_task_id = crate::domain::TaskId::new();
         let candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
             producer_task_id,
-            uuid::Uuid::new_v4(),
+            crate::domain::AgentId::new(),
             "child fact".to_string(),
             "content".to_string(),
         );
@@ -920,8 +920,8 @@ mod tests {
         let request_id = uuid::Uuid::new_v4();
         let candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "bound fact".to_string(),
             "content".to_string(),
         );
@@ -942,8 +942,8 @@ mod tests {
 
         let mut c1 = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "first".to_string(),
             "content".to_string(),
         );
@@ -953,8 +953,8 @@ mod tests {
 
         let mut c2 = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "second".to_string(),
             "content".to_string(),
         );
@@ -981,8 +981,8 @@ mod tests {
         let mut store = ExperienceStore::default();
         let mut candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "orphan".to_string(),
             "content".to_string(),
         );
@@ -1045,8 +1045,8 @@ mod tests {
     fn skill_constructor_sets_is_new_false() {
         let candidate = ExperienceCandidate::skill(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "test skill".to_string(),
             "test-skill".to_string(),
             "description".to_string(),
@@ -1067,8 +1067,8 @@ mod tests {
     fn skill_new_constructor_sets_is_new_true() {
         let candidate = ExperienceCandidate::skill_new(
             uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
+            crate::domain::TaskId::new(),
+            crate::domain::AgentId::new(),
             "new skill".to_string(),
             "new-skill".to_string(),
             "description".to_string(),

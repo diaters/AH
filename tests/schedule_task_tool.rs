@@ -62,8 +62,8 @@ fn scheduled_task_trigger_routes_to_create_task_message() {
     assert_eq!(messages.len(), 1, "exactly one CreateTaskMessage expected");
     assert_eq!(messages[0].content, "analyze");
     assert_eq!(
-        messages[0].routing_policy.output_channel,
-        Some(channel),
+        messages[0].routing_policy.output_channel(),
+        Some(&channel),
         "output_channel should come from ScheduledTaskInfo"
     );
 

@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use tracing::debug;
 
-use crate::app::MemoryConfig;
+use crate::domain::MemoryConfig;
 use crate::domain::{
     Agent, ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
     FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
@@ -361,8 +361,10 @@ pub(crate) fn reload_plugins_system(world: &mut World) {
         return;
     }
 
-    // 执行重载
+    // 执行重载（user_plugins 侧完成 registry 与技能贡献的重扫），
+    // 随后由 tools 系统主动拉取 registry 注册插件工具（方向反转）。
     crate::user_plugins::reload::reload_plugins(world);
+    crate::systems::tools::register_plugin_tools_in_world(world);
 
     // despawn 消息实体
     for entity in messages {
@@ -404,7 +406,7 @@ mod tests {
     use super::command_parse_system;
     use crate::ecs::EntityIndex;
     use crate::{
-        app::MemoryConfig,
+        domain::MemoryConfig,
         domain::{
             Agent, ChannelId, CreateTaskMessage, KnowledgeValidationStatus,
             PendingKnowledgeWriteHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,
@@ -607,9 +609,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -681,9 +683,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq parent".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -751,9 +753,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -822,9 +824,9 @@ mod tests {
         );
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,
@@ -888,12 +890,12 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
         app.world_mut().spawn((
             Task {
                 id: task_id,
                 content: "active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Running,
                 pending_confirmation_id: None,
@@ -949,8 +951,8 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
-        let creator_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let creator_id = crate::domain::AgentId::new();
         app.world_mut().spawn((
             Task {
                 id: task_id,
@@ -1015,8 +1017,8 @@ mod tests {
             thread_id: None,
         };
         let now = chrono::Utc::now();
-        let task_id = uuid::Uuid::new_v4();
-        let delegate_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let delegate_id = crate::domain::AgentId::new();
         // 注册 Agent 实体
         let agent_entity = app
             .world_mut()
@@ -1046,7 +1048,7 @@ mod tests {
             Task {
                 id: task_id,
                 content: "active task".to_string(),
-                creator: uuid::Uuid::new_v4(),
+                creator: crate::domain::AgentId::new(),
                 delegate: Some(delegate_id),
                 status: TaskStatus::Running,
                 pending_confirmation_id: None,
@@ -1106,9 +1108,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Running,
                 pending_confirmation_id: None,
@@ -1168,9 +1170,9 @@ mod tests {
         let now = chrono::Utc::now();
         app.world_mut().spawn((
             Task {
-                id: uuid::Uuid::new_v4(),
+                id: crate::domain::TaskId::new(),
                 content: "qq active task".to_string(),
-                creator: uuid::Uuid::nil(),
+                creator: crate::domain::AgentId::nil(),
                 delegate: None,
                 status: TaskStatus::Ready,
                 pending_confirmation_id: None,

@@ -12,9 +12,10 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentExecutor,
-    AgentRequestKind, HarnessConfig, LlmResponseHookPending, OutputContent, build_harness_app,
-    llm::ExecutorRegistry,
+    app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionResult,
+    domain::AgentExecutionResultMessage, domain::AgentExecutor, domain::AgentRequestKind,
+    domain::LlmResponseHookPending, domain::OutputContent, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 mod common;
@@ -75,8 +76,8 @@ fn on_llm_response_removes_marker() {
     // spawn 一个带标记的 AgentExecutionResultMessage
     let msg = AgentExecutionResultMessage {
         result: AgentExecutionResult {
-            task_id: uuid::Uuid::new_v4(),
-            agent_id: uuid::Uuid::new_v4(),
+            task_id: harness::domain::TaskId::new(),
+            agent_id: harness::domain::AgentId::new(),
             request_kind: AgentRequestKind::LlmCompletion,
             result: Ok(AgentExecutionOutput {
                 content: OutputContent::Text("test response".to_string()),

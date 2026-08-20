@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use harness::{
-    ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, MessageRole, UserAction,
+    domain::ChannelId, domain::EngineEvent, domain::EventTarget, domain::Frontend,
+    domain::FrontendKind, domain::MessageRole, domain::UserAction,
 };
 
 struct SpyFrontend {

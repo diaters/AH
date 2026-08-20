@@ -1,12 +1,14 @@
 use crate::prelude::*;
 use tracing::debug;
 
+use crate::domain::HookPoint;
 use crate::domain::{
-    Agent, AgentKind, ConversationMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryRole,
-    ExperienceCollectionCompletedMessage, ExperienceCollectionRequestMessage,
-    ExperienceConsolidationRequestMessage, ExperienceGovernanceRequestMessage, ExperienceKindHint,
-    ExperienceStore, LlmToolCall, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
-    TaskExperiencePolicy, TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemType,
+    Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, ConversationMessage,
+    DispatchHint, DispatchKind, DispatchStrategy, EntryRole, ExperienceCollectionCompletedMessage,
+    ExperienceCollectionRequestMessage, ExperienceConsolidationRequestMessage,
+    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, LlmToolCall,
+    OutputContent, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskExperiencePolicy,
+    TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::ecs::EntityIndex;
 
@@ -336,15 +338,100 @@ pub(crate) fn experience_collection_completion_system(
     }
 }
 
+fn has_experience_submission(store: &ExperienceStore, task_id: crate::domain::TaskId) -> bool {
+    store.root_candidates_for_task(task_id).iter().any(|id| {
+        store
+            .candidates
+            .get(id)
+            .is_some_and(|c| c.producer_task_id == task_id)
+    }) || store
+        .inboxes
+        .get(&task_id)
+        .is_some_and(|inbox| !inbox.candidate_ids.is_empty())
+}
+
+/// 处理 ExperienceCollection WorkItem LLM 响应的路由分支。
+///
+/// 自 `transform/llm_response.rs` 按知识域归位至此（P2 重组，纯搬家）。
+///
+/// 返回 `true` 表示该响应已处理完毕（调用方应 `continue`）；
+/// 返回 `false` 表示 ToolCalls 放行给 tool calling loop 处理。
+pub(crate) fn handle_experience_collection_llm_response(
+    commands: &mut Commands,
+    experience_store: &ExperienceStore,
+    work_items: &mut Query<(Entity, &mut WorkItem)>,
+    result_entity: Entity,
+    work_item_entity: Entity,
+    work_item: &WorkItem,
+    result: &AgentExecutionResult,
+) -> bool {
+    match &result.result {
+        Ok(AgentExecutionOutput {
+            content: OutputContent::ToolCalls(_),
+            ..
+        }) => {
+            // 放行给 tool calling loop 处理 tool calls
+            false
+        }
+        Ok(_) => {
+            // LLM 返回普通文本：检查是否有候选提交
+            let had_submission = has_experience_submission(experience_store, work_item.task_id);
+
+            let completed_task_id = work_item.task_id;
+            let completed_parent_task_id = work_item.parent_task_id;
+            let completed_agent_id = work_item
+                .assigned_agent
+                .unwrap_or_else(crate::domain::AgentId::nil);
+            let governing_agent_id = work_item.governing_agent_id.unwrap_or(completed_agent_id);
+
+            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                if had_submission {
+                    wi.1.complete();
+                    commands
+                        .entity(work_item_entity)
+                        .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemCompleted));
+                } else {
+                    wi.1.fail();
+                    commands
+                        .entity(work_item_entity)
+                        .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+                }
+            }
+
+            commands.spawn(ExperienceCollectionCompletedMessage {
+                task_id: completed_task_id,
+                parent_task_id: completed_parent_task_id,
+                agent_id: completed_agent_id,
+                governing_agent_id,
+            });
+
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            true
+        }
+        Err(_) => {
+            if let Ok(mut wi) = work_items.get_mut(work_item_entity) {
+                wi.1.fail();
+                commands
+                    .entity(work_item_entity)
+                    .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemFailed));
+            }
+            commands.entity(work_item_entity).despawn();
+            commands.entity(result_entity).despawn();
+            true
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::domain::{ExperienceCandidate, ExperienceCandidateStatus, ExperienceStore, TaskId};
 
     #[test]
     fn experience_collection_completion_aggregates_child_candidates() {
-        let parent_task_id: TaskId = uuid::Uuid::new_v4();
-        let child_task_id: TaskId = uuid::Uuid::new_v4();
-        let parent_agent_id = uuid::Uuid::new_v4();
+        let parent_task_id: TaskId = crate::domain::TaskId::new();
+        let child_task_id: TaskId = crate::domain::TaskId::new();
+        let parent_agent_id = crate::domain::AgentId::new();
 
         let mut store = ExperienceStore::default();
 
@@ -352,7 +439,7 @@ mod tests {
         let child_candidate = ExperienceCandidate::knowledge(
             uuid::Uuid::new_v4(),
             child_task_id,
-            uuid::Uuid::new_v4(),
+            crate::domain::AgentId::new(),
             "child fact".to_string(),
             "content".to_string(),
         );

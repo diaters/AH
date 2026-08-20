@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(messages[0].content, "请分析这个 issue");
         assert_eq!(messages[0].origin_channel, None);
         assert_eq!(
-            messages[0].routing_policy.approval_context.as_deref(),
+            messages[0].routing_policy.approval_context(),
             Some("GitHub issue opened")
         );
     }
@@ -299,13 +299,10 @@ mod tests {
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "say hi");
+        assert_eq!(messages[0].routing_policy.output_channel(), Some(&channel));
         assert_eq!(
-            messages[0].routing_policy.output_channel,
-            Some(channel.clone())
-        );
-        assert_eq!(
-            messages[0].routing_policy.approval_channel,
-            Some(channel.clone())
+            messages[0].routing_policy.approval_channel(),
+            Some(&channel)
         );
         assert!(
             app.world()

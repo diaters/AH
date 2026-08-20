@@ -29,7 +29,6 @@ impl StatusPanel {
             FrontendKind::QQ => ("QQ", Color::Magenta),
             FrontendKind::Telegram => ("TG", Color::Blue),
             FrontendKind::Web => ("Web", Color::DarkGray),
-            FrontendKind::Feishu => ("FS", Color::DarkGray),
         }
     }
 
@@ -85,7 +84,7 @@ impl StatusPanel {
             // 分离主任务和子任务
             let main_tasks: Vec<_> = app.tasks.iter().filter(|t| t.parent_id.is_none()).collect();
 
-            let subtasks_by_parent: std::collections::HashMap<uuid::Uuid, Vec<_>> = app
+            let subtasks_by_parent: std::collections::HashMap<crate::domain::TaskId, Vec<_>> = app
                 .tasks
                 .iter()
                 .filter(|t| t.parent_id.is_some())

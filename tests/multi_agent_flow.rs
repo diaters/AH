@@ -5,9 +5,10 @@ use std::{sync::Arc, thread, time::Duration};
 use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    ChannelId, ExternalInput, FrontendKind, HarnessConfig, Task, TaskRoutingPolicy, TaskStatus,
-    TaskTerminatedMessage, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
+    domain::ExternalInput, domain::FrontendKind, domain::Task, domain::TaskTerminatedMessage,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -22,9 +23,9 @@ use tokio::runtime::Runtime;
 fn multi_agent_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -128,9 +129,9 @@ fn selects_agent_by_tags_match() {
     assert_eq!(tasks.len(), 1);
     // 多轮对话任务会在响应后回到 Waiting(User) 状态
     assert!(
-        !tasks[0].status.is_terminal(),
+        !tasks[0].status().is_terminal(),
         "multi-turn task should not be in terminal state, got {:?}",
-        tasks[0].status
+        tasks[0].status()
     );
 }
 
@@ -164,11 +165,11 @@ fn task_scoped_agent_lifecycle() {
         default_agent.id
     };
 
-    let task_id = uuid::Uuid::new_v4();
+    let task_id = harness::domain::TaskId::new();
     {
         let world = app.world_mut();
         world.spawn(Agent {
-            id: uuid::Uuid::new_v4(),
+            id: harness::domain::AgentId::new(),
             profile: AgentProfile {
                 name: "sub-agent".to_string(),
                 model: "gpt-4.1-mini".to_string(),
@@ -197,31 +198,11 @@ fn task_scoped_agent_lifecycle() {
 
     {
         let world = app.world_mut();
-        let task_entity = world
-            .spawn(Task {
-                id: task_id,
-                content: "test".to_string(),
-                creator: parent_agent_id,
-                delegate: None,
-                status: TaskStatus::Done,
-                pending_confirmation_id: None,
-                input_summary: String::new(),
-                result_summary: "done".to_string(),
-                priority: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: true,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(default_channel()),
-                routing_policy: TaskRoutingPolicy::conversational(default_channel()),
-                last_evaluated_turn: None,
-            })
-            .id();
+        let mut task = Task::from_user_input("test".to_string(), 3, default_channel());
+        task.id = task_id;
+        task.creator = parent_agent_id;
+        task.mark_done("done".to_string(), chrono::Utc::now());
+        let task_entity = world.spawn(task).id();
         // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
         // 供 maintenance::handle_termination 等 O(1) 解析 TaskId → Entity（ADR-005 §3 阶段 2）。
         world

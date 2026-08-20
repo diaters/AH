@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tracing::warn;
 
+use crate::domain::validate_template;
 use crate::domain::{ChannelId, EventTaskRoute, SignalTriggerRegistry};
-use crate::triggers::prompt_template::validate_template;
 
 /// triggers.toml 顶层结构
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Resource)]

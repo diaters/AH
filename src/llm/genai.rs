@@ -7,7 +7,7 @@ use genai::{
 };
 use reqwest_013;
 use tokio::time::Instant;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::domain::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ConversationMessage,
@@ -18,7 +18,7 @@ use super::provider::{LlmProviderConfig, LlmProviderKind};
 
 pub(crate) struct GenaiExecutor {
     client: Client,
-    model: String,
+    model: Option<String>,
 }
 
 fn create_reqwest_client() -> Result<reqwest_013::Client> {
@@ -36,7 +36,7 @@ fn create_reqwest_client() -> Result<reqwest_013::Client> {
 
 impl GenaiExecutor {
     pub(crate) fn new(config: &LlmProviderConfig) -> Result<Self> {
-        debug!(model = %config.model, provider = ?config.provider, "creating genai executor");
+        debug!(model = ?config.model, provider = ?config.provider, "creating genai executor");
 
         let client = match config.provider {
             LlmProviderKind::OpenAi | LlmProviderKind::Anthropic | LlmProviderKind::DeepSeek => {
@@ -87,12 +87,29 @@ impl GenaiExecutor {
 impl AgentExecutor for GenaiExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         let client = self.client.clone();
-        // 支持 model_override 覆盖默认模型
-        let model = request
+        // 模型解析：请求级 model_override 优先，其次 executor 默认模型。
+        // 两者皆无时无法确定目标模型，直接返回配置错误而非发送伪模型名。
+        let model = match request
             .model_override
-            .as_ref()
-            .unwrap_or(&self.model)
-            .clone();
+            .clone()
+            .or_else(|| self.model.clone())
+        {
+            Some(model) => model,
+            None => {
+                warn!(
+                    event = "LlmModelUnspecified",
+                    task_id = %request.task_id,
+                    agent_id = %request.agent_id,
+                    "no model specified: provider has no default model and request carries no model_override"
+                );
+                return Box::pin(async move {
+                    Err(ExecutionError::Unknown(
+                        "no model specified: provider has no default model and request carries no model_override"
+                            .to_string(),
+                    ))
+                });
+            }
+        };
 
         Box::pin(async move {
             debug!(
@@ -391,8 +408,8 @@ mod tests {
 
     fn sample_request() -> AgentExecutionRequest {
         AgentExecutionRequest {
-            task_id: uuid::Uuid::new_v4(),
-            agent_id: uuid::Uuid::new_v4(),
+            task_id: crate::domain::TaskId::new(),
+            agent_id: crate::domain::AgentId::new(),
             request_kind: crate::domain::AgentRequestKind::LlmCompletion,
             prompt: "hello".to_string(),
             system_prompt: None,
@@ -414,6 +431,34 @@ mod tests {
             captured_raw_body: None,
             response_id: None,
         }
+    }
+
+    // ---- execute 模型解析 ----
+
+    /// executor 无默认模型且请求未携带 model_override 时，应显式报错
+    /// 而不是把伪模型名发给 API。
+    #[test]
+    fn execute_errors_when_no_model_specified() {
+        // 测试进程无 main.rs 的 provider 安装，先装 ring provider 再构建 reqwest/rustls client
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let config = LlmProviderConfig {
+            provider: LlmProviderKind::OpenAi,
+            model: None,
+            api_key: None,
+            api_base: None,
+        };
+        let executor = GenaiExecutor::new(&config).unwrap();
+
+        let fut = executor.execute(sample_request());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(fut)
+            .expect_err("no model specified should fail");
+
+        assert!(
+            error.to_string().contains("no model specified"),
+            "unexpected error: {error}"
+        );
     }
 
     // ---- 工具名 sanitize ----
@@ -618,7 +663,7 @@ mod tests {
     #[test]
     fn parse_response_returns_text_output() {
         let response = make_response(ChatMessage::assistant("answer").content, None);
-        let output = parse_response(&uuid::Uuid::new_v4(), response).unwrap();
+        let output = parse_response(&crate::domain::TaskId::new(), response).unwrap();
         assert_eq!(output.content, OutputContent::Text("answer".to_string()));
         assert!(output.reasoning_content.is_none());
     }
@@ -629,7 +674,7 @@ mod tests {
             ChatMessage::assistant("answer").content,
             Some("chain of thought".to_string()),
         );
-        let output = parse_response(&uuid::Uuid::new_v4(), response).unwrap();
+        let output = parse_response(&crate::domain::TaskId::new(), response).unwrap();
         assert_eq!(
             output.reasoning_content.as_deref(),
             Some("chain of thought")
@@ -639,7 +684,7 @@ mod tests {
     #[test]
     fn parse_response_empty_returns_empty_response_error() {
         let response = make_response(MessageContent::default(), None);
-        let result = parse_response(&uuid::Uuid::new_v4(), response);
+        let result = parse_response(&crate::domain::TaskId::new(), response);
         assert!(matches!(result, Err(ExecutionError::EmptyResponse)));
     }
 
@@ -653,7 +698,7 @@ mod tests {
             thought_signatures: None,
         };
         let response = make_response(MessageContent::from(vec![tool_call]), None);
-        let output = parse_response(&uuid::Uuid::new_v4(), response).unwrap();
+        let output = parse_response(&crate::domain::TaskId::new(), response).unwrap();
         match output.content {
             OutputContent::ToolCalls(calls) => {
                 assert_eq!(calls.len(), 1);

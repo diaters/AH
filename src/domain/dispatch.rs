@@ -4,8 +4,8 @@
 //! 所有派发请求通过 `PendingDispatch` Component 流转，
 //! 由单一的 `dispatch_system` 扫描处理。
 
+use crate::domain::SkillId;
 use crate::domain::{AgentId, TaskId, WorkItemType};
-use crate::infrastructure::skills::SkillId;
 use bevy_ecs::prelude::Component;
 
 /// 派发请求标记 Component，附加在 Task 或 WorkItem Entity 上。
@@ -115,7 +115,7 @@ mod tests {
             parent_agent_id: None,
         };
         let awaiting = AwaitingBrainDecision {
-            task_id: uuid::Uuid::nil(),
+            task_id: crate::domain::TaskId::nil(),
             spawn_spec: Some(spec),
         };
         assert!(awaiting.spawn_spec.is_some());

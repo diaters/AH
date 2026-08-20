@@ -1,13 +1,13 @@
 use crate::prelude::*;
 use tracing::{debug, warn};
 
+use crate::domain::HookPoint;
 use crate::domain::{
     ExperienceCandidateStatus, ExperienceGovernanceDecision, ExperienceStore,
     ExperienceWritebackDestination, ExperienceWritebackRequestMessage, IncubationProposalStatus,
     PendingExperienceHooks, ProfileGenerationContext, ProfileGenerationRequestMessage,
     SkillCreationContext, SkillCreationWritebackMessage, ToolConfirmationResponseMessage, WorkItem,
 };
-use crate::user_plugins::hook_point::HookPoint;
 
 /// 经验确认结果系统：处理用户对经验候选的确认，触发统一写回。
 ///
@@ -289,8 +289,8 @@ mod tests {
         let request_id = uuid::Uuid::new_v4();
         let candidate = ExperienceCandidate {
             candidate_id: uuid::Uuid::new_v4(),
-            producer_task_id: uuid::Uuid::new_v4(),
-            producer_agent_id: uuid::Uuid::new_v4(),
+            producer_task_id: crate::domain::TaskId::new(),
+            producer_agent_id: crate::domain::AgentId::new(),
             title: "test skill".to_string(),
             kind_hint: ExperienceKindHint::Skill,
             payload: ExperienceCandidatePayload::Skill {
@@ -326,7 +326,10 @@ mod tests {
     }
 
     /// 构建测试用候选：处于 NeedsUserApproval 状态。
-    fn make_test_candidate(task_id: uuid::Uuid, agent_id: uuid::Uuid) -> ExperienceCandidate {
+    fn make_test_candidate(
+        task_id: crate::domain::TaskId,
+        agent_id: crate::domain::AgentId,
+    ) -> ExperienceCandidate {
         ExperienceCandidate {
             candidate_id: uuid::Uuid::new_v4(),
             producer_task_id: task_id,
@@ -345,8 +348,8 @@ mod tests {
 
     #[test]
     fn reject_with_feedback_spawns_regeneration_request() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
@@ -363,7 +366,7 @@ mod tests {
                 String::new(),
                 vec![],
                 vec![],
-                uuid::Uuid::nil(),
+                crate::domain::AgentId::nil(),
                 ProfileGenerationKind::Incubation,
             ),
             ProfileGenerationContext {
@@ -417,8 +420,8 @@ mod tests {
 
     #[test]
     fn reject_with_feedback_preserves_exception_count() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
@@ -435,7 +438,7 @@ mod tests {
                 String::new(),
                 vec![],
                 vec![],
-                uuid::Uuid::nil(),
+                crate::domain::AgentId::nil(),
                 ProfileGenerationKind::Incubation,
             ),
             ProfileGenerationContext {
@@ -470,8 +473,8 @@ mod tests {
     fn reject_with_feedback_always_allowed() {
         // 验证：即使 exception_count 很高，reject_with_feedback 仍触发重新生成
         // （exception_count 仅限制 LLM 异常重试，不限制用户反馈次数）
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();
@@ -488,7 +491,7 @@ mod tests {
                 String::new(),
                 vec![],
                 vec![],
-                uuid::Uuid::nil(),
+                crate::domain::AgentId::nil(),
                 ProfileGenerationKind::Incubation,
             ),
             ProfileGenerationContext {
@@ -529,8 +532,8 @@ mod tests {
 
     #[test]
     fn reject_with_feedback_without_context_falls_to_plain_reject() {
-        let task_id = uuid::Uuid::new_v4();
-        let agent_id = uuid::Uuid::new_v4();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
         let request_id = uuid::Uuid::new_v4();
 
         let mut store = ExperienceStore::default();

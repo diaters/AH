@@ -8,11 +8,13 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult,
-    AgentExecutor, AgentKind, AgentProfile, AgentRequestKind, AgentToolPermissions, ChannelId,
-    ExecutorFuture, ExperienceCandidate, ExperienceCandidateStatus, FrontendKind, HarnessConfig,
-    LongTermMemory, ShortTermMemory, SkillCreationContext, Task, WorkItem, WorkItemStatus,
-    WorkItemType, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentExecutionRequest, domain::AgentExecutionResult, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentRequestKind,
+    domain::AgentToolPermissions, domain::ChannelId, domain::ExecutorFuture,
+    domain::ExperienceCandidate, domain::ExperienceCandidateStatus, domain::FrontendKind,
+    domain::LongTermMemory, domain::ShortTermMemory, domain::SkillCreationContext, domain::Task,
+    domain::WorkItem, domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -29,7 +31,7 @@ impl AgentExecutor for TextExecutor {
     fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
         Box::pin(async move {
             Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("已创建 skill".to_string()),
+                content: harness::domain::OutputContent::Text("已创建 skill".to_string()),
                 reasoning_content: None,
             })
         })
@@ -39,9 +41,9 @@ impl AgentExecutor for TextExecutor {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
@@ -72,7 +74,7 @@ fn setup_with(
     submit_candidate: bool,
     sandbox_dir: std::path::PathBuf,
     spawn_result: bool,
-) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+) -> (bevy_app::App, harness::domain::TaskId, uuid::Uuid) {
     let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(TextExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -92,7 +94,7 @@ fn setup_with(
     app.world_mut().spawn((task, ShortTermMemory::default()));
 
     // 治理请求的 agent 需存在，否则 governance 系统会直接 despawn 请求
-    let governing_agent_id = uuid::Uuid::new_v4();
+    let governing_agent_id = harness::domain::AgentId::new();
     app.world_mut().spawn((
         Agent {
             id: governing_agent_id,
@@ -121,8 +123,8 @@ fn setup_with(
         governing_agent_id,
     );
     let work_item_id = work_item.id;
-    work_item.status = WorkItemStatus::Running;
-    work_item.assigned_agent = Some(governing_agent_id);
+    work_item.assign(governing_agent_id);
+    work_item.start();
     app.world_mut().spawn((
         work_item,
         SkillCreationContext {
@@ -147,7 +149,7 @@ fn setup_with(
             vec![],
         );
         app.world_mut()
-            .resource_mut::<harness::ExperienceStore>()
+            .resource_mut::<harness::domain::ExperienceStore>()
             .stage_root_candidate(candidate);
     }
 
@@ -157,7 +159,7 @@ fn setup_with(
             agent_id: governing_agent_id,
             request_kind: AgentRequestKind::LlmCompletion,
             result: Ok(AgentExecutionOutput {
-                content: harness::OutputContent::Text("已创建 skill".to_string()),
+                content: harness::domain::OutputContent::Text("已创建 skill".to_string()),
                 reasoning_content: None,
             }),
             prompt: String::new(),
@@ -168,14 +170,14 @@ fn setup_with(
             conversation: None,
         };
         app.world_mut()
-            .spawn(harness::AgentExecutionResultMessage { result });
+            .spawn(harness::domain::AgentExecutionResultMessage { result });
     }
 
     (app, task_id, candidate_id)
 }
 
 /// 默认场景：提交候选 + 触发治理推进。
-fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+fn setup(submit_candidate: bool) -> (bevy_app::App, harness::domain::TaskId, uuid::Uuid) {
     setup_with(
         submit_candidate,
         std::path::PathBuf::from("/tmp/test-sandbox"),
@@ -184,7 +186,7 @@ fn setup(submit_candidate: bool) -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
 }
 
 /// 隔离的批准场景：不触发治理系统，直接测试批准→写回路径。
-fn setup_for_approval() -> (bevy_app::App, uuid::Uuid, uuid::Uuid) {
+fn setup_for_approval() -> (bevy_app::App, harness::domain::TaskId, uuid::Uuid) {
     setup_with(true, std::path::PathBuf::from("/tmp/test-sandbox"), false)
 }
 
@@ -208,7 +210,7 @@ fn skill_creation_completion_promotes_candidate_and_requests_governance() {
     );
 
     // 候选越过 Submitted（GovernancePending 或同帧被治理消费为 NeedsUserApproval）
-    let store = app.world().resource::<harness::ExperienceStore>();
+    let store = app.world().resource::<harness::domain::ExperienceStore>();
     let status = store
         .candidates
         .get(&candidate_id)
@@ -243,7 +245,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
 
     // 绑定 approval request 到候选
     app.world_mut()
-        .resource_mut::<harness::ExperienceStore>()
+        .resource_mut::<harness::domain::ExperienceStore>()
         .bind_approval_request(request_id, candidate_id);
 
     // 模拟 spawn_experience_confirmation 的配对 ToolExecutionRequestMessage：
@@ -254,7 +256,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
         .spawn(harness::domain::ToolExecutionRequestMessage {
             request: AgentExecutionRequest {
                 task_id,
-                agent_id: uuid::Uuid::nil(),
+                agent_id: harness::domain::AgentId::nil(),
                 request_kind: AgentRequestKind::ToolExecution {
                     tool_name: "experience_governance".to_string(),
                 },
@@ -303,7 +305,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
 
     // 沙箱 /tmp/test-sandbox 不存在 → rename 失败 → 候选置为 WritebackFailed；
     // 若上下文缺失（bug），候选停留在 WritebackPending 且 writeback 永不触发。
-    let store = app.world().resource::<harness::ExperienceStore>();
+    let store = app.world().resource::<harness::domain::ExperienceStore>();
     let status = store
         .candidates
         .get(&candidate_id)

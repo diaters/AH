@@ -37,7 +37,7 @@ fn parse_wait_tasks_ids(input: &serde_json::Value) -> Result<Vec<TaskId>, ToolEr
     for id_str in ids_array.iter().filter_map(|v| v.as_str()) {
         let id = uuid::Uuid::parse_str(id_str)
             .map_err(|_| ToolError::InvalidInput(format!("invalid task id: {}", id_str)))?;
-        task_ids.push(id);
+        task_ids.push(TaskId(id));
     }
 
     if task_ids.is_empty() {
@@ -75,8 +75,8 @@ mod tests {
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             tool_inflight_timeout_secs: 300,
-            current_task_id: uuid::Uuid::nil(),
-            current_agent_id: uuid::Uuid::nil(),
+            current_task_id: crate::domain::TaskId::nil(),
+            current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
             current_skill_dir: None,
         };
@@ -116,8 +116,8 @@ mod tests {
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             tool_inflight_timeout_secs: 300,
-            current_task_id: uuid::Uuid::nil(),
-            current_agent_id: uuid::Uuid::nil(),
+            current_task_id: crate::domain::TaskId::nil(),
+            current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
             current_skill_dir: None,
         };
@@ -151,8 +151,8 @@ mod tests {
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             tool_inflight_timeout_secs: 300,
-            current_task_id: uuid::Uuid::nil(),
-            current_agent_id: uuid::Uuid::nil(),
+            current_task_id: crate::domain::TaskId::nil(),
+            current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
             current_skill_dir: None,
         };
@@ -179,8 +179,8 @@ mod tests {
             shell_default_exec_timeout_secs: 60,
             shell_default_stop_timeout_secs: 5,
             tool_inflight_timeout_secs: 300,
-            current_task_id: uuid::Uuid::nil(),
-            current_agent_id: uuid::Uuid::nil(),
+            current_task_id: crate::domain::TaskId::nil(),
+            current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
             current_skill_dir: None,
         };

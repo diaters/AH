@@ -13,10 +13,12 @@ use std::{
 use common::mock_executor::CannedExecutor;
 use harness::prelude::*;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutionOutput, AgentKind, AgentProfile, AgentToolPermissions,
-    ApprovalOption, ChannelId, EngineEvent, EventTarget, ExternalInput, Frontend, FrontendKind,
-    HarnessConfig, LlmToolCall, LongTermMemory, OutputContent, ToolConfirmationResponseMessage,
-    ToolExecutionResultMessage, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
+    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ApprovalOption,
+    domain::ChannelId, domain::EngineEvent, domain::EventTarget, domain::ExternalInput,
+    domain::Frontend, domain::FrontendKind, domain::LlmToolCall, domain::LongTermMemory,
+    domain::OutputContent, domain::ToolConfirmationResponseMessage,
+    domain::ToolExecutionResultMessage, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -59,13 +61,13 @@ fn shell_exec_call(id: &str, command: &str) -> LlmToolCall {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_retries: 3,
-        llm: harness::LlmProviderConfig {
-            provider: harness::LlmProviderKind::OpenAi,
-            model: "gpt-4.1-mini".to_string(),
+        llm: harness::llm::LlmProviderConfig {
+            provider: harness::domain::LlmProviderKind::OpenAi,
+            model: Some("gpt-4.1-mini".to_string()),
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::BrainConfig { enabled: true }),
+        brain: Some(harness::systems::BrainConfig { enabled: true }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -87,7 +89,7 @@ fn test_config() -> HarnessConfig {
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut App) {
     // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    let brain_id = uuid::Uuid::new_v4();
+    let brain_id = harness::domain::AgentId::new();
     let brain_entity = app
         .world_mut()
         .spawn((
@@ -115,7 +117,7 @@ fn spawn_default_agent(app: &mut App) {
         .agents
         .insert(brain_id, brain_entity);
 
-    let default_id = uuid::Uuid::new_v4();
+    let default_id = harness::domain::AgentId::new();
     let default_entity = app
         .world_mut()
         .spawn((
@@ -183,7 +185,7 @@ impl Frontend for CapturingFrontend {
         self.events.lock().unwrap().push(event);
     }
 
-    fn poll_actions(&self) -> Vec<harness::UserAction> {
+    fn poll_actions(&self) -> Vec<harness::domain::UserAction> {
         vec![]
     }
 }

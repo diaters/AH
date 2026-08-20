@@ -2,9 +2,7 @@
 
 use std::io::Write;
 
-use harness::HarnessConfig;
-use harness::app::HarnessSettings;
-use harness::domain::SignalTriggerRegistry;
+use harness::domain::{SignalTriggerRegistry, TriggersConfigPath};
 use harness::prelude::*;
 use harness::triggers::{SchedulerState, SchedulerStateWatcher, reload_triggers_system};
 use tempfile::NamedTempFile;
@@ -18,11 +16,7 @@ fn write_config(content: &str) -> NamedTempFile {
 
 fn build_app(path: &str) -> App {
     let mut app = App::new();
-    let config = HarnessConfig {
-        triggers_config_path: Some(path.to_string()),
-        ..HarnessConfig::default()
-    };
-    app.insert_resource(HarnessSettings(config));
+    app.insert_resource(TriggersConfigPath(Some(path.to_string())));
     app.insert_resource(SignalTriggerRegistry::default());
     app.insert_resource(SchedulerStateWatcher::default());
     app.insert_resource(SchedulerState::default());
@@ -89,8 +83,8 @@ prompt_template = "{{body_json.a.b}}"
 "#,
     );
     // 把 path 指向坏文件
-    let mut settings = app.world_mut().resource_mut::<HarnessSettings>();
-    settings.0.triggers_config_path = Some(bad.path().to_str().unwrap().to_string());
+    let mut path_res = app.world_mut().resource_mut::<TriggersConfigPath>();
+    path_res.0 = Some(bad.path().to_str().unwrap().to_string());
     app.update();
 
     // 应保留旧配置（registry 仍是 1 个路由，但 kind 应仍是 "good"）
@@ -147,8 +141,8 @@ approval_context = "c"
 prompt_template = "x"
 "#,
     );
-    let mut settings = app.world_mut().resource_mut::<HarnessSettings>();
-    settings.0.triggers_config_path = Some(bad.path().to_str().unwrap().to_string());
+    let mut path_res = app.world_mut().resource_mut::<TriggersConfigPath>();
+    path_res.0 = Some(bad.path().to_str().unwrap().to_string());
     app.update();
 
     // 旧配置保留：timer 仍是 1 个

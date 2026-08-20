@@ -12,15 +12,16 @@ use tokio::runtime::Runtime;
 
 use common::mock_executor::EchoExecutor;
 use harness::{
-    Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-    HarnessConfig, LtmWriteHookPending, build_harness_app, llm::ExecutorRegistry,
+    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
+    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions,
+    domain::LtmWriteHookPending, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
 
 fn make_agent() -> Agent {
     Agent {
-        id: uuid::Uuid::new_v4(),
+        id: harness::domain::AgentId::new(),
         profile: AgentProfile {
             name: "test-agent".to_string(),
             model: "test-model".to_string(),

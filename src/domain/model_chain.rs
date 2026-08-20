@@ -1,4 +1,4 @@
-use crate::llm::LlmProviderKind;
+use crate::domain::LlmProviderKind;
 use crate::prelude::Component;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;

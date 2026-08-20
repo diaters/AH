@@ -7,7 +7,41 @@ use uuid::Uuid;
 
 use super::{AgentId, TaskId};
 
-pub type SessionHandleId = Uuid;
+/// Shell 会话句柄唯一标识 newtype：与 `Uuid` 在类型层面隔离。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SessionHandleId(pub Uuid);
+
+impl SessionHandleId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for SessionHandleId {
+    fn default() -> Self {
+        Self(Uuid::nil())
+    }
+}
+
+impl std::fmt::Display for SessionHandleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for SessionHandleId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
+impl std::ops::Deref for SessionHandleId {
+    type Target = Uuid;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionBackendKind {
@@ -209,7 +243,7 @@ mod tests {
     #[test]
     fn shell_exec_result_uses_snapshot_output() {
         let handle = SessionHandle {
-            handle_id: Uuid::new_v4(),
+            handle_id: crate::domain::SessionHandleId::new(),
             backend: SessionBackendKind::Native,
             status: SessionStatus::Completed,
             command: "printf 'ok'".to_string(),
@@ -220,8 +254,8 @@ mod tests {
             interaction_required: false,
             started_at: Utc::now(),
             finished_at: Some(Utc::now()),
-            owner_task_id: Uuid::new_v4(),
-            owner_agent_id: Uuid::new_v4(),
+            owner_task_id: crate::domain::TaskId::new(),
+            owner_agent_id: crate::domain::AgentId::new(),
             output: SessionOutputSnapshot {
                 output: "ok".to_string(),
                 returned_lines: 1,

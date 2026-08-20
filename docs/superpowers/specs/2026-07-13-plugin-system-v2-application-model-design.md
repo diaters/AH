@@ -244,8 +244,8 @@ get_delta_secs()                             // -> f64
 - 实体查询（只读）：`get_task` / `get_task_ids` / `get_agent` / `get_work_item` 等
 - 工具控制：`tool_deny` / `tool_set_result`
 - 插件资源：`read_plugin_resource`
-- 审批：`approval_request_id` / `approval_resolve`
-- 经验：`experience_get_candidate` / `experience_set_pinned`
+- 审批：`approval_request_id`
+- 经验：`experience_get_candidate`
 - 消息：`emit_message`
 - 临时资源：`register_temp_resource`
 - 技能查询：`list_skills`

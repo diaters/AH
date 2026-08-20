@@ -3,6 +3,7 @@
 //! 定义项目的核心领域类型。
 
 mod agent;
+mod attachment;
 mod chat_session;
 mod command;
 mod confirmation;
@@ -12,11 +13,17 @@ mod error;
 mod evaluation;
 mod execution;
 mod frontend;
+mod hook_point;
+mod llm_provider;
 mod memory;
 mod message;
 mod model_chain;
+mod prompt_template;
+mod schedule;
 mod session;
+mod session_backend;
 mod signal_trigger;
+mod skill;
 mod space;
 mod summarization;
 mod task;
@@ -31,10 +38,88 @@ use std::{future::Future, pin::Pin};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-// ============ 类型别名 ============
+// ============ ID newtype ============
 
-pub type TaskId = Uuid;
-pub type AgentId = Uuid;
+/// Task 唯一标识 newtype：与 `Uuid` 在类型层面隔离，杜绝 Task/Agent/Session ID 互传。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TaskId(pub Uuid);
+
+impl TaskId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn nil() -> Self {
+        Self(Uuid::nil())
+    }
+}
+
+impl Default for TaskId {
+    fn default() -> Self {
+        Self::nil()
+    }
+}
+
+impl std::fmt::Display for TaskId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for TaskId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
+impl std::ops::Deref for TaskId {
+    type Target = Uuid;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Agent 唯一标识 newtype：与 `Uuid` 在类型层面隔离。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentId(pub Uuid);
+
+impl AgentId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn nil() -> Self {
+        Self(Uuid::nil())
+    }
+}
+
+impl Default for AgentId {
+    fn default() -> Self {
+        Self::nil()
+    }
+}
+
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for AgentId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
+impl std::ops::Deref for AgentId {
+    type Target = Uuid;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 pub type ExecutorFuture =
     Pin<Box<dyn Future<Output = Result<AgentExecutionOutput, ExecutionError>> + Send>>;
 
@@ -50,7 +135,7 @@ pub use agent::{
 pub use chat_session::ChatSession;
 
 // command
-pub use command::UserCommand;
+pub use command::{ShutdownState, UserCommand};
 
 // confirmation
 pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource, GrantMode};
@@ -85,6 +170,11 @@ pub use execution::{
     ConversationMessage, LlmToolCall, OutputContent,
 };
 
+// attachment
+pub use attachment::{
+    ATTACHMENT_MARKER_SYNTAX_HINT, AttachmentKind, ChannelAttachment, extract_attachments,
+};
+
 // frontend
 pub use frontend::{
     AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
@@ -92,11 +182,17 @@ pub use frontend::{
     WaitingReasonKind, summarize_tool_input,
 };
 
+// hook_point
+pub use hook_point::{HookPoint, HookPointParseError};
+
+// llm_provider
+pub use llm_provider::LlmProviderKind;
+
 // memory
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
-    LtmEvictedHookPending, LtmWriteHookPending, MemoryEntry, MemoryImportance, MemorySnapshot,
-    ShortTermMemory, ToolCall, compressible_entry_count, estimate_tokens,
+    LtmEvictedHookPending, LtmWriteHookPending, MemoryConfig, MemoryEntry, MemoryImportance,
+    MemorySnapshot, ShortTermMemory, ToolCall, compressible_entry_count, estimate_tokens,
     render_tool_calls_summary, split_into_groups,
 };
 
@@ -105,12 +201,13 @@ pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ClearTaskMessage,
-    ContinueTaskMessage, CreateTaskMessage, ExperienceCollectionCompletedMessage, ExternalInput,
-    FinishTaskMessage, LlmResponseHookPending, MessageDispatchedHookPending,
-    MessageReceivedHookPending, ModelChainStateUpdate, OutputKind, OutputMessage,
-    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
+    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver, ExecutionResultSender,
+    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, InputReceiver,
+    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
+    ModelChainStateUpdate, ModelChainStateUpdateReceiver, ModelChainStateUpdateSender, OutputKind,
+    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
+    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
+    Signal, SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
     SkillUpdateRequestMessage, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
@@ -121,8 +218,20 @@ pub use message::{
 // model_chain
 pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, ProvidersConfig};
 
+// prompt_template
+pub use prompt_template::{render_template, validate_template};
+
+// schedule
+pub use schedule::ScheduleSpec;
+pub(crate) use schedule::compute_next_trigger;
+
 // signal_trigger
-pub use signal_trigger::{EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger};
+pub use signal_trigger::{
+    EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger, TriggersConfigPath,
+};
+
+// skill
+pub use skill::SkillId;
 
 // session
 pub use session::{
@@ -130,6 +239,9 @@ pub use session::{
     SessionReadRequest, SessionStartRequest, SessionStatus, SessionSummary, ShellExecResult,
     ShellSessionResult,
 };
+
+// session_backend
+pub use session_backend::SessionBackend;
 
 // space
 pub use space::{
@@ -237,7 +349,7 @@ mod tests {
             .insert("test_tool".to_string(), ToolPermission::Allow);
 
         let agent = Agent {
-            id: Uuid::nil(),
+            id: AgentId::nil(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "test-model".to_string(),
@@ -266,7 +378,7 @@ mod tests {
     #[test]
     fn agent_grant_permission_updates_overrides() {
         let mut agent = Agent {
-            id: Uuid::nil(),
+            id: AgentId::nil(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "test-model".to_string(),
