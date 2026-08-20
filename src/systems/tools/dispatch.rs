@@ -58,14 +58,14 @@ pub fn tool_dispatch_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在 Allow 路径推送 ToolCallStarted 事件。
-    index_clock_loader: (
-        Res<EntityIndex>,
+    mut index_clock_loader: (
+        ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
     ),
 ) {
-    let index = &index_clock_loader.0;
+    let index = &mut index_clock_loader.0;
     let clock = &index_clock_loader.1;
     let frontend_registry = &index_clock_loader.3;
     for (entity, mut request) in &mut requests {
@@ -334,6 +334,7 @@ pub fn tool_dispatch_system(
                             clock: &index_clock_loader.1,
                         },
                         parent_agent_id,
+                        &mut *index,
                     );
                 }
 

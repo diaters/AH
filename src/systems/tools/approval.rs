@@ -128,14 +128,14 @@ pub fn approval_result_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在 Approved 路径推送 ToolCallStarted 事件。
-    index_clock_loader_frontends: (
-        Res<EntityIndex>,
+    mut index_clock_loader_frontends: (
+        ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
     ),
 ) {
-    let index = &index_clock_loader_frontends.0;
+    let index = &mut index_clock_loader_frontends.0;
     let frontend_registry = &index_clock_loader_frontends.3;
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
@@ -373,6 +373,7 @@ pub fn approval_result_system(
                             clock: &index_clock_loader_frontends.1,
                         },
                         None,
+                        &mut *index,
                     );
                 }
 

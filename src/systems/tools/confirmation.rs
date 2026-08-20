@@ -11,7 +11,7 @@ use crate::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, EngineEvent, EventTarget,
         ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
         PermissionAuditContext, PermissionSource, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task, TaskStatus,
+        ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task, TaskId, TaskStatus,
         ToolActionKind, ToolCallingState, ToolConfirmationResponseMessage, ToolContext, ToolError,
         ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
         ToolReturnedHookPending, WaitingReason, WorkItem,
@@ -28,6 +28,29 @@ use super::orchestrator::{
     ToolResources, ToolWorldQueries, clear_task_pending_confirmation_id, handle_tool_action,
     restore_task_after_tool, spawn_tool_error,
 };
+
+/// 审批结果落地后恢复 task.status：`Waiting(User)` → `Waiting(ToolExecution)`
+///
+/// `tool_dispatch_system` 在 `ToolRequiresUserConfirmation` 时把 task.status 设为
+/// `Waiting(User)`（dispatch.rs）。确认（sync/async）或拒绝后，工具结果消息需要
+/// `tool_calling_orchestrator_system` 收集并触发 follow-up LLM，task 必须回到
+/// `Waiting(ToolExecution)`——否则下一帧 Transform 集的 `tool_calling_turn_reset_system`
+/// 看到 `Waiting(User) && pending_confirmation_id.is_none()` 会 despawn
+/// `ToolCallingState`，结果消息无人认领，LLM 调用循环永久中断
+/// （2026-08-19 会话 `harness_2026-08-19_16-02-46.jsonl` 证实的 bug，
+/// sync 工具与 deny 路径均受影响）。
+fn restore_task_to_tool_execution(
+    tasks: &mut Query<(Entity, &mut Task)>,
+    index: &EntityIndex,
+    clock: &Clock,
+    task_id: TaskId,
+) {
+    if let Some((_, mut task)) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())
+        && task.status == TaskStatus::Waiting(WaitingReason::User)
+    {
+        task.mark_waiting(WaitingReason::ToolExecution, clock.0);
+    }
+}
 
 /// Tool 确认响应处理 System
 ///
@@ -61,14 +84,14 @@ pub fn tool_confirmation_result_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在用户确认路径推送 ToolCallStarted 事件。
-    index_clock_loader_frontends: (
-        Res<EntityIndex>,
+    mut index_clock_loader_frontends: (
+        ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
     ),
 ) {
-    let index = &index_clock_loader_frontends.0;
+    let index = &mut index_clock_loader_frontends.0;
     let clock = &index_clock_loader_frontends.1;
     let frontend_registry = &index_clock_loader_frontends.3;
     for (entity, response) in &responses {
@@ -169,6 +192,12 @@ pub fn tool_confirmation_result_system(
                     ToolReturnedHookPending,
                 ));
 
+                restore_task_to_tool_execution(
+                    &mut tasks,
+                    index,
+                    clock,
+                    tool_request.request.task_id,
+                );
                 restore_task_after_tool(
                     &mut tasks,
                     &calling_states,
@@ -233,6 +262,17 @@ pub fn tool_confirmation_result_system(
                     );
                 }
 
+                // 恢复 task.status 为 Waiting(ToolExecution)（sync/async/executor 缺失
+                // 三条子路径通用）：审批已落地，工具结果消息需要 orchestrator 收集并
+                // 触发 follow-up；停留 Waiting(User) 会被 turn reset 误杀
+                // ToolCallingState（详见 restore_task_to_tool_execution 文档）。
+                restore_task_to_tool_execution(
+                    &mut tasks,
+                    index,
+                    clock,
+                    tool_request.request.task_id,
+                );
+
                 // 执行 Tool
                 let Some(executor) = executors.get(&tool_request.tool_name) else {
                     warn!(
@@ -267,11 +307,9 @@ pub fn tool_confirmation_result_system(
                 // worker，worker 完成后 ingest 落地结果并 restore 任务。
                 //
                 // **状态恢复**：`tool_dispatch_system` 在 `ToolRequiresUserConfirmation` 时
-                // 把 task.status 设为 `Waiting(User)`（dispatch.rs:317）。Async 工具确认后
-                // 必须在此处恢复为 `Waiting(ToolExecution)`——否则下一帧 Transform 集中的
-                // `tool_calling_turn_reset_system` 会看到 `Waiting(User) &&
-                // pending_confirmation_id.is_none()`，错误 despawn `ToolCallingState`，
-                // 导致 worker 完成后 LLM 调用循环无法续跑（竞态 bug，日志已证实）。
+                // 把 task.status 设为 `Waiting(User)`（dispatch.rs），已由本分支上方的
+                // `restore_task_to_tool_execution` 统一恢复为 `Waiting(ToolExecution)`，
+                // 防止下一帧 `tool_calling_turn_reset_system` 误杀 `ToolCallingState`。
                 //
                 // **allow_once 路径**：设置 `confirmed_once = true` 让 async_tool_dispatch_system
                 // 跳过权限检查直接认领——否则 Confirm 权限的 Async 工具会陷入
@@ -297,15 +335,6 @@ pub fn tool_confirmation_result_system(
                         index,
                         tool_request.request.task_id,
                     );
-                    // 恢复 task.status 为 Waiting(ToolExecution)，语义正确 + 防 reset 竞态
-                    // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                    if let Some((_, mut task)) = index
-                        .get_task(&tool_request.request.task_id)
-                        .and_then(|e| tasks.get_mut(e).ok())
-                        && task.status == TaskStatus::Waiting(WaitingReason::User)
-                    {
-                        task.mark_waiting(WaitingReason::ToolExecution, clock.0);
-                    }
                     commands.entity(entity).despawn();
                     continue;
                 }
@@ -398,6 +427,7 @@ pub fn tool_confirmation_result_system(
                             clock: &index_clock_loader_frontends.1,
                         },
                         None,
+                        &mut *index,
                     );
                 }
 
@@ -448,6 +478,12 @@ pub fn tool_confirmation_result_system(
                     ToolReturnedHookPending,
                 ));
 
+                restore_task_to_tool_execution(
+                    &mut tasks,
+                    index,
+                    clock,
+                    tool_request.request.task_id,
+                );
                 clear_task_pending_confirmation_id(&mut tasks, index, tool_request.request.task_id);
                 restore_task_after_tool(
                     &mut tasks,
@@ -619,6 +655,142 @@ mod tests {
         assert!(
             task.pending_confirmation_id.is_none(),
             "pending_confirmation_id should be cleared after approval"
+        );
+    }
+
+    /// 用于 sync 路径测试的 dummy executor：`kind() == Sync`，`execute` 返回
+    /// `ListSessions`（空 backend 上安全返回空列表，不启动真实进程）。
+    struct SyncDummyTool;
+
+    impl crate::domain::BuiltinTool for SyncDummyTool {
+        fn name(&self) -> &str {
+            "shell_exec"
+        }
+        fn kind(&self) -> crate::domain::ToolActionKind {
+            crate::domain::ToolActionKind::Sync
+        }
+        fn execute(
+            &self,
+            _input: &serde_json::Value,
+            _ctx: &crate::domain::ToolContext,
+        ) -> Result<crate::domain::ToolAction, crate::domain::ToolError> {
+            Ok(crate::domain::ToolAction::ListSessions)
+        }
+    }
+
+    /// 复现并守护 sync 工具确认后 task.status 恢复为 `Waiting(ToolExecution)` 的修复。
+    ///
+    /// sync 工具确认路径直接执行工具并落地结果消息，若 task 停留在
+    /// `Waiting(User)`（`tool_dispatch_system` 设置），下一帧
+    /// `tool_calling_turn_reset_system` 会 despawn `ToolCallingState`，
+    /// 结果消息无人认领，LLM 调用循环永久中断（2026-08-19 会话日志证实的 bug）。
+    #[test]
+    fn sync_confirmation_restores_task_to_waiting_tool_execution() {
+        let mut world = test_world();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
+        let request_id = Uuid::new_v4();
+
+        // 注册 sync dummy executor
+        world
+            .resource_mut::<crate::domain::BuiltinToolExecutors>()
+            .register(Box::new(SyncDummyTool));
+
+        // task 模拟 dispatch.rs ToolRequiresUserConfirmation 后的状态
+        let mut task = dummy_task(task_id);
+        task.mark_waiting(WaitingReason::User, Utc::now());
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        // 真实场景中 LLM 发起工具调用时创建 ToolCallingState，审批等待期间持续存在
+        world.spawn(crate::domain::ToolCallingState {
+            task_id,
+            agent_id,
+            pending_tool_call_ids: vec!["call_1".to_string()],
+            iteration: 0,
+            max_iterations: 10,
+            conversation: vec![],
+            tools: vec![],
+            request_kind: crate::domain::AgentRequestKind::ToolExecution {
+                tool_name: "shell_exec".to_string(),
+            },
+            work_item_id: None,
+        });
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "allow_always".to_string(),
+            feedback: None,
+        });
+
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert_eq!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::ToolExecution),
+            "sync tool confirmation must restore task to Waiting(ToolExecution) \
+             to prevent tool_calling_turn_reset_system from despawning ToolCallingState"
+        );
+    }
+
+    /// 复现并守护 deny 路径的状态恢复：拒绝后 UserCancelled 错误结果同样需要
+    /// `tool_calling_orchestrator_system` 收集并触发 follow-up，task 不能停留在
+    /// `Waiting(User)`，否则 ToolCallingState 被 turn reset 误杀、结果丢失。
+    #[test]
+    fn confirmation_denied_restores_task_to_waiting_tool_execution() {
+        let mut world = test_world();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
+        let request_id = Uuid::new_v4();
+
+        // task 模拟 dispatch.rs ToolRequiresUserConfirmation 后的状态
+        let mut task = dummy_task(task_id);
+        task.mark_waiting(WaitingReason::User, Utc::now());
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        // 真实场景中 LLM 发起工具调用时创建 ToolCallingState，审批等待期间持续存在
+        world.spawn(crate::domain::ToolCallingState {
+            task_id,
+            agent_id,
+            pending_tool_call_ids: vec!["call_1".to_string()],
+            iteration: 0,
+            max_iterations: 10,
+            conversation: vec![],
+            tools: vec![],
+            request_kind: crate::domain::AgentRequestKind::ToolExecution {
+                tool_name: "shell_exec".to_string(),
+            },
+            work_item_id: None,
+        });
+        world.spawn(ToolConfirmationResponseMessage {
+            request_id,
+            selected_option: "deny".to_string(),
+            feedback: None,
+        });
+
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert_eq!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::ToolExecution),
+            "denied confirmation must restore task to Waiting(ToolExecution) \
+             so the UserCancelled result can still reach the follow-up LLM loop"
         );
     }
 

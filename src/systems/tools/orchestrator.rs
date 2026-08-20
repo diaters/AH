@@ -72,6 +72,7 @@ pub fn spawn_create_tasks_messages(
     definitions: Vec<SubTaskDefinition>,
     tool_call_id: Option<String>,
     parent_origin_channel: Option<ChannelId>,
+    index: &mut EntityIndex,
 ) {
     let batch_id = Uuid::new_v4();
     let total_count = definitions.len();
@@ -131,7 +132,13 @@ pub fn spawn_create_tasks_messages(
             depended_by,
         };
 
-        commands.spawn((child_task, sub_task_config, ShortTermMemory::default()));
+        // 同步注册 EntityIndex：brain_decision_system 等经索引 O(1) 查找任务。
+        // 若不注册，子任务的 Brain 决策结果会被 brain_decision_system 静默丢弃，
+        // 子任务永久卡在 Waiting(Agent)。与 spawn_task 封装保持同样的索引一致性。
+        let child_entity = commands
+            .spawn((child_task, sub_task_config, ShortTermMemory::default()))
+            .id();
+        index.tasks.insert(child_task_id, child_entity);
 
         batch_tasks.insert(
             def.name.clone(),
@@ -479,6 +486,7 @@ pub fn handle_tool_action<B: SessionBackend>(
     >,
     resources: &mut ToolResources<'_, B>,
     parent_agent_id: Option<AgentId>,
+    index: &mut EntityIndex,
 ) {
     match action {
         Ok(ToolAction::Direct(_value)) => {
@@ -492,6 +500,7 @@ pub fn handle_tool_action<B: SessionBackend>(
                 request,
                 world.tasks,
                 definitions,
+                index,
             );
         }
         Ok(ToolAction::WaitForTasks {
@@ -711,6 +720,7 @@ fn handle_create_batch(
     request: &ToolExecutionRequestMessage,
     tasks: &Query<(Entity, &mut Task)>,
     definitions: Vec<SubTaskDefinition>,
+    index: &mut EntityIndex,
 ) {
     let parent_origin_channel = tasks
         .get(task_entity)
@@ -737,6 +747,7 @@ fn handle_create_batch(
         definitions,
         request.tool_call_id.clone(),
         parent_origin_channel,
+        index,
     );
 }
 
@@ -2402,7 +2413,11 @@ mod tests {
     /// 测试系统：从世界中的父 Task 读取 origin_channel，调用 spawn_create_tasks_messages。
     ///
     /// 通过系统而非直接调用 `world.commands()`，确保 `app.update()` 能正确刷新 Commands。
-    fn spawn_subtasks_for_inheritance_test(mut commands: Commands, tasks: Query<&Task>) {
+    fn spawn_subtasks_for_inheritance_test(
+        mut commands: Commands,
+        tasks: Query<&Task>,
+        mut index: ResMut<EntityIndex>,
+    ) {
         let parent_task = tasks
             .iter()
             .find(|t| t.content == "parent")
@@ -2429,6 +2444,7 @@ mod tests {
             }],
             None,
             parent_origin_channel,
+            &mut index,
         );
     }
 
@@ -2440,6 +2456,7 @@ mod tests {
     #[test]
     fn create_tasks_subtask_inherits_parent_origin_channel() {
         let mut app = App::new();
+        app.init_resource::<EntityIndex>();
 
         let telegram_channel = ChannelId {
             frontend: FrontendKind::Telegram,
@@ -2509,6 +2526,14 @@ mod tests {
             }),
             "subtask channel must NOT be the hardcoded Tui/default"
         );
+        // 回归保护：子任务必须注册进 EntityIndex。
+        // 此前 create_tasks 裸 spawn 未注册索引，导致 brain_decision_system
+        // 查不到子任务、静默丢弃 Brain 决策结果，子任务永久卡在 Waiting(Agent)。
+        let index = app.world().resource::<EntityIndex>();
+        assert!(
+            index.get_task(&child_tasks[0].id).is_some(),
+            "subtask should be registered in EntityIndex.tasks"
+        );
     }
 
     // ============ AskUser arm 测试 ============
@@ -2565,6 +2590,7 @@ mod tests {
         skill_loader: Res<SkillLoader>,
         calling_states: Query<(Entity, &ToolCallingState)>,
         frontend_registry: Res<FrontendRegistry>,
+        mut index: ResMut<EntityIndex>,
         requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     ) {
         let Some((request_entity, request)) = requests.iter().next() else {
@@ -2601,6 +2627,7 @@ mod tests {
                 clock: &clock,
             },
             None,
+            &mut index,
         );
     }
 
@@ -2666,6 +2693,7 @@ mod tests {
         world.init_resource::<SharedKnowledgeBase>();
         world.init_resource::<ExperienceStore>();
         world.init_resource::<PendingExperienceHooks>();
+        world.init_resource::<EntityIndex>();
         world.insert_resource(crate::systems::NativeProcessBackend::default());
         world.insert_resource(Clock::default());
         world.insert_resource(SkillLoader::new(std::path::PathBuf::from(
