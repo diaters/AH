@@ -19,7 +19,7 @@
 | `2026-07-26-ecs-relation-modeling-design.md` | 当前有效 | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 消灭 55+ 线性扫描 |
 | `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效 | 上下文压缩盲区修复 | 工具结果入 STM、配对组粒度压缩、结构化发送路径 |
 | `2026-08-16-real-llm-scenario-testing-design.md` | 当前有效 | 真实 LLM 场景测试与分层正确性判断 | 四层测试模型 + AI Judge/人工待审 |
-| `2026-08-17-complexity-governance-design.md` | 当前有效 | 设计质量治理：依赖方向、知识收口、按知识域重组 | 已评审修订（N1-N2/S1-S4/C1-C4 采纳），进入实施 |
+| `2026-08-17-complexity-governance-design.md` | 当前有效 | 设计质量治理：依赖方向、知识收口、按知识域重组 | 已评审修订，P0–P5 全部实施完成 |
 
 ## 推荐阅读顺序
 

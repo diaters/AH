@@ -1,8 +1,8 @@
 # 设计质量治理计划：从时间顺序分解走向知识域分解
 
 > __状态：当前有效__ — 2026-08-17 完成设计评审并修订（N1/N2/S1-S4/C1-C4 全部采纳，
-> N2 选方案 A、S3 选 contracts 归属），进入实施。评审报告见
-> `logs/review/2026-08-17-complexity-governance-design-review.md`。
+> N2 选方案 A、S3 选 contracts 归属）。P0–P5 全部阶段已实施完成，实施记录见 §8。
+> 评审报告见 `logs/review/2026-08-17-complexity-governance-design-review.md`。
 > 产出背景：2026-08-17 基于《软件设计的哲学》（A Philosophy of Software Design）核心观点的全仓库质量审视。
 
 路径约定：文中 `systems/...`、`domain/...` 等简写均以 `src/` 为根（如
@@ -302,3 +302,91 @@ __风险__：波及面实测 62 个文件（`src/` 47 + `tests/` 15），必须�
   CI（code-check job 首步）。
 - 验证：`cargo fmt` / `cargo clippy -D warnings` / `cargo test --all-features`
   （79 套件）全绿；断言脚本本地通过。
+
+### P1：登记性知识收口（2026-08-19）
+
+- `FrontendKind` 单一权威：`domain/frontend.rs` 提供 `channel_name()`/`from_channel_name()`，
+  替换原 6 处散落映射；2 处 `panic!("unknown channel name")` 改为启动期配置校验错误
+  （`grep` src/ 已无残留）。
+- 移除未实现的 `FrontendKind::Feishu` 变体与空 `channels/lark.rs`（名字先于实现扩散；
+  实现时随真实通道一并加回）。
+- 工具 schema 通道枚举生成化：`systems/tools/mod.rs` 由硬编码改为
+  `FrontendKind::ALL.iter().map(|k| k.channel_name())` 生成。
+- `agents.toml` 解析收口：从 `infrastructure/incubation/agent_registry.rs` 提取
+  `load_agent_config` 只读接口，`systems/maintenance.rs` 改调该接口，统一解析语义。
+- 审批 `callback_data` 格式收口：生成 `make_callback_data` 与解析 `parse_callback_data`
+  集中到 `channels/traits.rs`，QQ/Telegram/frontend 三处调用之。
+- skill 布局读写收口：`infrastructure/skills/loader.rs` 暴露
+  `skill_dir`/`read_skill_md_in`/`write_skill_md_in`，消除 `systems/experience/` 内
+  9 处直接 `std::fs`（残留 `scan_skill_dir` 目录遍历一处，属目录列举，可后续收口）。
+- QQ 通道配置写入收口：`qq.rs::persist_allowed_user` 改调
+  `ChannelConfigs::append_qq_allowed_user`，文件 IO 知识退出通道模块。
+- `[IMAGE:path]` marker 语法说明收口为常量 `ATTACHMENT_MARKER_SYNTAX_HINT`
+  （`domain/attachment.rs`）。
+
+### P2：WorkItem 结果处理按知识域重组（2026-08-19）
+
+- `handle_evaluation_work_item_result` 迁至 `systems/evaluation.rs`；
+  `handle_summarization_work_item_result` 迁至 `systems/summarization.rs`；
+  `handle_profile_generation_invalid` 迁至 `systems/experience/profile_generation.rs`。
+- `tool_calling_orchestrator_system` 迁至 `systems/tools/tool_calling.rs`。
+- brain 三文件（`brain_decision`/`brain_dispatch`/`brain_llm_builder`）合并到
+  `systems/brain/`（经 `git diff --find-copies=30%` 确认为真实 rename，源自
+  `transform/` 与 `dispatch/`）；`transform/` 不再引用 `dispatch/` 内部函数。
+- `llm_response.rs` 由 1908 行降至 476 行（< 500 验收达成），回归纯路由 + Task 级
+  通用 LLM 响应处理。
+- 搬迁以 move 为主，函数体无逻辑改动；覆盖测试（evaluation/summarization/profile
+  flow）全绿。
+
+### P3：拆解 `handle_tool_action`（2026-08-19）
+
+- `handle_tool_action` 由 ~1206 行拆为 ~200 行纯分派器，按 action kind 拆出 ~15 个
+  per-action handler（`dispatch_session_action`/`handle_start_session`/
+  `handle_read_session`/`handle_submit_profile_update`/`handle_ask_user` 等），主函数
+  只保留分派（验收"任一函数 ≤ 200 行"达成）。
+- 微文件合并：`tools/builtin/shell/` 下单工具文件合并为 `shell_tools.rs`。
+- 流水线协议（`InFlightToolCall` claim 语义、工具结果落地 + 请求 despawn 协议）集中为
+  `orchestrator.rs` 模块级 rustdoc 单一权威。
+- 与 spec 处方的偏差：拆解按 action kind 而非执行路径（sync/async/shell），但
+  ≤200 行 + 主函数只分派的验收已达成。
+
+### P4：领域类型收紧（2026-08-19）
+
+- ID newtype 化：`TaskId`/`AgentId`/`SessionHandleId` 由 `pub type = Uuid` 改为
+  newtype struct，编译器驱动全量替换，杜绝 ID 互传。
+- `Task::status`/`last_error` 等状态字段收窄 `pub(crate)`，状态转换统一经 `mark_*`
+  方法（恢复结构化 `TaskStatusTransition` 日志）；`WorkItem` 对齐补 `mark_*` 并收窄字段。
+- `TaskRoutingPolicy` 字段私有化，合法组合仅经 `conversational`/`event`/
+  `scheduled_task` 工厂构造。
+- 状态直接赋值断言入 CI：`scripts/check_status_assignment.sh` grep 仓库内对
+  `task.status`/`work_item.status` 的直接赋值（豁免 `domain/task.rs`、
+  `domain/work_item.rs` 内 `mark_*` 实现），已接入 `.github/workflows/ci.yml`。
+
+### P5：接口与实现对齐（2026-08-19）
+
+- `WorldCommand` 未实现命令变体删除（残留变体均已实现回放，无"跳过"占位）。
+- `llm/factory.rs` 四分支同构 match 简化为单一 `GenaiExecutor` 构造（文件降至 17 行）。
+- 前置 hook 补 `tool_call_name`/`tool_call_input_json`（`host_api/tool_control.rs`，
+  条件拒绝核心用途）。
+- `HookPoint` 三重字符串映射（变体/`FromStr`/`as_serialized`/`ALL_NAMES`）用
+  `define_hook_points!` 宏单点化（`domain/hook_point.rs`）。
+- `HARNESS_PLUGINS_DIR` 默认值去重，统一到 `user_plugins/loader.rs::DEFAULT_PLUGINS_DIR`。
+- `llm/registry.rs` `model` 字段改 `Option`，消除 `"placeholder"` 语义不诚实。
+
+### 实施期回归修复（2026-08-20，commit 73ff96a）
+
+- `create_tasks` 子任务索引漏注册：`spawn_create_tasks_messages` 同步
+  `index.tasks.insert`，消除 `brain_decision_system` 经索引 O(1) 查找子任务失败、
+  静默丢弃 Brain 决策、子任务卡死 `Waiting(Agent)` 的 bug；brain_decision 查不到任务
+  时由静默丢弃改为 `warn!` 日志便于定位。补回归测试。
+- sync/deny 工具确认路径状态恢复竞态：`tool_dispatch_system` 在
+  `ToolRequiresUserConfirmation` 时把 `task.status` 设为 `Waiting(User)`，确认落地后
+  未恢复为 `Waiting(ToolExecution)`，导致 `tool_calling_turn_reset_system` 误杀
+  `ToolCallingState`、LLM 调用循环永久中断。抽取 `restore_task_to_tool_execution`
+  统一 sync/async/executor-missing 三子路径恢复，补 sync + deny 两条回归测试。
+
+### 最终验证
+
+- `cargo test --all-features` 退出码 0：1248 passed / 0 failed / 6 ignored
+  （6 个 ignored 均为真实 API 门控测试，非回归掩盖）；`cargo clippy -D warnings`、
+  `cargo fmt` 与依赖方向/状态赋值断言脚本由 CI 门禁保证。
