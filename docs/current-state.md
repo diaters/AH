@@ -183,7 +183,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `triggers.toml` 配置文件：声明 webhook 监听地址、路由、auth token 与 timer cron 表达式、路由
 - `/reload-triggers` 命令：运行时热重载 `triggers.toml`，仅替换静态路由；动态 scheduled task 原样保留
 - `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
-- `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`feishu`/`web`
+- `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`web`
 - 动态 scheduled task 触发后，其 `output_channel` 同时作为审批通道，执行期需要用户确认的工具请求会路由到该 IM 用户；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
 - 动态 scheduled task 仅存内存，进程重启后丢失；一次性任务触发后自动从 registry 清理，并记录 `DynamicTaskRemoved` 结构化日志
 
@@ -325,8 +325,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 插件 `v1` 不追踪 `tool_deny` 的 per-plugin attribution，推迟到后续 host API 升级
 - 历史设计文档仍有一部分使用旧阶段叙事，需要逐步补充状态标注
 - 标准 provider 的实际兼容性说明仍需要更多运行验证和沉淀
-- 飞书通道仅有占位模块，尚未接入实际 API
-- Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 通道已支持收发媒体附件与审批文本回复匹配；飞书仍为占位模块
+- 飞书通道尚未接入实际 API（`FrontendKind::Feishu` 变体与 `channels/lark.rs` 占位已移除，待实现时随真实通道一并加回）
+- Telegram 通道已支持收发媒体附件（图片、文档、语音等）与 Inline Keyboard 审批交互；QQ 通道已支持收发媒体附件与审批文本回复匹配
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 - Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
   `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
@@ -380,6 +380,20 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `SharedKnowledgeBase` 负责承载用户显式写入及审核后共享的知识，当前仍为进程内存态
 - `SpaceToolRegistry` 负责承载全局工具定义
 - shell session 真源位于 `NativeProcessBackend`，不再作为 `Space` 资源建模
+
+### 模块依赖方向与复杂度治理
+
+- 单向分层依赖（下层不引用上层，同层括号内不互相引用）：
+  `domain ← contracts ← {ecs, llm, channels, tui, infrastructure} ← {user_plugins, triggers} ← systems ← {plugins, app}`；
+  `lib.rs` 不再含模块级 glob re-export，依赖方向经 `scripts/check_module_deps.sh` CI 断言固化。
+- 知识域重组：`transform/llm_response.rs` 回归纯路由（1908→476 行），评估/摘要/画像结果处理归位各自领域模块，工具调用编排归位 `systems/tools/`，brain 决策三文件合并为 `systems/brain/`。
+- 领域类型收紧：`TaskId`/`AgentId` 等改 newtype 杜绝互传；`Task`/`WorkItem` 状态字段
+  `pub(crate)` + `mark_*` 转换；`TaskRoutingPolicy` 工厂构造；状态直接赋值经
+  `scripts/check_status_assignment.sh` CI 断言。
+- 登记性知识收口：`FrontendKind` 为通道名唯一权威（`channel_name`/`from_channel_name`），
+  审批 `callback_data`、`agents.toml` 解析、skill 布局读写、QQ 配置写入均收口到单一模块/接口。
+- 详细阶段任务与实施记录见
+  [docs/design/2026-08-17-complexity-governance-design.md](design/2026-08-17-complexity-governance-design.md) §3 与 §8。
 
 ## 已知限制
 
