@@ -483,8 +483,8 @@ fn tool_call_is_recorded_to_short_term_memory() {
             .iter()
             .any(|e| e.role == EntryRole::Assistant && !e.metadata.tool_calls.is_empty());
         assert!(
-            has_tool_record || !memory.entries.is_empty(),
-            "ShortTermMemory should have recorded the tool call"
+            has_tool_record,
+            "ShortTermMemory should have recorded the tool call (tool_calls non-empty)"
         );
     }
 }

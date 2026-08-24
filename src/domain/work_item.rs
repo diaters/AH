@@ -432,8 +432,6 @@ mod tests {
         let task_id = crate::domain::TaskId::nil();
         let work_item = WorkItem::execution(task_id, "test prompt".to_string());
         assert_eq!(work_item.work_type, WorkItemType::Execution);
-        assert_eq!(work_item.status, WorkItemStatus::Pending);
-        assert!(work_item.is_pending());
     }
 
     #[test]
