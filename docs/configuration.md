@@ -126,6 +126,13 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | `HARNESS_ACTIVE_POLL_MS` | `16` | 有任务或事件时主循环的轮询间隔（毫秒） |
 | `HARNESS_IDLE_POLL_MS` | `150` | 完全空闲时主循环的轮询间隔（毫秒） |
 
+### 记忆压缩
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HARNESS_MEMORY_COMPRESSION_THRESHOLD_TOKENS` | `8000` | 短期记忆 token 压缩触发阈值 |
+| `HARNESS_MEMORY_SUMMARY_TARGET_TOKENS` | `1000` | LLM 摘要目标 token 数 |
+
 ### Shell Runtime
 
 | 环境变量 | 默认值 | 说明 |

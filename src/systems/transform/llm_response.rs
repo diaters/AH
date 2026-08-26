@@ -63,7 +63,7 @@ fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
 pub fn llm_response_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
-    config: Res<MemoryConfig>,
+    _config: Res<MemoryConfig>,
     eval_config: Res<crate::domain::TaskEvaluationConfig>,
     mut commands: Commands,
     index: Res<EntityIndex>,
@@ -134,7 +134,6 @@ pub fn llm_response_system(
                             &work_item,
                             result,
                             clock.0,
-                            &config,
                         );
                         continue;
                     }

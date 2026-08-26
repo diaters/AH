@@ -298,6 +298,7 @@ impl AgentExecutor for CompressionSelfcheckExecutor {
 
 fn scenario_config() -> HarnessConfig {
     HarnessConfig {
+        memory: harness::domain::MemoryConfig::default(),
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,

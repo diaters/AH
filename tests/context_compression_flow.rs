@@ -606,10 +606,10 @@ fn sub_agent_tool_calls_stay_in_own_stm() {
 
 #[test]
 fn summarization_loop_terminates_after_group_aligned_drain() {
-    use harness::domain::{compressible_entry_count, split_into_groups};
+    use harness::domain::compressible_group_indices;
 
     // 复现日志 harness_2026-08-15_23-56-36.jsonl：
-    // 大 token 工具 entry 独立成组，落入 preserve_recent_turns=2 保护窗口
+    // 大 token 工具 entry 独立成组；现在「除最后 1 个进行中组外全部可压缩」
     let mut stm = ShortTermMemory::default();
     stm.add_entry(
         EntryRole::User,
@@ -635,17 +635,26 @@ fn summarization_loop_terminates_after_group_aligned_drain() {
         stm.estimated_tokens
     );
 
-    // 模拟完成端 drain：首轮压缩组 0（78 字符对话组）
-    let removed = stm.drain_compressed_groups(2);
-    assert_eq!(removed, 1);
+    // 触发端视角：除最后 1 个进行中组外，全部可压缩（含大 token 工具组）
+    let targets = compressible_group_indices(&stm.entries);
+    assert!(!targets.is_empty(), "存在可压缩组");
 
-    // 触发端视角：剩余组数 <= preserve → 不再触发，循环终止
-    let groups = split_into_groups(&stm.entries);
-    assert_eq!(compressible_entry_count(&groups, 2), 0);
+    // 模拟完成端 drain：一次移除全部历史组（工具组也在内）
+    let removed = stm.drain_compressible_groups();
+    assert_eq!(removed, 2); // [User 新闻, Assistant 工具]
 
-    // 用户下一轮对话后，工具组落出保护窗口，可被正常压缩
+    // 收敛：压缩后只剩最后 1 个进行中组 → 无可压 → 循环终止
+    assert!(
+        compressible_group_indices(&stm.entries).is_empty(),
+        "压缩后无可压缩组，循环应终止"
+    );
+    assert!(stm.estimated_tokens < 8000, "压缩后应降到阈值下");
+
+    // 用户下一轮对话后，旧对话组成为历史 → 再次可压缩
     stm.add_entry(EntryRole::User, "新问题", EntryMetadata::default());
     stm.add_entry(EntryRole::Assistant, "新回答", EntryMetadata::default());
-    let groups = split_into_groups(&stm.entries);
-    assert_eq!(compressible_entry_count(&groups, 2), 1);
+    assert!(
+        !compressible_group_indices(&stm.entries).is_empty(),
+        "新对话后旧组进入可压缩区"
+    );
 }

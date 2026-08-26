@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 
+use crate::domain::MemoryConfig;
 use crate::llm::{LlmProviderConfig, LlmProviderKind};
 use crate::prelude::Resource;
 
@@ -20,6 +21,8 @@ pub struct HarnessConfig {
     pub max_tool_iterations: u32,
     pub llm: LlmProviderConfig,
     pub brain: Option<BrainConfig>,
+    /// 记忆压缩配置（token 阈值 / 摘要目标）
+    pub memory: MemoryConfig,
     pub agents_config_path: String,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
@@ -78,6 +81,18 @@ impl HarnessConfig {
                 .unwrap_or(5),
             llm,
             brain,
+            memory: MemoryConfig {
+                compression_threshold_tokens: std::env::var(
+                    "HARNESS_MEMORY_COMPRESSION_THRESHOLD_TOKENS",
+                )
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8000),
+                summary_target_tokens: std::env::var("HARNESS_MEMORY_SUMMARY_TARGET_TOKENS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1000),
+            },
             agents_config_path,
             default_wait_tasks_timeout_secs: std::env::var(
                 "HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS",
@@ -157,6 +172,7 @@ impl Default for HarnessConfig {
                 api_base: None,
             },
             brain: None,
+            memory: MemoryConfig::default(),
             agents_config_path: "agents.toml".to_string(),
             default_wait_tasks_timeout_secs: 300, // 5 minutes default
             shell_default_tail_lines: 200,

@@ -9,7 +9,7 @@ use crate::{
     contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResult, ChatSession, DispatchHint, DispatchKind,
-        DispatchStrategy, MemoryConfig, OutputContent, PendingDispatch, ShortTermMemory,
+        DispatchStrategy, OutputContent, PendingDispatch, ShortTermMemory,
         SummarizationRequestMessage, SummarizationTrigger, SystemOutputMessage, Task, TaskStatus,
         WaitingReason, WorkItem, WorkItemType,
     },
@@ -108,7 +108,6 @@ pub(crate) fn handle_summarization_work_item_result(
     work_item: &WorkItem,
     result: &AgentExecutionResult,
     now: chrono::DateTime<chrono::Utc>,
-    config: &MemoryConfig,
 ) {
     let task_id = work_item.task_id;
 
@@ -121,16 +120,15 @@ pub(crate) fn handle_summarization_work_item_result(
             // 注意：这里简化处理，假设全局只有一个 STM（当前架构确实如此）
             for (_, _, short_term, _) in tasks.iter_mut() {
                 if let Some(mut memory) = short_term {
+                    // summary_prefix 覆盖式写入：每轮全部历史重生成一份新摘要
+                    // 替换旧值，字段恒有界（≤ summary_target_tokens 量级）
                     memory.summary_prefix = Some(summary.clone());
 
                     // 移除已压缩的 entries：与触发端 memory_compression_system
-                    // 共用配对组选择逻辑（见 domain::memory 的
-                    // split_into_groups / compressible_entry_count），
-                    // 保证压缩循环每轮必有进展、必然收敛
-                    let removed = memory.drain_compressed_groups(config.preserve_recent_turns);
-
-                    // 重新计算 token
-                    memory.recalculate_tokens();
+                    // 共用同一份 compressible_group_indices（见 domain::memory），
+                    // 保证压缩循环收敛（只有最后 1 个进行中组保留）
+                    // drain_compressible_groups 内部会 recalculate_tokens
+                    let removed = memory.drain_compressible_groups();
 
                     debug!(
                         event = "SummarizationCompleted",

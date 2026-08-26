@@ -4,10 +4,15 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 当前有效 |
+| 状态 | 当前有效（部分被取代） |
 | 创建日期 | 2026-08-09 |
 | 适用阶段 | 上下文压缩机制改造 |
 | 相关文档 | `docs/design/multi-turn-memory-design.md`、`docs/current-state.md`、`logs/context-compression-blind-spot.md` |
+
+> **注**：本文档「工具结果入 STM、工具执行级上下文管控」结论仍为有效架构；
+> 其中「对话级压缩按 `preserve_recent_turns` 组数保护窗口选择组」的设计
+> 已被 `docs/design/2026-08-26-memory-compression-redesign-design.md`（一次全压、
+> 仅保留最后 1 组、结构性收敛）取代，`preserve_recent_turns` 字段已删除。
 
 ---
 

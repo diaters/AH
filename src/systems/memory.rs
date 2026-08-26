@@ -6,8 +6,8 @@ use crate::{
     domain::{
         Agent, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending, LtmWriteHookPending,
         MemoryImportance, ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task,
-        TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType,
-        compressible_entry_count, render_tool_calls_summary, split_into_groups,
+        TaskStatus, WaitingReason, WorkItem, WorkItemStatus, WorkItemType, build_compress_text,
+        compressible_group_indices, render_tool_calls_summary,
     },
     infrastructure::memory::LongTermMemoryService,
 };
@@ -47,33 +47,18 @@ pub(crate) fn memory_compression_system(
                 continue;
             }
 
-            // 替换原有的 preserve_count / compress_count 逻辑
-            let groups = split_into_groups(&short_term.entries);
-            let preserve_group_count = config.preserve_recent_turns as usize;
-            let compress_entry_count =
-                compressible_entry_count(&groups, config.preserve_recent_turns);
-            if compress_entry_count == 0 {
+            // 一次全压：除最后 1 个进行中组外，全部历史组进入摘要
+            let compressible = compressible_group_indices(&short_term.entries);
+            if compressible.is_empty() {
+                // 无可压缩内容（只有进行中的最后 1 组）→ 不触发，等待新对话
+                // 把该组挤出保护窗口后再压缩（结构性收敛，无需状态机）
                 continue;
             }
-
-            // 收集需要压缩的条目内容（含 tool_calls 渲染）
-            let to_compress: Vec<_> = short_term
-                .entries
-                .iter()
-                .take(compress_entry_count)
-                .collect();
-            let mut compress_text = String::new();
-            for entry in &to_compress {
-                let mut line = format!("{:?}: {}", entry.role, entry.content);
-                if !entry.metadata.tool_calls.is_empty() {
-                    line.push_str(&format!(
-                        "\n  {}",
-                        render_tool_calls_summary(&entry.metadata.tool_calls)
-                    ));
-                }
-                compress_text.push_str(&line);
-                compress_text.push('\n');
-            }
+            let compress_text = build_compress_text(
+                &short_term.entries,
+                short_term.summary_prefix.as_deref(),
+                render_tool_calls_summary,
+            );
 
             // 发送摘要请求而非直接拼接
             debug!(
@@ -81,9 +66,8 @@ pub(crate) fn memory_compression_system(
                 task_id = %task.id,
                 current_tokens = short_term.estimated_tokens,
                 threshold = config.compression_threshold_tokens,
-                groups_total = groups.len(),
-                groups_to_compress = groups.len() - preserve_group_count,
-                entries_to_compress = compress_entry_count,
+                groups_to_compress = compressible.len(),
+                entries_to_compress = compressible.iter().map(|g| g.len()).sum::<usize>(),
                 compress_text_len = compress_text.len(),
                 "triggering summarization request"
             );
@@ -225,7 +209,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(MemoryConfig {
             compression_threshold_tokens: 100,
-            preserve_recent_turns: 1,
             summary_target_tokens: 50,
         });
 
@@ -376,7 +359,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(MemoryConfig {
             compression_threshold_tokens: 50,
-            preserve_recent_turns: 1,
             summary_target_tokens: 25,
         });
 
@@ -440,7 +422,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(MemoryConfig {
             compression_threshold_tokens: 100,
-            preserve_recent_turns: 1,
             summary_target_tokens: 50,
         });
 

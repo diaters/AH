@@ -23,8 +23,6 @@ pub struct LtmEvictedHookPending;
 pub struct MemoryConfig {
     /// 压缩触发阈值（token 数）
     pub compression_threshold_tokens: u32,
-    /// 保留最近 N 轮不压缩
-    pub preserve_recent_turns: u32,
     /// LLM 摘要目标 token 数
     pub summary_target_tokens: u32,
 }
@@ -33,7 +31,6 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             compression_threshold_tokens: 8000,
-            preserve_recent_turns: 2,
             summary_target_tokens: 1000,
         }
     }
@@ -293,52 +290,76 @@ mod tests {
     }
 
     #[test]
-    fn compressible_entry_count_protects_recent_groups() {
+    fn compressible_group_indices_takes_all_history_except_last() {
         let stm = log_scenario_stm();
-        let groups = split_into_groups(&stm.entries);
-
-        // preserve=2（默认）：保留工具组与最近对话组，仅组 0 可压缩（日志中的 78 字符）
-        assert_eq!(compressible_entry_count(&groups, 2), 1);
-        // preserve=1：工具组落入压缩区
-        assert_eq!(compressible_entry_count(&groups, 1), 2);
-        // 组数 <= preserve：无可压缩
-        assert_eq!(compressible_entry_count(&groups, 3), 0);
-        assert_eq!(compressible_entry_count(&groups, 4), 0);
-        // 空分组
-        assert_eq!(compressible_entry_count(&[], 2), 0);
+        // 分组 [[User0],[Assistant1(工具)], [User2, Assistant3]]
+        let targets = compressible_group_indices(&stm.entries);
+        // 除最后 1 个进行中组外，全部可压缩（工具组也在内）
+        assert_eq!(targets, vec![vec![0], vec![1]]);
     }
 
     #[test]
-    fn drain_compressed_groups_removes_only_leading_groups() {
+    fn compressible_group_indices_single_group_is_empty() {
+        // 只有 1 个组（进行中）→ 无可压缩
+        let mut stm = ShortTermMemory::default();
+        assert!(compressible_group_indices(&stm.entries).is_empty());
+        stm.add_entry(EntryRole::User, "仅一轮", EntryMetadata::default());
+        stm.add_entry(EntryRole::Assistant, "回答", EntryMetadata::default());
+        assert!(compressible_group_indices(&stm.entries).is_empty());
+    }
+
+    #[test]
+    fn drain_compressible_groups_keeps_only_last_group() {
         let mut stm = log_scenario_stm();
         let tokens_before = stm.estimated_tokens;
+        assert!(tokens_before > 50);
 
-        // 摘要完成后 drain（preserve=2 默认配置）：仅移除组 0 的 1 个 entry。
-        // 与完成端流程一致：drain 后由 recalculate_tokens 反映 token 下降
-        let removed = stm.drain_compressed_groups(2);
-        stm.recalculate_tokens();
-        assert_eq!(removed, 1);
-        assert_eq!(stm.entries.len(), 3);
+        // 压缩后仅保留最后 1 个进行中组，token 显著下降
+        let removed = stm.drain_compressible_groups();
+        assert_eq!(removed, 2); // 组0（User）+ 组1（工具 Assistant）
+        assert_eq!(stm.entries.len(), 2); // [User "总结一下", Assistant "好的"]
         assert!(stm.estimated_tokens < tokens_before);
-
-        // 二次 drain：保护窗口已满，无进展 → 触发端将停止，循环终止
-        assert_eq!(stm.drain_compressed_groups(2), 0);
-        assert_eq!(stm.entries.len(), 3);
+        // 收敛：再次 drain 无可压
+        assert_eq!(stm.drain_compressible_groups(), 0);
     }
 
     #[test]
-    fn drain_compressed_groups_then_next_turn_exposes_tool_group() {
-        // 终止后用户追加一轮对话，工具组落出保护窗口，可被后续压缩
+    fn drain_compressible_groups_then_next_turn_compresses_history() {
+        // 压缩后只剩进行中组；新对话加入后，旧对话组成为可压缩区
         let mut stm = log_scenario_stm();
-        stm.drain_compressed_groups(2);
+        stm.drain_compressible_groups();
 
         stm.add_entry(EntryRole::User, "新的问题", EntryMetadata::default());
         stm.add_entry(EntryRole::Assistant, "新的回答", EntryMetadata::default());
 
-        // 此时分组 [[工具组], [对话组], [新对话组]]：工具组成为可压缩区
-        let removed = stm.drain_compressed_groups(2);
-        assert_eq!(removed, 1);
-        assert!(stm.entries.iter().all(|e| e.metadata.tool_calls.is_empty()));
+        // 分组 [[旧对话组], [新对话组]] → 旧对话组可压缩
+        let removed = stm.drain_compressible_groups();
+        assert_eq!(removed, 2);
+        assert_eq!(stm.entries.len(), 2);
+    }
+
+    #[test]
+    fn build_compress_text_includes_summary_and_tool_calls() {
+        let stm = log_scenario_stm();
+        let text = build_compress_text(&stm.entries, Some("旧摘要"), render_tool_calls_summary);
+        assert!(text.contains("旧摘要"));
+        assert!(text.contains("User: 帮我看今天的新闻"));
+        // 工具组被包含（含 tool_calls 渲染）
+        assert!(text.contains("playwright-cli browse"));
+        // 最后 1 个进行中组不进入压缩文本
+        assert!(!text.contains("总结一下"));
+        assert!(!text.contains("好的"));
+    }
+
+    #[test]
+    fn build_compress_text_no_summary_and_single_group() {
+        let mut stm = ShortTermMemory::default();
+        stm.add_entry(EntryRole::User, "仅一轮", EntryMetadata::default());
+        stm.add_entry(EntryRole::Assistant, "回答", EntryMetadata::default());
+
+        let text = build_compress_text(&stm.entries, None, render_tool_calls_summary);
+        // 只有 1 个组 → 无可压 → 空文本（无 summary 时为空）
+        assert_eq!(text, "");
     }
 }
 
@@ -358,7 +379,7 @@ pub fn estimate_tokens(text: &str) -> u32 {
 /// - Summary / Archive 归入最近的配对组
 ///
 /// 触发端（`memory_compression_system`）与完成端
-/// （`ShortTermMemory::drain_compressed_groups`）共用此分组逻辑，
+/// （`ShortTermMemory::drain_compressible_groups`）共用此分组逻辑，
 /// 保证两端粒度对齐。
 pub fn split_into_groups(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
     if entries.is_empty() {
@@ -388,22 +409,53 @@ pub fn split_into_groups(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
     groups
 }
 
-/// 计算可压缩的 entry 数量：排除最后 `preserve_recent_turns` 个配对组后，
-/// 前置各组包含的 entry 总数。组数不足时返回 0。
+/// 返回可压缩的配对组下标集合：除最后 1 个进行中的组外，全部组可压缩。
+///
+/// - 最后 1 个组是「进行中」（正在交互的对话/工具配对组），始终保留；
+/// - 其余组（全部历史）一次整体压缩——不存在「选择哪几组」的排序。
+/// - 只剩 1 个组（无可压）时返回空。
 ///
 /// 触发端（`memory_compression_system`）与完成端
-/// （`ShortTermMemory::drain_compressed_groups`）共用此选择逻辑，
+/// （`ShortTermMemory::drain_compressible_groups`）共用此选择逻辑，
 /// 保证两端粒度对齐。
-pub fn compressible_entry_count(groups: &[Vec<usize>], preserve_recent_turns: u32) -> usize {
-    let preserve = preserve_recent_turns as usize;
-    if groups.len() <= preserve {
-        return 0;
+pub fn compressible_group_indices(entries: &[MemoryEntry]) -> Vec<Vec<usize>> {
+    let groups = split_into_groups(entries);
+    if groups.len() <= 1 {
+        return Vec::new();
     }
-    groups
-        .iter()
-        .take(groups.len() - preserve)
-        .map(|g| g.len())
-        .sum()
+    groups[..groups.len() - 1].to_vec()
+}
+
+/// 构造压缩输入文本：旧摘要 + 全部可压缩组的拼接。
+///
+/// 触发端在阈值超限时用它一次性构造 `SummarizationRequestMessage` 的
+/// `content_to_summarize`。与完成端 `drain_compressible_groups` 使用同一份
+/// `compressible_group_indices` 选择逻辑，保证两端粒度对齐。
+pub fn build_compress_text(
+    entries: &[MemoryEntry],
+    summary_prefix: Option<&str>,
+    render_tool_calls: impl Fn(&[ToolCall]) -> String,
+) -> String {
+    let mut text = String::new();
+    if let Some(summary) = summary_prefix {
+        text.push_str(&format!("[Previous context summary]\n{}\n\n", summary));
+    }
+    let groups = compressible_group_indices(entries);
+    for group in groups {
+        for idx in group {
+            let entry = &entries[idx];
+            let mut line = format!("{:?}: {}", entry.role, entry.content);
+            if !entry.metadata.tool_calls.is_empty() {
+                line.push_str(&format!(
+                    "\n  {}",
+                    render_tool_calls(&entry.metadata.tool_calls)
+                ));
+            }
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    text
 }
 
 /// 短期记忆条目。
@@ -579,18 +631,18 @@ impl ShortTermMemory {
         );
     }
 
-    /// 摘要完成后移除已压缩的 entries。
+    /// 摘要完成后移除全部可压缩组的 entries，并重新计算 token。
     ///
     /// 与触发端 `memory_compression_system` 使用同一份
-    /// `split_into_groups` + `compressible_entry_count` 选择逻辑：
-    /// 移除的是被压缩组的前置 entries，保留最后 `preserve_recent_turns`
-    /// 个配对组。返回实际移除的 entry 数。
-    pub fn drain_compressed_groups(&mut self, preserve_recent_turns: u32) -> usize {
-        let groups = split_into_groups(&self.entries);
-        let count = compressible_entry_count(&groups, preserve_recent_turns);
+    /// `compressible_group_indices` 选择逻辑：移除「除最后 1 个进行中组外」
+    /// 的全部历史 entries，保留进行中的最后 1 组。返回实际移除的 entry 数。
+    pub fn drain_compressible_groups(&mut self) -> usize {
+        let groups = compressible_group_indices(&self.entries);
+        let count: usize = groups.iter().map(|g| g.len()).sum();
         if count > 0 {
             self.entries.drain(0..count);
         }
+        self.recalculate_tokens();
         count
     }
 }
