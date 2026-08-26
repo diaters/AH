@@ -17,7 +17,7 @@
 | `2026-07-13-agent-profile-llm-generation-design.md` | 当前有效 | Agent 元信息 LLM 生成与动态更新 | 孵化时 LLM 生成 profile，经验积累后评估更新 |
 | `2026-07-18-dispatch-architecture-unification-design.md` | 当前有效 | 派发架构统一 | 单一 `PendingDispatch` 入口，治理 9 个腐化点 |
 | `2026-07-26-ecs-relation-modeling-design.md` | 当前有效 | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 消灭 55+ 线性扫描 |
-| `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效（部分被取代） | 上下文压缩盲区修复 | 工具结果入 STM、配对组粒度压缩、结构化发送路径；对话级组选择策略已被 08-26 重设计取代 |
+| `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效（部分被取代） | 上下文压缩盲区修复 | 工具结果入 STM、配对组粒度压缩；对话级选择已被 08-26 取代 |
 | `2026-08-16-real-llm-scenario-testing-design.md` | 当前有效 | 真实 LLM 场景测试与分层正确性判断 | 四层测试模型 + AI Judge/人工待审 |
 | `2026-08-17-complexity-governance-design.md` | 当前有效 | 设计质量治理：依赖方向、知识收口、按知识域重组 | 已评审修订，P0–P5 全部实施完成 |
 | `2026-08-26-memory-compression-redesign-design.md` | 当前有效 | 短期记忆压缩重设计：一次全压与结构性收敛 | 配置入口 + 压缩滞后修复，已实施完成 |

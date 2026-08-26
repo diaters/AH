@@ -7,7 +7,8 @@
 | 状态 | 当前有效 |
 | 创建日期 | 2026-08-26 |
 | 关联 TODO | `docs/TODO.md` 中优先级两项：`MemoryConfig` token 压缩阈值配置入口；token 压缩触发过迟排查 |
-| 相关文档 | `docs/design/2026-08-09-context-compression-blind-spot-fix.md`、`docs/design/multi-turn-memory-design.md`、`logs/bugs/2026-08-15-skill-context-compression-loop.md` |
+| 相关文档（一） | `docs/design/2026-08-09-context-compression-blind-spot-fix.md` |
+| 相关文档（二） | `docs/design/multi-turn-memory-design.md`、`logs/bugs/2026-08-15-skill-context-compression-loop.md` |
 
 ---
 
@@ -162,7 +163,7 @@ let removed = memory.drain_compressible_groups(); // 内部 recalculate_tokens()
 - __每轮触发减少__：压缩后若帧间无新 User 组进入，可压组为空（只剩最后 1 组）
   → 不可再触发。只有新对话加入产生新的被保护组 → `estimated_tokens` 再次超阈值时才触发，
   不会死循环。
-- **最终上界**：`entries = 最后 1 组`，`estimated_tokens ≈ last_group + summary_target`。
+- __最终上界__：`entries = 最后 1 组`，`estimated_tokens ≈ last_group + summary_target`。
   若最后 1 组本身超大，不压缩——语义正确（进行中的对话不强制删除）；
   下一条新消息把它推入「历史组」后才压缩。
 
