@@ -21,6 +21,7 @@
 | `2026-08-16-real-llm-scenario-testing-design.md` | 当前有效 | 真实 LLM 场景测试与分层正确性判断 | 四层测试模型 + AI Judge/人工待审 |
 | `2026-08-17-complexity-governance-design.md` | 当前有效 | 设计质量治理：依赖方向、知识收口、按知识域重组 | 已评审修订，P0–P5 全部实施完成 |
 | `2026-08-26-memory-compression-redesign-design.md` | 当前有效 | 短期记忆压缩重设计：一次全压与结构性收敛 | 配置入口 + 压缩滞后修复，已实施完成 |
+| `2026-08-24-test-seam-quality-remediation-design.md` | 待评审 | 测试接缝质量修正：从实现耦合回归到可观察端口验证 | 基于低质测试清单证据核对与分批治理（基建先行） |
 
 ## 推荐阅读顺序
 

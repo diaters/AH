@@ -35,9 +35,22 @@
 | `logs.md` | 当前有效 | 结构化日志规范 |
 | `TODO.md` | 动态 | 进行中与待办清单 |
 | `framework-architecture-analysis.md` | 历史背景 | 早期模块布局分析，已被 `current-state.md`、`wiki/system-pipeline.md` 取代 |
+| `analysis/` | 待评审 | 测试套件质量分析（低质测试清单与原因），见下节 |
 | `design/README.md` | 索引 | `design/` 全量状态表（含每篇有效性） |
 | `superpowers/README.md` | 索引 | `superpowers/` 活跃计划与规格清单 |
 | `wiki/README.md` | 索引 | 系统知识库（pipeline、LLM 上下文组装） |
+
+## 测试质量分析（analysis/）
+
+`docs/analysis/` 存放测试套件质量评估类分析文档（非标准设计仓库，仅承载评审输入）。
+
+| 文档 | 状态 | 定位 |
+| --- | --- | --- |
+| `analysis/skill-path-injection-improvement.md` | 待评审 | Skill 路径注入改进方案（历史分析） |
+| `analysis/test-seam-quality-low-value-inventory.md` | 待评审 | 低质量测试清单与原因（Seam 与证伪力评估），评审后拆解为修复任务 |
+
+> `test-seam-quality-low-value-inventory.md` 的证据核对与分批修正方案见
+> [`design/2026-08-24-test-seam-quality-remediation-design.md`](design/2026-08-24-test-seam-quality-remediation-design.md)（待评审）。
 
 ## 架构决策记录（ADR）
 
@@ -108,6 +121,7 @@ docs/
 ├── AI-Harness-Data-Flow-Guide.md       # 当前有效
 ├── framework-architecture-analysis.md  # 历史背景
 ├── adr/                       # 架构决策记录（追加不修改）
+├── analysis/                  # 测试质量分析（待评审）
 ├── design/                    # 当前有效设计文档（含状态表）
 ├── superpowers/               # 活跃计划与规格（插件生成）
 ├── wiki/                      # 系统知识库

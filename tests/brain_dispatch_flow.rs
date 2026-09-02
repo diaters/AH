@@ -291,11 +291,35 @@ fn mvp_flow_unchanged_when_brain_disabled() {
 
     // 创建一个 Ready 状态的任务
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
-    app.world_mut()
-        .spawn((task, harness::domain::ShortTermMemory::default()));
+    let task_entity = app
+        .world_mut()
+        .spawn((task, harness::domain::ShortTermMemory::default()))
+        .id();
 
     for _ in 0..8 {
         app.update();
         thread::sleep(Duration::from_millis(20));
     }
+
+    // 负向：brain 禁用时不进入 brain 决策等待
+    let awaiting_brain = {
+        let world = app.world_mut();
+        let mut q = world.query::<&harness::domain::AwaitingBrainDecision>();
+        q.iter(world).count()
+    };
+    assert_eq!(
+        awaiting_brain, 0,
+        "brain=None 时不应有 AwaitingBrainDecision"
+    );
+
+    // 正向：任务被 default agent 推进，未停滞在 Pending
+    let task = app
+        .world()
+        .get::<harness::domain::Task>(task_entity)
+        .expect("task entity should exist");
+    assert_ne!(
+        task.status(),
+        &harness::domain::TaskStatus::Pending,
+        "task should be advanced by default agent"
+    );
 }
