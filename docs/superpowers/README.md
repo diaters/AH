@@ -22,6 +22,7 @@
 | `plans/2026-07-18-dispatch-architecture-unification.md` | 调度架构统一实施 | 活跃 |
 | `plans/2026-07-18-skill-first-class-and-experience-governance.md` | Skill 一等公民与经验治理改造实施 | 活跃 |
 | `plans/2026-08-16-layer2-scenario-extension.md` | Layer 2 场景扩展（多轮上下文与摘要压缩）实施 | 活跃 |
+| `plans/2026-08-24-test-seam-p0-remediation.md` | 测试接缝质量 P0 修复实施（删占位/修恒真放水/删幽灵规则） | 活跃 |
 
 ### 活跃规格
 
