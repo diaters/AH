@@ -64,6 +64,14 @@
     （当前 `list_skills` 返回空）
   - 实现插件全局 state Host API（当前 `state` 模块为占位）
 - [ ] 梳理并补充当前架构索引，明确哪些设计文档仍是有效真相源
+- [x] 为 `MemoryConfig` 的 token 压缩阈值提供配置入口，避免硬编码 `8000`
+  （`compression_threshold_tokens` / `summary_target_tokens` 已并入 `HarnessConfig`，
+  经 `HARNESS_MEMORY_COMPRESSION_THRESHOLD_TOKENS` / `HARNESS_MEMORY_SUMMARY_TARGET_TOKENS`
+  env 覆盖；`preserve_recent_turns` 随压缩重设计删除，
+  见 `docs/design/2026-08-26-memory-compression-redesign-design.md`）
+- [x] 排查 token 压缩触发过迟问题：实测 `CompressionTriggered` 时 `current_tokens: 86351`
+  已远超阈值 `8000`（10 倍以上），`groups_to_compress` 仅压缩 1/3、`compress_text_len: 260`，
+  压缩生效明显滞后；需核对 `estimated_tokens` 统计口径与压缩检查点时机
 - [ ] 增加更多真实 provider 场景验证，明确 `openai`、`anthropic`、
   `deepseek` 与 `openai-compatible` 的运行约束
 - [ ] 继续强化复杂任务场景下的调度、评估与恢复策略验证

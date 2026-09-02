@@ -192,8 +192,8 @@ pub use llm_provider::LlmProviderKind;
 pub use memory::{
     EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
     LtmEvictedHookPending, LtmWriteHookPending, MemoryConfig, MemoryEntry, MemoryImportance,
-    MemorySnapshot, ShortTermMemory, ToolCall, compressible_entry_count, estimate_tokens,
-    render_tool_calls_summary, split_into_groups,
+    MemorySnapshot, ShortTermMemory, ToolCall, build_compress_text, compressible_group_indices,
+    estimate_tokens, render_tool_calls_summary, split_into_groups,
 };
 
 // message

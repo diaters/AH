@@ -51,6 +51,9 @@ pub fn build_harness_app(
     app.insert_resource(crate::domain::ToolResultSender(tool_result_tx));
     app.insert_resource(crate::domain::ToolResultReceiver(tool_result_rx));
     app.insert_resource(TriggersConfigPath(config.triggers_config_path.clone()));
+    // 记忆压缩配置：由 HarnessConfig（env 配置源）投影注入，
+    // TaskRuntimePlugin::init_resource::<MemoryConfig>() 保留为默认兜底。
+    app.insert_resource(config.memory.clone());
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(crate::domain::ShutdownState::default());

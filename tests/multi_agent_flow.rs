@@ -22,6 +22,7 @@ use tokio::runtime::Runtime;
 
 fn multi_agent_config() -> HarnessConfig {
     HarnessConfig {
+        memory: harness::domain::MemoryConfig::default(),
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {
             provider: harness::domain::LlmProviderKind::OpenAi,

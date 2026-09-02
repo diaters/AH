@@ -68,3 +68,6 @@ tests/scenarios/reports/
 tests/scenarios/review-pending/
 
 plugins/bug-workflow
+
+# AI 记忆数据目录（工作区记忆，非代码）
+.workbuddy/
