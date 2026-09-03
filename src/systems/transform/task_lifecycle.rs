@@ -10,11 +10,12 @@ use crate::{
     domain::MemoryConfig,
     domain::SessionBackend,
     domain::{
-        Agent, ClearTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
-        EventTarget, ExperienceCandidateStatus, ExperienceStore, FailureReason, FinishTaskMessage,
-        PendingDispatch, PreviousTaskStatus, RetryReadyMessage, ShortTermMemory,
-        SkillCreationContext, SubTaskConfig, Task, TaskStatus, TaskTerminatedMessage,
-        ToolCallingState, ToolExecutionRequestMessage, WaitingReason, WorkItem,
+        Agent, AwaitingBrainDecision, ClearTaskMessage, DispatchHint, DispatchKind,
+        DispatchStrategy, EngineEvent, EventTarget, ExperienceCandidateStatus, ExperienceStore,
+        FailureReason, FinishTaskMessage, PendingDispatch, PreviousTaskStatus, RetryReadyMessage,
+        ShortTermMemory, SkillCreationContext, SubTaskConfig, Task, TaskStatus,
+        TaskTerminatedMessage, ToolCallingState, ToolExecutionRequestMessage, WaitingReason,
+        WorkItem,
     },
     ecs::EntityIndex,
     systems::NativeProcessBackend,
@@ -44,11 +45,11 @@ pub fn retry_ready_system(
     index: Res<EntityIndex>,
     agents: Query<&Agent>,
     messages: Query<(Entity, &RetryReadyMessage)>,
-    mut tasks: Query<&mut Task>,
+    mut tasks: Query<(&mut Task, Option<&AwaitingBrainDecision>)>,
 ) {
     for (entity, message) in &messages {
         if let Some(task_entity) = index.get_task(&message.task_id)
-            && let Ok(mut task) = tasks.get_mut(task_entity)
+            && let Ok((mut task, awaiting_brain)) = tasks.get_mut(task_entity)
         {
             debug!(
                 event = "RetryReady",
@@ -63,34 +64,15 @@ pub fn retry_ready_system(
 
             // 重新附加 PendingDispatch，使任务进入调度队列
             if let Some(agent_id) = task.delegate {
-                // 有 delegate：尝试 DirectDelegate 策略
-                let agent_name = agents
-                    .iter()
-                    .find(|a| a.id == agent_id)
-                    .map(|a| a.profile.name.clone());
-                if let Some(name) = agent_name {
+                if awaiting_brain.is_some() {
+                    // 仍在等待 brain 决策（brain 可重试失败保留了 AwaitingBrainDecision）：
+                    // 必须重新走 BrainLlm 重建带候选 agent 列表的 BrainDecision 请求。
+                    // 若走 DirectDelegate，brain 会直接吐出路由决策 JSON，
+                    // 被当作最终回复泄漏到前端（见 logs/bugs/2026-09-03-brain-decision-leak-on-retry.md）。
                     debug!(
-                        event = "RetryDirectDispatch",
+                        event = "RetryBrainDecisionRedispatch",
                         task_id = %task.id,
-                        agent_name = %name,
-                        "re-dispatching task via DirectDelegate on retry"
-                    );
-                    commands.entity(task_entity).insert(PendingDispatch {
-                        kind: DispatchKind::Task,
-                        hint: DispatchHint {
-                            strategy: DispatchStrategy::DirectDelegate,
-                            preferred_agent_name: Some(name),
-                            required_skill_id: None,
-                            agent_spawn_spec: None,
-                        },
-                    });
-                } else {
-                    // delegate 指向的 agent 不存在（可能已被销毁），fallback 到 BrainLlm
-                    debug!(
-                        event = "RetryDelegateAgentNotFound",
-                        task_id = %task.id,
-                        delegate_agent_id = %agent_id,
-                        "delegate agent not found, falling back to BrainLlm dispatch on retry"
+                        "re-dispatching via BrainLlm on retry (still awaiting brain decision)"
                     );
                     commands.entity(task_entity).insert(PendingDispatch {
                         kind: DispatchKind::Task,
@@ -101,6 +83,46 @@ pub fn retry_ready_system(
                             agent_spawn_spec: None,
                         },
                     });
+                } else {
+                    // 有 delegate：尝试 DirectDelegate 策略
+                    let agent_name = agents
+                        .iter()
+                        .find(|a| a.id == agent_id)
+                        .map(|a| a.profile.name.clone());
+                    if let Some(name) = agent_name {
+                        debug!(
+                            event = "RetryDirectDispatch",
+                            task_id = %task.id,
+                            agent_name = %name,
+                            "re-dispatching task via DirectDelegate on retry"
+                        );
+                        commands.entity(task_entity).insert(PendingDispatch {
+                            kind: DispatchKind::Task,
+                            hint: DispatchHint {
+                                strategy: DispatchStrategy::DirectDelegate,
+                                preferred_agent_name: Some(name),
+                                required_skill_id: None,
+                                agent_spawn_spec: None,
+                            },
+                        });
+                    } else {
+                        // delegate 指向的 agent 不存在（可能已被销毁），fallback 到 BrainLlm
+                        debug!(
+                            event = "RetryDelegateAgentNotFound",
+                            task_id = %task.id,
+                            delegate_agent_id = %agent_id,
+                            "delegate agent not found, falling back to BrainLlm dispatch on retry"
+                        );
+                        commands.entity(task_entity).insert(PendingDispatch {
+                            kind: DispatchKind::Task,
+                            hint: DispatchHint {
+                                strategy: DispatchStrategy::BrainLlm,
+                                preferred_agent_name: None,
+                                required_skill_id: None,
+                                agent_spawn_spec: None,
+                            },
+                        });
+                    }
                 }
             } else {
                 // 无 delegate：走 BrainLlm 重新调度
@@ -1159,5 +1181,166 @@ mod tests {
             }
             other => panic!("expected TaskCleared event, got {other:?}"),
         }
+    }
+
+    /// 构造最小 Bevy App，注册 retry_ready_system 及其所需资源。
+    fn make_retry_test_app() -> App {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.init_resource::<EntityIndex>();
+        app.add_systems(Update, retry_ready_system);
+        app
+    }
+
+    /// 在 app world 中 spawn 一个 Persistent Agent，返回其 AgentId。
+    fn spawn_agent_for_retry(app: &mut App, name: &str) -> crate::domain::AgentId {
+        use crate::domain::{
+            AgentCapabilities, AgentProfile, AgentToolPermissions, ToolPermission,
+        };
+        use std::collections::HashMap;
+
+        let agent_id = crate::domain::AgentId::new();
+        let agent = Agent {
+            id: agent_id,
+            profile: AgentProfile {
+                name: name.to_string(),
+                model: "test-model".to_string(),
+            },
+            capabilities: AgentCapabilities {
+                tags: vec![name.to_string()],
+                description: format!("{} agent", name),
+            },
+            kind: crate::domain::AgentKind::Persistent,
+            parent_id: None,
+            bound_task_id: None,
+            tool_permissions: AgentToolPermissions {
+                default_permission: ToolPermission::Confirm,
+                default_permission_explicit: true,
+                overrides: HashMap::new(),
+            },
+            system_prompt: None,
+        };
+        let entity = app.world_mut().spawn(agent).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .agents
+            .insert(agent_id, entity);
+        agent_id
+    }
+
+    /// 复现 bug（2026-09-03 brain-decision-leak-on-retry）：任务经 BrainLlm 派发后
+    /// `delegate = brain agent` 且携带 `AwaitingBrainDecision`，brain 调用 502 可重试
+    /// 失败进入 `schedule_retry`（brain_decision_system 的可重试分支不移除该组件）。
+    /// 重试就绪时应重新走 `BrainLlm` 策略重建 BrainDecision 请求（带候选 agent 列表），
+    /// 而非 `DirectDelegate`——否则 brain 会吐出路由决策 JSON 被当作最终回复泄漏到前端。
+    #[test]
+    fn retry_with_awaiting_brain_decision_uses_brain_llm_strategy() {
+        use crate::domain::AwaitingBrainDecision;
+
+        let mut app = make_retry_test_app();
+        let now = chrono::Utc::now();
+
+        let brain_agent_id = spawn_agent_for_retry(&mut app, "brain");
+
+        // 模拟 brain 派发 + 可重试失败：delegate = brain，状态 Waiting(RetryBackoff)
+        let mut task = Task::from_user_input(
+            "qq_group_message".to_string(),
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        task.mark_waiting_for_agent(brain_agent_id, now);
+        task.schedule_retry(
+            &crate::domain::ExecutionError::Transport("502 Bad Gateway".to_string()),
+            now,
+        );
+        let task_id = task.id;
+        let task_entity = app
+            .world_mut()
+            .spawn((
+                task,
+                AwaitingBrainDecision {
+                    task_id,
+                    spawn_spec: None,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        app.world_mut().spawn(RetryReadyMessage { task_id });
+        app.update();
+
+        let pending = app
+            .world_mut()
+            .entity(task_entity)
+            .get::<PendingDispatch>()
+            .expect("PendingDispatch should be attached on retry");
+        assert!(
+            matches!(pending.hint.strategy, DispatchStrategy::BrainLlm),
+            "retry of a task still awaiting brain decision must re-dispatch via BrainLlm \
+             to rebuild the BrainDecision request, not DirectDelegate (got {:?})",
+            pending.hint.strategy
+        );
+        assert_eq!(
+            pending.hint.preferred_agent_name, None,
+            "BrainLlm retry should not pin a preferred agent"
+        );
+    }
+
+    /// 回归守卫：无 `AwaitingBrainDecision` 的普通 delegate 重试仍走
+    /// `DirectDelegate`（既有行为不受本修复影响）。
+    #[test]
+    fn retry_with_delegate_without_awaiting_brain_uses_direct_delegate() {
+        let mut app = make_retry_test_app();
+        let now = chrono::Utc::now();
+
+        let agent_id = spawn_agent_for_retry(&mut app, "worker");
+
+        let mut task = Task::from_user_input(
+            "normal task".to_string(),
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "test".to_string(),
+                thread_id: None,
+            },
+        );
+        task.mark_waiting_for_agent(agent_id, now);
+        task.schedule_retry(
+            &crate::domain::ExecutionError::Transport("conn reset".to_string()),
+            now,
+        );
+        let task_id = task.id;
+        let task_entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        app.world_mut().spawn(RetryReadyMessage { task_id });
+        app.update();
+
+        let pending = app
+            .world_mut()
+            .entity(task_entity)
+            .get::<PendingDispatch>()
+            .expect("PendingDispatch should be attached on retry");
+        assert!(
+            matches!(pending.hint.strategy, DispatchStrategy::DirectDelegate),
+            "retry of a delegated task without AwaitingBrainDecision should use \
+             DirectDelegate (got {:?})",
+            pending.hint.strategy
+        );
+        assert_eq!(
+            pending.hint.preferred_agent_name.as_deref(),
+            Some("worker"),
+            "DirectDelegate retry should pin the delegate agent name"
+        );
     }
 }
