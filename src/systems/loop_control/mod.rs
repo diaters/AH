@@ -1,0 +1,9 @@
+//! Agent loop 控制系统：引导式插入、回合收件箱唤醒、请求期上下文注入。
+//!
+//! 设计见 `docs/design/2026-10-28-loop-steering-and-background-notification-design.md`。
+
+mod attachment;
+mod inbox;
+
+pub(crate) use attachment::context_attachment_system;
+pub(crate) use inbox::{inbox_ingest_system, inbox_wake_system};

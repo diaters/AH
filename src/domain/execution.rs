@@ -95,6 +95,9 @@ pub struct AgentExecutionRequest {
     /// 覆盖 executor 的默认模型（用于多模型 provider）
     #[serde(default)]
     pub model_override: Option<String>,
+    /// 回合代次（由 `context_attachment_system` 打标，`/stop` 后过期结果据此丢弃）
+    #[serde(default)]
+    pub turn_generation: Option<u64>,
 }
 
 /// Agent 执行结果
@@ -117,6 +120,9 @@ pub struct AgentExecutionResult {
     /// 结构化对话历史（从 AgentExecutionRequest 传递，用于 First iteration 还原）
     #[serde(default)]
     pub conversation: Option<Vec<ConversationMessage>>,
+    /// 回传请求的回合代次（`agent_execution_system` 原样带回）
+    #[serde(default)]
+    pub turn_generation: Option<u64>,
 }
 
 #[cfg(test)]
@@ -135,6 +141,7 @@ mod tests {
             conversation: None,
             work_item_id: Some(uuid::Uuid::new_v4()),
             model_override: None,
+            turn_generation: None,
         };
 
         assert!(request.work_item_id.is_some());
@@ -153,6 +160,7 @@ mod tests {
             conversation: None,
             work_item_id: None,
             model_override: Some("gpt-4.1-mini".to_string()),
+            turn_generation: None,
         };
 
         assert_eq!(request.model_override, Some("gpt-4.1-mini".to_string()));

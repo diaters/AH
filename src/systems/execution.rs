@@ -103,6 +103,7 @@ pub(crate) fn agent_execution_system(
                 reasoning_content,
                 work_item_id: request.work_item_id,
                 conversation: request.conversation.clone(),
+                turn_generation: request.turn_generation,
             });
         });
 

@@ -9,6 +9,7 @@ mod frontend_output;
 mod ingress;
 mod ingress_hook;
 mod knowledge_hook;
+mod loop_control;
 mod maintenance;
 mod memory;
 mod memory_hook;
@@ -46,6 +47,7 @@ pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
 pub(crate) use ingress_hook::on_message_received_hook_system;
 pub(crate) use knowledge_hook::on_shared_knowledge_write_hook_system;
+pub(crate) use loop_control::{context_attachment_system, inbox_ingest_system, inbox_wake_system};
 pub(crate) use maintenance::{
     agent_factory_system, load_agents_system, validate_required_tags_system,
 };

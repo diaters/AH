@@ -338,6 +338,7 @@ fn spawn_experience_confirmation(
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({

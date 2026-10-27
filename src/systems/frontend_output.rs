@@ -298,7 +298,8 @@ fn waiting_reason_to_kind(reason: &WaitingReason) -> WaitingReasonKind {
         WaitingReason::Agent => WaitingReasonKind::Agent,
         WaitingReason::ToolExecution
         | WaitingReason::Session { .. }
-        | WaitingReason::SubTaskBatch { .. } => WaitingReasonKind::Tool,
+        | WaitingReason::SubTaskBatch { .. }
+        | WaitingReason::BackgroundJobs => WaitingReasonKind::Tool,
         WaitingReason::User | WaitingReason::Approval | WaitingReason::AskUser => {
             WaitingReasonKind::User
         }

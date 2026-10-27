@@ -93,6 +93,7 @@ pub fn chat_round_completion_system(
             reasoning_content: None,
             work_item_id: None,
             conversation: None,
+            turn_generation: None,
         };
 
         commands.spawn((

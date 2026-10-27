@@ -246,6 +246,7 @@ fn llm_tool_calling_complete_loop() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -313,6 +314,7 @@ fn tool_calling_exceeds_max_iterations() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -376,6 +378,7 @@ fn tool_calling_records_to_short_term_memory() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -443,6 +446,7 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -501,6 +505,7 @@ fn tool_calling_hard_limit_forces_failure() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });

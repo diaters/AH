@@ -52,6 +52,7 @@ fn make_request(
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
         },
         tool_name: "shell_exec".into(),
         tool_input,

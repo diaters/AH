@@ -178,6 +178,7 @@ pub fn tool_confirmation_result_system(
                     reasoning_content: None,
                     work_item_id: None,
                     conversation: None,
+                    turn_generation: None,
                 };
 
                 commands.spawn((
@@ -462,6 +463,7 @@ pub fn tool_confirmation_result_system(
                     reasoning_content: None,
                     work_item_id: None,
                     conversation: None,
+                    turn_generation: None,
                 };
 
                 commands.spawn((
@@ -579,6 +581,7 @@ mod tests {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"cmd": "echo ok"}),

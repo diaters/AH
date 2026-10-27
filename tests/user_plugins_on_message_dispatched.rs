@@ -84,6 +84,7 @@ fn on_message_dispatched_removes_marker() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
         },
     };
     let entity = app

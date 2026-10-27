@@ -64,6 +64,7 @@ fn test_config() -> HarnessConfig {
         channels_config_path: None,
         triggers_config_path: None,
         providers_config_path: "/nonexistent_providers.toml".to_string(),
+        loop_control: harness::domain::LoopControlConfig::default(),
     }
 }
 
@@ -169,6 +170,7 @@ fn setup_with(
             reasoning_content: None,
             work_item_id: Some(work_item_id),
             conversation: None,
+            turn_generation: None,
         };
         app.world_mut()
             .spawn(harness::domain::AgentExecutionResultMessage { result });
@@ -267,6 +269,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({ "candidate_id": candidate_id.to_string() }),

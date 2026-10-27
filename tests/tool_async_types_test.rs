@@ -55,6 +55,7 @@ fn pending_entity_spawn_and_query() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     };
     let e = world
         .spawn((

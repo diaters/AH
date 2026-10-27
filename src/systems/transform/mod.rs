@@ -29,19 +29,43 @@ pub use trigger_task::trigger_task_routing_system;
 
 use crate::prelude::*;
 
+use tracing::debug;
+
 use crate::{
     domain::ExecutionResultReceiver,
-    domain::{AgentExecutionResultMessage, LlmResponseHookPending},
+    domain::{AgentExecutionResultMessage, LlmResponseHookPending, TurnGeneration},
+    ecs::EntityIndex,
 };
 
 /// 执行结果接收 System
 ///
-/// 从异步通道接收执行结果并转换为消息实体。
+/// 从异步通道接收执行结果并转换为消息实体。结果落地单点同时裁决回合代次：
+/// 代次小于任务当前 `TurnGeneration` 的结果属于 `/stop` 之前的回合，直接丢弃。
 pub fn ingest_execution_results_system(
     mut commands: Commands,
     mut receiver: ResMut<ExecutionResultReceiver>,
+    index: Option<Res<EntityIndex>>,
+    generations: Query<&TurnGeneration>,
 ) {
     while let Ok(result) = receiver.0.try_recv() {
+        let current_generation = index
+            .as_ref()
+            .and_then(|index| index.get_task(&result.task_id))
+            .and_then(|entity| generations.get(entity).ok())
+            .map(|g| g.0);
+        if let (Some(result_generation), Some(current)) =
+            (result.turn_generation, current_generation)
+            && result_generation < current
+        {
+            debug!(
+                event = "StaleExecutionResultDropped",
+                task_id = %result.task_id,
+                result_generation = result_generation,
+                current_generation = current,
+                "dropping llm result from a stopped turn"
+            );
+            continue;
+        }
         commands.spawn((
             AgentExecutionResultMessage { result },
             LlmResponseHookPending,

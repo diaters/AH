@@ -212,6 +212,7 @@ pub fn spawn_create_tasks_messages(
                 reasoning_content: None,
                 work_item_id: None,
                 conversation: None,
+                turn_generation: None,
             },
             tool_name: "create_tasks".to_string(),
             tool_output: Ok(serde_json::json!({
@@ -363,6 +364,7 @@ pub fn spawn_wait_result_message(
                 reasoning_content: None,
                 work_item_id: None,
                 conversation: None,
+                turn_generation: None,
             },
             tool_name: "wait_tasks".to_string(),
             tool_output: Ok(output),
@@ -1400,6 +1402,7 @@ fn spawn_tool_success(
         reasoning_content: None,
         work_item_id: None,
         conversation: None,
+        turn_generation: None,
     };
 
     commands.spawn((
@@ -2207,6 +2210,7 @@ fn spawn_experience_candidate_result(
         reasoning_content: None,
         work_item_id: None,
         conversation: None,
+        turn_generation: None,
     };
 
     commands.spawn((
@@ -2270,6 +2274,7 @@ pub fn spawn_tool_error(
         reasoning_content: None,
         work_item_id: None,
         conversation: None,
+        turn_generation: None,
     };
 
     commands.spawn((
@@ -2309,6 +2314,7 @@ pub fn spawn_shell_result(
         reasoning_content: None,
         work_item_id: None,
         conversation: None,
+        turn_generation: None,
     };
 
     commands.spawn((
@@ -2677,6 +2683,7 @@ mod tests {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "ask_user".to_string(),
             tool_input: serde_json::json!({"question": "what is your name?"}),

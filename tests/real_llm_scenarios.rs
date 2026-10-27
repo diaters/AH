@@ -322,6 +322,7 @@ fn scenario_config() -> HarnessConfig {
         channels_config_path: None,
         triggers_config_path: None,
         providers_config_path: "/nonexistent_providers.toml".to_string(),
+        loop_control: harness::domain::LoopControlConfig::default(),
     }
 }
 
@@ -654,6 +655,7 @@ fn build_judge_request(data: &JudgePromptData) -> AgentExecutionRequest {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
     }
 }
 

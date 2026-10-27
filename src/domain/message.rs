@@ -37,6 +37,8 @@ pub enum WaitingReason {
     ChatAgent,
     /// ask_user 工具等待用户开放文本回复
     AskUser,
+    /// 任务已自然完成，但仍有活跃后台任务；全部结束后由收件箱唤醒续一轮
+    BackgroundJobs,
 }
 
 /// 信号载荷

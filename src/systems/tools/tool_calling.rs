@@ -94,6 +94,7 @@ pub(crate) fn spawn_synthetic_limit_result(
         reasoning_content: None,
         work_item_id: None,
         conversation: None,
+        turn_generation: None,
     };
 
     commands.spawn((
@@ -332,6 +333,7 @@ pub(crate) fn handle_tool_calls_response(
                     conversation: None,
                     work_item_id: result.work_item_id,
                     model_override: None,
+                    turn_generation: None,
                 },
                 tool_name: call.name.clone(),
                 tool_input,
@@ -534,6 +536,7 @@ pub fn tool_calling_orchestrator_system(
             conversation: Some(state.conversation.clone()),
             work_item_id: state.work_item_id,
             model_override: None,
+            turn_generation: None,
         };
 
         debug!(

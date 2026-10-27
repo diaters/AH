@@ -6,8 +6,8 @@ use crate::prelude::*;
 use bevy_app::PluginGroupBuilder;
 
 use super::{
-    DispatchPlugin, ExecutionPlugin, FrontendPlugin, MemoryPlugin, TaskRuntimePlugin,
-    ToolRuntimePlugin,
+    DispatchPlugin, ExecutionPlugin, FrontendPlugin, LoopControlPlugin, MemoryPlugin,
+    TaskRuntimePlugin, ToolRuntimePlugin,
 };
 
 /// 默认运行时 Plugin 组
@@ -24,5 +24,6 @@ impl PluginGroup for DefaultRuntimePluginGroup {
             .add(ExecutionPlugin)
             .add(ToolRuntimePlugin)
             .add(MemoryPlugin)
+            .add(LoopControlPlugin)
     }
 }

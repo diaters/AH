@@ -147,6 +147,7 @@ fn experience_collection_workitem_completes_on_candidate_submission() {
         reasoning_content: None,
         work_item_id: Some(work_item_id),
         conversation: None,
+        turn_generation: None,
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionResultMessage { result });

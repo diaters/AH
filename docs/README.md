@@ -65,6 +65,7 @@
 | `adr/ADR-004-skill-first-class-and-experience-governance-reform.md` | Skill 一等公民与经验治理改造 | 已决议（进行中，见 superpowers 计划） |
 | `adr/ADR-005-ecs-relation-modeling.md` | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 已决议（最新） |
 | `adr/ADR-006-skill-updater-multi-file-support.md` | skill updater 多文件更新支持 | 已决议（最新） |
+| `adr/ADR-007-task-todo-list-as-progress-display.md` | 任务进度清单定位为纯展示数据 | 提议中（待评审） |
 
 ## 设计文档（design/）
 

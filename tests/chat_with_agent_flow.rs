@@ -49,6 +49,7 @@ fn test_config() -> HarnessConfig {
         channels_config_path: None,
         triggers_config_path: None,
         providers_config_path: "providers.toml".to_string(),
+        loop_control: harness::domain::LoopControlConfig::default(),
     }
 }
 
@@ -157,6 +158,7 @@ fn chat_with_agent_creates_chat_subtask() {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "chat_with_agent".to_string(),
             tool_input: serde_json::json!({
@@ -319,6 +321,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "chat_with_agent".to_string(),
             tool_input: serde_json::json!({
@@ -360,6 +363,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "chat_with_agent".to_string(),
             tool_input: serde_json::json!({

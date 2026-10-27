@@ -99,6 +99,7 @@ pub fn on_tool_called_hook_system(world: &mut World) {
                         reasoning_content: None,
                         work_item_id: None,
                         conversation: None,
+                        turn_generation: None,
                     };
 
                     world.spawn((
@@ -214,6 +215,7 @@ mod tests {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
             },
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({}),
