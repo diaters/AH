@@ -3,9 +3,13 @@
 //! 设计见 `docs/design/2026-10-28-loop-steering-and-background-notification-design.md`。
 
 mod attachment;
+mod background;
 mod inbox;
 mod stop;
 
 pub(crate) use attachment::context_attachment_system;
+pub(crate) use background::{
+    background_job_cleanup_system, background_job_monitor_system, spawn_background_job,
+};
 pub(crate) use inbox::{inbox_ingest_system, inbox_wake_system};
 pub(crate) use stop::{clear_stop_requested_system, stop_task_system};

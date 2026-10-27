@@ -7,10 +7,11 @@ use crate::prelude::*;
 use crate::{
     domain::LoopControlConfig,
     systems::{
-        HarnessSet, agent_execution_system, cancel_monitor_system, clear_stop_requested_system,
+        HarnessSet, agent_execution_system, background_job_cleanup_system,
+        background_job_monitor_system, cancel_monitor_system, clear_stop_requested_system,
         command_parse_system, context_attachment_system, continue_task_system, inbox_ingest_system,
-        inbox_wake_system, llm_response_system, stop_task_system, tool_calling_turn_reset_system,
-        user_input_routing_system,
+        inbox_wake_system, llm_response_system, stop_task_system, task_termination_system,
+        tool_calling_turn_reset_system, user_input_routing_system,
     },
 };
 
@@ -25,9 +26,11 @@ impl Plugin for LoopControlPlugin {
         app.add_systems(
             Update,
             (
+                // 收件箱写入先于 LLM 响应处理：同帧到达的后台通知能被完成判定看到
                 inbox_ingest_system
                     .in_set(HarnessSet::Transform)
-                    .after(user_input_routing_system),
+                    .after(user_input_routing_system)
+                    .before(llm_response_system),
                 inbox_wake_system
                     .in_set(HarnessSet::Transform)
                     .after(inbox_ingest_system)
@@ -44,6 +47,14 @@ impl Plugin for LoopControlPlugin {
                 clear_stop_requested_system
                     .in_set(HarnessSet::Maintenance)
                     .after(cancel_monitor_system),
+                // 后台任务完成检测：先于收件箱写入，使通知同帧入箱
+                background_job_monitor_system
+                    .in_set(HarnessSet::Transform)
+                    .before(inbox_ingest_system),
+                // 终态清理：保证终态 Task 不留存活后台任务
+                background_job_cleanup_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(task_termination_system),
             ),
         );
     }

@@ -162,8 +162,11 @@ pub struct StopRequested;
 pub enum JobSource {
     /// `shell_start(notify_on_exit = true)` 启动的会话
     Shell { handle_id: SessionHandleId },
-    /// `create_tasks(background = true)` 派出的子任务批次
-    SubTaskBatch { batch_id: Uuid },
+    /// `create_tasks` 派出的子任务批次（未被 `wait_tasks` 认领时完成后通知）
+    SubTaskBatch {
+        batch_id: Uuid,
+        task_ids: Vec<TaskId>,
+    },
 }
 
 impl JobSource {

@@ -23,6 +23,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::contracts::{Clock, FrontendRegistry};
+use crate::domain::JobSource;
 use crate::domain::SessionBackend;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, AskUserPending,
@@ -62,6 +63,8 @@ pub struct TaskWaitResult {
 }
 
 /// 为 create_tasks 生成子 Task 实体、SubTaskBatchState 和消息
+///
+/// 返回 `(batch_id, 子任务 ID 列表)`，供调用方登记后台任务。
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_create_tasks_messages(
     commands: &mut Commands,
@@ -73,7 +76,7 @@ pub fn spawn_create_tasks_messages(
     tool_call_id: Option<String>,
     parent_origin_channel: Option<ChannelId>,
     index: &mut EntityIndex,
-) {
+) -> (Uuid, Vec<TaskId>) {
     let batch_id = Uuid::new_v4();
     let total_count = definitions.len();
 
@@ -220,6 +223,7 @@ pub fn spawn_create_tasks_messages(
                 "batch_id": batch_id.to_string(),
                 "task_count": total_count,
                 "tasks": tasks_with_ids,
+                "note": "Sub-tasks run in the background. Call wait_tasks to block for results, or continue other work: a <task-notification> with all results will be delivered when the batch finishes.",
             })),
             tool_call_id,
             processed: false,
@@ -229,6 +233,8 @@ pub fn spawn_create_tasks_messages(
     ));
 
     commands.entity(request_entity).despawn();
+    let child_ids = batch_tasks.values().map(|status| status.task_id).collect();
+    (batch_id, child_ids)
 }
 
 /// 生成等待任务的消息和状态
@@ -534,7 +540,14 @@ pub fn handle_tool_action<B: SessionBackend>(
             | ToolAction::InputSession(_)
             | ToolAction::StopSession(_)),
         ) => {
-            dispatch_session_action(commands, request_entity, request, resources.backend, action);
+            dispatch_session_action(
+                commands,
+                request_entity,
+                task_entity,
+                request,
+                resources.backend,
+                action,
+            );
         }
         Ok(ToolAction::SubmitExperienceCandidate(submission)) => {
             handle_submit_experience_candidate(
@@ -659,13 +672,21 @@ pub fn handle_tool_action<B: SessionBackend>(
 fn dispatch_session_action<B: SessionBackend>(
     commands: &mut Commands,
     request_entity: Entity,
+    task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     backend: &B,
     action: ToolAction,
 ) {
     match action {
         ToolAction::StartSession(session_request) => {
-            handle_start_session(commands, request_entity, request, backend, session_request);
+            handle_start_session(
+                commands,
+                request_entity,
+                task_entity,
+                request,
+                backend,
+                session_request,
+            );
         }
         ToolAction::ReadSession(read_request) => {
             handle_read_session(commands, request_entity, request, backend, read_request);
@@ -740,7 +761,7 @@ fn handle_create_batch(
                 thread_id: None,
             })
         });
-    spawn_create_tasks_messages(
+    let (batch_id, task_ids) = spawn_create_tasks_messages(
         commands,
         request_entity,
         request.request.agent_id,
@@ -751,6 +772,16 @@ fn handle_create_batch(
         parent_origin_channel,
         index,
     );
+    // 登记后台任务：未被 wait_tasks 认领时，批次完成后以通知回流父任务
+    if request.request.work_item_id.is_none() {
+        crate::systems::loop_control::spawn_background_job(
+            commands,
+            task_entity,
+            request.request.task_id,
+            JobSource::SubTaskBatch { batch_id, task_ids },
+            chrono::Utc::now(),
+        );
+    }
 }
 
 /// WaitForTasks 分支：验证任务归属后挂起等待子任务完成。
@@ -782,16 +813,29 @@ fn handle_wait_for_tasks(
     }
 }
 
-/// StartSession 分支：启动后台 shell 会话。
+/// StartSession 分支：启动后台 shell 会话；`notify_on_exit` 时登记后台任务，退出后通知。
 fn handle_start_session<B: SessionBackend>(
     commands: &mut Commands,
     request_entity: Entity,
+    task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     backend: &B,
     session_request: SessionStartRequest,
 ) {
+    let notify_on_exit = session_request.notify_on_exit;
     match backend.start_session(session_request) {
         Ok(handle) => {
+            if notify_on_exit && request.request.work_item_id.is_none() {
+                crate::systems::loop_control::spawn_background_job(
+                    commands,
+                    task_entity,
+                    request.request.task_id,
+                    JobSource::Shell {
+                        handle_id: handle.handle_id,
+                    },
+                    chrono::Utc::now(),
+                );
+            }
             let summary = SessionSummary::from_handle(&handle);
             spawn_shell_result(
                 commands,

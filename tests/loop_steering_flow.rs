@@ -98,6 +98,10 @@ fn shell_exec_call(command: &str) -> LlmToolCall {
 
 /// 构造一个已发出首个 LLM 请求、执行器阻塞中的多轮顶层任务。
 fn start_blocked_task(tool_call: LlmToolCall) -> Harness {
+    start_blocked_task_with(tool_call, true)
+}
+
+fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness {
     let gate = Arc::new(Notify::new());
     let requests = Arc::new(Mutex::new(Vec::new()));
     let executor: Arc<dyn AgentExecutor> = Arc::new(GatedToolExecutor {
@@ -152,20 +156,26 @@ fn start_blocked_task(tool_call: LlmToolCall) -> Harness {
 
     let tools: Vec<ToolDefinition> = {
         let mut registry = app.world_mut().resource_mut::<SpaceToolRegistry>();
-        if registry.get("shell_exec").is_none() {
-            registry.register(ToolDefinition {
-                name: "shell_exec".to_string(),
-                description: "run a command".to_string(),
-                parameters: ToolSchema::default(),
-                default_permission: ToolPermission::Allow,
-                executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-                required_tag: None,
-            });
+        for name in ["shell_exec", "shell_start"] {
+            if registry.get(name).is_none() {
+                registry.register(ToolDefinition {
+                    name: name.to_string(),
+                    description: "run a command".to_string(),
+                    parameters: ToolSchema::default(),
+                    default_permission: ToolPermission::Allow,
+                    executor: ToolExecutorKind::Builtin(name.to_string()),
+                    required_tag: None,
+                });
+            }
         }
         registry.iter().cloned().collect()
     };
 
-    let mut task = Task::from_user_input("build the thing", 3, channel());
+    let mut task = if multi_turn {
+        Task::from_user_input("build the thing", 3, channel())
+    } else {
+        Task::from_user_input_ready("build the thing", 3, channel())
+    };
     task.mark_waiting_for_agent(agent_id, chrono::Utc::now());
     let task_id = task.id;
     let task_entity = app
@@ -297,4 +307,135 @@ fn stop_discards_in_flight_result_and_keeps_context() {
         "stale tool call must not execute"
     );
     assert_eq!(task_count(&mut h.app), 1);
+}
+
+fn shell_start_call(command: &str) -> LlmToolCall {
+    LlmToolCall {
+        id: "call_bg".to_string(),
+        name: "shell_start".to_string(),
+        arguments: serde_json::json!({ "command": command }).to_string(),
+    }
+}
+
+/// 轮询推进直到条件满足（后台进程退出 + 节流轮询 + 唤醒需要真实时间）。
+fn update_until(app: &mut App, max_iters: usize, mut done: impl FnMut(&mut App) -> bool) -> bool {
+    for _ in 0..max_iters {
+        app.update();
+        if done(app) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
+fn request_mentions(requests: &[AgentExecutionRequest], needle: &str) -> bool {
+    requests.iter().any(|r| {
+        r.prompt.contains(needle)
+            || r.conversation.as_ref().is_some_and(|c| {
+                c.iter().any(|m| match m {
+                    ConversationMessage::User { content } => content.contains(needle),
+                    _ => false,
+                })
+            })
+    })
+}
+
+#[test]
+fn background_shell_exit_wakes_idle_task_with_notification() {
+    let mut h = start_blocked_task(shell_start_call("sleep 0.3; echo bg-done"));
+    h.gate.notify_one();
+
+    // 首轮：shell_start → follow-up → 文本回复，任务空闲
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 200, |_| {
+        requests.lock().unwrap().len() >= 2
+    }));
+    // 后台进程退出 → 通知入箱 → 空闲任务被拉起
+    let requests = h.requests.clone();
+    let woke = update_until(&mut h.app, 400, |_| {
+        request_mentions(&requests.lock().unwrap(), "<task-notification")
+    });
+    assert!(woke, "idle task should be woken by background notification");
+
+    let all = h.requests.lock().unwrap().clone();
+    assert!(
+        request_mentions(&all, "bg-done"),
+        "notification carries output tail"
+    );
+    assert!(request_mentions(&all, "exited(0)"));
+    assert_eq!(task_count(&mut h.app), 1);
+    let jobs = h
+        .app
+        .world_mut()
+        .query::<&harness::domain::BackgroundJob>()
+        .iter(h.app.world())
+        .count();
+    assert_eq!(jobs, 0, "finished job is retired");
+}
+
+#[test]
+fn natural_completion_waits_for_background_jobs() {
+    let mut h = start_blocked_task_with(shell_start_call("sleep 1.5; echo late"), false);
+    h.gate.notify_one();
+
+    let entity = h.task_entity;
+    assert!(
+        update_until(&mut h.app, 200, |app| {
+            app.world().get::<Task>(entity).unwrap().status()
+                == &TaskStatus::Waiting(WaitingReason::BackgroundJobs)
+        }),
+        "single-turn task must not reach Done while its shell job is alive"
+    );
+
+    assert!(
+        update_until(&mut h.app, 400, |app| {
+            app.world().get::<Task>(entity).unwrap().status() == &TaskStatus::Done
+        }),
+        "task completes after the background job finishes"
+    );
+
+    let all = h.requests.lock().unwrap().clone();
+    assert!(
+        request_mentions(&all, "候选结果"),
+        "deferred result is replayed to the LLM"
+    );
+    assert!(request_mentions(&all, "late"));
+}
+
+#[test]
+fn stopping_owner_task_with_finish_force_stops_background_shell() {
+    let mut h = start_blocked_task(shell_start_call("sleep 30"));
+    h.gate.notify_one();
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 200, |_| {
+        requests.lock().unwrap().len() >= 2
+    }));
+    let jobs_before = h
+        .app
+        .world_mut()
+        .query::<&harness::domain::BackgroundJob>()
+        .iter(h.app.world())
+        .count();
+    assert_eq!(jobs_before, 1);
+
+    send_input(&mut h.app, "/finish");
+    let ok = update_until(&mut h.app, 200, |app| {
+        app.world_mut()
+            .query::<&harness::domain::BackgroundJob>()
+            .iter(app.world())
+            .count()
+            == 0
+    });
+    assert!(ok, "terminal task must not keep background jobs");
+    let backend = h
+        .app
+        .world()
+        .resource::<harness::NativeProcessBackend>()
+        .clone();
+    use harness::domain::SessionBackend;
+    assert!(
+        backend.list_active_sessions().unwrap().is_empty(),
+        "shell session stopped"
+    );
 }

@@ -887,6 +887,7 @@ fn shell_input_returns_backend_backed_status() {
             tail_lines: 20,
             owner_task_id: task_id,
             owner_agent_id: agent_id,
+            notify_on_exit: false,
         })
         .expect("start_session should succeed");
 
@@ -1048,6 +1049,7 @@ fn shell_read_backend_returns_latest_snapshot() {
             tail_lines: 2,
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
+            notify_on_exit: false,
         })
         .expect("exec_blocking should succeed");
 
@@ -1442,6 +1444,7 @@ fn shell_input_and_stop_follow_simplified_contract() {
             tail_lines: 20,
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
+            notify_on_exit: false,
         })
         .expect("start_session should succeed");
     let session_id = handle.handle_id.to_string();
@@ -1686,6 +1689,7 @@ fn backend_session_handle_uses_snapshot_output_shape() {
             tail_lines: 2,
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
+            notify_on_exit: false,
         })
         .expect("exec_blocking should succeed");
 
