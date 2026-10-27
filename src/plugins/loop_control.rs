@@ -7,8 +7,10 @@ use crate::prelude::*;
 use crate::{
     domain::LoopControlConfig,
     systems::{
-        HarnessSet, agent_execution_system, context_attachment_system, continue_task_system,
-        inbox_ingest_system, inbox_wake_system, llm_response_system, user_input_routing_system,
+        HarnessSet, agent_execution_system, cancel_monitor_system, clear_stop_requested_system,
+        command_parse_system, context_attachment_system, continue_task_system, inbox_ingest_system,
+        inbox_wake_system, llm_response_system, stop_task_system, tool_calling_turn_reset_system,
+        user_input_routing_system,
     },
 };
 
@@ -34,6 +36,14 @@ impl Plugin for LoopControlPlugin {
                 context_attachment_system
                     .in_set(HarnessSet::Execution)
                     .before(agent_execution_system),
+                stop_task_system
+                    .in_set(HarnessSet::Transform)
+                    .after(command_parse_system)
+                    .after(llm_response_system)
+                    .before(tool_calling_turn_reset_system),
+                clear_stop_requested_system
+                    .in_set(HarnessSet::Maintenance)
+                    .after(cancel_monitor_system),
             ),
         );
     }

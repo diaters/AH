@@ -4,6 +4,8 @@
 
 mod attachment;
 mod inbox;
+mod stop;
 
 pub(crate) use attachment::context_attachment_system;
 pub(crate) use inbox::{inbox_ingest_system, inbox_wake_system};
+pub(crate) use stop::{clear_stop_requested_system, stop_task_system};

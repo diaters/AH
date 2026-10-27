@@ -262,3 +262,39 @@ fn steer_during_running_turn_reaches_follow_up_request_without_new_task() {
         &TaskStatus::Waiting(WaitingReason::User)
     );
 }
+
+#[test]
+fn stop_discards_in_flight_result_and_keeps_context() {
+    let mut h = start_blocked_task(shell_exec_call("echo should-not-run"));
+    send_input(&mut h.app, "/stop");
+    update_with_yield(&mut h.app, 2);
+
+    let task = h.app.world().get::<Task>(h.task_entity).unwrap().clone();
+    assert_eq!(task.status(), &TaskStatus::Waiting(WaitingReason::User));
+    assert_eq!(
+        h.app
+            .world()
+            .get::<harness::domain::TurnGeneration>(h.task_entity)
+            .map(|g| g.0),
+        Some(1)
+    );
+
+    // 放行被阻塞的首个请求：其结果属于已中断回合，应被丢弃，不会触发工具调用
+    h.gate.notify_one();
+    update_with_yield(&mut h.app, 20);
+
+    assert_eq!(h.requests.lock().unwrap().len(), 1, "no follow-up request");
+    let task = h.app.world().get::<Task>(h.task_entity).unwrap();
+    assert_eq!(task.status(), &TaskStatus::Waiting(WaitingReason::User));
+    let stm = h.app.world().get::<ShortTermMemory>(h.task_entity).unwrap();
+    assert!(stm.entries.iter().any(|e| e.content.contains("用户中断")));
+    assert!(
+        !stm.entries.iter().any(|e| e
+            .metadata
+            .tool_calls
+            .iter()
+            .any(|c| c.tool_name == "shell_exec")),
+        "stale tool call must not execute"
+    );
+    assert_eq!(task_count(&mut h.app), 1);
+}

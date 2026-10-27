@@ -349,6 +349,24 @@ impl App {
         }
     }
 
+    /// 是否存在可中断的 TUI 顶层任务（执行中，或等待 Agent / 工具 / 重试）。
+    fn has_interruptible_task(&self) -> bool {
+        use crate::domain::{TaskStatusKind, WaitingReasonKind};
+        self.tasks.iter().any(|t| {
+            t.parent_id.is_none()
+                && t.origin_channel
+                    .as_ref()
+                    .is_none_or(|c| c.frontend == FrontendKind::Tui)
+                && match t.status {
+                    TaskStatusKind::Pending | TaskStatusKind::Running => true,
+                    TaskStatusKind::Waiting => {
+                        !matches!(t.waiting_reason, Some(WaitingReasonKind::User))
+                    }
+                    TaskStatusKind::Done | TaskStatusKind::Failed => false,
+                }
+        })
+    }
+
     fn handle_chat_key(&mut self, key: KeyEvent) {
         use crossterm::event::KeyModifiers;
         match key.code {
@@ -365,6 +383,20 @@ impl App {
                     };
                     self.promote_queued_card(&pending);
                 }
+            }
+            KeyCode::Esc if self.input_buffer.is_empty() && self.has_interruptible_task() => {
+                // 输入框为空且存在执行中的顶层任务：Esc 中断当前回合（等价 /stop）
+                let channel = ChannelId {
+                    frontend: FrontendKind::Tui,
+                    user_id: "default".to_string(),
+                    thread_id: None,
+                };
+                let _ = self.action_tx.send(UserAction::Text {
+                    channel,
+                    content: "/stop".to_string(),
+                });
+                self.messages
+                    .push(ChatMessage::System("⏹ 已请求中断当前回合".to_string()));
             }
             KeyCode::Enter => {
                 let content = self.input_buffer.clone();
@@ -1533,6 +1565,58 @@ mod tests {
         // 审批应被移除，回到 Chat 模式
         assert!(app.pending_approvals.is_empty());
         assert!(matches!(app.mode, AppMode::Chat));
+    }
+
+    fn tui_task(status: crate::domain::TaskStatusKind) -> crate::tui::app::TaskState {
+        crate::tui::app::TaskState {
+            id: crate::domain::TaskId::new(),
+            name: "t".to_string(),
+            status,
+            result: None,
+            parent_id: None,
+            subtask_count: 0,
+            completed_count: 0,
+            origin_channel: None,
+            completed_at: None,
+            agent_name: None,
+            waiting_reason: None,
+        }
+    }
+
+    #[test]
+    fn esc_with_empty_input_and_running_task_sends_stop() {
+        let (action_tx, action_rx) = unbounded();
+        let mut app = App::new(action_tx);
+        app.tasks
+            .push(tui_task(crate::domain::TaskStatusKind::Running));
+        app.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        match action_rx.try_recv() {
+            Ok(crate::domain::UserAction::Text { content, .. }) => assert_eq!(content, "/stop"),
+            other => panic!("expected /stop text action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn esc_without_active_task_or_with_input_does_nothing() {
+        let (action_tx, action_rx) = unbounded();
+        let mut app = App::new(action_tx);
+        let mut idle = tui_task(crate::domain::TaskStatusKind::Waiting);
+        idle.waiting_reason = Some(crate::domain::WaitingReasonKind::User);
+        app.tasks.push(idle);
+        app.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        assert!(
+            action_rx.try_recv().is_err(),
+            "idle task is not interruptible"
+        );
+
+        app.tasks
+            .push(tui_task(crate::domain::TaskStatusKind::Running));
+        app.input_buffer = "draft".to_string();
+        app.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        assert!(
+            action_rx.try_recv().is_err(),
+            "non-empty input keeps Esc inert"
+        );
     }
 
     #[test]
