@@ -31,6 +31,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 插件系统：Rhai 脚本扩展，20 个 hook 点，支持贡献工具、技能和 Agent
 - IM 通道：Telegram（长轮询、白名单、媒体附件）+ QQ（WebSocket Gateway、OAuth2、
   富媒体），跨通道隔离，出向-自动回执
+- 图片输入：模型声明 `vision = true` 后，IM 入站图片与 `view_image` 工具结果以真实图片
+  发给模型；QQ 移动端逐张发送的图片与下一条文字合并为一条输入
 - 结构化日志、CI、单元测试与集成测试
 - Android aarch64 支持（rustls TLS 后端）
 

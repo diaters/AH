@@ -149,6 +149,7 @@ fn e2e_ask_user_full_flow() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            vision: false,
         },
         tool_name: "ask_user".to_string(),
         tool_input: serde_json::json!({"question": question}),

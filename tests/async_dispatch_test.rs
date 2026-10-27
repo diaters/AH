@@ -32,6 +32,7 @@ fn make_request(tool_name: &str, tool_call_id: &str) -> ToolExecutionRequestMess
             conversation: None,
             work_item_id: None,
             model_override: None,
+            vision: false,
         },
         tool_name: tool_name.into(),
         tool_input: serde_json::json!({"hello": "world"}),
