@@ -25,6 +25,7 @@
 - [x] TUI 全局 Task 面板：任务状态展示、origin_channel 标签、自动清理已完成任务
 - [x] 日志级别重构：RUST_LOG 环境变量、审计事件分类
 - [x] Android aarch64 支持（rustls TLS 后端，交叉编译运行）
+- [x] Agent loop 控制：steer 引导式插入、`/stop` 中断、后台任务通知拉起、`update_todos` 进度清单
 
 ## 当前待办
 
@@ -109,6 +110,13 @@
   （PR #69，commit fb569ce）
 - [~] `async_tool_dispatch_system` 参数（当前 14 个）收敛到 Resource bundle：
   暂缓，当前 14/16 参数无 Bevy SystemParam 上限压力，待真实触发再收敛
+
+### Agent loop 控制后续
+
+- [ ] Layer 1 真实 LLM：验证各 provider 接受"tool 结果后追加 user 文本"（设计文档 §4.3）
+- [ ] Layer 2 场景：补充 steer 与后台通知场景（`tests/scenarios/*.toml`）
+- [ ] TUI 输入框展示 steer 排队数量
+- [ ] `/stop` 真正中止 provider 侧 HTTP 请求（`AbortHandle`），当前仅作废结果
 
 ### IM 通道后续阶段
 

@@ -119,6 +119,16 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | `HARNESS_AGENTS_CONFIG` | `agents.toml` | Agent 配置文件路径 |
 | `HARNESS_LOG_DIR` | `logs` | JSONL 日志输出目录 |
 
+### Agent loop 控制
+
+设计见 [2026-10-28-loop-steering-and-background-notification-design.md](design/2026-10-28-loop-steering-and-background-notification-design.md)。
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HARNESS_MAX_AUTO_WAKES` | `5` | 无用户输入时，后台通知连续自动拉起任务的轮数上限；超出后只提示用户 |
+| `HARNESS_NOTIFICATION_COALESCE_MS` | `300` | 空闲任务被后台通知唤醒前的合并窗口（毫秒） |
+| `HARNESS_BACKGROUND_POLL_MS` | `500` | 后台任务（shell 会话 / 子任务批次）完成检测的轮询间隔（毫秒） |
+
 ### TUI 主循环
 
 | 环境变量 | 默认值 | 说明 |

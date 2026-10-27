@@ -4,9 +4,9 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 待评审 |
+| 状态 | 当前有效 |
 | 创建日期 | 2026-10-28 |
-| 关联 ADR | `docs/adr/ADR-007-task-todo-list-as-progress-display.md`（Proposed） |
+| 关联 ADR | `docs/adr/ADR-007-task-todo-list-as-progress-display.md`（Accepted） |
 | 相关文档 | `docs/async-tool-bridge.md`、ECS 关系建模设计（07-26）、Plan/Evaluation 重评估设计（06-06） |
 
 ---
@@ -133,16 +133,21 @@
 
 | 系统 | Set | 顺序约束 | 新增/改造 |
 |------|-----|----------|-----------|
-| `background_job_monitor_system` | `Signal` | 节流轮询（默认 500ms） | 新增 |
+| `background_job_monitor_system` | `Transform` | 节流轮询（默认 500ms），`.before(inbox_ingest_system)` | 新增 |
 | `user_input_routing_system` | `Transform` | 不变 | 改造：活跃任务 → `InboxDeliveryMessage` |
-| `stop_task_system` | `Transform` | `.before(tool_calling_turn_reset_system)` | 新增 |
-| `inbox_ingest_system` | `Transform` | `.after(user_input_routing_system)` | 新增 |
+| `stop_task_system` | `Transform` | `.after(command_parse_system)`、`.before(tool_calling_turn_reset_system)` | 新增 |
+| `inbox_ingest_system` | `Transform` | `.after(user_input_routing_system)`、`.before(llm_response_system)` | 新增 |
 | `inbox_wake_system` | `Transform` | `.after(inbox_ingest_system)`、`.before(continue_task_system)` | 新增 |
 | `ingest_execution_results_system` | `Transform` | 不变 | 改造：丢弃过期代次 |
-| `sub_task_batch_block_system` | `Transform` | 不变 | 改造：后台批次不阻塞父任务 |
+| `llm_response_system` | `Transform` | 不变 | 改造：终态约束（§7.3）、丢弃终态任务的迟到响应 |
+| `sub_task_completion_system` | `Transform` | 不变 | 修复：仅解除阻塞在本批次上的父任务 |
 | `context_attachment_system` | `Execution` | `.before(agent_execution_system)` | 新增 |
-| `cancel_monitor_system` | 不变 | 不变 | 改造：`StopRequested` 也触发取消 |
+| `cancel_monitor_system` | `Maintenance` | 不变 | 改造：`StopRequested` 也触发取消 |
+| `clear_stop_requested_system` | `Maintenance` | `.after(cancel_monitor_system)` | 新增 |
 | `background_job_cleanup_system` | `Maintenance` | `.after(task_termination_system)` | 新增 |
+
+`inbox_ingest_system` 排在 `llm_response_system` 之前：与最终回复同帧到达的后台通知
+能被完成判定看到，不会在任务进入终态后才入箱而丢失。
 
 `context_attachment_system` 放在 `Execution` 首位，是因为 `AgentExecutionRequestMessage`
 由 `Transform`（工具循环 follow-up、续轮）、`Dispatch`（`dispatch_system`、
@@ -155,7 +160,8 @@
 - `BackgroundJob` 是独立实体，通过自定义关系 `JobOwner(Entity)` 指向所属 Task。
   Task 侧由 `RelationshipTarget` 自动维护 `OwnedJobs`，用于"该任务还有几个活跃后台任务"的
   O(1) 查询。
-- 这是代码库首次引入自定义关系（Bevy 0.18 原生 `#[relationship]` 派生），评审时需确认接受。
+- 这是代码库首次引入自定义关系（Bevy 0.18 原生 `#[relationship]` 派生）。未使用 `linked_spawn`：
+  所属 Task 被 despawn（如 `/clear`）时 Bevy 移除 Job 上的 `JobOwner`，由清理系统停止并回收孤儿 Job。
 - 不复用 `ChildOf`：`ChildOf` 已承载 Task 父子层级，混入 Job 会污染 `Children` 的语义与
   既有级联逻辑。
 - ADR-005 v2 已确认 `SessionHandle` 不是 ECS 实体，shell 会话的真源仍在
@@ -176,13 +182,16 @@
 |------|------|
 | 规范已明确 `Plan` 不作为独立模块，`update_todos` 易被理解为 Plan 复活 | 定位为纯展示数据，零调度语义，见 ADR-007 |
 | 路由语义变化：运行中输入从"新建任务"变为"注入当前任务" | 属于对外能力变化：同步 `README.md`、`current-state.md`；`/btw` 继续承担"开新话题" |
-| `ExperienceInbox`（经验候选收件箱）与 `TaskInbox` 命名相近 | 文档注释明确二者无关；评审时可改名为 `PendingTurnInputs` |
-| 父任务 `Waiting(SubTaskBatch)` 期间 steer 无法立即送达 | 维持现状：积压到批次结束后的 follow-up 请求中送达，前端提示"已排队"。后台批次（§7.2）可缓解 |
+| `ExperienceInbox`（经验候选收件箱）与 `TaskInbox` 命名相近 | 保留 `TaskInbox`，模块文档注释明确二者无关 |
+| 父任务 `Waiting(SubTaskBatch)` 期间 steer 无法立即送达 | 维持现状：积压到下一次 follow-up 请求中送达，前端回执提示 |
+| 终态任务收到迟到的 LLM 响应会被拉回 `Waiting(User)`（既有缺陷，破坏终态约束） | `llm_response_system` 丢弃终态任务的任务级响应 |
+| 批次完成时无条件把父任务置为 `Ready` / `Waiting(ToolExecution)`（既有缺陷，会覆盖空闲父任务） | 仅当父任务仍处于 `Waiting(SubTaskBatch{本批次})` 时解除阻塞 |
 
 ### 3.7 模块依赖
 
-新类型放在 `domain/`（`inbox.rs`、`background_job.rs`、`todo.rs`），新系统放在
-`systems/loop_control/`，插件注册放在 `plugins/task_runtime.rs`，满足
+新类型集中在 `domain/loop_control.rs`（`domain/attachment.rs` 已用于消息附件，避免混名），
+新系统放在 `systems/loop_control/`（`attachment`、`inbox`、`stop`、`background`），
+插件注册放在 `plugins/loop_control.rs`（`LoopControlPlugin`，并入默认插件组），满足
 `domain ← … ← systems ← plugins` 的单向依赖（`scripts/check_module_deps.sh`）。
 
 ---
@@ -192,25 +201,21 @@
 ### 4.1 模型
 
 ```rust
-pub enum ContextAttachment {
-    /// 用户在任务运行中追加的输入（Durable）
+/// Durable：送达后成为对话历史的一部分
+pub enum InboxItem {
     UserSteer { content: String, received_at: DateTime<Utc> },
-    /// 后台任务完成通知（Durable）
-    TaskNotification { job_id: Uuid, source: JobSource, summary: String },
-    /// 当前进度清单快照（Ephemeral）
-    TodoSnapshot { items: Vec<TodoItem> },
+    TaskNotification { job_id: Uuid, source: String, status: String, summary: String, received_at: DateTime<Utc> },
 }
 
-impl ContextAttachment {
-    pub fn durability(&self) -> Durability { /* Durable | Ephemeral */ }
-    pub fn render(&self) -> String { /* <user_steer>…</user_steer> 等标签块 */ }
-}
+pub fn render_inbox_items(items: &[InboxItem]) -> String; // <user_steer> / <task-notification> 标签块
+pub fn render_todos(items: &[TodoItem]) -> String;        // 进度清单快照（Ephemeral）
 ```
 
 - __Durable__：成为对话历史的一部分。追加到 `request.conversation`，同时追加到该任务
   `ToolCallingState.conversation`（否则下一次 follow-up 会从 state 重建对话，导致注入项丢失），
-  并以 `EntryRole::User` + 来源元数据记入 `ShortTermMemory`。
-- __Ephemeral__：只追加到本次请求，不写 state，也不写 STM。
+  并以 `EntryRole::User` 记入 `ShortTermMemory`。
+- __Ephemeral__：只追加到本次请求，不写 STM。进度清单快照只在新一轮首个请求回填，
+  会随首个响应的对话进入本轮 `ToolCallingState`，下一轮重新生成。
 
 ### 4.2 `context_attachment_system`
 
@@ -219,10 +224,10 @@ impl ContextAttachment {
 1. 只处理 `request_kind == LlmCompletion` 且 `work_item_id == None` 的请求。
    摘要、评估、Brain 决策等内部请求不受影响。
 2. 打上 `turn_generation`（读 Task 上的 `TurnGeneration`）。
-3. 从 `TaskInbox` 取出全部积压，按到达顺序渲染为__一条__ User 消息并追加到对话尾部，
-   多条积压合并，避免出现连续多个 User 轮次。
-4. 若请求是新一轮的首个请求（对话中尚无 `update_todos` 调用）且 `TaskTodoList` 非空，
-   追加 `TodoSnapshot`（Ephemeral）。
+3. 从 `TaskInbox` 取出全部积压，按到达顺序渲染为__一条__ User 内容并追加到对话尾部；
+   对话尾部已是 User 消息时合并进去，避免出现连续多个 User 轮次。
+4. 若请求是新一轮的首个请求（该任务不存在 `ToolCallingState`）且 `TaskTodoList` 非空，
+   追加 `<todo_snapshot>`（Ephemeral）。
 5. `conversation == None`（纯 prompt 路径）时，把渲染文本追加到 `prompt` 末尾。
 
 追加位置始终在对话尾部，`system_prompt` 保持不变，不破坏 provider 的前缀缓存。
@@ -236,9 +241,9 @@ impl ContextAttachment {
   API 侧会合并相邻同角色消息。
 - Gemini：允许。
 
-实施时在 `tests/real_llm_smoke.rs` 增加"tool 结果后追加 user 文本"的往返用例，
-按 provider 逐一验证。若某个 adapter 拒绝，在 `src/llm/genai.rs` 的 `build_chat_messages`
-边界把该文本并入最后一条 tool result 作为兜底（与图片标记晚绑定同一层，不影响上层）。
+真实 provider 往返尚未逐一验证（Layer 1 冒烟测试需真实 API Key，不进 CI），列为待完善。
+若某个 adapter 拒绝，在 `src/llm/genai.rs` 的 `build_chat_messages` 边界把该文本并入最后一条
+tool result 作为兜底，不影响上层。
 
 ---
 
@@ -250,10 +255,10 @@ impl ContextAttachment {
 之后、"新建任务"之前，增加一个分支：
 
 - 匹配条件：同 `origin_channel`、顶层任务（`parent_task_id == None`）、状态属于活跃集合
-  `Running | Waiting(Agent | ToolExecution | SubTaskBatch | RetryBackoff | Summarization | Evaluator | BackgroundJobs)`。
-  有多个时取 `updated_at` 最新的一个。
+  非终态且不处于 `Waiting(User | AskUser)`，并要求 `multi_turn == true`（单轮任务与子任务维持新建任务）。
+  有多个时取 `updated_at` 最新的一个。同通道存在空闲 `Waiting(User)` 任务时仍优先续轮。
 - 动作：spawn `InboxDeliveryMessage { task_id, item: UserSteer }`，并向该通道输出一条轻量
-  `SystemOutputMessage`："已收到，将在下一步送达（排队 N 条）"。
+  `SystemOutputMessage` 回执，并清零自动拉起计数。
 - 既有优先分支保持不变：处于工具确认中的 `1/2/3` 输入、`ask_user` 回复仍优先匹配。
 
 ### 5.2 两种送达时机
@@ -270,9 +275,8 @@ impl ContextAttachment {
 
 ### 5.4 前端
 
-- TUI：任务活跃时输入框标题显示"steer → [短 ID]"，已排队数量显示在状态栏，
-  送达后以 `[steer]` 前缀回显在对话区。
-- IM：回执为一条 `MessageKind::System` 消息，送达后撤回（复用状态消息滚动撤回机制）。
+- TUI 与 IM 均以一条系统消息回执"已收到，将在当前任务的下一步送达"；送达后作为
+  `<user_steer>` 块进入对话与 STM。输入框内的排队计数展示未实现，列为后续体验优化。
 
 ---
 
@@ -292,12 +296,16 @@ impl ContextAttachment {
 2. 给 Task 插入 `StopRequested` 标记，使 `cancel_monitor_system` 对该任务的在飞异步工具调用
    `CancellationToken.cancel()`（复用既有单点 claim 逻辑，只扩展触发条件）。
 3. 清理挂起的确认：`pending_confirmation_id = None`，撤回前端审批卡片，移除 `AskUserPending`。
-4. 向 STM 追加一条 `[用户中断了上一轮执行]` 的 User 条目，让下一轮 LLM 知道上下文断点。
-5. `mark_waiting(WaitingReason::User)`。随后 `tool_calling_turn_reset_system` 按既有逻辑
+4. 撤回本任务排队中的工具请求（含待确认请求，并推送 `ApprovalResult{decision: "cancelled"}`
+   撤回审批卡片），移除 `WaitingForTasksInfo` / `WaitingForSessionInfo`。
+5. 向 STM 追加一条 `[用户中断了上一轮执行…]` 的 User 条目，让下一轮 LLM 知道上下文断点。
+6. `mark_waiting(WaitingReason::User)`。随后 `tool_calling_turn_reset_system` 按既有逻辑
    清理残留的 `ToolCallingState`。
-6. 子任务批次：对该任务未完成的子任务级联 `mark_failed_reason(UserCancelled)`，走既有子任务终态链路。
-7. `TaskInbox` 中的积压__保留__，随用户下一条输入一并送达。
-8. 移除 `StopRequested`（在 `cancel_monitor_system` 处理完成后的下一帧移除）。
+7. 子任务批次：移除批次状态，并对未完成的子任务级联 `mark_failed_reason(UserCancelled)`。
+8. `TaskInbox` 中的积压__保留__，随用户下一条输入一并送达。
+9. `clear_stop_requested_system` 在 `cancel_monitor_system` 之后移除 `StopRequested`。
+
+对空闲任务（`Waiting(User)` 且无待确认请求）执行 `/stop` 只回执"当前没有正在执行的回合"。
 
 ### 6.3 过期结果作废
 
@@ -305,10 +313,8 @@ impl ContextAttachment {
   由 `context_attachment_system` 打标，`agent_execution_system` 原样带回。
 - `ingest_execution_results_system` 比较代次：小于 Task 当前代次的结果直接丢弃，
   记录 `StaleExecutionResultDropped` 日志。exactly-once 仍由"结果落地单点"保证。
-- 被取消的异步工具结果以 `cancelled` 错误回到 ingest。因为 `ToolCallingState` 已被清理，
-  这些结果实体不会被 orchestrator 消费，需在 `Maintenance` 增加孤儿结果清理：
-  记入 STM 为"已取消"后 despawn。实施时需核实 `tool_result_system` 的现有行为，
-  避免对同一结果重复记账。
+- 被取消的异步工具结果以 `cancelled` 错误回到 ingest。经核实，`tool_result_system` 在没有
+  `ToolCallingState` 追踪时会记账后直接 despawn 结果实体，无需新增孤儿清理系统。
 
 ### 6.4 已知限制
 
@@ -325,7 +331,8 @@ impl ContextAttachment {
 #[derive(Component)]
 pub struct BackgroundJob {
     pub id: Uuid,
-    pub source: JobSource,       // Shell { handle_id } | SubTaskBatch { batch_id }
+    pub owner_task_id: TaskId,
+    pub source: JobSource,       // Shell { handle_id } | SubTaskBatch { batch_id, task_ids }
     pub started_at: DateTime<Utc>,
     pub claimed: bool,           // 被 wait_tasks 显式等待时置位，不再单独发通知
 }
@@ -335,17 +342,17 @@ pub struct BackgroundJob {
 pub struct JobOwner(pub Entity);
 ```
 
-- __Shell__：`shell_start` 增加参数 `notify_on_exit`（默认 `true`）。为真时，在 effect 落账处
+- __Shell__：`shell_start` 增加参数 `notify_on_exit`（默认 `true`）。为真时，在启动成功处
   spawn `BackgroundJob::Shell`。`background_job_monitor_system` 节流读取 backend 状态，
-  发现会话进入 `Completed | ExitedWithError | Stopped` 后，生成通知
-  （退出码 + 末尾 `shell_default_tail_lines` 行输出），并 despawn Job。
-- __后台子任务批次__：`create_tasks` 增加参数 `background`（默认 `false`）。
-  - 为真时，`create_tasks` 工具立即返回 `{ batch_id, task_ids, mode: "background" }`，
-    `sub_task_batch_block_system` 不阻塞父任务，改为 spawn `BackgroundJob::SubTaskBatch`。
-  - `sub_task_completion_system` 在批次全部完成时，若对应 Job 未被 claim，
-    将汇总结果以通知形式投递，不再作为工具结果回填。
-  - LLM 若之后对这些任务调用 `wait_tasks`，则 Job 置为 `claimed`，结果走既有
-    `wait_tasks` 返回路径，不重复通知。
+  会话进入 `Completed | ExitedWithError | FailedToStart` 后生成通知（退出码 + 末尾 20 行输出）；
+  `Stopped`（LLM 主动 `shell_stop`）或会话已不存在时静默回收。
+- __子任务批次__：经核实，`create_tasks` 本就立即返回工具结果、不阻塞当前回合，
+  子任务结果此前只能经 `wait_tasks` 取回，否则丢失。因此不新增 `background` 参数，
+  而是__每个批次__都登记为 `BackgroundJob::SubTaskBatch`：
+  - 批次内全部子任务终态时，汇总各子任务结果投递通知；
+  - 父任务若对批次内任务调用 `wait_tasks`（存在 `WaitingForTasksInfo`），Job 置为 `claimed`，
+    结果走既有 `wait_tasks` 返回路径，不重复通知；
+  - `create_tasks` 的工具结果与工具描述同步说明这一行为。
 
 ### 7.2 通知投递与合并
 
@@ -366,15 +373,19 @@ pub struct JobOwner(pub Entity);
 按评审确认的"禁止终态时有后台任务"，用两条规则保证不变量：
 __终态 Task 的 `OwnedJobs` 为空__。
 
-- __LLM 自然完成（非多轮任务），但仍有活跃 Job__：不调用 `mark_done`，改为
+- __LLM 自然完成（非多轮任务），但仍有活跃 Job 或收件箱中有未送达通知__：不调用 `mark_done`，改为
   `mark_waiting(BackgroundJobs)`，候选结果暂存于 `DeferredResult` Component。
   Job 全部结束后，由 `inbox_wake_system` 带通知续一轮，LLM 结合后台结果重新给出最终结果。
 - __`/finish`、`/clear`、父任务级联取消、任务 `Failed`__：`background_job_cleanup_system` 强制停止。
   Shell 调用 `stop_session`；子任务批次级联 `mark_failed_reason(UserCancelled)`；随后 despawn Job。
 - __多轮顶层任务处于 `Waiting(User)`__：不是终态，允许 Job 存活，完成后正常唤醒。
 
-第一条在 `llm_response_system` 的完成分支检查 `OwnedJobs`；第二条是兜底，
-保证任何终态路径都不会留下孤儿 Job。
+第一条在 `llm_response_system` 的完成分支检查 `OwnedJobs` 与 `TaskInbox`；第二条是兜底，
+保证任何终态路径都不会留下孤儿 Job。为使兜底可靠，`llm_response_system` 丢弃终态任务的
+迟到任务级响应（如 LLM 调用在飞期间用户 `/finish`），避免终态任务被拉回 `Waiting(User)`。
+
+子任务被唤醒时经 `continue_task_system` 走 Brain 重新派发（`DirectDelegate` 仅适用于
+Persistent Agent），短期记忆保存在任务实体上，上下文不丢失。
 
 ### 7.4 自动拉起预算
 
@@ -407,7 +418,8 @@ __终态 Task 的 `OwnedJobs` 为空__。
 
 - TUI：任务状态面板（`src/tui/status.rs`）中，任务行下方渲染清单（`✓` / `▶` / `○`）。
 - IM：清单变化时更新一条 `MessageKind::TaskStatus` 状态消息（发新撤旧），
-  只在 `in_progress` 项变化或全部完成时推送，避免刷屏。
+  只在 `in_progress` 项变化、全部完成或清单新建/清空时推送（`progress_changed`），避免刷屏。
+- 前端事件：`EngineEvent::TodoUpdated { target, task_id, items, progress_changed }`。
 
 ### 8.3 生命周期与回填
 
@@ -429,7 +441,7 @@ __终态 Task 的 `OwnedJobs` 为空__。
 | `HARNESS_NOTIFICATION_COALESCE_MS` | `300` | 空闲任务唤醒的通知合并窗口 |
 | `HARNESS_BACKGROUND_POLL_MS` | `500` | 后台 shell 会话状态轮询间隔 |
 
-实施时同步 `docs/configuration.md` 与 `.env.example`。
+已同步 `docs/configuration.md` 与 `.env.example`。
 
 ---
 
@@ -449,32 +461,31 @@ __终态 Task 的 `OwnedJobs` 为空__。
   所有终态路径后 `OwnedJobs` 为空（性质测试）。
 - 自动拉起预算：超过上限只通知不拉起；用户输入后清零。
 - `update_todos`：校验规则；effect 落账；新一轮首个请求回填；不影响派发。
-- Layer 1 真实 LLM：tool 结果后追加 user 文本的 provider 往返（§4.3）。
-- Layer 2 场景：新增 `steer_mid_tool_loop.toml`、`background_shell_notify.toml`。
+- 端到端（mock executor）：`tests/loop_steering_flow.rs` 覆盖 steer 送达、`/stop` 作废在飞结果、
+  后台 shell 唤醒空闲任务、自然完成等待后台任务、`/finish` 强制停止后台 shell、进度清单回填。
+- 待完善：Layer 1 真实 LLM 的"tool 结果后追加 user 文本"provider 往返（§4.3）与
+  Layer 2 场景（steer / 后台通知）尚未补充。
 
 ---
 
 ## 11. 实施分期
 
-每期独立分支、独立 PR，自 `main` 创建；每期都可独立交付、独立回滚。
+四期在同一分支按期分提交、合并为一个 PR（每期一个 Conventional Commit，可按提交回滚）。
 
 | 期 | 内容 | 依赖 |
 |----|------|------|
 | 1 | 注入管道 + `TaskInbox` + steer 路由 + 轮末续轮 | — |
-| 2 | `TurnGeneration` + `/stop` + TUI `Esc` + 孤儿结果清理 | 1 |
-| 3 | `BackgroundJob` + shell 通知 + 后台批次 + 终态约束 + 自动拉起预算 | 1 |
+| 2 | `TurnGeneration` + `/stop` + TUI `Esc` | 1 |
+| 3 | `BackgroundJob` + shell 通知 + 子任务批次通知 + 终态约束 + 自动拉起预算 | 1 |
 | 4 | `update_todos` + 展示 + 回填 + ADR-007 转 Accepted | 1 |
-
-每期合入时同步 `README.md`、`docs/current-state.md`、`docs/design/README.md`。
 
 ---
 
-## 12. 待确认事项
+## 12. 评审结论
 
-1. `TaskInbox` 是否改名为 `PendingTurnInputs`，以避免与 `ExperienceInbox` 混淆。
-2. `shell_start` 的 `notify_on_exit` 默认值为 `true`（对齐 Claude Code），是否接受。
-3. §7.3 对"禁止终态时有后台任务"的解释：自然完成等待后台任务、显式结束强制停止，是否符合预期。
-4. TUI 中断键：单次 `Esc`（仅输入框为空时）还是双击 `Esc`。
-5. 自然完成等待后台任务时，`inbox_wake_system` 经 `ContinueTaskMessage` 续轮。
-   `continue_task_system` 目前面向用户输入设计，是否适用于子任务需在第 3 期开工前核实；
-   若不适用，改为对子任务直接构造 follow-up 请求。
+1. 运行中输入默认 steer；`/btw` 保留开启新话题。
+2. 保留 `TaskInbox` 命名。
+3. `shell_start` 的 `notify_on_exit` 默认 `true`。
+4. "禁止终态时有后台任务"：自然完成时等待后台任务结束后续轮给出最终结果；
+   `/finish`、`/clear`、失败时强制停止后台任务。
+5. TUI 中断键为单次 `Esc`（仅输入框为空且存在执行中的顶层任务时生效）。

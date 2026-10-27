@@ -87,6 +87,25 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   （`src/llm/judge_prompt.rs`），复用 `AgentRequestKind::Evaluation` 请求通道；
   采样投票 + 低置信/分裂降级人工待审
 
+#### Agent loop 控制
+
+设计见 [2026-10-28-loop-steering-and-background-notification-design.md](design/2026-10-28-loop-steering-and-background-notification-design.md)。
+
+- 引导式插入（steer）：同通道存在活跃的顶层多轮任务时，用户输入投递到该任务的 `TaskInbox`，
+  在下一个工具结果边界追加到对话尾部（同步写入 `ToolCallingState` 与 STM），不再新建任务；
+  轮末仍有积压时自动续一轮；`/btw` 仍用于开启新话题
+- 请求期上下文注入管道：`context_attachment_system` 在 `Execution` 首位统一处理任务级
+  `LlmCompletion` 请求，负责回合代次打标、收件箱送达与新一轮进度清单回填
+- `/stop` 中断（TUI 空输入时 `Esc`）：递增 `TurnGeneration` 作废在飞 LLM 结果，取消在飞异步工具，
+  撤回排队/待确认工具请求，级联取消子任务，任务回到 `Waiting(User)` 并保留上下文
+- 后台任务通知：`shell_start`（`notify_on_exit` 默认开启）与 `create_tasks` 批次登记为
+  `BackgroundJob`（`JobOwner` 关系），完成后以 `<task-notification>` 投递收件箱；
+  `wait_tasks` 显式等待时认领、不重复通知；空闲任务被自动拉起，连续自动拉起受
+  `HARNESS_MAX_AUTO_WAKES` 约束
+- 终态约束：任务自然完成时若仍有后台任务或未送达通知，进入 `Waiting(BackgroundJobs)` 暂存候选结果；
+  `/finish`、`/clear`、失败时强制停止后台任务；终态任务收到的迟到 LLM 响应被丢弃
+- `update_todos` 进度清单：纯展示数据（ADR-007），TUI 任务面板渲染，IM 仅在进度变化时推送
+
 #### 工具与会话
 
 - 工具调用软限制：单轮用户输入内达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，让 LLM 总结并询问用户；绝对硬上限（HARD_LIMIT_MULTIPLIER × max_iterations）时强制失败
@@ -157,7 +176,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   （通常即来源 `origin_channel`）自动推回来源 IM 通道，并附加任务短 ID 前缀（如 `[a1b2c3d4]`），
   便于同一会话中多任务并行时区分消息来源
 - IM 任务状态展示：任务状态变更（如运行中 → 等待中）作为独立状态消息推送到 IM 通道，同样携带任务短 ID 前缀
-- 跨通道隔离：用户输入仅路由到同一通道中等待用户的 Task；`/finish`、`/summarize`、`/btw` 等命令限定在发出通道生效；子任务继承父任务的 `origin_channel`
+- 跨通道隔离：用户输入仅路由到同一通道中等待用户或正在执行（steer）的 Task；`/finish`、`/stop`、`/summarize`、`/btw` 等命令限定在发出通道生效；子任务继承父任务的 `origin_channel`
 
 #### 记忆治理
 
@@ -330,6 +349,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 - Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
   `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
+- Agent loop 控制：真实 provider 对"tool 结果后追加 user 文本"的兼容性尚未逐一验证；`/stop` 只作废
+  在飞 LLM 结果，不中止 provider 侧请求
 - 异步工具桥双轨期待完善：`ToolContext<'a>` 借用上下文尚未完全退役；剩余 Sync 工具
 
 ### 已收敛或已废弃

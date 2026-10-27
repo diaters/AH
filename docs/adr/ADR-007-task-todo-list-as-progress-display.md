@@ -2,7 +2,7 @@
 
 ## 状态
 
-Proposed
+Accepted（2026-10-28，随 Agent loop 优化设计一并确认实施）
 
 ## 背景
 
