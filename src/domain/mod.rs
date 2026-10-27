@@ -236,10 +236,10 @@ pub use skill::SkillId;
 
 // loop_control
 pub use loop_control::{
-    AutoWakeBudget, BackgroundJob, DeferredResult, InboxDeliveryMessage, InboxItem, JobOwner,
-    JobSource, LoopControlConfig, MAX_TODO_ITEMS, OwnedJobs, StopRequested, StopTaskMessage,
-    TaskInbox, TaskTodoList, TodoItem, TodoStatus, TurnGeneration, render_inbox_items,
-    render_todos, validate_todos,
+    AutoWakeBudget, BackgroundJob, DeferredResult, InboxDeliveryMessage, InboxItem,
+    InflightLlmRequests, JobOwner, JobSource, LoopControlConfig, MAX_TODO_ITEMS, OwnedJobs,
+    StopRequested, StopTaskMessage, TaskInbox, TaskTodoList, TodoItem, TodoStatus, TurnGeneration,
+    render_inbox_items, render_todos, validate_todos,
 };
 
 // session

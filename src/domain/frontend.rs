@@ -224,6 +224,12 @@ pub enum EngineEvent {
         /// 进行中条目发生变化或全部完成：IM 通道据此决定是否推送，避免刷屏
         progress_changed: bool,
     },
+    /// 任务收件箱积压数量变化（steer / 后台通知排队中，尚未送达 LLM）
+    InboxChanged {
+        target: EventTarget,
+        task_id: TaskId,
+        pending: usize,
+    },
     /// 权限审计：每次权限决策（Allow/Confirm/Deny/Grant）发出，
     /// 前端可据此构建可观测性视图。target 由 task 的 output_channel 推导。
     PermissionAudit {
@@ -316,6 +322,7 @@ impl EngineEvent {
             Self::ToolCallStarted { target, .. } => target,
             Self::TaskCleared { target, .. } => target,
             Self::TodoUpdated { target, .. } => target,
+            Self::InboxChanged { target, .. } => target,
             Self::PermissionAudit { target, .. } => target,
         }
     }

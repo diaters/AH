@@ -62,6 +62,8 @@ pub struct TaskState {
     pub waiting_reason: Option<crate::domain::WaitingReasonKind>,
     /// Agent 自报的进度清单（`update_todos`）
     pub todos: Vec<crate::domain::TodoItem>,
+    /// 收件箱中尚未送达 LLM 的排队输入数量（steer / 后台通知）
+    pub pending_inputs: usize,
 }
 
 /// 待处理审批
@@ -728,6 +730,7 @@ impl App {
                         agent_name,
                         waiting_reason,
                         todos: Vec::new(),
+                        pending_inputs: 0,
                     });
                 }
 
@@ -762,6 +765,13 @@ impl App {
                     )
                 };
                 self.messages.push(ChatMessage::System(content));
+            }
+            EngineEvent::InboxChanged {
+                task_id, pending, ..
+            } => {
+                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.pending_inputs = pending;
+                }
             }
             EngineEvent::TodoUpdated { task_id, items, .. } => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
@@ -1589,7 +1599,22 @@ mod tests {
             agent_name: None,
             waiting_reason: None,
             todos: vec![],
+            pending_inputs: 0,
         }
+    }
+
+    #[test]
+    fn inbox_changed_event_updates_pending_count() {
+        let mut app = test_app();
+        let task = tui_task(crate::domain::TaskStatusKind::Running);
+        let task_id = task.id;
+        app.tasks.push(task);
+        app.handle_engine_event(EngineEvent::InboxChanged {
+            target: EventTarget::Broadcast,
+            task_id,
+            pending: 2,
+        });
+        assert_eq!(app.tasks[0].pending_inputs, 2);
     }
 
     #[test]

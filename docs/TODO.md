@@ -113,10 +113,8 @@
 
 ### Agent loop 控制后续
 
-- [ ] Layer 1 真实 LLM：验证各 provider 接受"tool 结果后追加 user 文本"（设计文档 §4.3）
-- [ ] Layer 2 场景：补充 steer 与后台通知场景（`tests/scenarios/*.toml`）
-- [ ] TUI 输入框展示 steer 排队数量
-- [ ] `/stop` 真正中止 provider 侧 HTTP 请求（`AbortHandle`），当前仅作废结果
+- [ ] 使用真实 API Key 逐个 provider 运行 `steer_after_tool_result_roundtrip_is_accepted`
+  与 `steer_mid_tool_loop` / `background_shell_notify` 场景并沉淀结果（用例已就绪，需人工执行）
 
 ### IM 通道后续阶段
 

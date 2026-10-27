@@ -5,13 +5,13 @@
 use crate::prelude::*;
 
 use crate::{
-    domain::LoopControlConfig,
+    domain::{InflightLlmRequests, LoopControlConfig},
     systems::{
         HarnessSet, agent_execution_system, background_job_cleanup_system,
         background_job_monitor_system, cancel_monitor_system, clear_stop_requested_system,
         command_parse_system, context_attachment_system, continue_task_system, inbox_ingest_system,
-        inbox_wake_system, llm_response_system, stop_task_system, task_termination_system,
-        tool_calling_turn_reset_system, user_input_routing_system,
+        inbox_status_sync_system, inbox_wake_system, llm_response_system, stop_task_system,
+        task_termination_system, tool_calling_turn_reset_system, user_input_routing_system,
     },
 };
 
@@ -22,6 +22,7 @@ impl Plugin for LoopControlPlugin {
     fn build(&self, app: &mut App) {
         // 默认兜底；运行时由 app 装配阶段按环境变量覆盖。
         app.init_resource::<LoopControlConfig>();
+        app.init_resource::<InflightLlmRequests>();
 
         app.add_systems(
             Update,
@@ -51,6 +52,8 @@ impl Plugin for LoopControlPlugin {
                 background_job_monitor_system
                     .in_set(HarnessSet::Transform)
                     .before(inbox_ingest_system),
+                // 收件箱积压数量同步到前端（所有 drain 出口之后）
+                inbox_status_sync_system.in_set(HarnessSet::Output),
                 // 终态清理：保证终态 Task 不留存活后台任务
                 background_job_cleanup_system
                     .in_set(HarnessSet::Maintenance)

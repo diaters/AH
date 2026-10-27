@@ -66,6 +66,14 @@ struct ScenarioSpec {
     /// 挂回同一 Task（STM 保留）；空列表 = 单轮场景（现有行为不变）。
     #[serde(default)]
     follow_ups: Vec<String>,
+    /// 引导式插入（steer）输入：首个 LLM 请求发出、任务仍在执行时经生产 ingress 注入，
+    /// 验证"运行中输入不打断、在下一步送达"（Agent loop 设计 §5）。
+    #[serde(default)]
+    steer: Vec<String>,
+    /// 显式多轮：任务文本回复后停在 Waiting(User)，可被后台通知重新拉起
+    /// （follow_ups / steer 非空时自动视为多轮）。
+    #[serde(default)]
+    multi_turn: bool,
     /// 场景级压缩阈值覆写：Some 时 runner 覆写 MemoryConfig，
     /// 让多轮长文本稳定触发 memory_compression_system。
     #[serde(default)]
@@ -424,7 +432,8 @@ fn count_summarization_triggers_system(
 }
 
 /// 场景稳定态：所有 Task 处于终态或 Waiting(User)（多轮等待续轮），
-/// 且所有 WorkItem 到达终态（无 in-flight Summarization 等）。
+/// 所有 WorkItem 到达终态（无 in-flight Summarization 等），
+/// 且无存活后台任务、无未送达的收件箱积压（后台通知会重新拉起任务）。
 ///
 /// 注意：若未来实现中 Summarization 完成后任务停留态导致本条件永不满足，
 /// 可按实际状态机放宽 Task 侧条件；但 WorkItem 侧"全部终态"必须保留——
@@ -439,8 +448,21 @@ fn scenario_settled(app: &mut bevy_app::App) -> bool {
     if !tasks_settled {
         return false;
     }
+    let mut job_query = world.query::<&harness::domain::BackgroundJob>();
+    if job_query.iter(world).next().is_some() {
+        return false;
+    }
+    let mut inbox_query = world.query::<&harness::domain::TaskInbox>();
+    if inbox_query.iter(world).any(|inbox| !inbox.is_empty()) {
+        return false;
+    }
     let mut wi_query = world.query::<&WorkItem>();
     wi_query.iter(world).all(|wi| wi.is_terminal())
+}
+
+/// 场景是否以多轮任务运行（停在 Waiting(User)，结束时注入 /finish 收尾）。
+fn scenario_multi_turn(spec: &ScenarioSpec) -> bool {
+    spec.multi_turn || !spec.follow_ups.is_empty() || !spec.steer.is_empty()
 }
 
 /// 轮询至稳定态；返回是否在整体超时前到达。
@@ -510,7 +532,7 @@ fn execute_scenario(
     // 多轮场景置 multi_turn：LLM 文本回复后任务转 Waiting(User) 等续轮，
     // follow-up 才能经 routing continue_existing 挂回同一 Task（STM 保留）；
     // 单轮场景保持 false，文本回复后直接 Done（现有行为不变）。
-    task.multi_turn = !spec.follow_ups.is_empty();
+    task.multi_turn = scenario_multi_turn(spec);
     let task_id = task.id;
     let task_entity = app
         .world_mut()
@@ -545,6 +567,37 @@ fn execute_scenario(
     let timeout = Duration::from_secs(spec.timeout_secs);
     let channel = scenario_channel();
 
+    // steer 场景：等任务进入执行态（首个 LLM 请求已发出）后注入，
+    // 经 routing 的 steer 分支投递到收件箱，在下一个工具结果边界送达。
+    // 优先等到工具执行中（Waiting(ToolExecution)）再注入，最多等 30 秒，避免模型未调工具时卡住。
+    if !spec.steer.is_empty() {
+        let steer_deadline = Duration::from_secs(30).min(timeout);
+        loop {
+            app.update();
+            let in_tool = app.world().get::<Task>(task_entity).is_some_and(|t| {
+                matches!(
+                    t.status(),
+                    TaskStatus::Waiting(WaitingReason::ToolExecution)
+                )
+            });
+            if in_tool || start.elapsed() > steer_deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(poll_ms));
+        }
+        for steer in &spec.steer {
+            if input_tx
+                .send(ExternalInput::TextWithChannel {
+                    channel: channel.clone(),
+                    content: steer.clone(),
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+
     // 多轮场景：逐条 follow-up 经生产 ingress → routing 续轮链路注入。
     // 每条前置等待稳定态，确保上一轮回复完成且无 in-flight Summarization。
     for follow_up in &spec.follow_ups {
@@ -566,7 +619,7 @@ fn execute_scenario(
     // 注入 /finish 命令走生产命令链路收尾（command → FinishTaskMessage → Done）。
     // 边界：若此前 wait_until_settled 超时（WorkItem 未终态），/finish 不会注入，
     // 场景会卡在 Waiting(User) 直到整体超时（mock 测试不会触发，真实场景属预期超时风险）。
-    if !spec.follow_ups.is_empty()
+    if scenario_multi_turn(spec)
         && wait_until_settled(&mut app, &start, timeout, poll_ms)
         && input_tx
             .send(ExternalInput::TextWithChannel {
@@ -1280,6 +1333,134 @@ fn scenario_framework_mock_smoke_multi_turn() {
     assert!(!report.needs_human, "不应有待审: {:?}", report.results);
 }
 
+/// 按请求内容作答的脚本化执行器：用于 steer / 后台通知场景的确定性自检。
+///
+/// 回答取决于请求中实际送达的内容（`<user_steer>` / `<task-notification>` / tool 结果），
+/// 因此断言通过即证明注入经生产链路到达 LLM。
+struct ScriptedLoopExecutor {
+    respond: fn(&str, bool) -> harness::domain::AgentExecutionOutput,
+}
+
+impl AgentExecutor for ScriptedLoopExecutor {
+    fn execute(&self, request: AgentExecutionRequest) -> harness::domain::ExecutorFuture {
+        if request.request_kind != AgentRequestKind::LlmCompletion || request.work_item_id.is_some()
+        {
+            return Box::pin(async { Ok(text_output("ok")) });
+        }
+        let mut text = request.prompt.clone();
+        let mut has_tool_result = false;
+        for message in request.conversation.iter().flatten() {
+            match message {
+                harness::domain::ConversationMessage::User { content } => text.push_str(content),
+                harness::domain::ConversationMessage::Tool { .. } => has_tool_result = true,
+                _ => {}
+            }
+        }
+        let output = (self.respond)(&text, has_tool_result);
+        Box::pin(async move { Ok(output) })
+    }
+}
+
+fn tool_call_output(name: &str, arguments: &str) -> harness::domain::AgentExecutionOutput {
+    harness::domain::AgentExecutionOutput {
+        content: harness::domain::OutputContent::ToolCalls(vec![harness::domain::LlmToolCall {
+            id: format!("call_{name}"),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        }]),
+        reasoning_content: None,
+    }
+}
+
+/// Mock 模式 steer 自检：工具执行中注入的要求在下一步送达，最终回复体现该要求，
+/// 且全程只有一个 Task（steer 不新建任务）。
+#[test]
+fn scenario_framework_mock_smoke_steer() {
+    let file = load_scenario("steer_mid_tool_loop");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(ScriptedLoopExecutor {
+        respond: |text, has_tool_result| {
+            if text.contains("<user_steer>") && text.contains("STEERED") {
+                text_output("命令输出 working，执行成功。STEERED")
+            } else if !has_tool_result {
+                tool_call_output("shell_exec", r#"{"command":"sleep 1; echo working"}"#)
+            } else {
+                text_output("命令输出 working，执行成功。")
+            }
+        },
+    });
+    let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
+        final_text: "unused",
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor,
+        judge,
+        runtime,
+        "mock（steer 自检）",
+        tmp.path(),
+    );
+
+    assert_eq!(report.trace.task_status.as_deref(), Some("Done"));
+    assert!(
+        report
+            .trace
+            .final_output
+            .as_deref()
+            .unwrap_or("")
+            .contains("STEERED"),
+        "steer 应送达 LLM 并体现在最终回复: {:?}",
+        report.trace.final_output
+    );
+    assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
+}
+
+/// Mock 模式后台通知自检：shell_start 后台进程退出 → 通知拉起空闲任务 → 回复包含后台输出。
+#[test]
+fn scenario_framework_mock_smoke_background_notify() {
+    let file = load_scenario("background_shell_notify");
+    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(ScriptedLoopExecutor {
+        respond: |text, has_tool_result| {
+            if text.contains("<task-notification") && text.contains("BG_DONE") {
+                text_output("后台任务已完成，输出：BG_DONE")
+            } else if !has_tool_result {
+                tool_call_output("shell_start", r#"{"command":"sleep 1; echo BG_DONE"}"#)
+            } else {
+                text_output("已在后台启动")
+            }
+        },
+    });
+    let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
+        final_text: "unused",
+    });
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let report = run_scenario(
+        &file,
+        executor,
+        judge,
+        runtime,
+        "mock（后台通知自检）",
+        tmp.path(),
+    );
+
+    assert_eq!(report.trace.task_status.as_deref(), Some("Done"));
+    assert!(
+        report
+            .trace
+            .final_output
+            .as_deref()
+            .unwrap_or("")
+            .contains("BG_DONE"),
+        "后台通知应拉起任务并汇报输出: {:?}",
+        report.trace.final_output
+    );
+    assert!(report.all_passed, "断言不应 FAIL: {:?}", report.results);
+}
+
 /// Mock 模式压缩链路自检：低阈值 + 多轮长文本触发
 /// memory_compression_system → Summarization WorkItem 完成，任务经 /finish 到 Done。
 #[test]
@@ -1324,6 +1505,8 @@ fn scenario_assertion_engine_branches() {
         description: "断言引擎分支自检".into(),
         input: "x".into(),
         follow_ups: vec![],
+        steer: vec![],
+        multi_turn: false,
         compression_threshold_tokens: None,
         max_cost_usd: 0.0,
         timeout_secs: 1,
@@ -1376,6 +1559,8 @@ fn scenario_assertion_summarization_triggered_branches() {
         description: "d".into(),
         input: "x".into(),
         follow_ups: vec![],
+        steer: vec![],
+        multi_turn: false,
         compression_threshold_tokens: None,
         max_cost_usd: 0.0,
         timeout_secs: 1,

@@ -10,9 +10,9 @@ use tracing::debug;
 use crate::contracts::{Clock, FrontendRegistry};
 use crate::domain::{
     AskUserPending, EngineEvent, EntryMetadata, EntryRole, EventTarget, FailureReason,
-    ShortTermMemory, StopRequested, StopTaskMessage, SubTaskBatchState, SystemOutputMessage, Task,
-    TaskId, TaskStatus, ToolExecutionRequestMessage, TurnGeneration, WaitingForSessionInfo,
-    WaitingForTasksInfo, WaitingReason,
+    InflightLlmRequests, ShortTermMemory, StopRequested, StopTaskMessage, SubTaskBatchState,
+    SystemOutputMessage, Task, TaskId, TaskStatus, ToolExecutionRequestMessage, TurnGeneration,
+    WaitingForSessionInfo, WaitingForTasksInfo, WaitingReason,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -26,6 +26,7 @@ pub(crate) fn stop_task_system(
     clock: Res<Clock>,
     index: Res<EntityIndex>,
     registry: Option<Res<FrontendRegistry>>,
+    mut inflight: Option<ResMut<InflightLlmRequests>>,
     messages: Query<(Entity, &StopTaskMessage)>,
     mut tasks: Query<(
         Entity,
@@ -76,6 +77,13 @@ pub(crate) fn stop_task_system(
         let Ok((_, mut task, short_term, generation)) = tasks.get_mut(task_entity) else {
             continue;
         };
+
+        // 中止在飞的 LLM 请求（provider 侧 HTTP 随 future drop 取消）；
+        // 代次递增仍保留，作为中止前已回送结果的兜底作废手段。
+        let aborted_requests = inflight
+            .as_mut()
+            .map(|inflight| inflight.abort_task(message.task_id))
+            .unwrap_or(0);
 
         let next_generation = match generation {
             Some(mut generation) => {
@@ -150,6 +158,7 @@ pub(crate) fn stop_task_system(
             event = "TaskStopped",
             task_id = %message.task_id,
             turn_generation = next_generation,
+            aborted_requests = aborted_requests,
             cancelled_children = children.len(),
             "task stopped by user; turn generation advanced"
         );

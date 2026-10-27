@@ -147,6 +147,47 @@ pub struct InboxDeliveryMessage {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Component)]
 pub struct TurnGeneration(pub u64);
 
+/// 在飞的任务级 LLM 请求句柄（`/stop` 时中止 provider 侧 HTTP 请求）。
+///
+/// 由 `agent_execution_system` 登记（仅任务级 `LlmCompletion`），`stop_task_system` 中止并移除；
+/// 已结束的句柄在登记新请求时顺带清理。
+#[derive(Debug, Default, Resource)]
+pub struct InflightLlmRequests {
+    by_task: std::collections::HashMap<TaskId, Vec<tokio::task::AbortHandle>>,
+}
+
+impl InflightLlmRequests {
+    pub fn register(&mut self, task_id: TaskId, handle: tokio::task::AbortHandle) {
+        let handles = self.by_task.entry(task_id).or_default();
+        handles.retain(|h| !h.is_finished());
+        handles.push(handle);
+        self.by_task
+            .retain(|_, hs| hs.iter().any(|h| !h.is_finished()));
+    }
+
+    /// 中止该任务全部在飞请求，返回实际中止的数量。
+    pub fn abort_task(&mut self, task_id: TaskId) -> usize {
+        let Some(handles) = self.by_task.remove(&task_id) else {
+            return 0;
+        };
+        let mut aborted = 0;
+        for handle in handles {
+            if !handle.is_finished() {
+                handle.abort();
+                aborted += 1;
+            }
+        }
+        aborted
+    }
+
+    pub fn in_flight(&self, task_id: TaskId) -> usize {
+        self.by_task
+            .get(&task_id)
+            .map(|hs| hs.iter().filter(|h| !h.is_finished()).count())
+            .unwrap_or(0)
+    }
+}
+
 /// `/stop` 请求消息。
 #[derive(Debug, Clone, Component)]
 pub struct StopTaskMessage {
@@ -288,6 +329,22 @@ mod tests {
             content: content.to_string(),
             received_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn inflight_requests_abort_only_target_task() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut inflight = InflightLlmRequests::default();
+        let stopped = TaskId::new();
+        let other = TaskId::new();
+        let pending = || std::future::pending::<()>();
+        inflight.register(stopped, runtime.spawn(pending()).abort_handle());
+        inflight.register(other, runtime.spawn(pending()).abort_handle());
+
+        assert_eq!(inflight.abort_task(stopped), 1);
+        assert_eq!(inflight.in_flight(stopped), 0);
+        assert_eq!(inflight.in_flight(other), 1);
+        assert_eq!(inflight.abort_task(stopped), 0, "second abort is a no-op");
     }
 
     #[test]

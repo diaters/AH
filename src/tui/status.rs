@@ -152,6 +152,12 @@ impl StatusPanel {
                         Style::default().fg(Color::Cyan),
                     ));
                 }
+                if main_task.pending_inputs > 0 {
+                    spans.push(Span::styled(
+                        format!(" ✉{} 排队", main_task.pending_inputs),
+                        Style::default().fg(Color::Magenta),
+                    ));
+                }
                 lines.push(Line::from(spans));
 
                 // 进度清单（update_todos）：终态任务不再展示

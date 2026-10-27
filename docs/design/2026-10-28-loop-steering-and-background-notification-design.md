@@ -241,7 +241,13 @@ pub fn render_todos(items: &[TodoItem]) -> String;        // 进度清单快照�
   API 侧会合并相邻同角色消息。
 - Gemini：允许。
 
-真实 provider 往返尚未逐一验证（Layer 1 冒烟测试需真实 API Key，不进 CI），列为待完善。
+验证：
+
+- `tests/real_llm_smoke.rs` 的 wiremock 用例（随 CI 运行）断言 OpenAI 兼容协议的线上消息顺序为
+  `user → assistant(tool_calls) → tool → user(<user_steer>)`，且响应可正常解析；
+- 同文件的真实 API 用例 `steer_after_tool_result_roundtrip_is_accepted`（`#[ignore]` + 环境变量门控）
+  按 `HARNESS_TEST_PROVIDER` 逐个 provider 验证真实接受度。
+
 若某个 adapter 拒绝，在 `src/llm/genai.rs` 的 `build_chat_messages` 边界把该文本并入最后一条
 tool result 作为兜底，不影响上层。
 
@@ -276,7 +282,9 @@ tool result 作为兜底，不影响上层。
 ### 5.4 前端
 
 - TUI 与 IM 均以一条系统消息回执"已收到，将在当前任务的下一步送达"；送达后作为
-  `<user_steer>` 块进入对话与 STM。输入框内的排队计数展示未实现，列为后续体验优化。
+  `<user_steer>` 块进入对话与 STM。
+- 排队数量：`inbox_status_sync_system`（`Output`）经 `Changed<TaskInbox>` 单点发出
+  `EngineEvent::InboxChanged { task_id, pending }`，TUI 任务行显示 `✉N 排队`，送达后归零。
 
 ---
 
@@ -316,10 +324,12 @@ tool result 作为兜底，不影响上层。
 - 被取消的异步工具结果以 `cancelled` 错误回到 ingest。经核实，`tool_result_system` 在没有
   `ToolCallingState` 追踪时会记账后直接 despawn 结果实体，无需新增孤儿清理系统。
 
-### 6.4 已知限制
+### 6.4 请求级中止
 
-- provider 侧 HTTP 请求不会被真正中止，token 照常计费，只是结果被作废。
-  如需真正中止，可后续在 `agent_execution_system` 为每个请求保存 `AbortHandle`，不在本期范围。
+- `agent_execution_system` 把任务级 `LlmCompletion` 请求的 tokio `AbortHandle` 登记到
+  `InflightLlmRequests` Resource（登记时顺带清理已结束句柄）。
+- `stop_task_system` 中止该任务全部在飞请求：future 被 drop，provider 侧 HTTP 连接随之取消。
+- 代次递增仍保留，兜底作废"中止前已回送通道"的结果。
 
 ---
 
@@ -463,8 +473,10 @@ Persistent Agent），短期记忆保存在任务实体上，上下文不丢失�
 - `update_todos`：校验规则；effect 落账；新一轮首个请求回填；不影响派发。
 - 端到端（mock executor）：`tests/loop_steering_flow.rs` 覆盖 steer 送达、`/stop` 作废在飞结果、
   后台 shell 唤醒空闲任务、自然完成等待后台任务、`/finish` 强制停止后台 shell、进度清单回填。
-- 待完善：Layer 1 真实 LLM 的"tool 结果后追加 user 文本"provider 往返（§4.3）与
-  Layer 2 场景（steer / 后台通知）尚未补充。
+- Layer 1：wiremock 线上消息形态用例（CI）+ 真实 provider 往返用例（门控，§4.3）。
+- Layer 2：`tests/scenarios/steer_mid_tool_loop.toml`、`background_shell_notify.toml`
+  （runner 新增 `steer` / `multi_turn` 字段，稳定态额外等待后台任务与收件箱清空），
+  并以按请求内容作答的脚本化执行器做 mock 自检，随 CI 运行。
 
 ---
 
@@ -475,7 +487,7 @@ Persistent Agent），短期记忆保存在任务实体上，上下文不丢失�
 | 期 | 内容 | 依赖 |
 |----|------|------|
 | 1 | 注入管道 + `TaskInbox` + steer 路由 + 轮末续轮 | — |
-| 2 | `TurnGeneration` + `/stop` + TUI `Esc` | 1 |
+| 2 | `TurnGeneration` + `/stop` + TUI `Esc` + 请求级中止 | 1 |
 | 3 | `BackgroundJob` + shell 通知 + 子任务批次通知 + 终态约束 + 自动拉起预算 | 1 |
 | 4 | `update_todos` + 展示 + 回填 + ADR-007 转 Accepted | 1 |
 

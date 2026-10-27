@@ -42,8 +42,24 @@ fn update_with_yield(app: &mut App, n: usize) {
 
 /// 脚本化执行器：记录全部任务级 LLM 请求；第一次请求阻塞到 `gate` 放行后返回
 /// 指定的工具调用，后续请求返回文本。
+/// 被 drop 时若尚未完成则置位：用于断言 `/stop` 真正中止了在飞请求。
+struct DropProbe {
+    aborted: Arc<std::sync::atomic::AtomicBool>,
+    completed: bool,
+}
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.aborted
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 struct GatedToolExecutor {
     gate: Arc<Notify>,
+    aborted: Arc<std::sync::atomic::AtomicBool>,
     first_call: Mutex<bool>,
     tool_call: LlmToolCall,
     requests: Arc<Mutex<Vec<AgentExecutionRequest>>>,
@@ -64,9 +80,15 @@ impl AgentExecutor for GatedToolExecutor {
         let is_first = std::mem::replace(&mut *self.first_call.lock().unwrap(), false);
         let gate = self.gate.clone();
         let tool_call = self.tool_call.clone();
+        let aborted = self.aborted.clone();
         Box::pin(async move {
             if is_first {
+                let mut probe = DropProbe {
+                    aborted,
+                    completed: false,
+                };
                 gate.notified().await;
+                probe.completed = true;
                 Ok(AgentExecutionOutput {
                     content: OutputContent::ToolCalls(vec![tool_call]),
                     reasoning_content: None,
@@ -84,6 +106,7 @@ impl AgentExecutor for GatedToolExecutor {
 struct Harness {
     app: App,
     gate: Arc<Notify>,
+    aborted: Arc<std::sync::atomic::AtomicBool>,
     requests: Arc<Mutex<Vec<AgentExecutionRequest>>>,
     task_entity: Entity,
 }
@@ -103,9 +126,11 @@ fn start_blocked_task(tool_call: LlmToolCall) -> Harness {
 
 fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness {
     let gate = Arc::new(Notify::new());
+    let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let executor: Arc<dyn AgentExecutor> = Arc::new(GatedToolExecutor {
         gate: gate.clone(),
+        aborted: aborted.clone(),
         first_call: Mutex::new(true),
         tool_call,
         requests: requests.clone(),
@@ -206,6 +231,7 @@ fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness 
     Harness {
         app,
         gate,
+        aborted,
         requests,
         task_entity,
     }
@@ -289,7 +315,13 @@ fn stop_discards_in_flight_result_and_keeps_context() {
         Some(1)
     );
 
-    // 放行被阻塞的首个请求：其结果属于已中断回合，应被丢弃，不会触发工具调用
+    // 在飞 LLM 请求被真正中止（provider 侧 HTTP 随 future drop 取消）
+    assert!(
+        h.aborted.load(std::sync::atomic::Ordering::SeqCst),
+        "in-flight llm future must be aborted by /stop"
+    );
+
+    // 即便放行，被中止的请求也不会再回送结果，不会触发工具调用
     h.gate.notify_one();
     update_with_yield(&mut h.app, 20);
 

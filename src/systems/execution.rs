@@ -17,6 +17,7 @@ pub(crate) fn agent_execution_system(
     result_sender: Res<ExecutionResultSender>,
     state_update_sender: Res<ModelChainStateUpdateSender>,
     mut commands: Commands,
+    mut inflight: Option<ResMut<crate::domain::InflightLlmRequests>>,
     requests: Query<(Entity, &AgentExecutionRequestMessage)>,
     mut tasks: Query<&mut Task>,
     agents: Query<(
@@ -68,7 +69,10 @@ pub(crate) fn agent_execution_system(
             "submitting execution request to async runtime"
         );
 
-        runtime.0.spawn(async move {
+        let is_task_turn_request = request.request_kind == AgentRequestKind::LlmCompletion
+            && request.work_item_id.is_none();
+        let task_id = request.task_id;
+        let handle = runtime.0.spawn(async move {
             let result = if let Some(mut chain) = chain_snapshot {
                 // 有 ModelChainState：执行带降级的请求
                 execute_with_fallback_logic(
@@ -106,6 +110,10 @@ pub(crate) fn agent_execution_system(
                 turn_generation: request.turn_generation,
             });
         });
+        // 任务级回合请求登记中止句柄，`/stop` 时中止 provider 侧请求
+        if is_task_turn_request && let Some(inflight) = inflight.as_mut() {
+            inflight.register(task_id, handle.abort_handle());
+        }
 
         commands.entity(entity).despawn();
     }

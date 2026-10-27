@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 use tracing::debug;
 
-use crate::contracts::Clock;
+use crate::contracts::{Clock, FrontendRegistry};
 use crate::domain::{
-    AskUserPending, AutoWakeBudget, ContinueTaskMessage, DeferredResult, InboxDeliveryMessage,
-    InboxItem, LoopControlConfig, OwnedJobs, SystemOutputMessage, Task, TaskInbox, TaskStatus,
-    WaitingReason, render_inbox_items,
+    AskUserPending, AutoWakeBudget, ContinueTaskMessage, DeferredResult, EngineEvent, EventTarget,
+    InboxDeliveryMessage, InboxItem, LoopControlConfig, OwnedJobs, SystemOutputMessage, Task,
+    TaskInbox, TaskStatus, WaitingReason, render_inbox_items,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -174,6 +174,32 @@ pub(crate) fn inbox_wake_system(
     }
 }
 
+/// 收件箱积压数量同步到前端（TUI 展示排队数量）。
+///
+/// 依赖 `Changed<TaskInbox>`：push（ingest）与 drain（注入管道 / 唤醒）都经 `&mut` 访问，
+/// 均会触发变更检测，单点覆盖所有出入口。
+pub(crate) fn inbox_status_sync_system(
+    registry: Option<Res<FrontendRegistry>>,
+    inboxes: Query<(&Task, &TaskInbox), Changed<TaskInbox>>,
+) {
+    let Some(registry) = registry else {
+        return;
+    };
+    for (task, inbox) in &inboxes {
+        let Some(channel) = task.routing_policy.output_channel().cloned() else {
+            continue;
+        };
+        let event = EngineEvent::InboxChanged {
+            target: EventTarget::Directed(vec![channel]),
+            task_id: task.id,
+            pending: inbox.len(),
+        };
+        for frontend in &registry.frontends {
+            frontend.push_event(event.clone());
+        }
+    }
+}
+
 fn write_budget(
     commands: &mut Commands,
     task_entity: Entity,
@@ -246,6 +272,63 @@ mod tests {
             .iter(app.world())
             .map(|m| m.user_input.clone())
             .collect()
+    }
+
+    #[test]
+    fn inbox_status_sync_reports_pending_count_on_push_and_drain() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::domain::{Frontend, UserAction};
+
+        struct RecordingFrontend(Arc<Mutex<Vec<EngineEvent>>>);
+        impl Frontend for RecordingFrontend {
+            fn kind(&self) -> FrontendKind {
+                FrontendKind::Tui
+            }
+            fn push_event(&self, event: EngineEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+            fn poll_actions(&self) -> Vec<UserAction> {
+                vec![]
+            }
+        }
+
+        let (mut app, entity, task_id) =
+            app_with_task(TaskStatus::Waiting(WaitingReason::ToolExecution));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(RecordingFrontend(events.clone()))],
+        });
+        app.add_systems(
+            Update,
+            (inbox_ingest_system, inbox_status_sync_system).chain(),
+        );
+        app.world_mut().spawn(InboxDeliveryMessage {
+            task_id,
+            item: steer("queued"),
+        });
+        app.update();
+        app.world_mut()
+            .get_mut::<TaskInbox>(entity)
+            .unwrap()
+            .drain_all();
+        app.update();
+        app.update();
+
+        let pending: Vec<usize> = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::InboxChanged { pending, .. } => Some(*pending),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pending,
+            vec![1, 0],
+            "push then drain, no event without change"
+        );
     }
 
     #[test]

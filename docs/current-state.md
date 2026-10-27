@@ -93,10 +93,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 - 引导式插入（steer）：同通道存在活跃的顶层多轮任务时，用户输入投递到该任务的 `TaskInbox`，
   在下一个工具结果边界追加到对话尾部（同步写入 `ToolCallingState` 与 STM），不再新建任务；
-  轮末仍有积压时自动续一轮；`/btw` 仍用于开启新话题
+  轮末仍有积压时自动续一轮；TUI 任务行显示排队数量；`/btw` 仍用于开启新话题
 - 请求期上下文注入管道：`context_attachment_system` 在 `Execution` 首位统一处理任务级
   `LlmCompletion` 请求，负责回合代次打标、收件箱送达与新一轮进度清单回填
-- `/stop` 中断（TUI 空输入时 `Esc`）：递增 `TurnGeneration` 作废在飞 LLM 结果，取消在飞异步工具，
+- `/stop` 中断（TUI 空输入时 `Esc`）：中止在飞 LLM 请求并递增 `TurnGeneration` 兜底作废结果，取消在飞异步工具，
   撤回排队/待确认工具请求，级联取消子任务，任务回到 `Waiting(User)` 并保留上下文
 - 后台任务通知：`shell_start`（`notify_on_exit` 默认开启）与 `create_tasks` 批次登记为
   `BackgroundJob`（`JobOwner` 关系），完成后以 `<task-notification>` 投递收件箱；
@@ -349,8 +349,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram webhook 模式仍由轮询替代，尚未切换（注：信号触发系统的 webhook 服务器已基于 axum 实现，与 Telegram webhook 模式是不同功能）
 - Brain LLM 选 Agent + skill 的链路已建立（`brain_dispatch_system` → `brain_decision_system` →
   `dispatch_system`），但实际 LLM 选错场景的集成测试仍需补充
-- Agent loop 控制：真实 provider 对"tool 结果后追加 user 文本"的兼容性尚未逐一验证；`/stop` 只作废
-  在飞 LLM 结果，不中止 provider 侧请求
+- Agent loop 控制：真实 provider 对"tool 结果后追加 user 文本"的接受度用例已就绪（Layer 1 门控 +
+  Layer 2 场景），OpenAI 兼容协议线上形态已由 wiremock 用例验证，其余 provider 待持有 Key 时人工执行
 - 异步工具桥双轨期待完善：`ToolContext<'a>` 借用上下文尚未完全退役；剩余 Sync 工具
 
 ### 已收敛或已废弃
