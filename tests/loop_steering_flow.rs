@@ -439,3 +439,45 @@ fn stopping_owner_task_with_finish_force_stops_background_shell() {
         "shell session stopped"
     );
 }
+
+#[test]
+fn update_todos_is_stored_and_replayed_at_next_turn_start() {
+    let call = LlmToolCall {
+        id: "call_todo".to_string(),
+        name: "update_todos".to_string(),
+        arguments: serde_json::json!({
+            "todos": [
+                { "content": "investigate loop", "status": "completed" },
+                { "content": "implement steer", "status": "in_progress" }
+            ]
+        })
+        .to_string(),
+    };
+    let mut h = start_blocked_task(call);
+    h.gate.notify_one();
+    let entity = h.task_entity;
+    assert!(update_until(&mut h.app, 200, |app| {
+        app.world().get::<Task>(entity).unwrap().status()
+            == &TaskStatus::Waiting(WaitingReason::User)
+    }));
+
+    let todos = h
+        .app
+        .world()
+        .get::<harness::domain::TaskTodoList>(entity)
+        .expect("todo list stored on task")
+        .items
+        .clone();
+    assert_eq!(todos.len(), 2);
+    assert_eq!(todos[1].status, harness::domain::TodoStatus::InProgress);
+
+    // 下一轮首个请求回填进度清单快照
+    send_input(&mut h.app, "继续");
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 200, |_| {
+        requests.lock().unwrap().len() >= 3
+    }));
+    let all = h.requests.lock().unwrap().clone();
+    assert!(request_mentions(&all[2..], "<todo_snapshot>"));
+    assert!(request_mentions(&all[2..], "▶ implement steer"));
+}

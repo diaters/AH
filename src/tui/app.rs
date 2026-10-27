@@ -60,6 +60,8 @@ pub struct TaskState {
     pub agent_name: Option<String>,
     /// 等待原因，仅当 status 为 Waiting 时有意义
     pub waiting_reason: Option<crate::domain::WaitingReasonKind>,
+    /// Agent 自报的进度清单（`update_todos`）
+    pub todos: Vec<crate::domain::TodoItem>,
 }
 
 /// 待处理审批
@@ -725,6 +727,7 @@ impl App {
                         completed_at,
                         agent_name,
                         waiting_reason,
+                        todos: Vec::new(),
                     });
                 }
 
@@ -759,6 +762,11 @@ impl App {
                     )
                 };
                 self.messages.push(ChatMessage::System(content));
+            }
+            EngineEvent::TodoUpdated { task_id, items, .. } => {
+                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.todos = items;
+                }
             }
             // 权限审计事件仅供可观测性消费（如日志聚合 / 监控面板），
             // TUI 不直接展示，避免噪音。
@@ -1580,7 +1588,26 @@ mod tests {
             completed_at: None,
             agent_name: None,
             waiting_reason: None,
+            todos: vec![],
         }
+    }
+
+    #[test]
+    fn todo_updated_event_attaches_items_to_task() {
+        let mut app = test_app();
+        let task = tui_task(crate::domain::TaskStatusKind::Running);
+        let task_id = task.id;
+        app.tasks.push(task);
+        app.handle_engine_event(EngineEvent::TodoUpdated {
+            target: EventTarget::Broadcast,
+            task_id,
+            items: vec![crate::domain::TodoItem {
+                content: "write tests".to_string(),
+                status: crate::domain::TodoStatus::InProgress,
+            }],
+            progress_changed: true,
+        });
+        assert_eq!(app.tasks[0].todos.len(), 1);
     }
 
     #[test]

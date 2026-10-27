@@ -51,7 +51,7 @@ use self::builtin::{
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillTool,
-    SubmitSkillUpdateTool, WaitTasksTool, WriteSkillFileTool,
+    SubmitSkillUpdateTool, UpdateTodosTool, WaitTasksTool, WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -638,6 +638,38 @@ pub fn register_builtin_tools(
         required_tag: Some("skill-creator".to_string()),
     });
     executors.register(Box::new(WriteSkillFileTool));
+
+    registry.register(ToolDefinition {
+        name: "update_todos".to_string(),
+        description: "维护当前任务的进度清单，向用户展示你正在做哪一步。每次提交完整列表（覆盖旧列表），同一时间最多一项 in_progress；多步骤任务开始时建立清单，每完成一步及时更新；提交空列表可清空。仅用于展示进度，不会执行任何工作——需要委派或并行执行请使用 create_tasks。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "完整的进度清单（最多 30 项）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string", "description": "步骤描述（祈使句，简短）" },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"]
+                                }
+                            },
+                            "required": ["content", "status"]
+                        }
+                    }
+                },
+                "required": ["todos"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("update_todos".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(UpdateTodosTool));
 }
 
 /// 注册插件贡献的 Tool

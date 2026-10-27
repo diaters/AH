@@ -375,6 +375,59 @@ impl Frontend for ChannelFrontend {
                     set.retain(|(tid, _)| tid != &task_id_str);
                 }
             }
+            // 进度清单：仅在进行中条目变化 / 全部完成时推送，复用状态消息滚动撤回
+            EngineEvent::TodoUpdated {
+                target,
+                task_id,
+                items,
+                progress_changed,
+            } => {
+                if !progress_changed || items.is_empty() {
+                    return;
+                }
+                let EventTarget::Directed(targets) = target else {
+                    return;
+                };
+                let content = format!(
+                    "[{}] 进度\n{}",
+                    task_short_id(task_id),
+                    crate::domain::render_todos(&items)
+                );
+                for channel_id in targets.into_iter().filter(|cid| self.matches(cid)) {
+                    let key = (format!("todo:{task_id}"), channel_id.user_id.clone());
+                    if let Ok(map) = self.last_status_msg.try_read()
+                        && let Some(old_msg_id) = map.get(&key).cloned()
+                    {
+                        drop(map);
+                        self.enqueue_recall(
+                            channel_id.user_id.clone(),
+                            channel_id.thread_id.clone(),
+                            old_msg_id,
+                        );
+                    }
+                    let last_status_msg = self.last_status_msg.clone();
+                    let on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>> =
+                        Some(Box::new(move |msg_id: Option<String>| {
+                            if let Some(id) = msg_id
+                                && let Ok(mut map) = last_status_msg.try_write()
+                            {
+                                map.insert(key, id);
+                            }
+                        }));
+                    self.enqueue(
+                        ChannelOutboundMessage {
+                            recipient: channel_id.user_id,
+                            thread_id: channel_id.thread_id,
+                            content: content.clone(),
+                            parse_mode: None,
+                            reply_markup: None,
+                            attachments: vec![],
+                            message_kind: MessageKind::TaskStatus,
+                        },
+                        on_sent,
+                    );
+                }
+            }
             // ToolCallStarted 不推送到 IM 通道：
             // 面向开发者的调试信息，对 IM 用户无意义，徒增通知噪音。
             // TUI 前端仍可通过其他路径展示工具调用状态。
@@ -398,6 +451,41 @@ mod tests {
     ) -> (ChannelFrontend, mpsc::UnboundedReceiver<OutboundEntry>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (ChannelFrontend::new(kind, "test", tx), rx)
+    }
+
+    #[test]
+    fn todo_update_is_pushed_only_on_progress_change() {
+        let (fe, mut rx) = make_frontend(FrontendKind::Telegram);
+        let task_id = crate::domain::TaskId::new();
+        let target = EventTarget::Directed(vec![ChannelId {
+            frontend: FrontendKind::Telegram,
+            user_id: "u1".to_string(),
+            thread_id: None,
+        }]);
+        let items = vec![crate::domain::TodoItem {
+            content: "write tests".to_string(),
+            status: crate::domain::TodoStatus::InProgress,
+        }];
+        fe.push_event(EngineEvent::TodoUpdated {
+            target: target.clone(),
+            task_id,
+            items: items.clone(),
+            progress_changed: false,
+        });
+        assert!(rx.try_recv().is_err(), "unchanged progress is not pushed");
+
+        fe.push_event(EngineEvent::TodoUpdated {
+            target,
+            task_id,
+            items,
+            progress_changed: true,
+        });
+        let entry = rx.try_recv().expect("progress message");
+        assert!(entry.message.content.contains("▶ write tests"));
+        assert!(matches!(
+            entry.message.message_kind,
+            MessageKind::TaskStatus
+        ));
     }
 
     fn text_event(target: EventTarget) -> EngineEvent {
