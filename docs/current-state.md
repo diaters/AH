@@ -119,6 +119,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - shell 输出语义已收敛为"最新快照"，不再对 LLM 暴露伪增量游标协议
+- shell 子进程以独立进程组运行：超时 / 取消 / `shell_stop` 终止整个进程组，后台孙进程不会成为孤儿；
+  进程退出后输出读取线程只等待 500ms 宽限期，后台进程持有管道时不再阻塞 `shell_exec`
+- 输出快照在行数上限之外再按 64 KiB 截断尾部；已结束的会话记录最多保留 128 条
 - 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always` 授权的权限会立即复用，后续同工具请求直接执行
 - 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务
 
