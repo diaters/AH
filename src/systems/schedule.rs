@@ -312,9 +312,19 @@ mod tests {
         let mut app = startup_app(vec![interrupted.clone(), pending.clone()]);
 
         let state = app.world().resource::<SchedulerState>();
-        let enabled = |id| state.dynamic_tasks().iter().find(|d| d.id == id).unwrap().enabled;
+        let enabled = |id| {
+            state
+                .dynamic_tasks()
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .enabled
+        };
         assert!(!enabled(interrupted.id), "interrupted once must be paused");
-        assert!(enabled(pending.id), "unfired once stays enabled for the timer");
+        assert!(
+            enabled(pending.id),
+            "unfired once stays enabled for the timer"
+        );
         assert!(catch_up_messages(&mut app).is_empty());
     }
 
@@ -347,12 +357,16 @@ mod tests {
             .world_mut()
             .spawn((
                 run_task(crate::domain::TaskStatus::Running),
-                ScheduledRun { schedule_id: once.id },
+                ScheduledRun {
+                    schedule_id: once.id,
+                },
             ))
             .id();
         app.world_mut().spawn((
             run_task(crate::domain::TaskStatus::Done),
-            ScheduledRun { schedule_id: cron.id },
+            ScheduledRun {
+                schedule_id: cron.id,
+            },
         ));
 
         app.update();
@@ -364,7 +378,11 @@ mod tests {
                 .map(|d| d.id)
                 .collect()
         };
-        assert_eq!(ids(&app), vec![once.id, cron.id], "running once and cron are kept");
+        assert_eq!(
+            ids(&app),
+            vec![once.id, cron.id],
+            "running once and cron are kept"
+        );
 
         app.world_mut().get_mut::<Task>(running).unwrap().status =
             crate::domain::TaskStatus::Failed(crate::domain::FailureReason::Unknown);
@@ -372,4 +390,3 @@ mod tests {
         assert_eq!(ids(&app), vec![cron.id], "once removed after its run fails");
     }
 }
-
