@@ -58,21 +58,38 @@ pub(crate) fn channel_is_closing(
 
 /// 批次中的普通输入可一起路由；命令是 FIFO 屏障，防止命令先于前面的正文执行。
 /// 命令之后的消息留在 ECS，下一帧在命令及关闭屏障之后继续处理。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn conversation_input_order_system(
     mut commands: Commands,
     inputs: Query<(Entity, &UserInputMessage, Option<&InputSequence>)>,
     tasks: Query<&Task>,
+    inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
     pending: Query<&ToolRequestPending>,
     queued: Query<&crate::domain::ToolExecutionRequestMessage>,
+    queued_llm: Query<&crate::domain::AgentExecutionRequestMessage>,
     clears: Query<&crate::domain::ClearTaskMessage>,
     backend: Option<Res<NativeProcessBackend>>,
 ) {
     let tasks: Vec<_> = tasks.iter().collect();
-    let pending = pending
+    let mut pending: std::collections::HashSet<_> = pending
         .iter()
         .map(|p| p.original_request.task_id)
         .chain(queued.iter().map(|request| request.request.task_id))
+        .chain(
+            queued_llm
+                .iter()
+                .filter(|request| request.request.work_item_id.is_none())
+                .map(|request| request.request.task_id),
+        )
         .collect();
+    if let Some(inflight) = inflight_llm.as_ref() {
+        pending.extend(
+            tasks
+                .iter()
+                .filter(|task| inflight.in_flight(task.id) > 0)
+                .map(|task| task.id),
+        );
+    }
     let mut groups: HashMap<ChannelId, Vec<_>> = HashMap::new();
     for (entity, input, sequence) in &inputs {
         groups

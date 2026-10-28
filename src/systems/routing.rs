@@ -130,13 +130,24 @@ pub(crate) fn user_input_routing_system(
         // ask_user 等待分支：用户回复 ask_user 工具的问题
         // 注意：iter().find().map(|(e, _)| e) 仅提取 Entity，立即释放 Mut<Task> 借用，
         // 否则与下方 tasks.get_mut(task_entity) 同实体冲突会触发 Bevy 运行时 panic。
-        let ask_user_task_entity = tasks
+        let ask_targets: Vec<_> = tasks
             .iter()
-            .find(|(_, t)| {
-                t.status == TaskStatus::Waiting(WaitingReason::AskUser)
-                    && super::conversation::is_user_root(t, &input.origin_channel)
+            .filter(|(_, task)| {
+                task.status == TaskStatus::Waiting(WaitingReason::AskUser)
+                    && task.origin_channel.as_ref() == Some(&input.origin_channel)
             })
-            .map(|(e, _)| e);
+            .map(|(entity, task)| (entity, task.id))
+            .collect();
+        if ask_targets.len() > 1 {
+            commands.spawn(SystemOutputMessage {
+                task_id: ask_targets[0].1,
+                content: "当前通道有多个待答问题，无法确定回复归属；请先处理或中断冲突的提问任务。"
+                    .into(),
+            });
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let ask_user_task_entity = ask_targets.first().map(|(entity, _)| *entity);
 
         if let Some(task_entity) = ask_user_task_entity {
             if let Ok(pending) = ask_user_pendings.get(task_entity) {
@@ -1217,5 +1228,33 @@ mod tests {
             results.is_empty(),
             "ambiguous ask_user reply must not pick a task"
         );
+    }
+    #[test]
+    fn child_ask_user_answer_keeps_the_child_tool_correlation() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.add_systems(Update, user_input_routing_system);
+        let root = make_waiting_task(telegram_channel());
+        let root_id = root.id;
+        app.world_mut().spawn(root);
+        let (mut child, pending) =
+            make_ask_user_waiting_task(telegram_channel(), crate::domain::AgentId::new());
+        child.parent_task_id = Some(root_id);
+        let child_id = child.id;
+        app.world_mut().spawn((child, pending));
+        app.world_mut().spawn(UserInputMessage {
+            sender: None,
+            content: "child answer".into(),
+            origin_channel: telegram_channel(),
+        });
+        app.update();
+        let results: Vec<_> = app
+            .world_mut()
+            .query::<&ToolExecutionResultMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].result.task_id, child_id);
+        assert_eq!(count::<ContinueTaskMessage>(&mut app), 0);
     }
 }

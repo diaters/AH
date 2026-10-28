@@ -37,6 +37,7 @@ pub fn terminal_task_retention_system(
     work_items: Query<&WorkItem>,
     dispatched: Option<ResMut<TaskTerminalDispatched>>,
     pending: Query<&crate::domain::ToolRequestPending>,
+    inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
     backend: Option<Res<crate::systems::NativeProcessBackend>>,
     mut last_sweep: Local<Option<DateTime<Utc>>>,
 ) {
@@ -79,6 +80,14 @@ pub fn terminal_task_retention_system(
             .iter()
             .map(|request| root_of(request.original_request.task_id)),
     );
+    if let Some(inflight) = inflight_llm.as_ref() {
+        busy_roots.extend(
+            tasks
+                .iter()
+                .filter(|task| inflight.in_flight(task.id) > 0)
+                .map(|task| root_of(task.id)),
+        );
+    }
     if let Some(backend) = backend.as_ref() {
         use crate::domain::SessionBackend;
         busy_roots.extend(

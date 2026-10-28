@@ -149,7 +149,7 @@ pub struct TurnGeneration(pub u64);
 
 /// 在飞的任务级 LLM 请求句柄（`/stop` 时中止 provider 侧 HTTP 请求）。
 ///
-/// 由 `agent_execution_system` 登记（仅任务级 `LlmCompletion`），`stop_task_system` 中止并移除；
+/// 由 `agent_execution_system` 登记任务级请求；中止后保留句柄到实际完成，以供关闭屏障检查。
 /// 已结束的句柄在登记新请求时顺带清理。
 #[derive(Debug, Default, Resource)]
 pub struct InflightLlmRequests {
@@ -167,7 +167,7 @@ impl InflightLlmRequests {
 
     /// 中止该任务全部在飞请求，返回实际中止的数量。
     pub fn abort_task(&mut self, task_id: TaskId) -> usize {
-        let Some(handles) = self.by_task.remove(&task_id) else {
+        let Some(handles) = self.by_task.get_mut(&task_id) else {
             return 0;
         };
         let mut aborted = 0;

@@ -516,3 +516,46 @@ fn update_todos_is_stored_and_replayed_at_next_turn_start() {
     assert!(request_mentions(&all[2..], "<todo_snapshot>"));
     assert!(request_mentions(&all[2..], "▶ implement steer"));
 }
+
+#[test]
+fn finish_aborts_in_flight_llm_before_releasing_conversation() {
+    let mut h = start_blocked_task(shell_exec_call("echo should-not-run"));
+    send_input(&mut h.app, "/finish");
+    update_with_yield(&mut h.app, 2);
+    assert!(
+        h.app
+            .world()
+            .get::<Task>(h.task_entity)
+            .unwrap()
+            .status()
+            .is_terminal()
+    );
+    assert!(
+        h.aborted.load(std::sync::atomic::Ordering::SeqCst),
+        "/finish must abort the provider future, not only drop its eventual response"
+    );
+    assert_eq!(
+        h.app
+            .world()
+            .resource::<harness::domain::InflightLlmRequests>()
+            .in_flight(h.app.world().get::<Task>(h.task_entity).unwrap().id),
+        0
+    );
+}
+
+#[test]
+fn finished_owner_cannot_start_a_queued_provider_request() {
+    let mut h = start_blocked_task(shell_exec_call("echo should-not-run"));
+    send_input(&mut h.app, "/finish");
+    update_with_yield(&mut h.app, 2);
+    let request = h.requests.lock().unwrap()[0].clone();
+    h.app
+        .world_mut()
+        .spawn(AgentExecutionRequestMessage { request });
+    update_with_yield(&mut h.app, 2);
+    assert_eq!(
+        h.requests.lock().unwrap().len(),
+        1,
+        "terminal owner must not submit new provider work"
+    );
+}

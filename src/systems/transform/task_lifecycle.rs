@@ -162,6 +162,7 @@ pub fn task_termination_system(
     mut tasks: Query<(TaskTerminationQuery, &mut PreviousTaskStatus), Changed<Task>>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
+    mut inflight_llm: Option<ResMut<crate::domain::InflightLlmRequests>>,
     mut experience_store: ResMut<ExperienceStore>,
     skill_creation_contexts: Query<(Entity, &SkillCreationContext, &WorkItem)>,
 ) {
@@ -179,6 +180,10 @@ pub fn task_termination_system(
             // 典型场景：终态内的字段更新（Done→Done、Failed→Failed），
             // 或非终态内的状态变化（Pending→Ready、Ready→Running 等）。
             continue;
+        }
+
+        if let Some(inflight) = inflight_llm.as_mut() {
+            inflight.abort_task(task.id);
         }
 
         // 以下逻辑仅在"非终态→终态"转换时执行
@@ -209,6 +214,11 @@ pub fn task_termination_system(
                 }
             }
             Err(e) => {
+                commands.spawn(crate::domain::SystemOutputMessage {
+                    task_id: task.id,
+                    content: format!("会话资源清理失败，暂不释放通道名额：{e}"),
+                });
+                tracing::warn!(event = "ConversationCleanupFailed", task_id = %task.id, error = %e, "conversation cleanup failed");
                 debug!(
                     event = "TaskShellSessionsStopFailed",
                     task_id = %task.id,
@@ -365,6 +375,7 @@ pub fn finish_task_system(
     index: Res<EntityIndex>,
     messages: Query<(Entity, &FinishTaskMessage)>,
     mut tasks: Query<&mut Task>,
+    mut inflight_llm: Option<ResMut<crate::domain::InflightLlmRequests>>,
 ) {
     for (entity, msg) in &messages {
         let mut tree = std::collections::HashSet::from([msg.task_id]);
@@ -377,6 +388,11 @@ pub fn finish_task_system(
             }
             if tree.len() == before {
                 break;
+            }
+        }
+        if let Some(inflight) = inflight_llm.as_mut() {
+            for id in &tree {
+                inflight.abort_task(*id);
             }
         }
         for mut task in &mut tasks {
@@ -415,7 +431,10 @@ pub fn clear_task_system(
     mut index: ResMut<EntityIndex>,
     registry: Res<FrontendRegistry>,
     mut tasks: Query<&mut Task>,
+    mut inflight_llm: Option<ResMut<crate::domain::InflightLlmRequests>>,
+    mut reported_failures: Local<std::collections::HashMap<crate::domain::TaskId, String>>,
     queued: Query<(Entity, &ToolExecutionRequestMessage)>,
+    queued_llm: Query<(Entity, &crate::domain::AgentExecutionRequestMessage)>,
     pending: Query<(
         &crate::domain::ToolRequestPending,
         Option<&crate::domain::InFlightToolCall>,
@@ -453,7 +472,18 @@ pub fn clear_task_system(
                 commands.entity(request_entity).despawn();
             }
         }
+        for (request_entity, request) in &queued_llm {
+            if request.request.work_item_id.is_none() && tree.contains(&request.request.task_id) {
+                commands.entity(request_entity).despawn();
+            }
+        }
         let mut waiting = false;
+        if let Some(inflight) = inflight_llm.as_mut() {
+            for id in &tree {
+                inflight.abort_task(*id);
+                waiting |= inflight.in_flight(*id) > 0;
+            }
+        }
         for (request, inflight) in &pending {
             if tree.contains(&request.original_request.task_id) {
                 if let Some(inflight) = inflight {
@@ -466,15 +496,26 @@ pub fn clear_task_system(
         if waiting {
             continue;
         }
-        let mut cleanup_failed = false;
+        let mut cleanup_errors = Vec::new();
         for id in &tree {
-            if backend.stop_task_sessions(*id).is_err() {
-                cleanup_failed = true;
+            if let Err(error) = backend.stop_task_sessions(*id) {
+                cleanup_errors.push(format!("{id}: {error}"));
             }
         }
-        if cleanup_failed {
+        if !cleanup_errors.is_empty() {
+            cleanup_errors.sort();
+            let reason = cleanup_errors.join("; ");
+            if reported_failures.get(&msg.task_id) != Some(&reason) {
+                tracing::warn!(event = "ConversationCleanupFailed", task_id = %msg.task_id, error = %reason, "conversation cleanup remains blocked");
+                commands.spawn(crate::domain::SystemOutputMessage {
+                    task_id: msg.task_id,
+                    content: format!("会话清理未完成，暂时保留通道占用：{reason}"),
+                });
+                reported_failures.insert(msg.task_id, reason);
+            }
             continue;
         }
+        reported_failures.remove(&msg.task_id);
 
         // 停止关联 shell sessions
         match backend.stop_task_sessions(msg.task_id) {
@@ -1419,6 +1460,51 @@ mod tests {
             pending.hint.preferred_agent_name.as_deref(),
             Some("worker"),
             "DirectDelegate retry should pin the delegate agent name"
+        );
+    }
+    #[test]
+    fn clear_cleanup_failure_is_visible_and_keeps_the_task() {
+        let mut app = App::new();
+        app.init_resource::<EntityIndex>();
+        app.insert_resource(FrontendRegistry { frontends: vec![] });
+        app.insert_resource(ExperienceStore::default());
+        let backend = NativeProcessBackend::default();
+        let sessions = backend.sessions.clone();
+        let _ = std::thread::spawn(move || {
+            let _lock = sessions.lock().unwrap();
+            panic!("inject session registry failure");
+        })
+        .join();
+        app.insert_resource(backend);
+        app.add_systems(Update, clear_task_system);
+        let task = Task::from_user_input(
+            "clear",
+            0,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "clear-test".into(),
+                thread_id: None,
+            },
+        );
+        let task_id = task.id;
+        let owner = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, owner);
+        app.world_mut().spawn(ClearTaskMessage { task_id });
+        app.update();
+        assert!(app.world().get::<Task>(owner).is_some());
+        let notices: Vec<_> = app
+            .world_mut()
+            .query::<&crate::domain::SystemOutputMessage>()
+            .iter(app.world())
+            .collect();
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.content.contains("poisoned")),
+            "cleanup failure must show its reason"
         );
     }
 }

@@ -51,17 +51,33 @@ pub fn user_message_to_task_system(
         Option<&crate::domain::InputSequence>,
     )>,
     tasks: Query<&Task>,
+    inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
     pending: Query<&crate::domain::ToolRequestPending>,
     queued: Query<&crate::domain::ToolExecutionRequestMessage>,
+    queued_llm: Query<&crate::domain::AgentExecutionRequestMessage>,
     backend: Option<Res<crate::systems::NativeProcessBackend>>,
     clock: Option<Res<crate::contracts::Clock>>,
 ) {
     let known: Vec<_> = tasks.iter().collect();
-    let pending = pending
+    let mut pending: std::collections::HashSet<_> = pending
         .iter()
         .map(|p| p.original_request.task_id)
         .chain(queued.iter().map(|request| request.request.task_id))
+        .chain(
+            queued_llm
+                .iter()
+                .filter(|request| request.request.work_item_id.is_none())
+                .map(|request| request.request.task_id),
+        )
         .collect();
+    if let Some(inflight) = inflight_llm.as_ref() {
+        pending.extend(
+            known
+                .iter()
+                .filter(|task| inflight.in_flight(task.id) > 0)
+                .map(|task| task.id),
+        );
+    }
     let mut reserved = std::collections::HashMap::new();
     let mut messages: Vec<_> = messages.iter().collect();
     messages.sort_by_key(|(entity, _, _, seq)| seq.map_or(entity.to_bits(), |seq| seq.0));
