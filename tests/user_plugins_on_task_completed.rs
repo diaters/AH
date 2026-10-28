@@ -124,6 +124,7 @@ fn on_task_completed_dispatches_on_finish_command() {
     // 发送 /finish 命令
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: "/finish".to_string(),
         })

@@ -289,6 +289,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
     // 用户批准
     app.world_mut()
         .spawn(harness::domain::ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "allow_once".to_string(),
             feedback: None,

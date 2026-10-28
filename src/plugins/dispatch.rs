@@ -57,6 +57,10 @@ impl Plugin for DispatchPlugin {
                 on_approval_resolved_hook_system
                     .in_set(HarnessSet::Transform)
                     .after(approval_result_system),
+                // 审批者身份校验：先于确认结果消费，丢弃无权审批者的响应
+                crate::systems::approval_sender_gate_system
+                    .in_set(HarnessSet::Dispatch)
+                    .before(tool_confirmation_result_system),
                 // 用户确认结果系统
                 tool_confirmation_result_system
                     .in_set(HarnessSet::Dispatch)

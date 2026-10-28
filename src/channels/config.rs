@@ -102,6 +102,9 @@ pub struct TelegramConfig {
     pub bot_token: String,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// 可代任意群成员审批的用户 ID；为空时群聊审批只接受任务发起人
+    #[serde(default)]
+    pub approvers: Vec<String>,
     #[serde(default)]
     pub pairing_enabled: bool,
     pub pairing_code: Option<String>,
@@ -113,6 +116,9 @@ pub struct QqConfig {
     pub app_secret: String,
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// 可代任意群成员审批的用户 ID；为空时群聊审批只接受任务发起人
+    #[serde(default)]
+    pub approvers: Vec<String>,
     #[serde(default)]
     pub pairing_enabled: bool,
     pub pairing_code: Option<String>,
@@ -140,6 +146,7 @@ mod tests {
 
     fn qq_default() -> QqConfig {
         QqConfig {
+            approvers: Vec::new(),
             app_id: "id".to_string(),
             app_secret: "secret".to_string(),
             allowed_users: vec![],
@@ -172,6 +179,7 @@ mod tests {
             .await
             .unwrap();
         let tg_default = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "from-memory".to_string(),
             allowed_users: vec![],
             pairing_enabled: false,

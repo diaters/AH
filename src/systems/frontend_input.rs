@@ -35,6 +35,8 @@ pub(crate) fn frontend_input_system(registry: Res<FrontendRegistry>, mut command
                         request_id,
                         selected_option: option_id,
                         feedback,
+                        // 本地前端（TUI）的操作者视为可信审批者
+                        sender: None,
                     });
                 }
             }

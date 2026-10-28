@@ -233,6 +233,7 @@ fn update_flow_modifies_agents_toml_and_ecs() {
     // 模拟用户审批通过
     app.world_mut()
         .spawn(harness::domain::ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "approve".to_string(),
             feedback: None,

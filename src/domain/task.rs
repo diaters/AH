@@ -119,6 +119,13 @@ pub struct Task {
     pub last_evaluated_turn: Option<u32>,
 }
 
+/// 发起任务的用户在平台上的 ID（IM 群聊中区分群成员）。
+///
+/// 只挂在由用户输入创建的顶层任务上；子任务沿父链取根任务的发起人，
+/// 事件任务与定时任务没有发起人。审批判定与运行期授权按它区分。
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct TaskInitiator(pub String);
+
 /// 标记刚创建、尚未派发 `on_task_created` hook 的 Task entity。
 ///
 /// 由 `user_message_to_task_system` 在创建 Task 时附带，由 companion 系统

@@ -67,6 +67,7 @@ fn tui_input_preserves_origin_channel() {
     };
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: tui_channel.clone(),
             content: "hello from TUI".to_string(),
         })
@@ -112,6 +113,7 @@ fn telegram_input_preserves_origin_channel() {
     };
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: tg_channel.clone(),
             content: "hello from Telegram".to_string(),
         })

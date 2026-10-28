@@ -617,6 +617,7 @@ fn user_denies_tool_confirmation() {
 
     // 用户选择拒绝
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "deny".to_string(),
         feedback: None,
@@ -727,6 +728,7 @@ fn user_allows_tool_once() {
 
     // 用户选择允许一次
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "allow_once".to_string(),
         feedback: None,
@@ -1261,6 +1263,7 @@ fn user_allows_tool_always() {
 
     // 用户选择允许永久
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "allow_always".to_string(),
         feedback: None,

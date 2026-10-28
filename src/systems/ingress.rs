@@ -31,7 +31,11 @@ pub(crate) fn input_ingress_system(
 ) {
     while let Ok(input) = receiver.0.try_recv() {
         match input {
-            ExternalInput::TextWithChannel { channel, content } => {
+            ExternalInput::TextWithChannel {
+                channel,
+                content,
+                sender,
+            } => {
                 debug!(
                     event = "ExternalInputReceived",
                     kind = "TextWithChannel",
@@ -48,7 +52,7 @@ pub(crate) fn input_ingress_system(
                     content.len()
                 );
                 commands.spawn((
-                    Signal::user_input_with_channel(content, channel),
+                    Signal::user_input_with_channel(content, channel).with_sender(sender),
                     MessageReceivedHookPending,
                 ));
             }
@@ -64,6 +68,7 @@ pub(crate) fn input_ingress_system(
                 request_id,
                 option,
                 feedback,
+                sender,
             } => {
                 debug!(
                     event = "ExternalInputReceived",
@@ -77,6 +82,7 @@ pub(crate) fn input_ingress_system(
                         request_id,
                         selected_option: option,
                         feedback,
+                        sender,
                     },
                     MessageReceivedHookPending,
                 ));

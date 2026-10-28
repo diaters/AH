@@ -62,9 +62,17 @@ pub struct Signal {
     pub source: SignalSource,
     pub payload: SignalPayload,
     pub origin_channel: Option<super::ChannelId>,
+    /// 发言人在平台上的用户 ID（IM 通道入向消息）；TUI 与内部信号为 None
+    pub sender: Option<String>,
 }
 
 impl Signal {
+    /// 附上发言人身份。
+    pub fn with_sender(mut self, sender: Option<String>) -> Self {
+        self.sender = sender;
+        self
+    }
+
     /// 构造用户输入信号（默认 Tui 通道）。
     pub fn user_input(content: impl Into<String>) -> Self {
         Self::user_input_with_channel(
@@ -85,6 +93,7 @@ impl Signal {
             source: SignalSource("user".to_string()),
             payload: SignalPayload::UserInput(content.into()),
             origin_channel: Some(origin_channel),
+            sender: None,
         }
     }
 
@@ -94,6 +103,7 @@ impl Signal {
             source: SignalSource("retry".to_string()),
             payload: SignalPayload::RetryWakeup(task_id),
             origin_channel: None,
+            sender: None,
         }
     }
 
@@ -103,6 +113,7 @@ impl Signal {
             source,
             payload: SignalPayload::SystemWakeup,
             origin_channel: None,
+            sender: None,
         }
     }
 
@@ -115,6 +126,7 @@ impl Signal {
                 body,
             },
             origin_channel: None,
+            sender: None,
         }
     }
 
@@ -124,6 +136,7 @@ impl Signal {
             source,
             payload: SignalPayload::Timer { kind: kind.into() },
             origin_channel: None,
+            sender: None,
         }
     }
 }
@@ -134,6 +147,8 @@ pub enum ExternalInput {
     TextWithChannel {
         channel: super::ChannelId,
         content: String,
+        /// 发言人在平台上的用户 ID；群聊中用于区分群成员，TUI 为 None
+        sender: Option<String>,
     },
     Shutdown,
     /// Tool 确认响应
@@ -142,6 +157,8 @@ pub enum ExternalInput {
         option: String,
         /// 拒绝并反馈场景：用户评审反馈文本。
         feedback: Option<String>,
+        /// 审批者在平台上的用户 ID；TUI 为 None
+        sender: Option<String>,
     },
     /// Webhook 事件
     Webhook {
@@ -161,6 +178,8 @@ pub enum ExternalInput {
 pub struct UserInputMessage {
     pub content: String,
     pub origin_channel: super::ChannelId,
+    /// 发言人在平台上的用户 ID；TUI 为 None
+    pub sender: Option<String>,
 }
 
 /// 重试就绪消息
@@ -253,6 +272,8 @@ pub struct CreateTaskMessage {
     pub content: String,
     pub origin_channel: Option<super::ChannelId>,
     pub routing_policy: TaskRoutingPolicy,
+    /// 发起任务的用户在平台上的 ID，创建后记为 `TaskInitiator`
+    pub initiator: Option<String>,
 }
 
 /// 继续现有任务消息
@@ -369,6 +390,8 @@ pub struct ToolConfirmationResponseMessage {
     pub selected_option: String,
     /// 拒绝并反馈场景：用户评审反馈文本。
     pub feedback: Option<String>,
+    /// 审批者在平台上的用户 ID；TUI 与内部审批为 None
+    pub sender: Option<String>,
 }
 
 /// 审批请求消息

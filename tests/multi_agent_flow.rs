@@ -115,6 +115,7 @@ fn selects_agent_by_tags_match() {
 
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: "帮我写一段 general 代码".to_string(),
         })

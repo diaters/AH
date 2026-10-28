@@ -621,6 +621,7 @@ mod tests {
 
         world.spawn(dummy_request(task_id, agent_id, request_id));
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "deny".to_string(),
             feedback: None,
@@ -654,6 +655,7 @@ mod tests {
 
         world.spawn(dummy_request(task_id, agent_id, request_id));
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "allow_once".to_string(),
             feedback: None,
@@ -736,6 +738,7 @@ mod tests {
             work_item_id: None,
         });
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "allow_always".to_string(),
             feedback: None,
@@ -790,6 +793,7 @@ mod tests {
             work_item_id: None,
         });
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "deny".to_string(),
             feedback: None,
@@ -861,6 +865,7 @@ mod tests {
 
         world.spawn(dummy_request(task_id, agent_id, request_id));
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "allow_always".to_string(),
             feedback: None,

@@ -3,6 +3,7 @@
 //! 实现 Tool 的分发、执行和结果处理。
 
 mod approval;
+mod approval_gate;
 mod approval_hook;
 mod async_dispatch;
 pub mod backend;
@@ -21,6 +22,7 @@ mod tool_returned_hook;
 mod waiting;
 
 pub use approval::{approval_dispatch_system, approval_result_system};
+pub use approval_gate::approval_sender_gate_system;
 pub use approval_hook::{on_approval_requested_hook_system, on_approval_resolved_hook_system};
 pub use async_dispatch::async_tool_dispatch_system;
 pub use backend::NativeProcessBackend;

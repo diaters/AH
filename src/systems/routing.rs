@@ -80,6 +80,7 @@ pub(crate) fn user_input_routing_system(
                         request_id: pending_id,
                         selected_option: option_id,
                         feedback: None,
+                        sender: input.sender.clone(),
                     });
                 }
                 None => {
@@ -229,6 +230,7 @@ pub(crate) fn user_input_routing_system(
                 content: input.content.clone(),
                 origin_channel: Some(input.origin_channel.clone()),
                 routing_policy: TaskRoutingPolicy::conversational(input.origin_channel.clone()),
+                initiator: input.sender.clone(),
             });
         }
 
@@ -482,6 +484,7 @@ mod tests {
             app.world_mut().spawn(task);
         }
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "also handle edge cases".to_string(),
             origin_channel: input_channel,
         });
@@ -591,6 +594,7 @@ mod tests {
 
         // QQ 通道的纯文本输入
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "hello from QQ".to_string(),
             origin_channel: qq_channel(),
         });
@@ -629,6 +633,7 @@ mod tests {
         app.world_mut().spawn(task);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "hello from Telegram".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -656,6 +661,7 @@ mod tests {
         app.world_mut().spawn(task);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "2".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -710,6 +716,7 @@ mod tests {
         app.world_mut().spawn(task);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "1".to_string(),
             origin_channel: qq_channel(),
         });
@@ -737,6 +744,7 @@ mod tests {
         ));
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "hello".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -793,6 +801,7 @@ mod tests {
         app.world_mut().spawn(task);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "继续".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -843,6 +852,7 @@ mod tests {
         app.world_mut().spawn(task);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/finish".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -999,6 +1009,7 @@ mod tests {
         app.world_mut().entity_mut(task_entity).insert(pending);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "用 React".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -1032,6 +1043,7 @@ mod tests {
         app.world_mut().entity_mut(task_entity).insert(pending);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "用 React".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -1058,6 +1070,7 @@ mod tests {
         app.world_mut().entity_mut(task_entity).insert(pending);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "用 React".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -1084,6 +1097,7 @@ mod tests {
 
         // QQ 通道的输入不应路由到 Telegram 的 ask_user 任务
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "hello from QQ".to_string(),
             origin_channel: qq_channel(),
         });
@@ -1121,6 +1135,7 @@ mod tests {
 
         // 输入是命令（/finish）
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/finish".to_string(),
             origin_channel: telegram_channel(),
         });
@@ -1156,6 +1171,7 @@ mod tests {
         app.world_mut().entity_mut(_task2_entity).insert(pending2);
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "回复".to_string(),
             origin_channel: telegram_channel(),
         });

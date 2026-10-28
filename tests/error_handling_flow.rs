@@ -273,6 +273,7 @@ fn empty_user_input_creates_task() {
     // Send empty input
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: "".to_string(),
         })
@@ -385,6 +386,7 @@ fn large_input_is_handled() {
     let large_content = "x".repeat(100_000);
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: large_content.clone(),
         })

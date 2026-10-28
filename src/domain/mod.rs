@@ -272,8 +272,9 @@ pub use summarization::SummarizationTrigger;
 
 // task
 pub use task::{
-    AskUserPending, NewlyCreatedTask, PreviousTaskStatus, Task, TaskRoutingPolicy, TaskStatus,
-    ToolCalledHookPending, ToolReturnedHookPending, WaitingForSessionInfo, WaitingForTasksInfo,
+    AskUserPending, NewlyCreatedTask, PreviousTaskStatus, Task, TaskInitiator, TaskRoutingPolicy,
+    TaskStatus, ToolCalledHookPending, ToolReturnedHookPending, WaitingForSessionInfo,
+    WaitingForTasksInfo,
 };
 
 // task_experience

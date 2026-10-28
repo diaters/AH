@@ -1503,6 +1503,7 @@ mod tests {
 
     fn cfg(users: Vec<String>) -> TelegramConfig {
         TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "x".to_string(),
             allowed_users: users,
             pairing_enabled: false,
@@ -1558,6 +1559,7 @@ mod tests {
         };
         let channel = TelegramChannel::new_with_path(
             TelegramConfig {
+                approvers: Vec::new(),
                 bot_token: "x".to_string(),
                 allowed_users: vec![],
                 pairing_enabled: true,
@@ -1588,6 +1590,7 @@ mod tests {
     #[test]
     fn expected_pairing_code_returns_configured_value() {
         let channel = TelegramChannel::new(TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "x".to_string(),
             allowed_users: vec![],
             pairing_enabled: true,
@@ -1629,6 +1632,7 @@ allowed_users = ["alice"]
 
         let channel = TelegramChannel::new_with_path(
             TelegramConfig {
+                approvers: Vec::new(),
                 bot_token: "x".to_string(),
                 allowed_users: vec![],
                 pairing_enabled: false,
@@ -1664,6 +1668,7 @@ allowed_users = ["123"]
 
         let channel = TelegramChannel::new_with_path(
             TelegramConfig {
+                approvers: Vec::new(),
                 bot_token: "x".to_string(),
                 allowed_users: vec![],
                 pairing_enabled: false,
@@ -1704,6 +1709,7 @@ allowed_users = ["qq_user"]
 
         let channel = TelegramChannel::new_with_path(
             TelegramConfig {
+                approvers: Vec::new(),
                 bot_token: "tg_token".to_string(),
                 allowed_users: vec![],
                 pairing_enabled: false,
@@ -2057,6 +2063,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["u".to_string()],
             pairing_enabled: false,
@@ -2107,6 +2114,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["u".to_string()],
             pairing_enabled: false,
@@ -2155,6 +2163,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["u".to_string()],
             pairing_enabled: false,
@@ -2203,6 +2212,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec![],
             pairing_enabled: false,
@@ -2270,6 +2280,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["alice".to_string()],
             pairing_enabled: false,
@@ -2350,6 +2361,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec!["alice".to_string()],
             pairing_enabled: false,
@@ -2385,6 +2397,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec![],
             pairing_enabled: false,
@@ -2412,6 +2425,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec![],
             pairing_enabled: false,
@@ -2437,6 +2451,7 @@ allowed_users = ["qq_user"]
             .await;
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: "TOKEN".to_string(),
             allowed_users: vec![],
             pairing_enabled: false,

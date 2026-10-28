@@ -19,6 +19,7 @@ async fn telegram_send_message() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec!["u".to_string()],
         pairing_enabled: false,
@@ -71,6 +72,7 @@ async fn telegram_listen_receives_update() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec!["alice".to_string()],
         pairing_enabled: false,
@@ -178,6 +180,7 @@ async fn telegram_bind_allows_user_and_replies() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec![],
         pairing_enabled: true,
@@ -262,6 +265,7 @@ async fn telegram_bind_success_does_not_send_ack_reaction() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec![],
         pairing_enabled: true,
@@ -324,6 +328,7 @@ async fn telegram_bind_wrong_code_replies_error() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec![],
         pairing_enabled: true,
@@ -386,6 +391,7 @@ async fn telegram_bind_empty_pairing_code_replies_error() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec![],
         pairing_enabled: true,
@@ -435,6 +441,7 @@ async fn telegram_bind_ignored_when_pairing_disabled() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec![],
         pairing_enabled: false,
@@ -484,6 +491,7 @@ async fn telegram_bind_ignored_when_allowlist_not_empty() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec!["alice".to_string()],
         pairing_enabled: true,
@@ -558,6 +566,7 @@ async fn telegram_callback_query_sends_confirmation_and_inbound() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec!["alice".to_string()],
         pairing_enabled: false,
@@ -644,6 +653,7 @@ async fn telegram_unauthorized_callback_query_notifies_user() {
         .await;
 
     let cfg = TelegramConfig {
+        approvers: Vec::new(),
         bot_token: "TOKEN".to_string(),
         allowed_users: vec!["alice".to_string()],
         pairing_enabled: false,

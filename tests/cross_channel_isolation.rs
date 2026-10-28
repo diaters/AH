@@ -64,6 +64,7 @@ fn cross_channel_plain_text_does_not_takeover_waiting_task() {
     // 从 QQ 通道发送纯文本
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: qq_channel(),
             content: "hello from QQ".to_string(),
         })
@@ -122,6 +123,7 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
     // 从 Telegram 通道发起 /btw
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: telegram_channel(),
             content: "/btw new topic".to_string(),
         })
@@ -180,6 +182,7 @@ fn cross_channel_finish_does_not_finish_other_channel_task() {
     // 从 Telegram 通道发起 /finish
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: telegram_channel(),
             content: "/finish".to_string(),
         })

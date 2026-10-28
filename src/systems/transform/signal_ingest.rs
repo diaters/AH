@@ -40,6 +40,7 @@ pub fn signal_ingest_system(
                     commands.spawn(UserInputMessage {
                         content: content.clone(),
                         origin_channel: channel.clone(),
+                        sender: signal.sender.clone(),
                     });
                 } else {
                     // 无 origin_channel 的用户输入（理论上不应出现），直接创建任务
@@ -47,6 +48,7 @@ pub fn signal_ingest_system(
                         content: content.clone(),
                         origin_channel: None,
                         routing_policy: TaskRoutingPolicy::event(None, None),
+                        initiator: None,
                     });
                 }
             }

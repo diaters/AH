@@ -1968,6 +1968,7 @@ mod tests {
 
     fn make_config() -> QqConfig {
         QqConfig {
+            approvers: Vec::new(),
             app_id: "test_id".to_string(),
             app_secret: "test_secret".to_string(),
             allowed_users: vec![],
@@ -3228,6 +3229,7 @@ allowed_users = []
 
         let ch = QqChannel::new_with_path(
             QqConfig {
+                approvers: Vec::new(),
                 app_id: "qq_id".to_string(),
                 app_secret: "qq_secret".to_string(),
                 allowed_users: vec![],
@@ -3270,6 +3272,7 @@ allowed_users = ["existing_user"]
 
         let ch = QqChannel::new_with_path(
             QqConfig {
+                approvers: Vec::new(),
                 app_id: "id".to_string(),
                 app_secret: "secret".to_string(),
                 allowed_users: vec!["existing_user".to_string()],

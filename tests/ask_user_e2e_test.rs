@@ -194,6 +194,7 @@ fn e2e_ask_user_full_flow() {
     let user_reply = "我推荐用 React".to_string();
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: user_reply.clone(),
         })

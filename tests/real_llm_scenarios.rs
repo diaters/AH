@@ -590,6 +590,7 @@ fn execute_scenario(
         for steer in &spec.steer {
             if input_tx
                 .send(ExternalInput::TextWithChannel {
+                    sender: None,
                     channel: channel.clone(),
                     content: steer.clone(),
                 })
@@ -608,6 +609,7 @@ fn execute_scenario(
         }
         if input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: channel.clone(),
                 content: follow_up.clone(),
             })
@@ -625,6 +627,7 @@ fn execute_scenario(
         && wait_until_settled(&mut app, &start, timeout, poll_ms)
         && input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: channel.clone(),
                 content: "/finish".to_string(),
             })
