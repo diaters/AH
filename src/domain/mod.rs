@@ -345,6 +345,8 @@ pub struct AgentEntry {
 
 // ============ 测试 ============
 
+pub use message::{InputBlocked, InputSequence};
+
 #[cfg(test)]
 mod tests {
     use super::*;

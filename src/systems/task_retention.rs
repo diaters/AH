@@ -36,6 +36,8 @@ pub fn terminal_task_retention_system(
     tasks: Query<&Task>,
     work_items: Query<&WorkItem>,
     dispatched: Option<ResMut<TaskTerminalDispatched>>,
+    pending: Query<&crate::domain::ToolRequestPending>,
+    backend: Option<Res<crate::systems::NativeProcessBackend>>,
     mut last_sweep: Local<Option<DateTime<Utc>>>,
 ) {
     let now = clock.0;
@@ -71,6 +73,25 @@ pub fn terminal_task_retention_system(
             .filter(|w| !w.is_terminal() && parents.contains_key(&w.task_id))
             .map(|w| root_of(w.task_id)),
     );
+
+    busy_roots.extend(
+        pending
+            .iter()
+            .map(|request| root_of(request.original_request.task_id)),
+    );
+    if let Some(backend) = backend.as_ref() {
+        use crate::domain::SessionBackend;
+        busy_roots.extend(
+            tasks
+                .iter()
+                .filter(|task| {
+                    backend
+                        .list_task_sessions(task.id)
+                        .map_or(true, |sessions| !sessions.is_empty())
+                })
+                .map(|task| root_of(task.id)),
+        );
+    }
 
     let reclaim: Vec<TaskId> = tasks
         .iter()

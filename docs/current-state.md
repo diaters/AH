@@ -102,9 +102,12 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 设计见 [2026-10-28-loop-steering-and-background-notification-design.md](design/2026-10-28-loop-steering-and-background-notification-design.md)。
 
-- 引导式插入（steer）：同通道存在活跃的顶层多轮任务时，用户输入投递到该任务的 `TaskInbox`，
+- 单通道用户任务：按完整 `ChannelId` 限制一个未结束的用户顶层 Task；同帧输入预留名额，命令按 FIFO 处理。
+  内部子任务仍可并行，定时任务仅绑定输出通道；插件和命令的用户任务创建走同一入口。
+  `/stop` 保留名额；`/finish` 和 `/clear` 等实际 worker、会话及子任务清理后释放；等待期间保留新输入
+- 引导式插入（steer）：同通道存在活跃的用户顶层任务时，用户输入投递到该任务的 `TaskInbox`，
   在下一个工具结果边界追加到对话尾部（同步写入 `ToolCallingState` 与 STM），不再新建任务；
-  轮末仍有积压时自动续一轮；TUI 任务行显示排队数量；`/btw` 仍用于开启新话题
+  轮末仍有积压时自动续一轮；TUI 任务行显示排队数量；`/btw` 在当前会话结束后用于开启新话题
 - 请求期上下文注入管道：`context_attachment_system` 在 `Execution` 首位统一处理任务级
   `LlmCompletion` 请求，负责回合代次打标、收件箱送达与新一轮进度清单回填
 - `/stop` 中断（TUI 空输入时 `Esc`）：中止在飞 LLM 请求并递增 `TurnGeneration` 兜底作废结果，取消在飞异步工具，

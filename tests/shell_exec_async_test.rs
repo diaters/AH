@@ -366,3 +366,33 @@ fn async_exec_preserves_real_task_and_agent_ownership() {
     assert_eq!(handle.owner_agent_id, agent_id);
     assert_eq!(stopped.len(), 1);
 }
+
+#[test]
+fn queued_exec_for_finished_owner_is_discarded_before_worker_spawn() {
+    let mut world = world_with_shell_exec();
+    let (owner, task_id) = spawn_waiting_task(&mut world, "already finished");
+    world
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, owner);
+    world
+        .get_mut::<Task>(owner)
+        .unwrap()
+        .mark_done("finished", chrono::Utc::now());
+    let request = world
+        .spawn(make_request(
+            serde_json::json!({"command": "sleep 30"}),
+            "late-request",
+            task_id,
+            harness::domain::AgentId::new(),
+        ))
+        .id();
+    world
+        .run_system_once(harness::systems::async_tool_dispatch_system)
+        .unwrap();
+    assert!(
+        world.get_entity(request).is_err(),
+        "terminal owner must not start new work after the closing check"
+    );
+    assert_eq!(world.query::<&ToolRequestPending>().iter(&world).count(), 0);
+}

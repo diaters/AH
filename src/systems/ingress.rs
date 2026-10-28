@@ -27,6 +27,7 @@ pub(crate) fn tick_clock_system(mut clock: ResMut<Clock>) {
 pub(crate) fn input_ingress_system(
     receiver: Res<InputReceiver>,
     mut shutdown: ResMut<ShutdownState>,
+    mut sequence: Local<u64>,
     mut commands: Commands,
 ) {
     while let Ok(input) = receiver.0.try_recv() {
@@ -54,7 +55,9 @@ pub(crate) fn input_ingress_system(
                 commands.spawn((
                     Signal::user_input_with_channel(content, channel).with_sender(sender),
                     MessageReceivedHookPending,
+                    crate::domain::InputSequence(*sequence),
                 ));
+                *sequence = sequence.checked_add(1).expect("input sequence exhausted");
             }
             ExternalInput::Shutdown => {
                 debug!(

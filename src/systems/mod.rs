@@ -1,5 +1,7 @@
 mod brain;
 mod command;
+mod conversation;
+pub(crate) use conversation::conversation_input_order_system;
 mod dispatch;
 mod evaluation;
 mod execution;

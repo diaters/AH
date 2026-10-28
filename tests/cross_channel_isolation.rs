@@ -143,13 +143,13 @@ fn cross_channel_btw_does_not_pick_other_channel_parent() {
         !tg_tasks.is_empty(),
         "Telegram /btw should create a new task in Telegram channel"
     );
-    // 没有同通道父任务时回退到 CreateTaskMessage 分支，content 为原始输入（"/btw new topic"）。
+    // 没有同通道用户任务时走统一创建入口，正文为解析出的新话题。
     // 关键断言是 Telegram 通道有新建任务，证明 /btw 没有选 QQ 通道的父任务。
     let tg_new_task = tg_tasks
         .iter()
-        .find(|t| t.content == "/btw new topic")
-        .expect("Telegram /btw task should use the original input as content");
-    assert_eq!(tg_new_task.content, "/btw new topic");
+        .find(|t| t.content == "new topic")
+        .expect("Telegram /btw task should use the parsed topic as content");
+    assert_eq!(tg_new_task.content, "new topic");
     assert_eq!(tg_new_task.origin_channel, Some(telegram_channel()));
 }
 

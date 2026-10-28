@@ -25,6 +25,13 @@ impl Plugin for FrontendPlugin {
         app.add_systems(Startup, schedule_catch_up_startup_system);
         app.add_systems(
             Update,
+            crate::systems::conversation_input_order_system
+                .in_set(HarnessSet::Transform)
+                .before(command_parse_system)
+                .before(user_input_routing_system),
+        );
+        app.add_systems(
+            Update,
             (
                 // 时钟更新
                 tick_clock_system.in_set(HarnessSet::Ingress),

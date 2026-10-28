@@ -677,3 +677,11 @@ mod tests {
         assert_eq!(signal.origin_channel.as_ref().unwrap(), &channel);
     }
 }
+
+/// 外部用户输入的实例内 FIFO 序号，随 Signal、用户消息及创建消息传播。
+#[derive(crate::prelude::Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputSequence(pub u64);
+
+/// 命令或旧会话资源清理屏障之后暂缓处理的输入；原文仍保留在 ECS。
+#[derive(crate::prelude::Component)]
+pub struct InputBlocked;

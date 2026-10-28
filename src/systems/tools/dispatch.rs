@@ -78,6 +78,15 @@ pub fn tool_dispatch_system(
     let runtime_grants = index_clock_loader.5.as_deref();
     let initiators = &index_clock_loader.6;
     for (entity, mut request) in &mut requests {
+        if index
+            .get_task(&request.request.task_id)
+            .and_then(|entity| tasks.get(entity).ok())
+            .is_some_and(|(_, task)| task.status.is_terminal())
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
             continue;

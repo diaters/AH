@@ -367,6 +367,27 @@ pub fn finish_task_system(
     mut tasks: Query<&mut Task>,
 ) {
     for (entity, msg) in &messages {
+        let mut tree = std::collections::HashSet::from([msg.task_id]);
+        loop {
+            let before = tree.len();
+            for task in &tasks {
+                if task.parent_task_id.is_some_and(|id| tree.contains(&id)) {
+                    tree.insert(task.id);
+                }
+            }
+            if tree.len() == before {
+                break;
+            }
+        }
+        for mut task in &mut tasks {
+            if task.id != msg.task_id && tree.contains(&task.id) && !task.status.is_terminal() {
+                task.mark_failed_reason(
+                    FailureReason::UserCancelled,
+                    "parent conversation finished",
+                    clock.0,
+                );
+            }
+        }
         if let Some(mut task) = index
             .get_task(&msg.task_id)
             .and_then(|e| tasks.get_mut(e).ok())
@@ -393,7 +414,12 @@ pub fn clear_task_system(
     mut commands: Commands,
     mut index: ResMut<EntityIndex>,
     registry: Res<FrontendRegistry>,
-    tasks: Query<&Task>,
+    mut tasks: Query<&mut Task>,
+    queued: Query<(Entity, &ToolExecutionRequestMessage)>,
+    pending: Query<(
+        &crate::domain::ToolRequestPending,
+        Option<&crate::domain::InFlightToolCall>,
+    )>,
     messages: Query<(Entity, &ClearTaskMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     backend: Res<NativeProcessBackend>,
@@ -401,6 +427,55 @@ pub fn clear_task_system(
     skill_creation_contexts: Query<(Entity, &SkillCreationContext)>,
 ) {
     for (entity, msg) in &messages {
+        let mut tree = std::collections::HashSet::from([msg.task_id]);
+        loop {
+            let before = tree.len();
+            for task in &tasks {
+                if task.parent_task_id.is_some_and(|id| tree.contains(&id)) {
+                    tree.insert(task.id);
+                }
+            }
+            if tree.len() == before {
+                break;
+            }
+        }
+        for mut task in &mut tasks {
+            if task.id != msg.task_id && tree.contains(&task.id) && !task.status.is_terminal() {
+                task.mark_failed_reason(
+                    FailureReason::UserCancelled,
+                    "parent conversation cleared",
+                    chrono::Utc::now(),
+                );
+            }
+        }
+        for (request_entity, request) in &queued {
+            if tree.contains(&request.request.task_id) {
+                commands.entity(request_entity).despawn();
+            }
+        }
+        let mut waiting = false;
+        for (request, inflight) in &pending {
+            if tree.contains(&request.original_request.task_id) {
+                if let Some(inflight) = inflight {
+                    inflight.cancel.cancel();
+                }
+                waiting = true;
+            }
+        }
+        // 保留原实体和 ClearTaskMessage，直到 worker 确认清理；输入顺序系统据此持有通道名额。
+        if waiting {
+            continue;
+        }
+        let mut cleanup_failed = false;
+        for id in &tree {
+            if backend.stop_task_sessions(*id).is_err() {
+                cleanup_failed = true;
+            }
+        }
+        if cleanup_failed {
+            continue;
+        }
+
         // 停止关联 shell sessions
         match backend.stop_task_sessions(msg.task_id) {
             Ok(stopped_sessions) => {

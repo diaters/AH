@@ -3,11 +3,10 @@ use tracing::debug;
 
 use crate::domain::MemoryConfig;
 use crate::domain::{
-    Agent, ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
-    FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
+    Agent, ClearTaskMessage, CreateTaskMessage, FinishTaskMessage, PendingKnowledgeWriteHooks,
     ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
     ShortTermMemory, StopTaskMessage, SummarizationRequestMessage, SummarizationTrigger, Task,
-    TaskInitiator, TaskRoutingPolicy, TaskStatus, UserCommand, UserInputMessage,
+    TaskRoutingPolicy, UserCommand, UserInputMessage,
 };
 use crate::ecs::EntityIndex;
 
@@ -19,7 +18,7 @@ pub(crate) fn command_parse_system(
     mut pending_writes: ResMut<PendingKnowledgeWriteHooks>,
     config: Res<MemoryConfig>,
     index: Res<EntityIndex>,
-    user_inputs: Query<(Entity, &UserInputMessage)>,
+    user_inputs: Query<(Entity, &UserInputMessage), Without<crate::domain::InputBlocked>>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
     agents: Query<&Agent>,
     plugin_registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
@@ -35,61 +34,47 @@ pub(crate) fn command_parse_system(
             "user command parsed"
         );
 
+        if cmd.is_command() {
+            let roots: Vec<_> = tasks
+                .iter()
+                .filter(|(task, _)| {
+                    super::conversation::is_user_root(task, &input.origin_channel)
+                        && !task.status.is_terminal()
+                })
+                .collect();
+            if roots.len() > 1 {
+                commands.spawn(crate::domain::SystemOutputMessage {
+                    task_id: roots[0].0.id,
+                    content: "此通道存在多个未结束的用户任务，无法确定命令归属；请先修复冲突任务。"
+                        .into(),
+                });
+                commands.entity(entity).despawn();
+                continue;
+            }
+        }
+
         match cmd {
             UserCommand::NewTask { topic } => {
-                // /btw - 创建子任务承接新话题
-                // 查找当前活跃的任务作为父任务
-                let parent_task = tasks.iter().find(|(t, _)| {
-                    !t.status.is_terminal()
-                        && t.status != TaskStatus::Pending
-                        && t.origin_channel == Some(input.origin_channel.clone())
-                });
-
-                if let Some((parent, _)) = parent_task {
-                    debug!(
-                        event = "SubTaskCreating",
-                        parent_id = %parent.id,
-                        topic = %topic,
-                        "creating sub-task via /btw command"
-                    );
-                    // 创建子任务（Pending 状态）。附带 NewlyCreatedTask 标记，
-                    // 使 on_task_created_hook_system 能对称地为 /btw 子任务派发 hook。
-                    let child_task = Task::from_user_input(
-                        if topic.is_empty() {
-                            &input.content
-                        } else {
-                            &topic
-                        },
-                        parent.max_retries,
-                        input.origin_channel.clone(),
-                    );
-                    let mut spawned = commands.spawn((
-                        child_task,
-                        ShortTermMemory::default(),
-                        NewlyCreatedTask,
-                        PendingDispatch {
-                            kind: DispatchKind::Task,
-                            hint: DispatchHint {
-                                strategy: DispatchStrategy::BrainLlm,
-                                preferred_agent_name: None,
-                                required_skill_id: None,
-                                agent_spawn_spec: None,
-                            },
-                        },
-                    ));
-                    // /btw 开启的是新的顶层任务，发起人是发出命令的用户
-                    if let Some(sender) = &input.sender {
-                        spawned.insert(TaskInitiator(sender.clone()));
-                    }
+                let roots: Vec<_> = tasks
+                    .iter()
+                    .filter(|(task, _)| {
+                        super::conversation::is_user_root(task, &input.origin_channel)
+                            && !task.status.is_terminal()
+                    })
+                    .collect();
+                if let Some((task, _)) = roots.first() {
+                    commands.spawn(crate::domain::SystemOutputMessage {
+                        task_id: task.id,
+                        content: "当前通道已有未结束的任务；请先用 /finish 结束，再开启新任务。"
+                            .to_string(),
+                    });
                 } else {
-                    debug!(
-                        event = "NoParentTask",
-                        topic = %topic,
-                        "no active parent task, creating normal task"
-                    );
-                    // 没有父任务，创建普通任务
                     commands.spawn(CreateTaskMessage {
-                        content: input.content.clone(),
+                        content: if topic.is_empty() {
+                            input.content.clone()
+                        } else {
+                            topic
+                        },
                         origin_channel: Some(input.origin_channel.clone()),
                         routing_policy: TaskRoutingPolicy::conversational(
                             input.origin_channel.clone(),
@@ -103,7 +88,7 @@ pub(crate) fn command_parse_system(
                 // /finish - 结束当前任务
                 let current_task = tasks.iter().find(|(t, _)| {
                     !t.status.is_terminal()
-                        && t.origin_channel == Some(input.origin_channel.clone())
+                        && super::conversation::is_user_root(t, &input.origin_channel)
                 });
 
                 if let Some((task, _)) = current_task {
@@ -121,15 +106,12 @@ pub(crate) fn command_parse_system(
                 commands.entity(entity).despawn();
             }
             UserCommand::StopCurrentTask => {
-                // /stop - 中断同通道最近活跃的顶层任务（保留上下文）
-                let target = tasks
-                    .iter()
-                    .filter(|(t, _)| {
-                        !t.status.is_terminal()
-                            && t.parent_task_id.is_none()
-                            && t.origin_channel == Some(input.origin_channel.clone())
-                    })
-                    .max_by_key(|(t, _)| t.updated_at);
+                // /stop - 中断同通道唯一用户顶层任务的当前回合（保留上下文）
+                let target = tasks.iter().find(|(t, _)| {
+                    !t.status.is_terminal()
+                        && t.parent_task_id.is_none()
+                        && super::conversation::is_user_root(t, &input.origin_channel)
+                });
                 if let Some((task, _)) = target {
                     debug!(
                         event = "StopCommandReceived",
@@ -147,7 +129,7 @@ pub(crate) fn command_parse_system(
                 // /summarize - 触发总结
                 let active_task = tasks.iter().find(|(t, _)| {
                     !t.status.is_terminal()
-                        && t.origin_channel == Some(input.origin_channel.clone())
+                        && super::conversation::is_user_root(t, &input.origin_channel)
                 });
 
                 if let Some((task, memory)) = active_task
@@ -279,7 +261,7 @@ pub(crate) fn command_parse_system(
                 // /clear - 删除当前任务（不触发终态处理链路）
                 let current_task = tasks.iter().find(|(t, _)| {
                     !t.status.is_terminal()
-                        && t.origin_channel == Some(input.origin_channel.clone())
+                        && super::conversation::is_user_root(t, &input.origin_channel)
                 });
 
                 if let Some((task, _)) = current_task {
@@ -335,7 +317,7 @@ pub(crate) fn command_parse_system(
                     // 查找当前活跃任务的 Agent（与 /finish 同逻辑：同 channel、非终态）
                     let current_task = tasks.iter().find(|(t, _)| {
                         !t.status.is_terminal()
-                            && t.origin_channel == Some(input.origin_channel.clone())
+                            && super::conversation::is_user_root(t, &input.origin_channel)
                     });
 
                     if let Some((task, _)) = current_task {
@@ -694,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn btw_subtask_inherits_input_origin_channel() {
+    fn btw_rejects_new_topic_when_same_channel_task_is_unfinished() {
         use crate::domain::FrontendKind;
 
         let mut app = App::new();
@@ -748,21 +730,24 @@ mod tests {
 
         app.update();
 
-        // /btw 子任务使用 topic 作为 content（若 topic 为空则使用 input.content）
-        let child_task = app
-            .world_mut()
-            .query::<&Task>()
-            .iter(app.world())
-            .find(|t| t.content == "child topic");
-        assert!(
-            child_task.is_some(),
-            "should spawn child task with topic as content"
+        assert_eq!(
+            app.world_mut().query::<&Task>().iter(app.world()).count(),
+            1
         );
         assert_eq!(
-            child_task.unwrap().origin_channel,
-            Some(qq_channel),
-            "child task should inherit input origin_channel"
+            app.world_mut()
+                .query::<&CreateTaskMessage>()
+                .iter(app.world())
+                .count(),
+            0
         );
+        let replies: Vec<_> = app
+            .world_mut()
+            .query::<&crate::domain::SystemOutputMessage>()
+            .iter(app.world())
+            .map(|message| message.content.clone())
+            .collect();
+        assert!(replies.iter().any(|reply| reply.contains("/finish")));
     }
 
     #[test]

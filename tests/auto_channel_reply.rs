@@ -177,9 +177,9 @@ fn auto_channel_reply() {
     });
 }
 
-/// 验证多个并行任务发送到同一通道时，出站消息带有不同的短 ID 前缀。
+/// 定时任务只占输出通道，允许并行发送并保留不同的短 ID 前缀。
 #[test]
-fn multi_task_channel_reply_has_different_short_ids() {
+fn scheduled_tasks_share_output_channel_with_different_short_ids() {
     let rt = Arc::new(Runtime::new().unwrap());
 
     rt.block_on(async {
@@ -239,20 +239,17 @@ fn multi_task_channel_reply_has_different_short_ids() {
             thread_id: None,
         };
 
-        input_tx
-            .send(ExternalInput::TextWithChannel {
-                sender: None,
-                channel: origin.clone(),
-                content: "first task".to_string(),
-            })
-            .expect("send first input");
-        input_tx
-            .send(ExternalInput::TextWithChannel {
-                sender: None,
-                channel: origin,
-                content: "second task".to_string(),
-            })
-            .expect("send second input");
+        for content in ["first scheduled task", "second scheduled task"] {
+            app.world_mut().spawn(harness::domain::CreateTaskMessage {
+                content: content.into(),
+                origin_channel: None,
+                initiator: None,
+                routing_policy: harness::domain::TaskRoutingPolicy::scheduled_task(
+                    Some(origin.clone()),
+                    "scheduled test",
+                ),
+            });
+        }
 
         for _ in 0..200 {
             app.update();

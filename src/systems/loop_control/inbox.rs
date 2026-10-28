@@ -23,12 +23,18 @@ use crate::prelude::*;
 pub(crate) fn inbox_ingest_system(
     mut commands: Commands,
     index: Res<EntityIndex>,
-    deliveries: Query<(Entity, &InboxDeliveryMessage)>,
+    deliveries: Query<(
+        Entity,
+        &InboxDeliveryMessage,
+        Option<&crate::domain::InputSequence>,
+    )>,
     mut tasks: Query<(&Task, Option<&mut TaskInbox>)>,
 ) {
     let mut new_inboxes: HashMap<Entity, TaskInbox> = HashMap::new();
 
-    for (message_entity, delivery) in &deliveries {
+    let mut deliveries: Vec<_> = deliveries.iter().collect();
+    deliveries.sort_by_key(|(entity, _, seq)| seq.map_or(entity.to_bits(), |seq| seq.0));
+    for (message_entity, delivery, _) in deliveries {
         commands.entity(message_entity).despawn();
 
         let Some(task_entity) = index.get_task(&delivery.task_id) else {

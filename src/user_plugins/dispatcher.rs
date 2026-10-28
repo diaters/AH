@@ -235,31 +235,42 @@ pub fn flush_world_commands(world: &mut World, rx: &Receiver<WorldCommand>) {
 /// 安全占位（不写回），其余变体均已实现。
 fn apply_world_command(world: &mut World, cmd: WorldCommand) {
     match cmd {
-        WorldCommand::CreateTask { title, parent: _ } => {
-            // 插件创建的任务不属于任何 IM 通道，使用 Tui/plugin 标识其来源。
-            // 这是有意为之：插件通过 host API 创建的任务不绑定到具体用户会话，
-            // 因此不参与通道隔离过滤（与 Tui/default 通道也不冲突）。
+        WorldCommand::CreateTask { title, parent } => {
             let channel = ChannelId {
                 frontend: FrontendKind::Tui,
                 user_id: "plugin".to_string(),
                 thread_id: None,
             };
-            let task = Task::from_user_input(title, 0, channel);
-            // 与其他 TopLevelTask 入口一致：spawn 时直接附加 PendingDispatch(BrainLlm)，
-            // 由 dispatch_system 走 Brain LLM 选 Agent + skill 的统一派发路径。
-            world.spawn((
-                task,
-                crate::domain::ShortTermMemory::default(),
-                PendingDispatch {
-                    kind: DispatchKind::Task,
-                    hint: DispatchHint {
-                        strategy: DispatchStrategy::BrainLlm,
-                        preferred_agent_name: None,
-                        required_skill_id: None,
-                        agent_spawn_spec: None,
-                    },
-                },
-            ));
+            if let Some(parent_id) = parent {
+                let mut task = Task::from_user_input(title, 0, channel);
+                task.parent_task_id = Some(parent_id.into());
+                let task_id = task.id;
+                let entity = world
+                    .spawn((
+                        task,
+                        crate::domain::ShortTermMemory::default(),
+                        PendingDispatch {
+                            kind: DispatchKind::Task,
+                            hint: DispatchHint {
+                                strategy: DispatchStrategy::BrainLlm,
+                                preferred_agent_name: None,
+                                required_skill_id: None,
+                                agent_spawn_spec: None,
+                            },
+                        },
+                    ))
+                    .id();
+                if let Some(mut index) = world.get_resource_mut::<crate::ecs::EntityIndex>() {
+                    index.tasks.insert(task_id, entity);
+                }
+            } else {
+                world.spawn(crate::domain::CreateTaskMessage {
+                    content: title,
+                    origin_channel: Some(channel.clone()),
+                    routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
+                    initiator: None,
+                });
+            }
         }
         WorldCommand::SetTaskMetadata {
             task_id,
