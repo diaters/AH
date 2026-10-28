@@ -458,6 +458,7 @@ fn handle_spawn_request(
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     commands.spawn((

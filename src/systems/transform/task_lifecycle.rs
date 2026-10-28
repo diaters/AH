@@ -801,6 +801,7 @@ mod tests {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::Value::Null,

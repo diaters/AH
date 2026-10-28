@@ -128,6 +128,7 @@ pub fn build_brain_execution_request(
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     (

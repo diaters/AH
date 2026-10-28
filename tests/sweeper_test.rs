@@ -31,6 +31,7 @@ fn spawn_inflight(
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     world
         .spawn((

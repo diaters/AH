@@ -63,6 +63,7 @@ fn pending_entity_spawn_and_query() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     let e = world
         .spawn((

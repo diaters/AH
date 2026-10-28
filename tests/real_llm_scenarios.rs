@@ -711,6 +711,7 @@ fn build_judge_request(data: &JudgePromptData) -> AgentExecutionRequest {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     }
 }
 

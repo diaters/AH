@@ -10,7 +10,7 @@ use crate::{
         DispatchKind, DispatchStrategy, EntryMetadata, EntryRole, InboxDeliveryMessage, InboxItem,
         OutputContent, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
         TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, ToolExecutionResultMessage,
-        UserCommand, UserInputMessage, WaitingReason,
+        TrustedImages, UserCommand, UserInputMessage, WaitingReason,
     },
 };
 
@@ -140,6 +140,7 @@ pub(crate) fn user_input_routing_system(
                         original_tool_output: None,
                     });
                     commands.entity(task_entity).remove::<AskUserPending>();
+                    TrustedImages::register(&mut commands, task_entity, &input.content);
                     // 恢复 task 状态为 Waiting(ToolExecution)，让 LLM loop 续跑
                     task.mark_waiting(WaitingReason::ToolExecution, clock.0);
                 }
@@ -183,6 +184,7 @@ pub(crate) fn user_input_routing_system(
             commands
                 .entity(*task_entity)
                 .insert(AutoWakeBudget::default());
+            TrustedImages::register(&mut commands, *task_entity, &input.content);
             // 继续现有任务
             commands.spawn(ContinueTaskMessage {
                 task_id: task.id,
@@ -200,6 +202,7 @@ pub(crate) fn user_input_routing_system(
             commands
                 .entity(task_entity)
                 .insert(AutoWakeBudget::default());
+            TrustedImages::register(&mut commands, task_entity, &input.content);
             commands.spawn(InboxDeliveryMessage {
                 task_id,
                 item: InboxItem::UserSteer {

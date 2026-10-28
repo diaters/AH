@@ -189,6 +189,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - QQ 纯图片消息合并：移动端逐张发送的图片按发送者缓存，与下一条常规文字消息合并为一条输入
 - 图片输入：`[IMAGE:path]` 标记在 LLM adapter 边界晚绑定为图片 ContentPart
   （设计：[2026-10-27-multimodal-image-input-design.md](design/2026-10-27-multimodal-image-input-design.md)）
+- 图片信任边界：只有任务 `TrustedImages` 登记表中的目标会被晚绑定。登记来源为用户会话输入
+  （新建任务、续轮、steer、`ask_user` 回答）与 `view_image` 成功结果（插件替换过的输出除外）；
+  webhook / 定时任务内容、shell 输出等其他来源的标记保留为文本并附 `untrusted source` 说明
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复、`SystemOutputMessage`、任务失败提示等按 `output_channel`

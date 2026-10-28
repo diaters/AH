@@ -115,6 +115,30 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
         .insert(default_id, default_entity);
 }
 
+/// 先跑满 `frames` 帧，再继续驱动直到没有在途任务（LLM 结果经 tokio 异步回送，
+/// 全量测试负载高时固定帧数不够，曾导致偶发失败）。
+fn run_until_settled(app: &mut App, frames: usize) {
+    for _ in 0..frames {
+        app.update();
+    }
+    for _ in 0..300 {
+        let in_flight = app.world_mut().query::<&Task>().iter(app.world()).any(|t| {
+            matches!(
+                t.status(),
+                TaskStatus::Pending
+                    | TaskStatus::Ready
+                    | TaskStatus::Running
+                    | TaskStatus::Waiting(WaitingReason::Agent | WaitingReason::ToolExecution)
+            )
+        });
+        if !in_flight {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        app.update();
+    }
+}
+
 #[test]
 fn multi_turn_task_lifecycle() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -158,9 +182,7 @@ fn multi_turn_task_lifecycle() {
     });
 
     // Run several frames
-    for _ in 0..10 {
-        app.update();
-    }
+    run_until_settled(&mut app, 10);
 
     // 验证多轮对话流程：
     // 1. 用户输入 → 任务进入 Ready
@@ -463,9 +485,7 @@ fn experience_collection_triggered_on_agent_termination() {
     );
 
     // 继续运行多帧，确保系统稳定处理
-    for _ in 0..9 {
-        app.update();
-    }
+    run_until_settled(&mut app, 9);
 }
 
 #[test]
@@ -509,9 +529,7 @@ fn multi_turn_memory_records_user_and_assistant() {
     });
 
     // 运行多个 frame 处理输入和响应
-    for _ in 0..10 {
-        app.update();
-    }
+    run_until_settled(&mut app, 10);
 
     // 验证 ShortTermMemory 记录了用户输入和 Agent 响应
     let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
@@ -523,23 +541,6 @@ fn multi_turn_memory_records_user_and_assistant() {
     assert_eq!(stm.entries[0].role, EntryRole::User);
     assert_eq!(stm.entries[0].content, "what is the weather?");
     assert_eq!(stm.entries[1].role, EntryRole::Assistant);
-}
-
-/// 驱动 app 直到出现 `Waiting(User)` 的任务：LLM 结果经 tokio 异步回送，
-/// 全量测试负载高时固定帧数不够（曾因只跑 5 帧而偶发失败）。
-fn run_until_waiting_user(app: &mut App) {
-    for _ in 0..300 {
-        app.update();
-        let waiting = app
-            .world_mut()
-            .query::<&Task>()
-            .iter(app.world())
-            .any(|t| t.status() == &TaskStatus::Waiting(WaitingReason::User));
-        if waiting {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
 }
 
 #[test]
@@ -568,7 +569,7 @@ fn multi_turn_full_conversation_flow() {
     });
 
     // 运行直到任务进入 Waiting(User)
-    run_until_waiting_user(&mut app);
+    run_until_settled(&mut app, 5);
 
     // 找到创建的任务
     let (entity_id, task) = app
@@ -602,9 +603,7 @@ fn multi_turn_full_conversation_flow() {
         origin_channel: default_channel(),
     });
 
-    for _ in 0..5 {
-        app.update();
-    }
+    run_until_settled(&mut app, 5);
 
     // 验证 ShortTermMemory 记录了第二轮
     let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
@@ -751,7 +750,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
     });
 
     // 运行直到任务进入 Waiting(User)
-    run_until_waiting_user(&mut app);
+    run_until_settled(&mut app, 5);
 
     // 找到创建的任务
     let (entity_id, task) = app
@@ -810,9 +809,7 @@ fn three_turn_conversation_maintains_correct_order() {
         routing_policy: TaskRoutingPolicy::conversational(default_channel()),
     });
 
-    for _ in 0..5 {
-        app.update();
-    }
+    run_until_settled(&mut app, 5);
 
     // 第一轮结束后验证
     let (entity_id, _task) = app
@@ -839,9 +836,7 @@ fn three_turn_conversation_maintains_correct_order() {
         origin_channel: default_channel(),
     });
 
-    for _ in 0..5 {
-        app.update();
-    }
+    run_until_settled(&mut app, 5);
 
     let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
     assert_eq!(
@@ -860,9 +855,7 @@ fn three_turn_conversation_maintains_correct_order() {
         origin_channel: default_channel(),
     });
 
-    for _ in 0..5 {
-        app.update();
-    }
+    run_until_settled(&mut app, 5);
 
     let stm = app.world_mut().get::<ShortTermMemory>(entity_id).unwrap();
     assert_eq!(
@@ -959,9 +952,7 @@ fn second_dispatch_prompt_includes_correct_history() {
         origin_channel: default_channel(),
     });
 
-    for _ in 0..10 {
-        app.update();
-    }
+    run_until_settled(&mut app, 10);
 
     // 获取第二轮 dispatch 的 prompt
     let prompts = captured.lock().unwrap();
@@ -1038,9 +1029,7 @@ fn task_content_updates_on_continue() {
         origin_channel: default_channel(),
     });
 
-    for _ in 0..10 {
-        app.update();
-    }
+    run_until_settled(&mut app, 10);
 
     // 验证 task.content 已更新为当前用户输入
     let task = app.world_mut().get::<Task>(entity_id).unwrap();

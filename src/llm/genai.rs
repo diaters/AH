@@ -236,7 +236,9 @@ fn build_chat_request(request: &AgentExecutionRequest) -> Result<ChatRequest, Ex
 
     // 视觉模型：把 `[IMAGE:...]` 标记晚绑定为图片；非视觉模型原样发送文本标记
     if request.vision {
-        messages = super::image::attach_images(&request.task_id, messages);
+        let trusted: std::collections::HashSet<String> =
+            request.trusted_images.iter().cloned().collect();
+        messages = super::image::attach_images(&request.task_id, messages, &trusted);
     }
 
     let mut chat_req = ChatRequest::new(messages);
@@ -466,6 +468,7 @@ mod tests {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         }
     }
 
@@ -642,6 +645,13 @@ mod tests {
         assert!(chat_req.messages[0].content.binaries().is_empty());
 
         request.vision = true;
+        let chat_req = build_chat_request(&request).unwrap();
+        assert!(
+            chat_req.messages[0].content.binaries().is_empty(),
+            "unregistered image must not be attached even with vision"
+        );
+
+        request.trusted_images = vec![path.display().to_string()];
         let chat_req = build_chat_request(&request).unwrap();
         assert_eq!(chat_req.messages[0].content.binaries().len(), 1);
     }

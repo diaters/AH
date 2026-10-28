@@ -34,6 +34,7 @@ fn make_request(tool_name: &str, tool_call_id: &str) -> ToolExecutionRequestMess
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: tool_name.into(),
         tool_input: serde_json::json!({"hello": "world"}),

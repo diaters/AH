@@ -101,6 +101,10 @@ pub struct AgentExecutionRequest {
     /// 当前模型是否接受图片输入（由模型链条目的 `vision` 写入）
     #[serde(default)]
     pub vision: bool,
+    /// 可信来源的图片标记目标（用户会话输入、`view_image` 结果）；适配层只绑定其中的图片，
+    /// 其他来源（webhook 内容、shell 输出等）的 `[IMAGE:...]` 保留为文本
+    #[serde(default)]
+    pub trusted_images: Vec<String>,
 }
 
 /// Agent 执行结果
@@ -146,6 +150,7 @@ mod tests {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         };
 
         assert!(request.work_item_id.is_some());
@@ -166,6 +171,7 @@ mod tests {
             model_override: Some("gpt-4.1-mini".to_string()),
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         };
 
         assert_eq!(request.model_override, Some("gpt-4.1-mini".to_string()));

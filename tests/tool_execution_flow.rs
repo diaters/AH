@@ -164,6 +164,7 @@ fn allowed_tool_executes_directly() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -272,6 +273,7 @@ fn denied_tool_does_not_execute() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -363,6 +365,7 @@ fn confirm_tool_requires_user_confirmation() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -462,6 +465,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -583,6 +587,7 @@ fn user_denies_tool_confirmation() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -692,6 +697,7 @@ fn user_allows_tool_once() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -865,6 +871,7 @@ fn child_agent_confirm_routes_to_parent() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -999,6 +1006,7 @@ fn confirmation_denied_rejects_tool() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1130,6 +1138,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1222,6 +1231,7 @@ fn user_allows_tool_always() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,

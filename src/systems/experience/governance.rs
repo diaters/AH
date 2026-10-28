@@ -340,6 +340,7 @@ fn spawn_experience_confirmation(
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({

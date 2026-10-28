@@ -225,6 +225,7 @@ fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness 
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
     });
     update_with_yield(&mut app, 3);

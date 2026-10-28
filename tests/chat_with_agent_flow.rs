@@ -161,6 +161,7 @@ fn chat_with_agent_creates_chat_subtask() {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "chat_with_agent".to_string(),
             tool_input: serde_json::json!({
@@ -325,6 +326,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "chat_with_agent".to_string(),
             tool_input: serde_json::json!({
@@ -368,6 +370,7 @@ fn chat_with_agent_multi_round_via_handle() {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "chat_with_agent".to_string(),
             tool_input: serde_json::json!({

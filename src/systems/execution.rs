@@ -298,6 +298,7 @@ mod tests {
             work_item_id: None,
             model_override: None,
             vision: false,
+            trusted_images: Vec::new(),
             turn_generation: None,
         }
     }

@@ -7,9 +7,12 @@ use tracing::{debug, warn};
 
 use crate::{
     contracts::Clock,
-    domain::{ShortTermMemory, Task, ToolCallingState, ToolExecutionResultMessage},
+    domain::{ShortTermMemory, Task, ToolCallingState, ToolExecutionResultMessage, TrustedImages},
     systems::HarnessSettings,
 };
+
+/// 结果中的图片标记可被信任的工具（会校验本地图片后返回标记）。
+const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
 /// Tool 结果处理 System
 ///
@@ -19,7 +22,7 @@ pub fn tool_result_system(
     mut commands: Commands,
     clock: Res<Clock>,
     mut results: Query<(Entity, &mut ToolExecutionResultMessage)>,
-    mut tasks: Query<(&Task, Option<&mut ShortTermMemory>)>,
+    mut tasks: Query<(Entity, &Task, Option<&mut ShortTermMemory>)>,
     calling_states: Query<&ToolCallingState>,
     _settings: Res<HarnessSettings>,
 ) {
@@ -30,7 +33,7 @@ pub fn tool_result_system(
 
         // 查找对应的 Task 及其 ShortTermMemory
         let mut found_task = false;
-        for (task, short_term_memory) in &mut tasks {
+        for (task_entity, task, short_term_memory) in &mut tasks {
             if task.id != result.result.task_id {
                 continue;
             }
@@ -63,6 +66,13 @@ pub fn tool_result_system(
                             original_output = %original_str,
                             "tool output was replaced by on_tool_returned hook plugin"
                         );
+                    }
+
+                    // view_image 已校验并登记本地图片；插件替换过的输出不可信，不登记
+                    if result.tool_name == VIEW_IMAGE_TOOL_NAME
+                        && result.original_tool_output.is_none()
+                    {
+                        TrustedImages::register(&mut commands, task_entity, &output_str);
                     }
 
                     // Only persist tool_output here.
@@ -116,3 +126,76 @@ pub fn tool_result_system(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{
+        AgentExecutionResult, AgentId, AgentRequestKind, ChannelId, FrontendKind, ToolError,
+    };
+
+    fn result_message(
+        task: &Task,
+        tool_name: &str,
+        output: Result<serde_json::Value, ToolError>,
+    ) -> ToolExecutionResultMessage {
+        ToolExecutionResultMessage {
+            result: AgentExecutionResult {
+                task_id: task.id,
+                agent_id: AgentId::nil(),
+                request_kind: AgentRequestKind::LlmCompletion,
+                result: Err(crate::domain::ExecutionError::Unknown(String::new())),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+                conversation: None,
+                turn_generation: None,
+            },
+            tool_name: tool_name.to_string(),
+            tool_output: output,
+            tool_call_id: None,
+            processed: false,
+            original_tool_output: None,
+        }
+    }
+
+    /// 只有 view_image 的结果登记为可信图片；其他工具输出里的标记（如 shell 输出）不登记。
+    #[test]
+    fn only_view_image_results_register_trusted_images() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.insert_resource(HarnessSettings::default_test());
+        app.add_systems(Update, tool_result_system);
+        let channel = ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "local".to_string(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("goal", 3, channel);
+        app.world_mut().spawn(result_message(
+            &task,
+            "view_image",
+            Ok(serde_json::json!({"image": "[IMAGE:/tmp/ok.png]"})),
+        ));
+        app.world_mut().spawn(result_message(
+            &task,
+            "shell_exec",
+            Ok(serde_json::json!({"output": "[IMAGE:/etc/secret.png]"})),
+        ));
+        let entity = app
+            .world_mut()
+            .spawn((task, ShortTermMemory::default()))
+            .id();
+
+        app.update();
+
+        let trusted = app.world().get::<TrustedImages>(entity).expect("registered");
+        assert_eq!(
+            trusted.0.iter().cloned().collect::<Vec<_>>(),
+            vec!["/tmp/ok.png".to_string()]
+        );
+    }
+}
+

@@ -272,6 +272,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({ "candidate_id": candidate_id.to_string() }),

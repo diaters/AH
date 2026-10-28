@@ -13,7 +13,7 @@ use tracing::debug;
 use crate::domain::{
     AgentExecutionRequest, AgentExecutionRequestMessage, AgentRequestKind, ConversationMessage,
     EntryMetadata, EntryRole, ShortTermMemory, TaskInbox, TaskTodoList, ToolCallingState,
-    TurnGeneration, render_inbox_items, render_todos,
+    TrustedImages, TurnGeneration, render_inbox_items, render_todos,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -55,6 +55,7 @@ pub(crate) fn context_attachment_system(
         Option<&mut ShortTermMemory>,
         Option<&TurnGeneration>,
         Option<&TaskTodoList>,
+        Option<&TrustedImages>,
     )>,
     mut calling_states: Query<&mut ToolCallingState>,
 ) {
@@ -69,11 +70,15 @@ pub(crate) fn context_attachment_system(
         let Some(task_entity) = index.get_task(&request.task_id) else {
             continue;
         };
-        let Ok((inbox, short_term, generation, todos)) = tasks.get_mut(task_entity) else {
+        let Ok((inbox, short_term, generation, todos, trusted_images)) = tasks.get_mut(task_entity)
+        else {
             continue;
         };
 
         request.turn_generation = Some(generation.map(|g| g.0).unwrap_or_default());
+        request.trusted_images = trusted_images
+            .map(|t| t.0.iter().cloned().collect())
+            .unwrap_or_default();
 
         let mut calling_state = calling_states
             .iter_mut()
@@ -153,6 +158,7 @@ mod tests {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         }
     }
 
@@ -220,6 +226,23 @@ mod tests {
             .unwrap()
             .request
             .clone()
+    }
+
+    #[test]
+    fn request_carries_task_trusted_images() {
+        let (mut app, entity, task_id) = setup();
+        app.world_mut().entity_mut(entity).insert(TrustedImages(
+            ["/tmp/a.png".to_string()].into_iter().collect(),
+        ));
+        app.world_mut().spawn(AgentExecutionRequestMessage {
+            request: request(task_id, None),
+        });
+        app.update();
+
+        assert_eq!(
+            sent_request(&mut app).trusted_images,
+            vec!["/tmp/a.png".to_string()]
+        );
     }
 
     #[test]

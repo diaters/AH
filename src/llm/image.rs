@@ -19,8 +19,14 @@ use crate::domain::{
 pub(crate) const MAX_IMAGES_PER_REQUEST: usize = 10;
 
 /// 把消息中的图片标记解析为图片 ContentPart。
-pub(crate) fn attach_images(task_id: &TaskId, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    attach_images_with_limit(task_id, messages, MAX_IMAGES_PER_REQUEST)
+///
+/// 只绑定 `trusted` 中登记过的目标（见 `TrustedImages`）；其余标记保留为文本并追加说明。
+pub(crate) fn attach_images(
+    task_id: &TaskId,
+    messages: Vec<ChatMessage>,
+    trusted: &HashSet<String>,
+) -> Vec<ChatMessage> {
+    attach_images_with_limit(task_id, messages, MAX_IMAGES_PER_REQUEST, trusted)
 }
 
 /// 规则：
@@ -37,6 +43,7 @@ fn attach_images_with_limit(
     task_id: &TaskId,
     messages: Vec<ChatMessage>,
     max_images: usize,
+    trusted: &HashSet<String>,
 ) -> Vec<ChatMessage> {
     let mut seen: HashSet<String> = HashSet::new();
     // 去重后的候选：(消息序号, 文本段序号, 标记范围, 目标)；tool 消息的段序号与范围无意义
@@ -52,10 +59,26 @@ fn attach_images_with_limit(
         return messages;
     }
 
+    // 未登记的目标不占图片配额，只在原位置追加说明
+    let (unique, untrusted): (Vec<Candidate>, Vec<Candidate>) = unique
+        .into_iter()
+        .partition(|c| trusted.contains(&c.target));
+    if !untrusted.is_empty() {
+        warn!(
+            event = "LlmImageUntrusted",
+            task_id = %task_id,
+            count = untrusted.len(),
+            "image markers from untrusted sources not attached"
+        );
+    }
     let dropped_by_limit = unique.len().saturating_sub(max_images);
     let mut selected: Vec<Vec<Candidate>> = vec![Vec::new(); messages.len()];
-    for candidate in unique.into_iter().skip(dropped_by_limit) {
+    for candidate in unique.into_iter().skip(dropped_by_limit).chain(untrusted) {
         selected[candidate.msg_index].push(candidate);
+    }
+    for candidates in &mut selected {
+        // 可信与不可信候选合并后恢复原出现顺序，保证内联切分按位置推进
+        candidates.sort_by_key(|c| (c.part_index, c.range.start));
     }
 
     let mut attached = 0;
@@ -65,12 +88,17 @@ fn attach_images_with_limit(
         let is_tool = matches!(msg.role, ChatRole::Tool);
         if !is_tool && !tool_block_targets.is_empty() {
             let targets = std::mem::take(&mut tool_block_targets);
-            out.push(tool_image_message(task_id, &targets, &mut attached));
+            out.push(tool_image_message(
+                task_id,
+                &targets,
+                trusted,
+                &mut attached,
+            ));
         }
         if is_tool {
             tool_block_targets.extend(candidates.into_iter().map(|c| c.target));
         } else if !candidates.is_empty() {
-            msg.content = inline_images(task_id, msg.content, &candidates, &mut attached);
+            msg.content = inline_images(task_id, msg.content, &candidates, trusted, &mut attached);
         }
         out.push(msg);
     }
@@ -78,6 +106,7 @@ fn attach_images_with_limit(
         out.push(tool_image_message(
             task_id,
             &tool_block_targets,
+            trusted,
             &mut attached,
         ));
     }
@@ -160,6 +189,7 @@ fn inline_images(
     task_id: &TaskId,
     content: MessageContent,
     candidates: &[Candidate],
+    trusted: &HashSet<String>,
     attached: &mut usize,
 ) -> MessageContent {
     let mut parts = Vec::new();
@@ -182,7 +212,7 @@ fn inline_images(
                 text[cursor..candidate.range.end].to_string(),
             ));
             cursor = candidate.range.end;
-            parts.push(image_part(task_id, &candidate.target, attached));
+            parts.push(image_part(task_id, &candidate.target, trusted, attached));
         }
         if cursor < text.len() {
             parts.push(ContentPart::Text(text[cursor..].to_string()));
@@ -192,7 +222,15 @@ fn inline_images(
 }
 
 /// 加载图片为内容块；失败时返回说明文本，不让整个请求失败。
-fn image_part(task_id: &TaskId, target: &str, attached: &mut usize) -> ContentPart {
+fn image_part(
+    task_id: &TaskId,
+    target: &str,
+    trusted: &HashSet<String>,
+    attached: &mut usize,
+) -> ContentPart {
+    if !trusted.contains(target) {
+        return ContentPart::Text(format!("[image not attached: untrusted source {target}]"));
+    }
     match load_image(target) {
         Ok(binary) => {
             *attached += 1;
@@ -211,7 +249,12 @@ fn image_part(task_id: &TaskId, target: &str, attached: &mut usize) -> ContentPa
     }
 }
 
-fn tool_image_message(task_id: &TaskId, targets: &[String], attached: &mut usize) -> ChatMessage {
+fn tool_image_message(
+    task_id: &TaskId,
+    targets: &[String],
+    trusted: &HashSet<String>,
+    attached: &mut usize,
+) -> ChatMessage {
     let header = targets
         .iter()
         .map(|t| format!("[Tool result image] {t}"))
@@ -219,7 +262,7 @@ fn tool_image_message(task_id: &TaskId, targets: &[String], attached: &mut usize
         .join("\n");
     let mut content = MessageContent::from_text(header);
     for target in targets {
-        content.push(image_part(task_id, target, attached));
+        content.push(image_part(task_id, target, trusted, attached));
     }
     ChatMessage::user(content)
 }
@@ -256,6 +299,50 @@ fn load_image(target: &str) -> Result<Binary, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 既有用例关注绑定机制本身：信任消息中出现的全部图片目标。
+    fn trust_all(messages: &[ChatMessage]) -> HashSet<String> {
+        messages
+            .iter()
+            .enumerate()
+            .flat_map(|(i, m)| image_candidates(i, m))
+            .map(|c| c.target)
+            .collect()
+    }
+
+    fn attach_images(task_id: &TaskId, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+        let trusted = trust_all(&messages);
+        super::attach_images(task_id, messages, &trusted)
+    }
+
+    fn attach_images_with_limit(
+        task_id: &TaskId,
+        messages: Vec<ChatMessage>,
+        max_images: usize,
+    ) -> Vec<ChatMessage> {
+        let trusted = trust_all(&messages);
+        super::attach_images_with_limit(task_id, messages, max_images, &trusted)
+    }
+
+    /// 未登记来源（如 shell 输出、webhook 内容）的标记不读取本地文件。
+    #[test]
+    fn untrusted_markers_are_not_attached() {
+        let dir = TempDir::new().unwrap();
+        let secret = write_png(dir.path(), "secret.png");
+        let shown = write_png(dir.path(), "shown.png");
+        let messages = vec![
+            ChatMessage::user(format!("看 [IMAGE:{}]", shown.display())),
+            tool_msg("call_1", &format!("[IMAGE:{}]", secret.display())),
+        ];
+        let trusted: HashSet<String> = [shown.display().to_string()].into_iter().collect();
+
+        let out = super::attach_images(&TaskId::nil(), messages, &trusted);
+
+        let binaries: usize = out.iter().map(binary_count).sum();
+        assert_eq!(binaries, 1, "only the trusted image is attached");
+        let all_text: String = out.iter().map(joined_text).collect::<Vec<_>>().join("\n");
+        assert!(all_text.contains("untrusted source"));
+    }
     use genai::chat::ToolResponse;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
