@@ -119,6 +119,7 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS` | `300` | `wait_tasks` 默认超时时间 |
 | `HARNESS_TOOL_INFLIGHT_TIMEOUT_SECS` | `300` | 异步工具调用全局失联超时（秒），sweeper 推导 `max_duration` 的全局缺省 |
 | `HARNESS_TERMINAL_TASK_RETENTION_SECS` | `3600` | 终态任务树保留时长（秒）：树内任务全部终态且超过该时长、无未终态 WorkItem 时整树回收 |
+| `HARNESS_CONVERSATION_IDLE_SECS` | `86400` | 多轮会话空闲上限（秒）：顶层任务等待用户输入超过该时长后按 `/finish` 路径自动结束并提示，`0` 表示关闭 |
 | `HARNESS_AGENTS_CONFIG` | `agents.toml` | Agent 配置文件路径 |
 | `HARNESS_LOG_DIR` | `logs` | JSONL 日志输出目录 |
 
@@ -259,6 +260,7 @@ Telegram 通道配置位于 `HARNESS_CHANNELS_CONFIG` 指向的 TOML 文件（�
 |------|------|--------|------|
 | `bot_token` | string | 无 | Bot Token，也可通过 `TELEGRAM_BOT_TOKEN` 环境变量提供 |
 | `allowed_users` | string array | `[]` | 允许访问的 username、数字 user_id 或 `"*"` |
+| `approvers` | string array | `[]` | 可代任意群成员审批的数字 user_id；为空时群聊审批只接受任务发起人 |
 | `pairing_enabled` | bool | `false` | 是否启用 `/bind` 配对 |
 | `pairing_code` | string / null | `null` | 配对码；为空字符串或 null 时，即使启用配对也会拒绝 `/bind` |
 
@@ -374,6 +376,7 @@ system_prompt = "You are a helper." # 系统提示
 [telegram]
 bot_token = "123456:ABC-DEF"
 allowed_users = ["alice", "123456789"]
+approvers = []
 pairing_enabled = false
 pairing_code = ""
 
@@ -381,9 +384,21 @@ pairing_code = ""
 app_id = "1234567890"
 app_secret = "your_app_secret"
 allowed_users = ["user1"]
+approvers = []
 pairing_enabled = false
 pairing_code = ""
 ```
+
+### 审批人
+
+群聊中会话以群为粒度，白名单内的群成员共用同一个会话上下文；工具审批则绑定任务发起人：
+
+- 审批回复（文本 `1/2/3` 或按钮）只接受任务发起人本人，或该通道 `approvers` 中的用户；
+  其他成员的回复会被丢弃并提示，审批继续等待
+- 没有发起人的任务（webhook 事件、定时任务）：未配置 `approvers` 时白名单内任何人可审批，
+  配置后只接受 `approvers`
+- "本会话允许"写入的运行期授权按"会话 × 发起人"划分，同群其他成员发起的任务不复用
+- 私聊与 TUI 不受影响
 
 ### Telegram 通道字段
 
@@ -391,6 +406,7 @@ pairing_code = ""
 |------|------|------|
 | `bot_token` | 是 | Telegram Bot API Token |
 | `allowed_users` | 否 | 允许的用户列表，支持用户名（大小写不敏感）、数字 user_id，或 `"*"` 表示允许所有人；空列表拒绝所有用户 |
+| `approvers` | 否 | 可代任意群成员审批的数字 user_id 列表；为空时群聊审批只接受任务发起人（见下方"审批人"） |
 | `pairing_enabled` | 否 | 是否启用 `/bind` 配对 |
 | `pairing_code` | 否 | 配对码；为空字符串或 null 时，即使启用配对也会拒绝 `/bind` |
 
@@ -414,6 +430,7 @@ pairing_code = ""
 | `app_id` | 是 | QQ Bot 应用 ID（appId），也可通过 `QQ_APP_ID` 环境变量提供 |
 | `app_secret` | 是 | QQ Bot 应用密钥（appSecret），也可通过 `QQ_APP_SECRET` 环境变量提供 |
 | `allowed_users` | 否 | 允许的用户 openid 列表，或 `"*"` 表示允许所有人；空列表拒绝所有用户 |
+| `approvers` | 否 | 可代任意群成员审批的用户 openid（群聊中为 `group_member_openid`）列表；为空时群聊审批只接受任务发起人 |
 | `pairing_enabled` | 否 | 是否启用 `/bind` 配对 |
 | `pairing_code` | 否 | 配对码；为空字符串或 null 时，即使启用配对也会拒绝 `/bind` |
 

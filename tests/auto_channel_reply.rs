@@ -120,6 +120,7 @@ fn auto_channel_reply() {
         let (input_tx, input_rx) = unbounded::<ExternalInput>();
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: bot_token.to_string(),
             allowed_users: vec!["123456".to_string()],
             pairing_enabled: false,
@@ -160,6 +161,7 @@ fn auto_channel_reply() {
         };
         input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: origin,
                 content: "hello bot".to_string(),
             })
@@ -199,6 +201,7 @@ fn multi_task_channel_reply_has_different_short_ids() {
         let (input_tx, input_rx) = unbounded::<ExternalInput>();
 
         let cfg = TelegramConfig {
+            approvers: Vec::new(),
             bot_token: bot_token.to_string(),
             allowed_users: vec!["123456".to_string()],
             pairing_enabled: false,
@@ -238,12 +241,14 @@ fn multi_task_channel_reply_has_different_short_ids() {
 
         input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: origin.clone(),
                 content: "first task".to_string(),
             })
             .expect("send first input");
         input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: origin,
                 content: "second task".to_string(),
             })

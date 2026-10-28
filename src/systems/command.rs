@@ -7,7 +7,7 @@ use crate::domain::{
     FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
     ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
     ShortTermMemory, StopTaskMessage, SummarizationRequestMessage, SummarizationTrigger, Task,
-    TaskRoutingPolicy, TaskStatus, UserCommand, UserInputMessage,
+    TaskInitiator, TaskRoutingPolicy, TaskStatus, UserCommand, UserInputMessage,
 };
 use crate::ecs::EntityIndex;
 
@@ -63,7 +63,7 @@ pub(crate) fn command_parse_system(
                         parent.max_retries,
                         input.origin_channel.clone(),
                     );
-                    commands.spawn((
+                    let mut spawned = commands.spawn((
                         child_task,
                         ShortTermMemory::default(),
                         NewlyCreatedTask,
@@ -77,6 +77,10 @@ pub(crate) fn command_parse_system(
                             },
                         },
                     ));
+                    // /btw 开启的是新的顶层任务，发起人是发出命令的用户
+                    if let Some(sender) = &input.sender {
+                        spawned.insert(TaskInitiator(sender.clone()));
+                    }
                 } else {
                     debug!(
                         event = "NoParentTask",
@@ -90,6 +94,7 @@ pub(crate) fn command_parse_system(
                         routing_policy: TaskRoutingPolicy::conversational(
                             input.origin_channel.clone(),
                         ),
+                        initiator: input.sender.clone(),
                     });
                 }
                 commands.entity(entity).despawn();
@@ -518,6 +523,7 @@ mod tests {
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/remember Docs should stay in Chinese".to_string(),
             origin_channel: crate::domain::ChannelId {
                 frontend: crate::domain::FrontendKind::Tui,
@@ -666,6 +672,7 @@ mod tests {
             thread_id: None,
         };
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/btw new topic".to_string(),
             origin_channel: tg_channel.clone(),
         });
@@ -734,6 +741,7 @@ mod tests {
         ));
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/btw child topic".to_string(),
             origin_channel: qq_channel.clone(),
         });
@@ -807,6 +815,7 @@ mod tests {
             thread_id: None,
         };
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/finish".to_string(),
             origin_channel: tg_channel,
         });
@@ -878,6 +887,7 @@ mod tests {
             thread_id: None,
         };
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/summarize".to_string(),
             origin_channel: tg_channel,
         });
@@ -942,6 +952,7 @@ mod tests {
         ));
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/clear".to_string(),
             origin_channel: channel,
         });
@@ -1004,6 +1015,7 @@ mod tests {
         ));
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/skill 做代码审查".to_string(),
             origin_channel: channel,
         });
@@ -1095,6 +1107,7 @@ mod tests {
         ));
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/skill 创建测试 skill".to_string(),
             origin_channel: channel,
         });
@@ -1157,6 +1170,7 @@ mod tests {
         ));
 
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/skill".to_string(),
             origin_channel: channel,
         });
@@ -1224,6 +1238,7 @@ mod tests {
             thread_id: None,
         };
         app.world_mut().spawn(UserInputMessage {
+            sender: None,
             content: "/clear".to_string(),
             origin_channel: tg_channel,
         });

@@ -30,7 +30,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `AgentExecutionRequest` 作为瞬时执行请求，不承担长期业务状态
 - 终态任务回收：`terminal_task_retention_system` 每 30 秒扫描，任务树内全部终态且超过
   `HARNESS_TERMINAL_TASK_RETENTION_SECS`（默认 1 小时）、无未终态 WorkItem 时整树销毁并清理终态派发去重集合；
-  仍处于 `Waiting(User)` 的多轮任务不回收（需 `/finish` 或 `/clear`）
+  仍处于 `Waiting(User)` 的多轮任务不回收
+- 空闲会话自动结束：`conversation_idle_system` 把等待用户输入（`Waiting(User)` / `Waiting(AskUser)`）超过
+  `HARNESS_CONVERSATION_IDLE_SECS`（默认 24 小时，0 关闭）的顶层任务按 `/finish` 路径结束并向会话通道推送提示，
+  之后由终态回收清理；等待工具审批的任务不受影响
 
 #### 协作与编排
 
@@ -138,11 +141,16 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Agent::effective_permission(tool_name, registry)` 是权限查询单一入口
 - `default_permission_explicit` 字段区分显式/隐式 Confirm，仅隐式 Confirm 回退到工具默认
 - 子 Agent 权限继承：父 Confirm → 子 Confirm（不再降为 Allow）
-- 运行期授权（`RuntimeGrants`）：用户选择"本会话允许"时按（Agent, 工具, 任务 `origin_channel`）记录，进程内有效、
+- 运行期授权（`RuntimeGrants`）：用户选择"本会话允许"时按（Agent, 工具, `GrantScope`）记录，`GrantScope` 为
+  任务 `origin_channel` × 任务树根任务的发起人（`TaskInitiator`），进程内有效、
   不持久化、不写入 `agent.overrides`；只把 Confirm 提升为 Allow，从不放宽 Deny。没有来源会话的任务
   （webhook 事件、定时任务）不复用任何运行期授权，选择该选项时按仅本次处理。权限查询入口为
   `resolve_tool_permission`（配置层三层回退 + 运行期授权）
 - 父 Agent 自动审批（MVP）只认配置层权限，不读运行期授权，也不写入任何持续授权
+- 审批绑定发起人：IM 入向消息携带发言人 ID，用户输入创建的顶层任务挂 `TaskInitiator`，子任务沿父链取根任务发起人；
+  `approval_sender_gate_system` 在审批响应被消费前校验回复者，只接受发起人或通道配置的 `approvers`
+  （无发起人的事件 / 定时任务在未配置 `approvers` 时保持原行为），拒绝时丢弃响应并提示，审批继续等待；
+  TUI 回复视为可信。群聊会话上下文仍按群共享，`/finish` 等控制命令仍按群生效
 - `EngineEvent::PermissionAudit` 审计事件覆盖 dispatch / async_dispatch / confirmation / approval 路径
 
 #### 异步工具桥

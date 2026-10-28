@@ -102,6 +102,7 @@ fn user_input_creates_new_task_when_no_waiting_task() {
 
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: "new task".to_string(),
         })
@@ -152,6 +153,7 @@ fn user_input_continues_waiting_task() {
 
     // Simulate user input
     app.world_mut().spawn(harness::domain::UserInputMessage {
+        sender: None,
         content: "continue input".to_string(),
         origin_channel: default_channel(),
     });
@@ -333,6 +335,7 @@ fn multiple_waiting_user_tasks_routes_to_one() {
 
     // 模拟用户输入
     app.world_mut().spawn(harness::domain::UserInputMessage {
+        sender: None,
         content: "hello".to_string(),
         origin_channel: default_channel(),
     });
@@ -397,6 +400,7 @@ fn finish_command_ends_multi_turn_conversation() {
 
     // 模拟用户输入 /finish
     app.world_mut().spawn(harness::domain::UserInputMessage {
+        sender: None,
         content: "/finish".to_string(),
         origin_channel: default_channel(),
     });

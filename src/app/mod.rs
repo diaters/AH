@@ -142,10 +142,14 @@ pub fn build_harness_app(
             .in_set(HarnessSet::Maintenance),
     );
 
-    // 终态任务树过保留期后回收，避免长期运行时实体无限增长。
+    // 终态任务树过保留期后回收；空闲多轮会话超时结束后同样进入回收。
     app.add_systems(
         Update,
-        crate::systems::terminal_task_retention_system.in_set(HarnessSet::Maintenance),
+        (
+            crate::systems::terminal_task_retention_system,
+            crate::systems::conversation_idle_system,
+        )
+            .in_set(HarnessSet::Maintenance),
     );
 
     app

@@ -352,6 +352,7 @@ fn experience_governance_confirmation_skips_tool_execution() {
 
     // 模拟用户批准
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "approve".to_string(),
         feedback: None,
@@ -493,6 +494,7 @@ fn approved_candidate_spawns_writeback_request() {
         confirmed_once: false,
     });
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "approve".to_string(),
         feedback: None,
@@ -622,6 +624,7 @@ fn approval_to_writeback_completes_in_same_frame() {
         confirmed_once: false,
     });
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "approve".to_string(),
         feedback: None,
@@ -755,6 +758,7 @@ fn multiple_candidates_same_proposal_deduplicate_writeback() {
     // 逐个审批每个候选
     for req_id in &request_ids {
         app.world_mut().spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id: *req_id,
             selected_option: "approve".to_string(),
             feedback: None,
@@ -940,6 +944,7 @@ fn aggregated_child_candidates_writeback_idempotently() {
     // 逐个审批
     for req_id in &request_ids {
         app.world_mut().spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id: *req_id,
             selected_option: "approve".to_string(),
             feedback: None,

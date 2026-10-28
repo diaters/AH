@@ -68,18 +68,18 @@ pub use schedule::{
 pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{
     NativeProcessBackend, approval_dispatch_system, approval_result_system,
-    channel_send_dispatch_system, check_waiting_tasks_system, on_approval_requested_hook_system,
-    on_approval_resolved_hook_system, on_subtask_completed_check_waiting,
-    on_tool_called_hook_system, on_tool_returned_hook_system, register_builtin_tools,
-    tool_calling_orchestrator_system, tool_confirmation_result_system, tool_dispatch_system,
-    tool_result_system,
+    approval_sender_gate_system, channel_send_dispatch_system, check_waiting_tasks_system,
+    on_approval_requested_hook_system, on_approval_resolved_hook_system,
+    on_subtask_completed_check_waiting, on_tool_called_hook_system, on_tool_returned_hook_system,
+    register_builtin_tools, tool_calling_orchestrator_system, tool_confirmation_result_system,
+    tool_dispatch_system, tool_result_system,
 };
 // `async_tool_dispatch_system` 供集成测试经 `harness::systems::async_tool_dispatch_system`
 // 调用 `world.run_system_once(...)`，故单独 `pub use`（其余 tools 内部系统保持
 // `pub(crate)` 仅 crate 内可见）。
 pub use runtime_config::{BrainConfig, HarnessConfig, HarnessSettings};
 pub use sweeper::sweep_inflight_tool_calls;
-pub use task_retention::terminal_task_retention_system;
+pub use task_retention::{conversation_idle_system, terminal_task_retention_system};
 pub use tools::async_tool_dispatch_system;
 pub use tools::cancel_monitor_system;
 pub use tools::commit_tool_effects_system;

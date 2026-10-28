@@ -377,6 +377,7 @@ mod tests {
             },
         ));
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "reject_with_feedback".to_string(),
             feedback: Some("name 太长了".to_string()),
@@ -449,6 +450,7 @@ mod tests {
             },
         ));
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "reject_with_feedback".to_string(),
             feedback: Some("tags 不够精确".to_string()),
@@ -502,6 +504,7 @@ mod tests {
             },
         ));
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "reject_with_feedback".to_string(),
             feedback: Some("still not good".to_string()),
@@ -546,6 +549,7 @@ mod tests {
 
         let mut world = make_test_world(store);
         world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "reject_with_feedback".to_string(),
             feedback: Some("feedback".to_string()),

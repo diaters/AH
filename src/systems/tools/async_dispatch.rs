@@ -31,12 +31,13 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
         PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants,
-        SkillCreationContext, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
-        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
-        ToolWorkerOutput, ToolWorkerPayload, resolve_tool_permission,
+        SkillCreationContext, SpaceToolRegistry, Task, TaskInitiator, ToolActionKind,
+        ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission, ToolRequestPending,
+        ToolResultSender, ToolWorkerOutput, ToolWorkerPayload, resolve_tool_permission,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
+    systems::tools::approval_gate::task_grant_scope,
     triggers::scheduled_task::SchedulerState,
 };
 
@@ -57,7 +58,7 @@ use super::ingest_tool_results::build_scheduler_snapshot;
 /// **权限检查条件性**：`registry` / `agents` 为 `Option`/`Query`——测试世界可能
 /// 不装 `SpaceToolRegistry` 或不 spawn `Agent`，此时跳过权限检查直接认领
 /// （测试工具通常用 `Allow` 权限，生产世界始终装齐两资源）。
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn async_tool_dispatch_system(
     mut commands: Commands,
     runtime: Res<AsyncRuntime>,
@@ -72,6 +73,7 @@ pub fn async_tool_dispatch_system(
         Query<&Agent>,
         Query<&Task>,
         Query<&SkillCreationContext>,
+        Query<&TaskInitiator>,
     ),
     sender: Res<ToolResultSender>,
     backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
@@ -85,7 +87,21 @@ pub fn async_tool_dispatch_system(
     let agents = &index_agents_tasks_skill_ctx.1;
     let tasks = &index_agents_tasks_skill_ctx.2;
     let skill_creation_contexts = &index_agents_tasks_skill_ctx.3;
+    let initiators = &index_agents_tasks_skill_ctx.4;
     let runtime_grants = runtime_grants.as_deref();
+    let grant_scope = |task_id| {
+        task_grant_scope(
+            task_id,
+            index,
+            |e| {
+                tasks
+                    .get(e)
+                    .ok()
+                    .map(|t| (t.parent_task_id, t.origin_channel.clone()))
+            },
+            initiators,
+        )
+    };
 
     for (entity, request) in &requests {
         // 等待确认的请求不归这里管（Confirm 路径先行）
@@ -125,16 +141,13 @@ pub fn async_tool_dispatch_system(
             if registry.get(&request.tool_name).is_none() {
                 continue; // 工具定义不在 registry → 留给 sync 路径
             }
-            let conversation = index
-                .get_task(&request.request.task_id)
-                .and_then(|e| tasks.get(e).ok())
-                .and_then(|t| t.origin_channel.as_ref());
+            let scope = grant_scope(request.request.task_id);
             let (permission, _source) = resolve_tool_permission(
                 agent,
                 &request.tool_name,
                 Some(registry),
                 runtime_grants,
-                conversation,
+                scope.as_ref(),
             );
             if matches!(permission, ToolPermission::Confirm) {
                 continue; // 需要确认 → 留给 sync 路径设置 confirmation
@@ -294,11 +307,9 @@ pub fn async_tool_dispatch_system(
                         .and_then(|e| agents.get(e).ok()),
                 )
                 .map(|(r, a)| {
-                    let conversation = index
-                        .get_task(&request.request.task_id)
-                        .and_then(|e| tasks.get(e).ok())
-                        .and_then(|t| t.origin_channel.as_ref());
-                    resolve_tool_permission(a, &tool_name, Some(r), runtime_grants, conversation).1
+                    let scope = grant_scope(request.request.task_id);
+                    resolve_tool_permission(a, &tool_name, Some(r), runtime_grants, scope.as_ref())
+                        .1
                 })
                 .unwrap_or(PermissionSource::AgentDefault);
             emit_permission_audit(

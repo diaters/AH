@@ -119,6 +119,7 @@ fn on_task_created_hook_dispatches_without_panic_and_clears_marker() {
     // 发送一条用户消息触发 task 创建
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: "trigger on_task_created".to_string(),
         })

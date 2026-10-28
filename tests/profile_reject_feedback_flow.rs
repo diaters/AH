@@ -252,6 +252,7 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
     // 阶段 2：用户拒绝并反馈，触发 experience_approval_result_system spawn 重生成请求
     app.world_mut()
         .spawn(harness::domain::ToolConfirmationResponseMessage {
+            sender: None,
             request_id: first_request_id,
             selected_option: "reject_with_feedback".to_string(),
             feedback: Some("name too generic, be more specific".to_string()),
@@ -274,6 +275,7 @@ fn reject_with_feedback_triggers_regeneration_and_writes_new_agent() {
     // 阶段 4：用户审批通过重生成的 profile
     app.world_mut()
         .spawn(harness::domain::ToolConfirmationResponseMessage {
+            sender: None,
             request_id: second_request_id,
             selected_option: "approve".to_string(),
             feedback: None,

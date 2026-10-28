@@ -34,6 +34,7 @@ impl ChannelInboundMessage {
                 request_id: confirmation.request_id,
                 option: confirmation.option.clone(),
                 feedback: confirmation.feedback.clone(),
+                sender: self.sender(),
             });
         }
 
@@ -45,7 +46,13 @@ impl ChannelInboundMessage {
                 thread_id: self.thread_id.clone(),
             },
             content: self.content.clone(),
+            sender: self.sender(),
         })
+    }
+
+    /// 发言人 ID；通道未提供时为 None。
+    fn sender(&self) -> Option<String> {
+        Some(self.sender_id.clone()).filter(|id| !id.is_empty())
     }
 }
 
@@ -209,10 +216,15 @@ mod tests {
         };
         let input = msg.to_external_input().expect("valid channel name");
         match input {
-            crate::domain::ExternalInput::TextWithChannel { channel, content } => {
+            crate::domain::ExternalInput::TextWithChannel {
+                channel,
+                content,
+                sender,
+            } => {
                 assert_eq!(channel.frontend, FrontendKind::Telegram);
                 assert_eq!(channel.user_id, "456");
                 assert_eq!(content, "hello");
+                assert_eq!(sender.as_deref(), Some("123"));
             }
             _ => panic!("unexpected variant"),
         }
@@ -286,8 +298,11 @@ mod tests {
             }),
         };
         match msg.to_external_input().expect("valid channel name") {
-            crate::domain::ExternalInput::Confirmation { feedback, .. } => {
+            crate::domain::ExternalInput::Confirmation {
+                feedback, sender, ..
+            } => {
                 assert_eq!(feedback.as_deref(), Some("name should be more specific"));
+                assert_eq!(sender.as_deref(), Some("u1"));
             }
             _ => panic!("expected Confirmation"),
         }

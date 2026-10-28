@@ -82,6 +82,7 @@ fn test_config() -> HarnessConfig {
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         terminal_task_retention_secs: 3600,
+        conversation_idle_secs: 86400,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -267,6 +268,7 @@ fn inject_user_input(app: &mut App, content: &str) {
     let sender = app.world().resource::<TestInputSender>().0.clone();
     sender
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: tui_channel(),
             content: content.to_string(),
         })
@@ -277,6 +279,7 @@ fn inject_qq_text(app: &mut App, content: &str) {
     let sender = app.world().resource::<TestInputSender>().0.clone();
     sender
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: qq_channel(),
             content: content.to_string(),
         })
@@ -285,6 +288,7 @@ fn inject_qq_text(app: &mut App, content: &str) {
 
 fn inject_confirmation(app: &mut App, request_id: &Uuid, option: &str) {
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id: *request_id,
         selected_option: option.to_string(),
         feedback: None,

@@ -31,6 +31,7 @@ fn test_config() -> HarnessConfig {
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         terminal_task_retention_secs: 3600,
+        conversation_idle_secs: 86400,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -66,6 +67,7 @@ fn tui_input_preserves_origin_channel() {
     };
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: tui_channel.clone(),
             content: "hello from TUI".to_string(),
         })
@@ -111,6 +113,7 @@ fn telegram_input_preserves_origin_channel() {
     };
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: tg_channel.clone(),
             content: "hello from Telegram".to_string(),
         })

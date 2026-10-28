@@ -13,7 +13,7 @@ use crate::{
     domain::{
         CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
         HookPoint, NewlyCreatedTask, PendingDispatch, ScheduledRun, ShortTermMemory, Task,
-        TrustedImages,
+        TaskInitiator, TrustedImages,
     },
     systems::HarnessSettings,
     user_plugins::{
@@ -106,6 +106,11 @@ pub fn user_message_to_task_system(
         );
         if let Some(run) = scheduled_run {
             commands.entity(task_entity).insert(*run);
+        }
+        if let Some(initiator) = &message.initiator {
+            commands
+                .entity(task_entity)
+                .insert(TaskInitiator(initiator.clone()));
         }
         // 只有来自用户会话的输入可信；事件 / 定时任务内容中的图片标记不绑定
         if message.origin_channel.is_some() {
@@ -229,6 +234,7 @@ mod tests {
         let schedule_id = uuid::Uuid::new_v4();
         app.world_mut().spawn((
             CreateTaskMessage {
+                initiator: None,
                 content: "scheduled".to_string(),
                 origin_channel: None,
                 routing_policy: TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
@@ -236,6 +242,7 @@ mod tests {
             ScheduledRun { schedule_id },
         ));
         app.world_mut().spawn(CreateTaskMessage {
+            initiator: None,
             content: "plain".to_string(),
             origin_channel: None,
             routing_policy: TaskRoutingPolicy::event(None, None),
@@ -267,11 +274,13 @@ mod tests {
             thread_id: None,
         };
         app.world_mut().spawn(CreateTaskMessage {
+            initiator: None,
             content: "看看 [IMAGE:/tmp/user.png]".to_string(),
             origin_channel: Some(channel.clone()),
             routing_policy: TaskRoutingPolicy::conversational(channel),
         });
         app.world_mut().spawn(CreateTaskMessage {
+            initiator: None,
             content: "webhook 内容 [IMAGE:/etc/secret.png]".to_string(),
             origin_channel: None,
             routing_policy: TaskRoutingPolicy::event(None, None),
@@ -295,6 +304,44 @@ mod tests {
             vec![
                 (false, None),
                 (true, Some(vec!["/tmp/user.png".to_string()])),
+            ]
+        );
+    }
+
+    #[test]
+    fn initiator_is_recorded_on_new_task() {
+        let mut app = app();
+        let channel = crate::domain::ChannelId {
+            frontend: crate::domain::FrontendKind::QQ,
+            user_id: "group:g".to_string(),
+            thread_id: None,
+        };
+        app.world_mut().spawn(CreateTaskMessage {
+            content: "from member".to_string(),
+            origin_channel: Some(channel.clone()),
+            routing_policy: TaskRoutingPolicy::conversational(channel),
+            initiator: Some("member-a".to_string()),
+        });
+        app.world_mut().spawn(CreateTaskMessage {
+            content: "event".to_string(),
+            origin_channel: None,
+            routing_policy: TaskRoutingPolicy::event(None, None),
+            initiator: None,
+        });
+
+        app.update();
+
+        let mut query = app.world_mut().query::<(&Task, Option<&TaskInitiator>)>();
+        let mut seen: Vec<(String, Option<String>)> = query
+            .iter(app.world())
+            .map(|(task, initiator)| (task.content.clone(), initiator.map(|i| i.0.clone())))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("event".to_string(), None),
+                ("from member".to_string(), Some("member-a".to_string())),
             ]
         );
     }

@@ -245,6 +245,7 @@ fn task_count(app: &mut App) -> usize {
 
 fn send_input(app: &mut App, content: &str) {
     app.world_mut().spawn(UserInputMessage {
+        sender: None,
         content: content.to_string(),
         origin_channel: channel(),
     });

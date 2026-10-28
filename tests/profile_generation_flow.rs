@@ -211,6 +211,7 @@ fn incubation_flow_writes_agent_to_toml_after_approval() {
     // 模拟用户审批通过
     app.world_mut()
         .spawn(harness::domain::ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "approve".to_string(),
             feedback: None,

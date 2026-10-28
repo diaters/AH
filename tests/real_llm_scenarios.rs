@@ -325,6 +325,7 @@ fn scenario_config() -> HarnessConfig {
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         terminal_task_retention_secs: 3600,
+        conversation_idle_secs: 86400,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -589,6 +590,7 @@ fn execute_scenario(
         for steer in &spec.steer {
             if input_tx
                 .send(ExternalInput::TextWithChannel {
+                    sender: None,
                     channel: channel.clone(),
                     content: steer.clone(),
                 })
@@ -607,6 +609,7 @@ fn execute_scenario(
         }
         if input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: channel.clone(),
                 content: follow_up.clone(),
             })
@@ -624,6 +627,7 @@ fn execute_scenario(
         && wait_until_settled(&mut app, &start, timeout, poll_ms)
         && input_tx
             .send(ExternalInput::TextWithChannel {
+                sender: None,
                 channel: channel.clone(),
                 content: "/finish".to_string(),
             })

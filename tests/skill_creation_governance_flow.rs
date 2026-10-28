@@ -59,6 +59,7 @@ fn test_config() -> HarnessConfig {
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
         terminal_task_retention_secs: 3600,
+        conversation_idle_secs: 86400,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -288,6 +289,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
     // 用户批准
     app.world_mut()
         .spawn(harness::domain::ToolConfirmationResponseMessage {
+            sender: None,
             request_id,
             selected_option: "allow_once".to_string(),
             feedback: None,

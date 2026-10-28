@@ -617,6 +617,7 @@ fn user_denies_tool_confirmation() {
 
     // 用户选择拒绝
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "deny".to_string(),
         feedback: None,
@@ -727,6 +728,7 @@ fn user_allows_tool_once() {
 
     // 用户选择允许一次
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "allow_once".to_string(),
         feedback: None,
@@ -1261,6 +1263,7 @@ fn user_allows_tool_always() {
 
     // 用户选择允许永久
     app.world_mut().spawn(ToolConfirmationResponseMessage {
+        sender: None,
         request_id,
         selected_option: "allow_always".to_string(),
         feedback: None,
@@ -1285,15 +1288,19 @@ fn user_allows_tool_always() {
 
     // 验证：allow_always 写入按会话划分的运行期授权，不改配置层 overrides
     let grants = app.world().resource::<harness::domain::RuntimeGrants>();
+    let scope = |conversation| harness::domain::GrantScope {
+        conversation,
+        initiator: None,
+    };
     assert!(
-        grants.allows(agent_id, "shell_exec", Some(&default_channel())),
+        grants.allows(agent_id, "shell_exec", Some(&scope(default_channel()))),
         "allow_always should grant shell_exec within the originating conversation"
     );
     let other_chat = harness::domain::ChannelId {
         user_id: "someone-else".to_string(),
         ..default_channel()
     };
-    assert!(!grants.allows(agent_id, "shell_exec", Some(&other_chat)));
+    assert!(!grants.allows(agent_id, "shell_exec", Some(&scope(other_chat))));
     let overrides_touched = {
         let world = app.world_mut();
         let mut query = world.query::<&Agent>();

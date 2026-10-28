@@ -88,6 +88,7 @@ pub fn trigger_task_routing_system(
                             route.approval_channel.clone(),
                             Some(approval_context),
                         ),
+                        initiator: None,
                     });
                 }
                 Err(_) => {
@@ -221,6 +222,7 @@ fn route_scheduled_trigger(
                 def.output_channel.clone(),
                 "scheduled task",
             ),
+            initiator: None,
         },
         ScheduledRun {
             schedule_id: def.id,

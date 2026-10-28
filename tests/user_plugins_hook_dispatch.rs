@@ -76,6 +76,7 @@ fn on_task_created_hook_observes_new_task() {
     // 发送一条用户消息触发 task 创建
     input_tx
         .send(ExternalInput::TextWithChannel {
+            sender: None,
             channel: default_channel(),
             content: "trigger on_task_created via fixture".to_string(),
         })
