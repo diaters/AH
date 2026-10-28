@@ -257,6 +257,7 @@ backend 对显式停止先发 TERM，最多等待一秒，再强杀同组残留�
 
 `dispatch` 将真实 Task / Agent 注入 owned context，缺失归属的 `shell_exec` 在 spawn 前拒绝执行。
 运行中的 exec 与 `shell_start` 都登记在 backend 中，因此 Task 清理能找到两者。
+两者共用登记与输出处理；exec 继承宿主 stdin，`shell_start` 创建供 `shell_input` 使用的交互输入管道。
 clone 只共享管理器，释放临时 clone 不会停止会话；`NativeProcessBackend::shutdown()`
 作为幂等显式关闭入口，阻止后续启动并回收当前注册进程。批量关闭与 Task 清理共用一秒 TERM 宽限和一次 500ms 输出 drain 宽限，避免逐会话串行累加。最终共享状态析构只负责遗漏路径的兜底；
 实例级独立守护与主运行时关闭接线属于后续工作。

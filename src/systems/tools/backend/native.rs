@@ -155,7 +155,7 @@ impl SessionBackend for NativeProcessBackend {
         let deadline = request
             .timeout_secs
             .map(|seconds| Instant::now() + Duration::from_secs(seconds));
-        let handle = self.start_session(request)?;
+        let handle = self.spawn_registered_process(request, Stdio::inherit())?;
         let id = handle.handle_id;
         // 保存自己的 child 引用；task cleanup 可以从公共注册表移除它。
         let process = self
@@ -223,98 +223,7 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn start_session(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
-        let shutdown = self
-            .lifecycle
-            .shutdown
-            .lock()
-            .map_err(|_| "shutdown mutex poisoned".to_string())?;
-        if *shutdown {
-            return Err("native process backend is shut down".to_string());
-        }
-        let handle_id = SessionHandleId::new();
-        let command_text = request.command.clone();
-        let session_name = request.session_name.clone();
-        let cwd = request.cwd.clone();
-        let owner_task_id = request.owner_task_id;
-        let owner_agent_id = request.owner_agent_id;
-
-        let mut command = StdCommand::new("sh");
-        command
-            .arg("-c")
-            .arg(&command_text)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if let Some(cwd) = cwd.as_ref() {
-            command.current_dir(cwd);
-        }
-        command.envs(&request.env);
-        isolate_process_group(&mut command);
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
-        let stdin_available = child.stdin.take().map(|s| Arc::new(Mutex::new(s)));
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let child = Arc::new(Mutex::new(child));
-        self.processes
-            .lock()
-            .map_err(|_| "process map poisoned".to_string())?
-            .insert(handle_id, child);
-        if let Some(stdin) = stdin_available {
-            self.stdins
-                .lock()
-                .map_err(|_| "stdin map poisoned".to_string())?
-                .insert(handle_id, stdin);
-        }
-
-        let handle = SessionHandle {
-            handle_id,
-            backend: SessionBackendKind::Native,
-            status: SessionStatus::Running,
-            command: command_text,
-            session_name,
-            cwd,
-            exit_code: None,
-            timed_out: false,
-            interaction_required: false,
-            started_at: Utc::now(),
-            finished_at: None,
-            owner_task_id,
-            owner_agent_id,
-            output: SessionOutputSnapshot {
-                output: String::new(),
-                returned_lines: 0,
-                truncated: false,
-            },
-        };
-
-        self.sessions
-            .lock()
-            .map_err(|_| "session map poisoned".to_string())?
-            .insert(handle_id, handle.clone());
-
-        self.runtimes
-            .lock()
-            .map_err(|_| "runtime map poisoned".to_string())?
-            .insert(handle_id, SessionRuntimeState::empty());
-
-        let readers = [
-            spawn_output_reader(handle_id, stdout, Arc::clone(&self.runtimes), ""),
-            spawn_output_reader(handle_id, stderr, Arc::clone(&self.runtimes), "[stderr] "),
-        ];
-        self.readers
-            .lock()
-            .map_err(|_| "reader map poisoned".to_string())?
-            .insert(handle_id, readers.into_iter().flatten().collect());
-
-        debug!(
-            event = "ShellSessionStarted",
-            handle_id = %handle_id,
-            command = %handle.command,
-            "shell_start session created with real process"
-        );
-
-        Ok(handle)
+        self.spawn_registered_process(request, Stdio::piped())
     }
 
     fn read_session(&self, request: SessionReadRequest) -> Result<SessionSummary, String> {
@@ -460,6 +369,106 @@ impl SessionBackend for NativeProcessBackend {
 }
 
 impl NativeProcessBackend {
+    /// 共用进程登记与输出生命周期；exec 继承 stdin，会话创建交互输入管道。
+    fn spawn_registered_process(
+        &self,
+        request: SessionStartRequest,
+        stdin: Stdio,
+    ) -> Result<SessionHandle, String> {
+        let shutdown = self
+            .lifecycle
+            .shutdown
+            .lock()
+            .map_err(|_| "shutdown mutex poisoned".to_string())?;
+        if *shutdown {
+            return Err("native process backend is shut down".to_string());
+        }
+        let handle_id = SessionHandleId::new();
+        let command_text = request.command.clone();
+        let session_name = request.session_name.clone();
+        let cwd = request.cwd.clone();
+        let owner_task_id = request.owner_task_id;
+        let owner_agent_id = request.owner_agent_id;
+
+        let mut command = StdCommand::new("sh");
+        command
+            .arg("-c")
+            .arg(&command_text)
+            .stdin(stdin)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(cwd) = cwd.as_ref() {
+            command.current_dir(cwd);
+        }
+        command.envs(&request.env);
+        isolate_process_group(&mut command);
+        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let stdin_available = child.stdin.take().map(|s| Arc::new(Mutex::new(s)));
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let child = Arc::new(Mutex::new(child));
+        self.processes
+            .lock()
+            .map_err(|_| "process map poisoned".to_string())?
+            .insert(handle_id, child);
+        if let Some(stdin) = stdin_available {
+            self.stdins
+                .lock()
+                .map_err(|_| "stdin map poisoned".to_string())?
+                .insert(handle_id, stdin);
+        }
+
+        let handle = SessionHandle {
+            handle_id,
+            backend: SessionBackendKind::Native,
+            status: SessionStatus::Running,
+            command: command_text,
+            session_name,
+            cwd,
+            exit_code: None,
+            timed_out: false,
+            interaction_required: false,
+            started_at: Utc::now(),
+            finished_at: None,
+            owner_task_id,
+            owner_agent_id,
+            output: SessionOutputSnapshot {
+                output: String::new(),
+                returned_lines: 0,
+                truncated: false,
+            },
+        };
+
+        self.sessions
+            .lock()
+            .map_err(|_| "session map poisoned".to_string())?
+            .insert(handle_id, handle.clone());
+
+        self.runtimes
+            .lock()
+            .map_err(|_| "runtime map poisoned".to_string())?
+            .insert(handle_id, SessionRuntimeState::empty());
+
+        let readers = [
+            spawn_output_reader(handle_id, stdout, Arc::clone(&self.runtimes), ""),
+            spawn_output_reader(handle_id, stderr, Arc::clone(&self.runtimes), "[stderr] "),
+        ];
+        self.readers
+            .lock()
+            .map_err(|_| "reader map poisoned".to_string())?
+            .insert(handle_id, readers.into_iter().flatten().collect());
+
+        debug!(
+            event = "ShellSessionStarted",
+            handle_id = %handle_id,
+            command = %handle.command,
+            "native shell process registered"
+        );
+
+        Ok(handle)
+    }
+
     /// 幂等关停所有已注册进程；所有 clone 立即拒绝后续 spawn。
     /// 此接口由运行时所有者调用，最终析构仅提供兜底。
     pub fn shutdown(&self) -> Result<(), String> {
@@ -964,6 +973,37 @@ mod tests {
         };
         // SAFETY: 信号 0 只检查进程是否存在。
         unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// 独立测试进程控制 stdin，避免并行测试修改宿主 fd0。
+    #[test]
+    fn exec_inherits_eof_stdin_instead_of_waiting_for_timeout() {
+        const CHILD_ENV: &str = "HARNESS_TEST_EXEC_EOF_STDIN_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let backend = NativeProcessBackend::default();
+            let handle = backend
+                .exec_blocking(exec_request("cat; echo done", Some(1)))
+                .unwrap();
+            assert!(
+                !handle.timed_out,
+                "one-shot exec blocked on an unwritten stdin pipe"
+            );
+            assert_eq!(handle.status, SessionStatus::Completed);
+            assert_eq!(handle.output.output, "done");
+            assert!(backend.stdins.lock().unwrap().is_empty());
+            return;
+        }
+        let result = StdCommand::new(std::env::current_exe().unwrap())
+            .args(["--exact", "systems::tools::backend::native::tests::exec_inherits_eof_stdin_instead_of_waiting_for_timeout", "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .stdin(Stdio::null())
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "EOF stdin child test failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[cfg(unix)]

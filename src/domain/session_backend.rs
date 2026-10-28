@@ -19,11 +19,12 @@ pub trait SessionBackend: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// 默认实现忽略 `cancel` 直接走 `exec_blocking`——已存在的同步 backend
     /// 零改动即可编译；真正长任务的 backend（如 `NativeProcessBackend`）
-    /// override 本方法在循环中检查 `cancel.is_cancelled()`，触发时 kill
-    /// 子进程并返回 `Err("cancelled")`。
+    /// override 本方法在循环中检查 `cancel.is_cancelled()`，触发时清理
+    /// 子进程及同组后代、回收组长并限时 drain 输出，再返回 `Err("cancelled")`。
     ///
-    /// 调用方（worker）应当用 `tokio::task::spawn_blocking` 包裹本方法，
-    /// 并用 `tokio::select!` 监听 `cancel.cancelled()` 与 `spawn_blocking` 句柄。
+    /// 调用方（worker）用 `tokio::task::spawn_blocking` 包裹本方法并等待句柄，
+    /// 由 backend 消费取消信号，确保回送结果前进程清理已经完成。
+    /// 取消是协作式约定；默认实现不提供取消保证。
     fn exec_with_cancel(
         &self,
         request: SessionStartRequest,
