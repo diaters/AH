@@ -2,21 +2,77 @@
 //!
 //! 定义 Agent 实体、配置、权限等。
 
-use crate::prelude::Component;
+use crate::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::{AgentId, TaskId, ToolPermission};
+use super::{AgentId, ChannelId, TaskId, ToolPermission};
 
 /// 权限来源标识，用于审计与调试
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionSource {
-    /// Agent 的 overrides 显式配置（运行时 grant 或 agents.toml 显式）
+    /// Agent 的 overrides 显式配置（agents.toml 显式）
     AgentOverride,
     /// Agent 的 default_permission
     AgentDefault,
     /// ToolDefinition.default_permission（最后回退层）
     ToolDefault,
+    /// 用户在当前会话中选择"本会话允许"写入的运行期授权（见 [`RuntimeGrants`]）
+    RuntimeGrant,
+}
+
+/// 运行期授权：用户在审批中选择"本会话允许"后写入。
+///
+/// 按 (Agent, 工具, 会话) 划分，只在同一会话（任务的 `origin_channel`）内复用，进程内有效、
+/// 不持久化。没有来源会话的任务（webhook 事件、定时任务）不复用任何运行期授权；
+/// 父 Agent 自动审批只认配置层权限，也不读取这里。
+#[derive(Resource, Debug, Default)]
+pub struct RuntimeGrants(HashSet<(AgentId, String, ChannelId)>);
+
+impl RuntimeGrants {
+    /// 记录一次"本会话允许"授权。
+    pub fn grant(&mut self, agent_id: AgentId, tool_name: &str, conversation: ChannelId) {
+        tracing::info!(
+            event = "PermissionGrant",
+            agent_id = %agent_id,
+            tool_name = %tool_name,
+            conversation = ?conversation,
+            "运行期授权写入（本会话）"
+        );
+        self.0
+            .insert((agent_id, tool_name.to_string(), conversation));
+    }
+
+    /// 该会话内是否已授权该 Agent 使用该工具；`conversation` 为 `None` 时恒为否。
+    pub fn allows(
+        &self,
+        agent_id: AgentId,
+        tool_name: &str,
+        conversation: Option<&ChannelId>,
+    ) -> bool {
+        conversation.is_some_and(|c| {
+            self.0
+                .contains(&(agent_id, tool_name.to_string(), c.clone()))
+        })
+    }
+}
+
+/// 工具权限的完整解析：配置层权限（[`Agent::effective_permission`]）为 Confirm 时，
+/// 若当前会话已有运行期授权则提升为 Allow。运行期授权从不放宽 Deny。
+pub fn resolve_tool_permission(
+    agent: &Agent,
+    tool_name: &str,
+    registry: Option<&crate::domain::SpaceToolRegistry>,
+    grants: Option<&RuntimeGrants>,
+    conversation: Option<&ChannelId>,
+) -> (ToolPermission, PermissionSource) {
+    let (permission, source) = agent.effective_permission(tool_name, registry);
+    if permission == ToolPermission::Confirm
+        && grants.is_some_and(|g| g.allows(agent.id, tool_name, conversation))
+    {
+        return (ToolPermission::Allow, PermissionSource::RuntimeGrant);
+    }
+    (permission, source)
 }
 
 /// Agent 能力描述
@@ -141,19 +197,6 @@ impl Agent {
     ) -> (crate::domain::ToolPermission, PermissionSource) {
         self.tool_permissions
             .effective_permission(tool_name, registry)
-    }
-
-    /// 授予永久权限
-    pub fn grant_permission(&mut self, tool_name: String) {
-        tracing::info!(
-            event = "PermissionGrant",
-            agent_id = %self.id,
-            tool_name = %tool_name,
-            "永久授权写入"
-        );
-        self.tool_permissions
-            .overrides
-            .insert(tool_name, ToolPermission::Allow);
     }
 }
 

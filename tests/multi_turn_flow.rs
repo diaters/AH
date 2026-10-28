@@ -525,6 +525,23 @@ fn multi_turn_memory_records_user_and_assistant() {
     assert_eq!(stm.entries[1].role, EntryRole::Assistant);
 }
 
+/// 驱动 app 直到出现 `Waiting(User)` 的任务：LLM 结果经 tokio 异步回送，
+/// 全量测试负载高时固定帧数不够（曾因只跑 5 帧而偶发失败）。
+fn run_until_waiting_user(app: &mut App) {
+    for _ in 0..300 {
+        app.update();
+        let waiting = app
+            .world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .any(|t| t.status() == &TaskStatus::Waiting(WaitingReason::User));
+        if waiting {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn multi_turn_full_conversation_flow() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -551,9 +568,7 @@ fn multi_turn_full_conversation_flow() {
     });
 
     // 运行直到任务进入 Waiting(User)
-    for _ in 0..5 {
-        app.update();
-    }
+    run_until_waiting_user(&mut app);
 
     // 找到创建的任务
     let (entity_id, task) = app
@@ -736,9 +751,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
     });
 
     // 运行直到任务进入 Waiting(User)
-    for _ in 0..5 {
-        app.update();
-    }
+    run_until_waiting_user(&mut app);
 
     // 找到创建的任务
     let (entity_id, task) = app

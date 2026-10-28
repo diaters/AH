@@ -92,7 +92,7 @@ pub(crate) fn user_input_routing_system(
                     );
                     commands.spawn(SystemOutputMessage {
                         task_id: task.id,
-                        content: "请输入有效选项：1=仅本次允许，2=永久允许，3=拒绝".to_string(),
+                        content: "请输入有效选项：1=仅本次允许，2=本会话允许，3=拒绝".to_string(),
                     });
                 }
             }

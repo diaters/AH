@@ -42,11 +42,11 @@ impl ConfirmationOption {
         }
     }
 
-    /// 创建 "永久允许" 选项
+    /// 创建 "本会话允许" 选项（本次运行内对该会话复用，见 `RuntimeGrants`）
     pub fn allow_always() -> Self {
         Self {
             id: "allow_always".to_string(),
-            label: "Allow always".to_string(),
+            label: "Allow in this chat".to_string(),
             mode: GrantMode::Permanent,
         }
     }

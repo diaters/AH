@@ -10,19 +10,17 @@ use crate::{
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, EngineEvent, EventTarget,
-        ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
-        PermissionAuditContext, PermissionSource, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task, TaskStatus,
-        ToolCallingState, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
+        ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks,
+        ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory, SkillCreationContext,
+        SkillUpdateContext, Task, TaskStatus, ToolCallingState, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+        WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
     systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
-
-use super::dispatch::emit_permission_audit;
 
 use super::orchestrator::{
     ToolResources, ToolWorldQueries, clear_task_pending_confirmation_id, handle_tool_action,
@@ -104,7 +102,7 @@ pub fn approval_dispatch_system(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn approval_result_system(
     mut commands: Commands,
-    mut agents: Query<&mut Agent>,
+    agents: Query<&mut Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
@@ -209,45 +207,8 @@ pub fn approval_result_system(
                     "tool execution approved by parent agent"
                 );
 
-                // Permanent 模式：更新 Agent 权限
-                if result.grant_mode == GrantMode::Permanent
-                    && let Some(mut agent) = index
-                        .get_agent(&tool_request.request.agent_id)
-                        .and_then(|e| agents.get_mut(e).ok())
-                {
-                    agent.grant_permission(tool_request.tool_name.clone());
-                    debug!(
-                        event = "AgentPermissionUpdated",
-                        agent_id = %agent.id,
-                        tool_name = %tool_request.tool_name,
-                        "agent permission updated to Allow permanently"
-                    );
-                }
-
-                // 权限审计：Permanent grant（父 Agent 审批路径写入永久权限）。
-                // 仅在 Permanent 模式下发出；Once 模式未改 overrides，不发 Grant 审计。
-                if result.grant_mode == GrantMode::Permanent {
-                    let agent_name = index
-                        .get_agent(&tool_request.request.agent_id)
-                        .and_then(|e| agents.get(e).ok())
-                        .map(|a| a.profile.name.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let output_channel = index
-                        .get_task(&tool_request.request.task_id)
-                        .and_then(|e| tasks.get(e).ok())
-                        .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
-                    emit_permission_audit(
-                        frontend_registry,
-                        output_channel.as_ref(),
-                        tool_request.request.agent_id,
-                        &agent_name,
-                        &tool_request.tool_name,
-                        PermissionAction::Grant,
-                        PermissionSource::AgentOverride,
-                        PermissionAuditContext::ParentApproval,
-                    );
-                }
-
+                // 父 Agent 审批不写入任何持续授权：运行期授权只来自用户在会话中的选择
+                // （见 RuntimeGrants），Permanent 在此按仅本次处理。
                 info!(
                     event = "ApprovalResolved",
                     request_id = %result.request_id,

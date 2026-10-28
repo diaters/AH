@@ -63,6 +63,7 @@ pub fn build_harness_app(
     // 中心索引：外部 UUID 身份 → ECS Entity 映射。
     // 写入由 spawn/despawn 中心封装维护；陈旧兜底见下方 Maintenance 清理系统。
     app.init_resource::<crate::ecs::EntityIndex>();
+    app.init_resource::<crate::domain::RuntimeGrants>();
 
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());

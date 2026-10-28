@@ -12,10 +12,11 @@ use crate::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
         ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
-        PermissionSource, ProfileGenerationContext, ScheduledRun, SharedKnowledgeBase,
-        ShortTermMemory, SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task,
-        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolPermission, WaitingReason, WorkItem,
+        PermissionSource, ProfileGenerationContext, RuntimeGrants, ScheduledRun,
+        SharedKnowledgeBase, ShortTermMemory, SkillCreationContext, SkillUpdateContext,
+        SpaceToolRegistry, Task, ToolConfirmationRequestMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolPermission, WaitingReason, WorkItem,
+        resolve_tool_permission,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -65,12 +66,14 @@ pub fn tool_dispatch_system(
         Res<SkillLoader>,
         Res<FrontendRegistry>,
         Query<(), With<ScheduledRun>>,
+        Option<Res<RuntimeGrants>>,
     ),
 ) {
     let index = &mut index_clock_loader.0;
     let clock = &index_clock_loader.1;
     let frontend_registry = &index_clock_loader.3;
     let scheduled_runs = &index_clock_loader.4;
+    let runtime_grants = index_clock_loader.5.as_deref();
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
@@ -157,7 +160,17 @@ pub fn tool_dispatch_system(
             continue;
         }
 
-        let (permission, source) = agent.effective_permission(&tool_name, Some(&registry));
+        let conversation = index
+            .get_task(&request.request.task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .and_then(|(_, t)| t.origin_channel.clone());
+        let (permission, source) = resolve_tool_permission(
+            agent,
+            &tool_name,
+            Some(&registry),
+            runtime_grants,
+            conversation.as_ref(),
+        );
 
         // 预先提取 output_channel 供 PermissionAudit 使用（避免在三个 match 分支
         // 中各做一次 task 查询）。clone 后是 owned 值，无 borrow 约束。
@@ -810,6 +823,111 @@ mod tests {
 
         let task = world.query::<&Task>().get(&world, task_entity).unwrap();
         assert!(task.pending_confirmation_id.is_some());
+    }
+
+    #[test]
+    fn runtime_grant_applies_only_to_the_granting_conversation() {
+        let (mut world, task_id, agent_id, task_entity) = confirm_world();
+        let origin = world
+            .query::<&Task>()
+            .get(&world, task_entity)
+            .unwrap()
+            .origin_channel
+            .clone()
+            .unwrap();
+        let other = ChannelId {
+            user_id: "other".to_string(),
+            ..origin.clone()
+        };
+        let mut grants = crate::domain::RuntimeGrants::default();
+        grants.grant(agent_id, "shell_exec", other);
+        world.insert_resource(grants);
+        world.spawn(shell_exec_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_dispatch_system);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world
+                .query::<&ToolConfirmationRequestMessage>()
+                .iter(&world)
+                .count(),
+            1,
+            "a grant from another conversation must not skip confirmation"
+        );
+    }
+
+    #[test]
+    fn parent_runtime_grant_does_not_auto_approve_child() {
+        let (mut world, task_id, agent_id, task_entity) = confirm_world();
+        // 父任务 / 父 Agent：shell_exec 仅有运行期授权，配置层仍是 Confirm
+        let parent_agent = crate::domain::AgentId::new();
+        let parent_agent_entity_id = world
+            .spawn(Agent {
+                id: parent_agent,
+                profile: AgentProfile {
+                    name: "parent".to_string(),
+                    model: "m".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec![],
+                    description: String::new(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
+            })
+            .id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .agents
+            .insert(parent_agent, parent_agent_entity_id);
+        let mut parent = world
+            .query::<&Task>()
+            .get(&world, task_entity)
+            .unwrap()
+            .clone();
+        let parent_id = crate::domain::TaskId::new();
+        parent.id = parent_id;
+        parent.delegate = Some(parent_agent);
+        let origin = parent.origin_channel.clone().unwrap();
+        let parent_entity = world.spawn(parent).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(parent_id, parent_entity);
+        world
+            .query::<&mut Task>()
+            .get_mut(&mut world, task_entity)
+            .unwrap()
+            .parent_task_id = Some(parent_id);
+        let mut grants = crate::domain::RuntimeGrants::default();
+        grants.grant(parent_agent, "shell_exec", origin);
+        world.insert_resource(grants);
+        world.spawn(shell_exec_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_dispatch_system);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world
+                .query::<&crate::domain::ApprovalRequestMessage>()
+                .iter(&world)
+                .count(),
+            0,
+            "parent auto-approval must ignore runtime grants"
+        );
+        assert_eq!(
+            world
+                .query::<&ToolConfirmationRequestMessage>()
+                .iter(&world)
+                .count(),
+            1
+        );
     }
 
     #[test]

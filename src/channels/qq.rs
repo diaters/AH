@@ -1271,7 +1271,7 @@ impl QqChannel {
             if let Err(e) = self
                 .send_text_markdown(
                     &recipient,
-                    "该审批按钮已失效，请直接回复数字：1=仅本次允许，2=永久允许，3=拒绝。",
+                    "该审批按钮已失效，请直接回复数字：1=仅本次允许，2=本会话允许，3=拒绝。",
                 )
                 .await
             {
@@ -2012,7 +2012,7 @@ mod tests {
             request_id,
             vec![crate::domain::ApprovalOption {
                 id: "allow_always".to_string(),
-                label: "永久允许".to_string(),
+                label: "本会话允许".to_string(),
                 description: String::new(),
             }],
         )

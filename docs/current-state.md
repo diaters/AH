@@ -125,7 +125,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - shell 子进程以独立进程组运行：超时 / 取消 / `shell_stop` 终止整个进程组，后台孙进程不会成为孤儿；
   进程退出后输出读取线程只等待 500ms 宽限期，后台进程持有管道时不再阻塞 `shell_exec`
 - 输出快照在行数上限之外再按 64 KiB 截断尾部；已结束的会话记录最多保留 128 条
-- 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always` 授权的权限会立即复用，后续同工具请求直接执行
+- 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always`（"本会话允许"）授权会在同一会话内立即复用，后续同工具请求直接执行
 - 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务
 
 #### 工具权限决策链路
@@ -134,6 +134,11 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Agent::effective_permission(tool_name, registry)` 是权限查询单一入口
 - `default_permission_explicit` 字段区分显式/隐式 Confirm，仅隐式 Confirm 回退到工具默认
 - 子 Agent 权限继承：父 Confirm → 子 Confirm（不再降为 Allow）
+- 运行期授权（`RuntimeGrants`）：用户选择"本会话允许"时按（Agent, 工具, 任务 `origin_channel`）记录，进程内有效、
+  不持久化、不写入 `agent.overrides`；只把 Confirm 提升为 Allow，从不放宽 Deny。没有来源会话的任务
+  （webhook 事件、定时任务）不复用任何运行期授权，选择该选项时按仅本次处理。权限查询入口为
+  `resolve_tool_permission`（配置层三层回退 + 运行期授权）
+- 父 Agent 自动审批（MVP）只认配置层权限，不读运行期授权，也不写入任何持续授权
 - `EngineEvent::PermissionAudit` 审计事件覆盖 dispatch / async_dispatch / confirmation / approval 路径
 
 #### 异步工具桥
