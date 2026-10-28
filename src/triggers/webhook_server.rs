@@ -25,6 +25,10 @@ pub async fn run_webhook_server(
     input_tx: Sender<ExternalInput>,
     config: WebhookConfig,
 ) -> anyhow::Result<()> {
+    // 空 token 时任何不带请求头的请求都会通过认证，必须拒绝启动
+    if config.auth_token.trim().is_empty() {
+        anyhow::bail!("webhook auth_token must not be empty when webhook is enabled");
+    }
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/webhook/:kind", post(webhook_handler))
@@ -41,6 +45,14 @@ pub async fn run_webhook_server(
     );
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// 常量时间比较，避免按字节提前返回泄露 token 前缀。
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[derive(Clone)]
@@ -64,7 +76,7 @@ async fn webhook_handler(
         .get("X-Webhook-Token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if token != state.auth_token {
+    if !constant_time_eq(token.as_bytes(), state.auth_token.as_bytes()) {
         warn!(event = "WebhookAuthFailed", kind = %kind, "auth failed");
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -93,4 +105,17 @@ async fn webhook_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((StatusCode::ACCEPTED, Json(json!({"status": "accepted"}))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_eq;
+
+    #[test]
+    fn constant_time_eq_matches_only_identical_bytes() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secret1"));
+        assert!(!constant_time_eq(b"", b"x"));
+    }
 }

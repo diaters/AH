@@ -30,7 +30,7 @@ const ONCE_CATCH_UP_GRACE: Duration = Duration::seconds(60);
 /// 将事件触发消息路由为 `CreateTaskMessage`。
 ///
 /// - Webhook 触发走 `registry.route`，Timer 触发走 `registry.timer_route`
-/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支
+/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支（Webhook 不进入该分支）
 /// - 未注册的触发器会被丢弃并记录结构化日志
 /// - `build_task_input` 失败的触发器会被丢弃
 /// - 静态路由成功后产出 `CreateTaskMessage`，`origin_channel` 为 `None`，
@@ -99,7 +99,8 @@ pub fn trigger_task_routing_system(
                     );
                 }
             }
-        } else if kind.starts_with("scheduled:") {
+        } else if matches!(trigger, TaskTrigger::Timer { .. }) && kind.starts_with("scheduled:") {
+            // 动态定时任务只接受 timer 触发；webhook 路径不能借 kind 前缀触发定时任务
             route_scheduled_trigger(
                 &mut commands,
                 &kind,
@@ -601,6 +602,24 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn webhook_with_scheduled_kind_does_not_fire_dynamic_task() {
+        let (mut app, _events) = routing_app();
+        let kind = insert_definition(&mut app, "cron job", "cron:0 8 * * *", None);
+
+        app.world_mut().spawn(TriggerTaskMessage {
+            source: SignalSource("webhook".to_string()),
+            trigger: TaskTrigger::Webhook {
+                kind: kind.clone(),
+                body: serde_json::json!({}),
+            },
+        });
+        app.update();
+
+        assert!(created(&mut app).is_empty(), "webhook must not fire scheduled tasks");
+        assert!(definition_of(&app, &kind).unwrap().health.last_fired_at.is_none());
     }
 
     #[test]

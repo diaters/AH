@@ -469,7 +469,7 @@ prompt_template = "执行每日摘要"
 |------|------|------|------|
 | `webhook.enabled` | bool | 否 | 是否启用 webhook 服务器，默认 `false` |
 | `webhook.listen_addr` | string | 是（启用时） | 监听地址，格式 `host:port` |
-| `webhook.auth_token` | string | 否 | 共享认证 token；设置后请求需携带 `Authorization: Bearer <token>` |
+| `webhook.auth_token` | string | `enabled = true` 时必填 | 共享认证 token；请求需携带 `X-Webhook-Token: <token>` 请求头。启用 webhook 但 token 为空时 server 拒绝启动 |
 | `webhook.routes[].kind` | string | 是 | 触发 kind 标识，用于匹配 `SignalTriggerRegistry` 路由 |
 | `webhook.routes[].approval_channel` | table | 否 | 审批通道，包含 `frontend` 和 `user_id` 字段 |
 | `webhook.routes[].approval_context` | string | 否 | 审批上下文描述 |
