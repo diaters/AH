@@ -174,8 +174,7 @@ impl SessionBackend for NativeProcessBackend {
                 let mut handle = self.stop_session(id)?;
                 handle.timed_out = true;
                 handle.output = self.output_snapshot(id, tail_lines)?;
-                self.record_finished(handle.clone())?;
-                return Ok(handle);
+                return self.record_finished(handle);
             }
             let exit_status = {
                 let mut child = process
@@ -207,7 +206,7 @@ impl SessionBackend for NativeProcessBackend {
                 }
                 handle.finished_at = Some(Utc::now());
                 handle.output = self.output_snapshot(id, tail_lines)?;
-                self.record_finished(handle.clone())?;
+                let handle = self.record_finished(handle)?;
                 self.processes
                     .lock()
                     .map_err(|_| "process map poisoned".to_string())?
@@ -230,10 +229,7 @@ impl SessionBackend for NativeProcessBackend {
         self.refresh_session_state(request.handle_id)?;
         let mut handle = self.get_status(request.handle_id)?;
         handle.output = self.output_snapshot(request.handle_id, request.tail_lines)?;
-        self.sessions
-            .lock()
-            .map_err(|_| "session map poisoned".to_string())?
-            .insert(request.handle_id, handle.clone());
+        // 读取快照不回写句柄，避免与 stop 并发时把旧 Running 状态写回注册表。
         Ok(self.session_summary(handle))
     }
 
@@ -321,7 +317,7 @@ impl SessionBackend for NativeProcessBackend {
         handle.status = SessionStatus::Stopped;
         handle.finished_at = Some(Utc::now());
         handle.output = self.output_snapshot(handle_id, LIVE_SESSION_TAIL_LINES)?;
-        self.record_finished(handle.clone())?;
+        let handle = self.record_finished(handle)?;
 
         // Clean up process and stdin resources
         self.processes
@@ -729,12 +725,22 @@ impl NativeProcessBackend {
 impl NativeProcessBackend {
     /// 记录已结束的会话，并把已结束记录数量限制在上限内（淘汰最早结束的），
     /// 被淘汰会话的输出缓冲区一并释放。
-    fn record_finished(&self, handle: SessionHandle) -> Result<(), String> {
+    fn record_finished(&self, mut handle: SessionHandle) -> Result<SessionHandle, String> {
         let mut sessions = self
             .sessions
             .lock()
             .map_err(|_| "session map poisoned".to_string())?;
-        sessions.insert(handle.handle_id, handle);
+        // 所有完成路径在同一把锁下合并终态，stop 的明确结果不能被迟到完成覆盖。
+        if let Some(current) = sessions.get(&handle.handle_id)
+            && current.status == SessionStatus::Stopped
+            && handle.status != SessionStatus::Stopped
+        {
+            handle.status = current.status;
+            handle.exit_code = current.exit_code;
+            handle.timed_out = current.timed_out;
+            handle.finished_at = current.finished_at;
+        }
+        sessions.insert(handle.handle_id, handle.clone());
         let mut finished: Vec<_> = sessions
             .values()
             .filter_map(|h| h.finished_at.map(|at| (at, h.handle_id)))
@@ -751,7 +757,7 @@ impl NativeProcessBackend {
                 runtimes.remove(&id);
             }
         }
-        Ok(())
+        Ok(handle)
     }
 }
 
@@ -973,6 +979,24 @@ mod tests {
         };
         // SAFETY: 信号 0 只检查进程是否存在。
         unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    #[test]
+    fn stopped_terminal_state_survives_delayed_completion_writeback() {
+        let backend = NativeProcessBackend::default();
+        let running = backend
+            .start_session(exec_request("sleep 30", None))
+            .unwrap();
+        let mut delayed_completion = running.clone();
+        delayed_completion.status = SessionStatus::Completed;
+        delayed_completion.finished_at = Some(Utc::now());
+        delayed_completion.exit_code = Some(0);
+        backend.stop_session(running.handle_id).unwrap();
+        let returned = backend.record_finished(delayed_completion).unwrap();
+        assert_eq!(returned.status, SessionStatus::Stopped);
+        let stored = backend.get_status(running.handle_id).unwrap();
+        assert_eq!(stored.status, SessionStatus::Stopped);
+        assert_eq!(stored.exit_code, None);
     }
 
     /// 独立测试进程控制 stdin，避免并行测试修改宿主 fd0。

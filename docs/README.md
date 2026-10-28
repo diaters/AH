@@ -46,6 +46,7 @@
 
 | 文档 | 状态 | 定位 |
 | --- | --- | --- |
+| `analysis/2026-10-29-process-ownership-quality-review.md` | 自查记录 | 任务 A 终态竞态修正与验证边界 |
 | `analysis/skill-path-injection-improvement.md` | 待评审 | Skill 路径注入改进方案（历史分析） |
 | `analysis/test-seam-quality-low-value-inventory.md` | 待评审 | 低质量测试清单与原因（Seam 与证伪力评估），评审后拆解为修复任务 |
 
