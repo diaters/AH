@@ -26,7 +26,8 @@ use crate::triggers::scheduled_task::{ScheduledItem, SchedulerState};
 /// 当 `state_rx` 的发送端关闭时返回 `Ok(())`。
 ///
 /// cron 使用 `Local` 时区，一次性任务使用 `Utc` 比较；两者统一到
-/// `DateTime<Utc>` 后取最早 deadline。一次性任务触发后立即从本地
+/// `DateTime<Utc>` 后取最早 deadline；唤醒后触发所有已到期的 cron（同刻
+/// 到期的多个 cron 全部触发）。一次性任务触发后立即从本地
 /// `schedules` 副本移除，避免重复触发。
 pub async fn run_timer_scheduler(
     input_tx: Sender<ExternalInput>,
@@ -45,7 +46,10 @@ pub async fn run_timer_scheduler(
     loop {
         let now_utc = Utc::now();
 
-        let next_cron: Option<(DateTime<Utc>, String)> = schedules
+        // 每个 cron 各自的下一次触发时间。唤醒后逐个判定到期，而不是只取
+        // 最早的一个：同一时刻到期的多个 cron 必须全部触发，否则唤醒后从
+        // 当前时间重算 `upcoming` 会把其余 cron 的这一次永久跳过。
+        let cron_deadlines: Vec<(DateTime<Utc>, String)> = schedules
             .iter()
             .filter_map(|item| match item {
                 ScheduledItem::Cron { schedule, kind } => schedule
@@ -54,7 +58,9 @@ pub async fn run_timer_scheduler(
                     .map(|t| (t.with_timezone(&Utc), kind.clone())),
                 ScheduledItem::Once { .. } => None,
             })
-            .min_by_key(|(t, _)| *t);
+            .collect();
+        let next_cron: Option<&(DateTime<Utc>, String)> =
+            cron_deadlines.iter().min_by_key(|(t, _)| *t);
 
         // 一次性任务取最早触发时间（无论是否已过期），过期任务在唤醒后立即触发
         let next_once: Option<(DateTime<Utc>, String)> = schedules
@@ -67,7 +73,6 @@ pub async fn run_timer_scheduler(
 
         // 合并 cron 与一次性任务，取最早的 UTC 时间作为 sleep 目标
         let next_deadline: Option<&(DateTime<Utc>, String)> = next_cron
-            .as_ref()
             .into_iter()
             .chain(next_once.as_ref())
             .min_by_key(|(t, _)| *t);
@@ -92,11 +97,13 @@ pub async fn run_timer_scheduler(
                 // 是 sleep 前的未来时间）会永远满足 `cron_time <= pre_sleep_now`，
                 // 导致 cron 与未来一次性任务永远不触发。
                 let now_utc = Utc::now();
-                // 触发到期的 cron 任务。`next_cron` 是 sleep 前计算的最早 cron
-                // 触发时间；若 sleep 因其到期而唤醒，则 `cron_time <= now_utc`。
-                if let Some((cron_time, cron_kind)) = &next_cron
-                    && *cron_time <= now_utc
-                {
+                // 触发所有到期的 cron 任务。`cron_deadlines` 是 sleep 前计算的
+                // 各 cron 下一次触发时间；sleep 因最早者到期而唤醒时，与其同刻
+                // （或因唤醒延迟已过期）的 cron 同样满足 `cron_time <= now_utc`。
+                for (cron_time, cron_kind) in &cron_deadlines {
+                    if *cron_time > now_utc {
+                        continue;
+                    }
                     debug!(
                         event = "TimerTriggered",
                         kind = %cron_kind,

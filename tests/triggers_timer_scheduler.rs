@@ -331,3 +331,65 @@ async fn one_shot_task_triggers_and_is_removed() {
 
     handle.abort();
 }
+
+/// 验证同一时刻到期的多个 cron 任务全部触发。
+///
+/// 回归：scheduler 曾只取最早的单个 cron（`min_by_key`）触发，唤醒后再从
+/// 当前时间重算下一次，导致同一时刻到期的其余 cron 被永久跳过（例如
+/// `*/5` 轮询与 `0 8` 日报在 08:00 相撞时只触发其一）。两个每秒触发的
+/// 动态 cron 任务时刻完全重合，修复前第二个永远收不到信号。
+#[tokio::test]
+async fn crons_due_at_same_instant_all_fire() {
+    use chrono::Utc;
+    use cron::Schedule;
+    use harness::triggers::{DynamicScheduledTask, ScheduleSpec};
+    use std::collections::HashSet;
+    use std::str::FromStr;
+    use uuid::Uuid;
+
+    let every_second = || {
+        ScheduleSpec::Cron(Box::new(
+            Schedule::from_str("* * * * * * *").expect("valid cron"),
+        ))
+    };
+    let mut state = SchedulerState::default();
+    for kind in ["scheduled:a", "scheduled:b"] {
+        state.dynamic_tasks_mut().push(DynamicScheduledTask {
+            id: Uuid::new_v4(),
+            kind: kind.to_string(),
+            schedule: every_second(),
+            created_at: Utc::now(),
+        });
+    }
+
+    let (input_tx, input_rx) = unbounded::<ExternalInput>();
+    let (_state_tx, state_rx) = watch::channel(state);
+    let handle = tokio::spawn(async move {
+        let _ = run_timer_scheduler(input_tx, state_rx).await;
+    });
+
+    // 收集约 3 秒内的触发信号（至少覆盖两个整秒边界）
+    let fired = tokio::task::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut kinds = HashSet::new();
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match input_rx.recv_timeout(left) {
+                Ok(ExternalInput::Timer { kind, .. }) => {
+                    kinds.insert(kind);
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        kinds
+    })
+    .await
+    .expect("collector panicked");
+
+    handle.abort();
+    assert!(
+        fired.contains("scheduled:a") && fired.contains("scheduled:b"),
+        "both crons due at the same instant must fire, got: {:?}",
+        fired
+    );
+}
