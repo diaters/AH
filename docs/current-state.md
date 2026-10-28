@@ -25,6 +25,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `WorkItem` 作为内部执行单元
 - `Evaluation` 与 `Summarization` 已迁移到 `WorkItem` 闭环
 - `AgentExecutionRequest` 作为瞬时执行请求，不承担长期业务状态
+- 终态任务回收：`terminal_task_retention_system` 每 30 秒扫描，任务树内全部终态且超过
+  `HARNESS_TERMINAL_TASK_RETENTION_SECS`（默认 1 小时）、无未终态 WorkItem 时整树销毁并清理终态派发去重集合；
+  仍处于 `Waiting(User)` 的多轮任务不回收（需 `/finish` 或 `/clear`）
 
 #### 协作与编排
 

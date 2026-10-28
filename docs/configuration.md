@@ -117,6 +117,7 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | `HARNESS_MAX_TOOL_ITERATIONS` | `5` | 单次用户输入后，LLM 工具调用最大迭代次数 |
 | `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS` | `300` | `wait_tasks` 默认超时时间 |
 | `HARNESS_TOOL_INFLIGHT_TIMEOUT_SECS` | `300` | 异步工具调用全局失联超时（秒），sweeper 推导 `max_duration` 的全局缺省 |
+| `HARNESS_TERMINAL_TASK_RETENTION_SECS` | `3600` | 终态任务树保留时长（秒）：树内任务全部终态且超过该时长、无未终态 WorkItem 时整树回收 |
 | `HARNESS_AGENTS_CONFIG` | `agents.toml` | Agent 配置文件路径 |
 | `HARNESS_LOG_DIR` | `logs` | JSONL 日志输出目录 |
 

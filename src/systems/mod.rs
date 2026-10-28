@@ -18,6 +18,7 @@ mod runtime_config;
 mod schedule;
 mod summarization;
 mod sweeper;
+mod task_retention;
 pub mod tools;
 pub mod transform;
 
@@ -76,6 +77,7 @@ pub(crate) use tools::{
 // `pub(crate)` 仅 crate 内可见）。
 pub use runtime_config::{BrainConfig, HarnessConfig, HarnessSettings};
 pub use sweeper::sweep_inflight_tool_calls;
+pub use task_retention::terminal_task_retention_system;
 pub use tools::async_tool_dispatch_system;
 pub use tools::cancel_monitor_system;
 pub use tools::commit_tool_effects_system;
