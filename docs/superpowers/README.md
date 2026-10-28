@@ -26,6 +26,10 @@
 
 ### 活跃规格
 
+新提交评审：
+[单通道用户任务、受管进程与持续监控通知修正](specs/2026-10-28-channel-task-and-process-lifecycle-design.md)。
+单通道任务范围已由用户确认；实现方案待书面评审，尚未实施。
+
 | 文件 | 主题 | 状态 |
 |------|------|------|
 | `specs/2026-07-04-sequential-tool-confirmation-design.md` | 顺序工具确认设计 | 当前有效 |

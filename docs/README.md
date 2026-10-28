@@ -77,6 +77,10 @@
 
 ## 活跃规格与计划（superpowers/）
 
+新增评审稿：
+[单通道用户任务、受管进程与持续监控通知修正](superpowers/specs/2026-10-28-channel-task-and-process-lifecycle-design.md)。
+本文为实施前评审输入，不代表当前能力已变更。
+
 > 完整清单见 `superpowers/README.md`。当前：__13 个活跃计划、12 个规格__（其中 11 篇标注 `当前有效`，1 篇草案，1 篇待补状态）。
 
 注意：标记为 `当前有效` 的规格若对应功能已合并 main（对照 `current-state.md` 的"已实现"章节），应按生命周期规则在 7 天内归档到 `docs/archive/superpowers/`。索引只反映文档自身声明状态，是否归档以实际合入为准。
