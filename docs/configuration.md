@@ -169,7 +169,7 @@ Agent 配置通过 `HARNESS_AGENTS_CONFIG` 指定的 TOML 文件加载（默认 
 | `vision` | `bool` | `false` | 模型是否接受图片输入 |
 
 `vision = true` 时，用户消息与工具结果中的 `[IMAGE:path]` 标记会作为真实图片发给模型
-（单次请求最多 10 张，单张不超过 5 MiB，仅 png/jpeg/gif/webp）；`false` 或降级到未声明的模型时，
+（单次请求最多 10 张、同一路径只发一份，单张不超过 5 MiB，仅 png/jpeg/gif/webp）；`false` 或降级到未声明的模型时，
 图片保持文本标记，与此前行为一致。
 
 ```toml
