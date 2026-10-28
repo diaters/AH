@@ -9,29 +9,61 @@ pub struct ChannelConfigs {
 }
 
 impl ChannelConfigs {
-    /// 将 `user` 追加到 `[qq].allowed_users` 并持久化到 `path`。
-    ///
-    /// 配置文件 IO 与格式知识收口于此（通道模块不直接写配置）：
-    /// 内部以 `ChannelConfigs` 全量读写而非仅 `[qq]` 段，
-    /// 确保 `[telegram]` 等其他段不丢失；文件缺失时以 `default_qq` 初始化。
+    /// 将 `user` 追加到 `[qq].allowed_users` 并持久化到 `path`；文件缺失 `[qq]` 段时以 `default_qq` 初始化。
     pub async fn append_qq_allowed_user(
         path: &std::path::Path,
         user: &str,
         default_qq: QqConfig,
     ) -> Result<(), String> {
-        let mut configs: Self = tokio::fs::read_to_string(path)
-            .await
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default();
-        let qq = configs.qq.get_or_insert(default_qq);
-        if !qq.allowed_users.iter().any(|u| u == user) {
-            qq.allowed_users.push(user.to_string());
-        }
+        Self::update_file(path, |configs| {
+            let qq = configs.qq.get_or_insert(default_qq);
+            if !qq.allowed_users.iter().any(|u| u == user) {
+                qq.allowed_users.push(user.to_string());
+            }
+        })
+        .await
+    }
+
+    /// 将 `user` 追加到 `[telegram].allowed_users` 并持久化到 `path`；
+    /// 文件缺失 `[telegram]` 段时以 `default_telegram` 初始化。
+    pub async fn append_telegram_allowed_user(
+        path: &std::path::Path,
+        user: &str,
+        default_telegram: TelegramConfig,
+    ) -> Result<(), String> {
+        Self::update_file(path, |configs| {
+            let tg = configs.telegram.get_or_insert(default_telegram);
+            if !tg.allowed_users.iter().any(|u| u == user) {
+                tg.allowed_users.push(user.to_string());
+            }
+        })
+        .await
+    }
+
+    /// 读取 → 修改 → 原子写回配置文件。
+    ///
+    /// 配置文件 IO 与格式知识收口于此（通道模块不直接写配置）：以 `ChannelConfigs`
+    /// 全量读写，确保其他段不丢失。文件不存在时从空配置开始；文件存在但读取或解析
+    /// 失败时返回错误、不覆盖原文件，避免丢掉其他通道的配置与凭据。
+    async fn update_file(
+        path: &std::path::Path,
+        apply: impl FnOnce(&mut Self),
+    ) -> Result<(), String> {
+        let mut configs: Self = match tokio::fs::read_to_string(path).await {
+            Ok(text) => toml::from_str(&text)
+                .map_err(|e| format!("refuse to overwrite unparseable {}: {e}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(format!("read {}: {e}", path.display())),
+        };
+        apply(&mut configs);
         let content = toml::to_string_pretty(&configs).map_err(|e| e.to_string())?;
-        tokio::fs::write(path, content)
+        let tmp = path.with_extension("toml.tmp");
+        tokio::fs::write(&tmp, content)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        tokio::fs::rename(&tmp, path)
+            .await
+            .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))
     }
 
     /// 展开配置文件中的环境变量引用。
@@ -105,6 +137,58 @@ fn expand_env_var(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn qq_default() -> QqConfig {
+        QqConfig {
+            app_id: "id".to_string(),
+            app_secret: "secret".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: true,
+            pairing_code: Some("code".to_string()),
+        }
+    }
+
+    /// 配置文件无法解析时不能用默认值整体覆盖，否则会丢掉其他通道的配置与凭据。
+    #[tokio::test]
+    async fn append_allowed_user_refuses_to_overwrite_unparseable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("channels.toml");
+        let original = "[telegram]\nbot_token = \"keep-me\"\nallowed_users = [\n";
+        std::fs::write(&path, original).unwrap();
+
+        let result = ChannelConfigs::append_qq_allowed_user(&path, "u1", qq_default()).await;
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn append_allowed_user_preserves_other_sections_and_writes_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("channels.toml");
+        std::fs::write(&path, "[telegram]\nbot_token = \"keep-me\"\n").unwrap();
+
+        ChannelConfigs::append_qq_allowed_user(&path, "u1", qq_default())
+            .await
+            .unwrap();
+        let tg_default = TelegramConfig {
+            bot_token: "from-memory".to_string(),
+            allowed_users: vec![],
+            pairing_enabled: false,
+            pairing_code: None,
+        };
+        ChannelConfigs::append_telegram_allowed_user(&path, "t1", tg_default)
+            .await
+            .unwrap();
+
+        let cfg: ChannelConfigs = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let tg = cfg.telegram.unwrap();
+        assert_eq!(tg.bot_token, "keep-me");
+        assert_eq!(tg.allowed_users, vec!["t1".to_string()]);
+        assert_eq!(cfg.qq.unwrap().allowed_users, vec!["u1".to_string()]);
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(leftovers.len(), 1, "temporary file must be renamed away");
+    }
 
     #[test]
     fn parse_telegram_config() {

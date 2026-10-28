@@ -170,6 +170,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `ChannelOutboundMessage` 携带 `MessageKind`（LLMReply/TaskStatus/ApprovalRequest/System/Recall/Other）
 - IM 通道状态消息治理：任务状态消息滚动撤回（发新撤旧，避免 2 分钟超时）、入向 ACK 用 typing 替代（C2C）、审批请求消息点击后撤回、LLM 回复到达时撤回最终态状态消息
 - Telegram 通道接入（长轮询、白名单、文本分块发送）
+- `/bind` 配对授权回写 `channels.toml` 统一经 `ChannelConfigs::update_file`：原子写入，文件无法解析时拒绝覆盖
 - Telegram 通道消息撤回（`deleteMessage`）与输入状态指示器（`sendChatAction` with `typing`）
 - QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 - QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
