@@ -35,7 +35,10 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::systems::BrainConfig { enabled: true }),
+        brain: Some(harness::systems::BrainConfig {
+            enabled: true,
+            fallback_agent: None,
+        }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,

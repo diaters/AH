@@ -7,8 +7,8 @@
 //! 本 system 已从"直接 spawn AgentExecutionRequestMessage + fallback"改造为
 //! "产出 PendingDispatch(DirectDelegate)"。实际派发由 `dispatch_system` 处理。
 //!
-//! 移除了 fallback 到第一个非 brain Persistent Agent 的逻辑——Brain 失败
-//! 现在直接 Task Failed（语义诚实，符合 AGENTS.md "避免伪精细控制面"原则）。
+//! 移除了 fallback 到第一个非 brain Persistent Agent 的隐式逻辑——Brain 失败默认直接
+//! Task Failed（语义诚实）；部署方可显式配置 `HARNESS_BRAIN_FALLBACK_AGENT` 指定兜底 Agent。
 
 use crate::prelude::*;
 use tracing::{debug, warn};
@@ -36,6 +36,7 @@ use super::brain_dispatch::parse_brain_skill_selection;
 ///
 /// - Brain 输出 JSON 解析失败 → Task Failed
 /// - Brain 选的 Agent 不存在或非 Persistent → Task Failed
+/// - 以上两种及下方不可重试失败：配置了兜底 Agent 时改为直接派发给它（`BrainFallbackUsed`）
 /// - Brain 选的 skill 不属于该 Agent → 降级为 None + warn 日志（防御性处理，Brain prompt 已含候选 Agent skills 清单）
 /// - Brain LLM 调用返回可重试错误且未超 retry 上限 → schedule_retry
 /// - Brain LLM 调用返回不可重试错误或超 retry → mark_failed
@@ -91,7 +92,20 @@ pub fn brain_decision_system(
                         .any(|a| a.profile.name == agent_name && a.kind == AgentKind::Persistent);
 
                     if !agent_exists {
-                        // Brain 选了不存在的 Agent，直接 Failed（不 fallback）
+                        let reason = format!("brain selected unknown agent '{agent_name}'");
+                        if try_brain_fallback(
+                            &mut commands,
+                            task_entity,
+                            &task,
+                            awaiting,
+                            brain_config.fallback_agent.as_deref(),
+                            &agents,
+                            &reason,
+                        ) {
+                            commands.entity(entity).despawn();
+                            continue;
+                        }
+                        // 未配置兜底 Agent：Brain 选了不存在的 Agent，直接 Failed
                         task.mark_failed_reason(
                             FailureReason::AgentError,
                             format!(
@@ -167,8 +181,18 @@ pub fn brain_decision_system(
                         "brain decision resolved, task re-queued for direct dispatch"
                     );
                 }
+                Err(e)
+                    if try_brain_fallback(
+                        &mut commands,
+                        task_entity,
+                        &task,
+                        awaiting,
+                        brain_config.fallback_agent.as_deref(),
+                        &agents,
+                        &format!("brain output parse failed: {e:?}"),
+                    ) => {}
                 Err(e) => {
-                    // JSON 解析失败，直接 Failed
+                    // 未配置兜底 Agent：JSON 解析失败，直接 Failed
                     task.mark_failed_reason(
                         FailureReason::AgentError,
                         format!("brain skill selection parse failed: {:?}", e),
@@ -198,15 +222,74 @@ pub fn brain_decision_system(
                 task.schedule_retry(error, clock.0);
             }
             Err(error) => {
-                task.mark_failed(error, clock.0);
-                commands
-                    .entity(task_entity)
-                    .remove::<AwaitingBrainDecision>();
+                let reason = format!("brain LLM call failed: {}", error.message());
+                if !try_brain_fallback(
+                    &mut commands,
+                    task_entity,
+                    &task,
+                    awaiting,
+                    brain_config.fallback_agent.as_deref(),
+                    &agents,
+                    &reason,
+                ) {
+                    task.mark_failed(error, clock.0);
+                    commands
+                        .entity(task_entity)
+                        .remove::<AwaitingBrainDecision>();
+                }
             }
         }
 
         commands.entity(entity).despawn();
     }
+}
+
+/// Brain 未能给出可用决策时，若配置了兜底 Agent（`HARNESS_BRAIN_FALLBACK_AGENT`）且它是存在的
+/// Persistent Agent，则不注入 skill、直接派发给它并返回 `true`；否则返回 `false`，由调用方按原语义标记失败。
+fn try_brain_fallback(
+    commands: &mut Commands,
+    task_entity: Entity,
+    task: &Task,
+    awaiting: Option<&AwaitingBrainDecision>,
+    fallback_agent: Option<&str>,
+    agents: &Query<&Agent>,
+    reason: &str,
+) -> bool {
+    let Some(fallback) = fallback_agent else {
+        return false;
+    };
+    if !agents
+        .iter()
+        .any(|a| a.profile.name == fallback && a.kind == AgentKind::Persistent)
+    {
+        warn!(
+            event = "BrainFallbackAgentMissing",
+            task_id = %task.id,
+            fallback_agent = %fallback,
+            "configured brain fallback agent is not a persistent agent, task will fail"
+        );
+        return false;
+    }
+    warn!(
+        event = "BrainFallbackUsed",
+        task_id = %task.id,
+        fallback_agent = %fallback,
+        reason = %reason,
+        "brain could not decide, dispatching to fallback agent"
+    );
+    commands
+        .entity(task_entity)
+        .remove::<AwaitingBrainDecision>()
+        .insert(PendingDispatch {
+            kind: DispatchKind::Task,
+            hint: DispatchHint {
+                strategy: DispatchStrategy::DirectDelegate,
+                preferred_agent_name: Some(fallback.to_string()),
+                required_skill_id: None,
+                agent_spawn_spec: awaiting.and_then(|a| a.spawn_spec.clone()),
+            },
+        });
+    true
 }
 
 #[cfg(test)]
@@ -222,9 +305,16 @@ mod tests {
 
     /// 构造最小 Bevy App，注册 brain_decision_system 及其所需资源。
     fn make_brain_decision_test_app() -> App {
+        make_brain_decision_test_app_with_fallback(None)
+    }
+
+    fn make_brain_decision_test_app_with_fallback(fallback_agent: Option<&str>) -> App {
         let mut app = App::new();
         let config = HarnessConfig {
-            brain: Some(BrainConfig { enabled: true }),
+            brain: Some(BrainConfig {
+                enabled: true,
+                fallback_agent: fallback_agent.map(str::to_string),
+            }),
             ..HarnessConfig::default()
         };
         app.insert_resource(Clock::default());
@@ -346,6 +436,70 @@ mod tests {
         app.world_mut()
             .entity(entity)
             .contains::<AwaitingBrainDecision>()
+    }
+
+    fn pending_delegate(app: &mut App, task_id: crate::domain::TaskId) -> Option<String> {
+        app.world_mut()
+            .query::<(&Task, &PendingDispatch)>()
+            .iter(app.world())
+            .find(|(t, _)| t.id == task_id)
+            .and_then(|(_, p)| {
+                matches!(p.hint.strategy, DispatchStrategy::DirectDelegate)
+                    .then(|| p.hint.preferred_agent_name.clone())
+                    .flatten()
+            })
+    }
+
+    fn make_brain_error_result(task_id: crate::domain::TaskId) -> AgentExecutionResultMessage {
+        let mut message = make_brain_text_result(task_id, "");
+        message.result.result = Err(crate::domain::ExecutionError::Authentication(
+            "invalid key".to_string(),
+        ));
+        message
+    }
+
+    /// 配置了兜底 Agent 时，Brain 的三类失败都改为直接派发给兜底 Agent。
+    #[test]
+    fn brain_failures_fall_back_to_configured_agent() {
+        let outcomes: Vec<fn(crate::domain::TaskId) -> AgentExecutionResultMessage> = vec![
+            |id| make_brain_text_result(id, "not json"),
+            |id| make_brain_text_result(id, r#"{"agent_name": "ghost"}"#),
+            make_brain_error_result,
+        ];
+        for outcome in outcomes {
+            let mut app = make_brain_decision_test_app_with_fallback(Some("generalist"));
+            spawn_persistent_agent(&mut app, "generalist");
+            let task_id = spawn_brain_awaiting_task(&mut app);
+            app.world_mut().spawn(outcome(task_id));
+
+            app.update();
+
+            assert_eq!(
+                pending_delegate(&mut app, task_id).as_deref(),
+                Some("generalist")
+            );
+            assert!(!matches!(
+                get_task_status(&mut app, task_id),
+                Some(TaskStatus::Failed(_))
+            ));
+            assert!(!has_awaiting_brain_decision(&mut app, task_id));
+        }
+    }
+
+    /// 兜底 Agent 不存在时仍按原语义失败，不派发到不存在的 Agent。
+    #[test]
+    fn missing_fallback_agent_still_fails() {
+        let mut app = make_brain_decision_test_app_with_fallback(Some("generalist"));
+        let task_id = spawn_brain_awaiting_task(&mut app);
+        app.world_mut().spawn(make_brain_error_result(task_id));
+
+        app.update();
+
+        assert!(matches!(
+            get_task_status(&mut app, task_id),
+            Some(TaskStatus::Failed(_))
+        ));
+        assert_eq!(pending_delegate(&mut app, task_id), None);
     }
 
     #[test]

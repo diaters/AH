@@ -29,7 +29,10 @@ fn extract_short_id_from_text(text: &str) -> Option<String> {
 /// 生成启用 Brain 的测试配置（auto_channel_reply 测试需要走 BrainLlm 派发路径）。
 fn brain_enabled_config() -> HarnessConfig {
     HarnessConfig {
-        brain: Some(BrainConfig { enabled: true }),
+        brain: Some(BrainConfig {
+            enabled: true,
+            fallback_agent: None,
+        }),
         ..Default::default()
     }
 }

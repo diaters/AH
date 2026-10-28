@@ -335,7 +335,10 @@ fn large_input_is_handled() {
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig {
-            brain: Some(harness::systems::BrainConfig { enabled: true }),
+            brain: Some(harness::systems::BrainConfig {
+                enabled: true,
+                fallback_agent: None,
+            }),
             ..test_config()
         },
         runtime,

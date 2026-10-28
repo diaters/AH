@@ -47,7 +47,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - SubTask 派发前置：`subtask_dispatch_preparation_system` 负责 DAG 依赖检查、兄弟任务结果收集、
   `AgentSpawnSpec` 准备，完成后附加 `PendingDispatch`
 - Brain LLM 决策：Brain Agent 选择执行 Agent + skill，产出 `PendingDispatch(DirectDelegate)`；
-  LLM 失败直接标记 Task 为 `Failed`，不 fallback
+  LLM 失败、输出无法解析或选了不存在的 Agent 时默认标记 Task 为 `Failed`；显式配置
+  `HARNESS_BRAIN_FALLBACK_AGENT` 后改为不注入 skill 直接派发给该 Agent（`BrainFallbackUsed`）
 - skill 注入：对所有 Task 适用（max 1），仅限 Persistent Agent，通过 `TaskInjectedSkill`
   Component 注入；Brain 选中 skill 时按依赖闭包收窄注入（`build_injected_skills`），
   未选中或闭包为空时维持全量注入（G4 行为变更最小化）

@@ -112,6 +112,7 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `HARNESS_BRAIN_ENABLED` | `false` | 是否启用 Brain Agent 调度 |
+| `HARNESS_BRAIN_FALLBACK_AGENT` | 未设置 | Brain 未能给出可用决策时直接派发的 Persistent Agent 名称；未设置时任务直接失败 |
 | `HARNESS_MAX_RETRIES` | `3` | LLM 请求最大重试次数 |
 | `HARNESS_LLM_REQUEST_TIMEOUT_SECS` | `300` | 单次 LLM 请求总超时（秒），超时按可重试的 `Timeout` 处理，避免 provider 连接挂住时任务永远停在 Running |
 | `HARNESS_MAX_TOOL_ITERATIONS` | `5` | 单次用户输入后，LLM 工具调用最大迭代次数 |

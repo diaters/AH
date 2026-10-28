@@ -13,6 +13,9 @@ use crate::prelude::Resource;
 #[derive(Debug, Clone)]
 pub struct BrainConfig {
     pub enabled: bool,
+    /// Brain 未能给出可用决策（LLM 失败、输出无法解析、选了不存在的 Agent）时直接派发的
+    /// Persistent Agent 名称；`None` 时任务直接失败（默认，保持"失败要显式"）
+    pub fallback_agent: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +69,13 @@ impl HarnessConfig {
 
         let brain =
             if std::env::var("HARNESS_BRAIN_ENABLED").is_ok_and(|v| v.to_lowercase() == "true") {
-                Some(BrainConfig { enabled: true })
+                Some(BrainConfig {
+                    enabled: true,
+                    fallback_agent: std::env::var("HARNESS_BRAIN_FALLBACK_AGENT")
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty()),
+                })
             } else {
                 None
             };
