@@ -89,6 +89,7 @@ fn on_llm_response_removes_marker() {
             reasoning_content: None,
             work_item_id: None,
             conversation: None,
+            turn_generation: None,
         },
     };
     let entity = app.world_mut().spawn((msg, LlmResponseHookPending)).id();

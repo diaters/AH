@@ -130,6 +130,7 @@ mod tests {
             reasoning_content: None,
             work_item_id: None,
             conversation: None,
+            turn_generation: None,
         }
     }
 

@@ -174,6 +174,7 @@ tool_deny("test deny reason");
                         conversation: None,
                         work_item_id: None,
                         model_override: None,
+                        turn_generation: None,
                         vision: false,
                     },
                     tool_name: "shell_exec".to_string(),

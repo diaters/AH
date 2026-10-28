@@ -1,0 +1,23 @@
+# 场景：后台任务通知重新拉起（Agent loop 设计 §7）
+# shell_start 后台运行 → 本轮回复后任务空闲 → 进程退出通知拉起任务 → 汇报后台输出
+[scenario]
+name = "background_shell_notify"
+description = "后台 shell 退出后以 task-notification 拉起空闲任务并汇报结果"
+input = "请用 shell_start 在后台运行命令 `sleep 2; echo BG_DONE`。启动后直接回复“已在后台启动”，不要等待或读取输出。收到后台完成通知后，请汇报输出内容。"
+multi_turn = true
+max_cost_usd = 0.10
+timeout_secs = 120
+
+[[assertions]]
+type = "tool_called"
+tool = "shell_start"
+min_times = 1
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = "BG_DONE"
+desc = "被通知拉起后的回复包含后台输出"

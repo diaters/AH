@@ -10,10 +10,15 @@
 
 use bevy_ecs::prelude::*;
 use chrono::Utc;
-use tracing::warn;
+use tracing::{debug, warn};
 
+use crate::contracts::FrontendRegistry;
 use crate::domain::compute_next_trigger;
-use crate::domain::{ToolAsyncResult, ToolEffect, ToolEffectPending, ToolError, ToolResultSender};
+use crate::domain::{
+    EngineEvent, EventTarget, Task, TaskId, TaskTodoList, TodoItem, TodoStatus, ToolAsyncResult,
+    ToolEffect, ToolEffectPending, ToolError, ToolResultSender, render_todos,
+};
+use crate::ecs::EntityIndex;
 use crate::triggers::scheduled_task::update_scheduler_state;
 use crate::triggers::{DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo};
 
@@ -105,6 +110,7 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                 "next_trigger": next_trigger,
             }))
         }
+        ToolEffect::UpdateTodos { task_id, items } => apply_update_todos(world, *task_id, items),
         ToolEffect::WriteSkillFile {
             sandbox_dir,
             path,
@@ -133,5 +139,145 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                 ))),
             }
         }
+    }
+}
+
+/// `update_todos` 落账：替换 `TaskTodoList` 并通知前端（纯展示数据，见 ADR-007）。
+fn apply_update_todos(
+    world: &mut World,
+    task_id: TaskId,
+    items: &[TodoItem],
+) -> Result<serde_json::Value, ToolError> {
+    let entity = world
+        .get_resource::<EntityIndex>()
+        .and_then(|index| index.get_task(&task_id))
+        .ok_or_else(|| ToolError::InternalState(format!("task {task_id} not found")))?;
+
+    let previous = world
+        .get::<TaskTodoList>(entity)
+        .map(|list| list.items.clone())
+        .unwrap_or_default();
+    let progress_changed = todo_progress_changed(&previous, items);
+    world.entity_mut(entity).insert(TaskTodoList {
+        items: items.to_vec(),
+    });
+
+    let target = world
+        .get::<Task>(entity)
+        .and_then(|task| task.routing_policy.output_channel().cloned())
+        .map(|channel| EventTarget::Directed(vec![channel]));
+    if let (Some(target), Some(registry)) = (target, world.get_resource::<FrontendRegistry>()) {
+        let event = EngineEvent::TodoUpdated {
+            target,
+            task_id,
+            items: items.to_vec(),
+            progress_changed,
+        };
+        for frontend in &registry.frontends {
+            frontend.push_event(event.clone());
+        }
+    }
+    debug!(
+        event = "TodoListUpdated",
+        task_id = %task_id,
+        todo_count = items.len(),
+        progress_changed = progress_changed,
+        "task todo list updated"
+    );
+
+    Ok(serde_json::json!({
+        "status": "updated",
+        "todos": render_todos(items),
+    }))
+}
+
+/// 进行中条目变化、全部完成或清单新建/清空时视为进度变化（IM 端据此推送，避免刷屏）。
+fn todo_progress_changed(previous: &[TodoItem], next: &[TodoItem]) -> bool {
+    let in_progress = |items: &[TodoItem]| {
+        items
+            .iter()
+            .find(|t| t.status == TodoStatus::InProgress)
+            .map(|t| t.content.clone())
+    };
+    let all_done = |items: &[TodoItem]| {
+        !items.is_empty() && items.iter().all(|t| t.status == TodoStatus::Completed)
+    };
+    previous.is_empty() != next.is_empty()
+        || in_progress(previous) != in_progress(next)
+        || (all_done(next) && !all_done(previous))
+}
+
+#[cfg(test)]
+mod todo_tests {
+    use super::*;
+
+    fn todo(content: &str, status: TodoStatus) -> TodoItem {
+        TodoItem {
+            content: content.to_string(),
+            status,
+        }
+    }
+
+    #[test]
+    fn progress_change_rules() {
+        let a_doing = vec![
+            todo("a", TodoStatus::InProgress),
+            todo("b", TodoStatus::Pending),
+        ];
+        let a_doing_renamed_b = vec![
+            todo("a", TodoStatus::InProgress),
+            todo("c", TodoStatus::Pending),
+        ];
+        let b_doing = vec![
+            todo("a", TodoStatus::Completed),
+            todo("b", TodoStatus::InProgress),
+        ];
+        let all_done = vec![
+            todo("a", TodoStatus::Completed),
+            todo("b", TodoStatus::Completed),
+        ];
+
+        assert!(todo_progress_changed(&[], &a_doing), "new list");
+        assert!(
+            !todo_progress_changed(&a_doing, &a_doing_renamed_b),
+            "same in-progress item"
+        );
+        assert!(
+            todo_progress_changed(&a_doing, &b_doing),
+            "in-progress moved"
+        );
+        assert!(todo_progress_changed(&b_doing, &all_done), "all completed");
+        assert!(todo_progress_changed(&all_done, &[]), "cleared");
+    }
+
+    #[test]
+    fn update_todos_effect_replaces_list_on_task() {
+        let mut world = World::new();
+        world.insert_resource(EntityIndex::default());
+        let task = Task::from_user_input(
+            "goal",
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "local".to_string(),
+                thread_id: None,
+            },
+        );
+        let task_id = task.id;
+        let entity = world.spawn(task).id();
+        world
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+
+        let output =
+            apply_update_todos(&mut world, task_id, &[todo("x", TodoStatus::InProgress)]).unwrap();
+        assert_eq!(output["status"], "updated");
+        assert_eq!(world.get::<TaskTodoList>(entity).unwrap().items.len(), 1);
+
+        apply_update_todos(&mut world, task_id, &[]).unwrap();
+        assert!(world.get::<TaskTodoList>(entity).unwrap().items.is_empty());
+
+        assert!(apply_update_todos(&mut world, crate::domain::TaskId::new(), &[]).is_err());
     }
 }

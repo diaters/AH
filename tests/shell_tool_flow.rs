@@ -123,6 +123,7 @@ fn test_config() -> HarnessConfig {
         channels_config_path: None,
         triggers_config_path: None,
         providers_config_path: "/nonexistent_providers.toml".to_string(),
+        loop_control: harness::domain::LoopControlConfig::default(),
     }
 }
 
@@ -248,6 +249,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -284,6 +286,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_read".to_string(),
@@ -340,6 +343,7 @@ fn shell_list_returns_only_active_sessions() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -365,6 +369,7 @@ fn shell_list_returns_only_active_sessions() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_list".to_string(),
@@ -423,6 +428,7 @@ fn shell_exec_returns_result_message() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -495,6 +501,7 @@ fn shell_exec_passes_env_to_child_process() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_exec".to_string(),
@@ -553,6 +560,7 @@ fn shell_start_returns_running_handle() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -620,6 +628,7 @@ fn shell_start_passes_env_to_child_process() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -672,6 +681,7 @@ fn shell_start_passes_env_to_child_process() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_read".to_string(),
@@ -737,6 +747,7 @@ fn shell_exec_with_exit_code_error() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -801,6 +812,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -842,6 +854,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -886,6 +899,7 @@ fn shell_input_returns_backend_backed_status() {
             tail_lines: 20,
             owner_task_id: task_id,
             owner_agent_id: agent_id,
+            notify_on_exit: false,
         })
         .expect("start_session should succeed");
 
@@ -954,6 +968,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -993,6 +1008,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_input".to_string(),
@@ -1047,6 +1063,7 @@ fn shell_read_backend_returns_latest_snapshot() {
             tail_lines: 2,
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
+            notify_on_exit: false,
         })
         .expect("exec_blocking should succeed");
 
@@ -1093,6 +1110,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -1168,6 +1186,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -1224,6 +1243,7 @@ fn shell_read_returns_output_text() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -1269,6 +1289,7 @@ fn shell_read_returns_output_text() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -1331,6 +1352,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     };
 
@@ -1409,6 +1431,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_exec".to_string(),
@@ -1441,6 +1464,7 @@ fn shell_input_and_stop_follow_simplified_contract() {
             tail_lines: 20,
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
+            notify_on_exit: false,
         })
         .expect("start_session should succeed");
     let session_id = handle.handle_id.to_string();
@@ -1535,6 +1559,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -1563,6 +1588,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_list".to_string(),
@@ -1630,6 +1656,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                turn_generation: None,
                 vision: false,
             },
             tool_name: "shell_start".to_string(),
@@ -1685,6 +1712,7 @@ fn backend_session_handle_uses_snapshot_output_shape() {
             tail_lines: 2,
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
+            notify_on_exit: false,
         })
         .expect("exec_blocking should succeed");
 
@@ -1755,6 +1783,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -1799,6 +1828,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_read".to_string(),
@@ -1869,6 +1899,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -1913,6 +1944,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_input".to_string(),
@@ -1982,6 +2014,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -2026,6 +2059,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_stop".to_string(),
@@ -2095,6 +2129,7 @@ fn task_termination_stops_owned_shell_sessions() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),
@@ -2170,6 +2205,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_start".to_string(),

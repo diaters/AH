@@ -36,6 +36,10 @@ impl crate::domain::BuiltinTool for ShellStartTool {
             tail_lines: ctx.shell_default_tail_lines,
             owner_task_id: ctx.current_task_id,
             owner_agent_id: ctx.current_agent_id,
+            notify_on_exit: input
+                .get("notify_on_exit")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
         }))
     }
 }

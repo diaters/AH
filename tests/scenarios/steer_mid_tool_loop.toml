@@ -1,0 +1,23 @@
+# 场景：引导式插入（Agent loop 设计 §5）
+# 工具执行期间注入 steer → 不新建任务、在下一个工具结果边界送达 → 最终回复体现追加要求
+[scenario]
+name = "steer_mid_tool_loop"
+description = "工具执行中途追加要求，验证 steer 不打断执行且在下一步送达"
+input = "请用 shell_exec 执行命令 `sleep 2; echo working`，然后用一句话汇报结果。"
+steer = ["补充要求：请在汇报的最后加上单词 STEERED。"]
+max_cost_usd = 0.10
+timeout_secs = 120
+
+[[assertions]]
+type = "tool_called"
+tool = "shell_exec"
+min_times = 1
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = "STEERED"
+desc = "最终回复体现运行中追加的要求"

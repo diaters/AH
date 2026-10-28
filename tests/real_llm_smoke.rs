@@ -23,8 +23,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use harness::domain::{
-    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind, ExecutionError,
-    OutputContent, ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema,
+    AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, AgentRequestKind,
+    ConversationMessage, ExecutionError, LlmToolCall, OutputContent, ToolDefinition,
+    ToolExecutorKind, ToolPermission, ToolSchema,
 };
 use harness::llm::{LlmProviderConfig, LlmProviderKind, create_executor_from_config};
 use wiremock::matchers::{method, path};
@@ -127,6 +128,7 @@ fn smoke_request(prompt: &str, tools: Vec<ToolDefinition>) -> AgentExecutionRequ
         conversation: None,
         work_item_id: None,
         model_override: None,
+        turn_generation: None,
         vision: false,
     }
 }
@@ -304,6 +306,57 @@ async fn openai_compatible_custom_endpoint_roundtrip() {
     }
 }
 
+/// 引导式插入的对话形态：tool 结果之后紧跟一条 user 文本（`<user_steer>`）。
+///
+/// 对应 Agent loop 设计文档 §4.3：注入管道把 steer / 后台通知追加在 tool 结果之后。
+fn steer_after_tool_result_request() -> AgentExecutionRequest {
+    let tool = sample_tool("get_weather", "Get the current weather for a city", "city");
+    let mut request = smoke_request("", vec![tool]);
+    request.conversation = Some(vec![
+        ConversationMessage::User {
+            content: "What is the weather in Paris? Use the get_weather tool.".to_string(),
+        },
+        ConversationMessage::Assistant {
+            content: None,
+            tool_calls: vec![LlmToolCall {
+                id: "call_weather_1".to_string(),
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Paris"}"#.to_string(),
+            }],
+            reasoning_content: None,
+        },
+        ConversationMessage::Tool {
+            tool_call_id: "call_weather_1".to_string(),
+            content: r#"{"temperature_c":18,"condition":"sunny"}"#.to_string(),
+        },
+        ConversationMessage::User {
+            content: "<user_steer>\nAnswer in one short sentence.\n</user_steer>".to_string(),
+        },
+    ]);
+    request
+}
+
+/// steer 往返：provider 接受"tool 结果后紧跟 user 文本"的对话并返回文本（Agent loop §4.3）。
+#[tokio::test]
+#[ignore = "需要真实 API：HARNESS_TEST_REAL_LLM=1 + HARNESS_LLM_API_KEY"]
+async fn steer_after_tool_result_roundtrip_is_accepted() {
+    if !real_llm_enabled() {
+        skip_notice();
+        return;
+    }
+
+    let executor = smoke_executor();
+    let output = execute_with_budget(&executor, steer_after_tool_result_request())
+        .await
+        .expect("tool 结果后追加 user 文本的请求应被 provider 接受");
+    match output.content {
+        OutputContent::Text(text) => assert!(!text.trim().is_empty(), "响应文本不应为空"),
+        OutputContent::ToolCalls(calls) => {
+            assert!(!calls.is_empty(), "工具调用响应也是合法往返")
+        }
+    }
+}
+
 // ============================================================
 // 错误分类测试（wiremock 本地端点，确定性，随 CI 常规运行）
 // ============================================================
@@ -376,4 +429,55 @@ async fn http_429_classified_as_rate_limited_and_retryable() {
         "429 应归类为 RateLimited，实际: {error:?}"
     );
     assert!(error.is_retryable(), "RateLimited 应允许统一重试");
+}
+
+/// steer 对话的线上形态（OpenAI 兼容协议）：消息顺序为 user → assistant(tool_calls) → tool → user，
+/// 末条 user 携带 `<user_steer>`，且响应可正常解析（Agent loop §4.3，确定性，随 CI 运行）。
+#[tokio::test]
+async fn steer_after_tool_result_is_serialized_as_trailing_user_message() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test-model",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "It is sunny in Paris." },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let executor = compatible_executor_with_base(mock_server.uri());
+    let output = executor
+        .execute(steer_after_tool_result_request())
+        .await
+        .expect("mock 响应应成功解析");
+    assert!(matches!(output.content, OutputContent::Text(ref t) if t.contains("sunny")));
+
+    let received = mock_server.received_requests().await.expect("请求已记录");
+    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    let messages = body["messages"].as_array().expect("messages 数组");
+    let roles: Vec<&str> = messages
+        .iter()
+        .filter_map(|m| m["role"].as_str())
+        .filter(|r| *r != "system")
+        .collect();
+    assert_eq!(
+        roles,
+        vec!["user", "assistant", "tool", "user"],
+        "body: {body}"
+    );
+    let last = messages.last().unwrap();
+    assert!(
+        last["content"].to_string().contains("<user_steer>"),
+        "末条 user 消息应携带 steer: {last}"
+    );
+    let tool = &messages[messages.len() - 2];
+    assert_eq!(tool["tool_call_id"], "call_weather_1");
 }

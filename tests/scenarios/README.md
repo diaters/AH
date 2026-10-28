@@ -37,6 +37,8 @@ cargo test --test real_llm_scenarios
 |------|------|------|
 | `name` / `description` / `input` | 是 | 场景名、描述、第一轮输入 |
 | `follow_ups` | 否 | 后续轮次输入列表；非空时任务按多轮会话运行（LLM 回复后等待续轮），全部注入后自动发送 `/finish` 收尾 |
+| `steer` | 否 | 引导式插入输入列表：等任务进入工具执行（最多 30 秒）后注入，验证运行中输入在下一步送达；非空时按多轮运行 |
+| `multi_turn` | 否 | 显式多轮：回复后停在 `Waiting(User)`，可被后台通知重新拉起；稳定态额外要求无存活后台任务与未送达通知 |
 | `compression_threshold_tokens` | 否 | 覆写 MemoryConfig 压缩阈值（默认 8000），用于低阈值触发摘要压缩 |
 | `max_cost_usd` / `timeout_secs` | 否 | 软预算与整体 wall-clock 超时（含全部轮次） |
 

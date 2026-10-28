@@ -152,7 +152,31 @@ impl StatusPanel {
                         Style::default().fg(Color::Cyan),
                     ));
                 }
+                if main_task.pending_inputs > 0 {
+                    spans.push(Span::styled(
+                        format!(" ✉{} 排队", main_task.pending_inputs),
+                        Style::default().fg(Color::Magenta),
+                    ));
+                }
                 lines.push(Line::from(spans));
+
+                // 进度清单（update_todos）：终态任务不再展示
+                if !Self::is_task_completed(main_task.status) {
+                    for todo in &main_task.todos {
+                        let todo_color = match todo.status {
+                            crate::domain::TodoStatus::Completed => Color::DarkGray,
+                            crate::domain::TodoStatus::InProgress => Color::Yellow,
+                            crate::domain::TodoStatus::Pending => Color::Gray,
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled("  ", Style::default()),
+                            Span::styled(
+                                format!("{} {}", todo.status.marker(), todo.content),
+                                Style::default().fg(todo_color),
+                            ),
+                        ]));
+                    }
+                }
 
                 // Render subtasks
                 if let Some(subtasks) = subtasks_by_parent.get(&main_task.id) {

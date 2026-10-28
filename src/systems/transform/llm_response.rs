@@ -13,9 +13,10 @@ use crate::{
     contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResultMessage, AgentRequestKind, ChatRoundReadyMessage,
-        ChatSession, EntryMetadata, EntryRole, ExperienceStore, FailureReason, MemoryConfig,
-        OutputContent, ProfileGenerationContext, ShortTermMemory, SkillCreationContext, Task,
-        TaskStatus, ToolCallingState, UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
+        ChatSession, DeferredResult, EntryMetadata, EntryRole, ExperienceStore, FailureReason,
+        MemoryConfig, OutputContent, OwnedJobs, ProfileGenerationContext, ShortTermMemory,
+        SkillCreationContext, Task, TaskInbox, TaskStatus, ToolCallingState, UserOutputMessage,
+        WaitingReason, WorkItem, WorkItemType,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
@@ -73,6 +74,8 @@ pub fn llm_response_system(
         Option<&mut ShortTermMemory>,
         Option<&ChatSession>,
     )>,
+    owned_jobs: Query<&OwnedJobs>,
+    inboxes: Query<&TaskInbox>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
     mut work_items: Query<(Entity, &mut WorkItem)>,
@@ -221,7 +224,7 @@ pub fn llm_response_system(
             }
         }
 
-        for (_task_entity, mut task, short_term, chat_session) in &mut tasks {
+        for (task_entity, mut task, short_term, chat_session) in &mut tasks {
             if task.id != result.task_id {
                 continue;
             }
@@ -236,6 +239,21 @@ pub fn llm_response_system(
                 multi_turn = task.multi_turn,
                 "llm response received"
             );
+
+            // 任务已终态（如 LLM 调用在飞期间用户 /finish）：丢弃迟到的任务级响应，
+            // 避免把终态任务重新拉回 Waiting(User)，破坏终态不变量。
+            if task.status.is_terminal() && result.request_kind == AgentRequestKind::LlmCompletion {
+                debug!(
+                    event = "LlmResponseForTerminalTaskDropped",
+                    task_id = %task.id,
+                    status = ?task.status,
+                    "dropping late llm response for terminal task"
+                );
+                if let Some(info) = find_calling_state(&state_info, task.id, result.work_item_id) {
+                    commands.entity(info.entity).despawn();
+                }
+                break;
+            }
 
             match &result.result {
                 Ok(AgentExecutionOutput {
@@ -331,6 +349,30 @@ pub fn llm_response_system(
                         } else {
                             content.clone()
                         };
+                        // 终态约束：仍有活跃后台任务、或已完成但通知尚未送达 LLM 时不进入终态，
+                        // 暂存候选结果，待后台任务全部结束后由收件箱唤醒续一轮。
+                        let active_jobs = owned_jobs
+                            .get(task_entity)
+                            .map(|jobs| jobs.jobs().len())
+                            .unwrap_or(0);
+                        let pending_inbox = inboxes
+                            .get(task_entity)
+                            .map(|inbox| inbox.len())
+                            .unwrap_or(0);
+                        if active_jobs > 0 || pending_inbox > 0 {
+                            debug!(
+                                event = "CompletionDeferredForBackgroundJobs",
+                                task_id = %task.id,
+                                active_jobs = active_jobs,
+                                pending_inbox = pending_inbox,
+                                "task completion deferred until background jobs finish"
+                            );
+                            commands
+                                .entity(task_entity)
+                                .insert(DeferredResult(result_summary));
+                            task.mark_waiting(WaitingReason::BackgroundJobs, clock.0);
+                            continue;
+                        }
                         task.mark_done(result_summary, clock.0);
                         commands.spawn(UserOutputMessage {
                             task_id: task.id,

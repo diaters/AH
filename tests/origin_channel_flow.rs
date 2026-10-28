@@ -36,6 +36,7 @@ fn test_config() -> HarnessConfig {
         channels_config_path: None,
         triggers_config_path: None,
         providers_config_path: "providers.toml".to_string(),
+        loop_control: harness::domain::LoopControlConfig::default(),
     }
 }
 

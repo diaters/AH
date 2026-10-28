@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 
-use crate::domain::MemoryConfig;
+use crate::domain::{LoopControlConfig, MemoryConfig};
 use crate::llm::{LlmProviderConfig, LlmProviderKind};
 use crate::prelude::Resource;
 
@@ -23,6 +23,8 @@ pub struct HarnessConfig {
     pub brain: Option<BrainConfig>,
     /// 记忆压缩配置（token 阈值 / 摘要目标）
     pub memory: MemoryConfig,
+    /// Agent loop 控制配置（自动拉起预算 / 通知合并 / 后台轮询）
+    pub loop_control: LoopControlConfig,
     pub agents_config_path: String,
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
@@ -92,6 +94,23 @@ impl HarnessConfig {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(1000),
+            },
+            loop_control: {
+                let defaults = LoopControlConfig::default();
+                LoopControlConfig {
+                    max_auto_wakes: std::env::var("HARNESS_MAX_AUTO_WAKES")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(defaults.max_auto_wakes),
+                    notification_coalesce_ms: std::env::var("HARNESS_NOTIFICATION_COALESCE_MS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(defaults.notification_coalesce_ms),
+                    background_poll_ms: std::env::var("HARNESS_BACKGROUND_POLL_MS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(defaults.background_poll_ms),
+                }
             },
             agents_config_path,
             default_wait_tasks_timeout_secs: std::env::var(
@@ -173,6 +192,7 @@ impl Default for HarnessConfig {
             },
             brain: None,
             memory: MemoryConfig::default(),
+            loop_control: LoopControlConfig::default(),
             agents_config_path: "agents.toml".to_string(),
             default_wait_tasks_timeout_secs: 300, // 5 minutes default
             shell_default_tail_lines: 200,

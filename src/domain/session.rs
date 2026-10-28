@@ -96,6 +96,8 @@ pub struct SessionStartRequest {
     pub tail_lines: usize,
     pub owner_task_id: TaskId,
     pub owner_agent_id: AgentId,
+    /// 会话退出后是否以 `<task-notification>` 通知所属任务（shell_start 默认 true）
+    pub notify_on_exit: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -52,6 +52,7 @@ fn make_request(
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         },
         tool_name: "shell_exec".into(),
@@ -281,4 +282,48 @@ fn parent_task_cancel_kills_worker_and_returns_cancelled_error() {
         }
         other => panic!("expected cancelled error, got {:?}", other),
     }
+}
+
+/// 用户 `/stop`：父任务带 `StopRequested`（非终态）同样触发 worker 取消。
+#[test]
+fn stop_requested_cancels_worker_without_terminal_parent() {
+    let mut world = world_with_shell_exec();
+
+    let (task_entity, task_id) = spawn_waiting_task(&mut world, "run sleep 5");
+    let agent_id = harness::domain::AgentId::new();
+    spawn_calling_state(&mut world, task_id, agent_id, &["stop-1"]);
+    let pending_entity = world
+        .spawn(make_request(
+            serde_json::json!({ "command": "sleep 5", "timeout_secs": 30 }),
+            "stop-1",
+            task_id,
+            agent_id,
+        ))
+        .id();
+    world
+        .run_system_once(harness::systems::async_tool_dispatch_system)
+        .unwrap();
+    assert!(world.get::<InFlightToolCall>(pending_entity).is_some());
+
+    world
+        .entity_mut(task_entity)
+        .insert(harness::domain::StopRequested);
+    world
+        .run_system_once(harness::systems::cancel_monitor_system)
+        .unwrap();
+
+    assert!(
+        world.get::<InFlightToolCall>(pending_entity).is_none(),
+        "StopRequested should trigger cancel claim"
+    );
+    assert!(
+        !world
+            .get::<Task>(task_entity)
+            .unwrap()
+            .status()
+            .is_terminal()
+    );
+    let result =
+        wait_for_tool_result(&mut world, 3000).expect("worker should return after /stop cancel");
+    assert_eq!(result.tool_call_id, "stop-1");
 }

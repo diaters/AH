@@ -422,6 +422,7 @@ mod tests {
             conversation: None,
             work_item_id: None,
             model_override: None,
+            turn_generation: None,
             vision: false,
         }
     }
