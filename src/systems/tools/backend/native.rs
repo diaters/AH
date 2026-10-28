@@ -74,6 +74,8 @@ pub struct NativeProcessBackend {
     pub processes: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<Child>>>>>,
     pub stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
+    /// shell_start 会话的输出读取线程，会话结束时等待其读完管道中的剩余输出。
+    readers: Arc<Mutex<HashMap<SessionHandleId, Vec<thread::JoinHandle<()>>>>>,
 }
 
 impl std::fmt::Debug for NativeProcessBackend {
@@ -274,8 +276,14 @@ impl SessionBackend for NativeProcessBackend {
             .map_err(|_| "runtime map poisoned".to_string())?
             .insert(handle_id, SessionRuntimeState::empty());
 
-        spawn_output_reader(handle_id, stdout, Arc::clone(&self.runtimes), "");
-        spawn_output_reader(handle_id, stderr, Arc::clone(&self.runtimes), "[stderr] ");
+        let readers = [
+            spawn_output_reader(handle_id, stdout, Arc::clone(&self.runtimes), ""),
+            spawn_output_reader(handle_id, stderr, Arc::clone(&self.runtimes), "[stderr] "),
+        ];
+        self.readers
+            .lock()
+            .map_err(|_| "reader map poisoned".to_string())?
+            .insert(handle_id, readers.into_iter().flatten().collect());
 
         debug!(
             event = "ShellSessionStarted",
@@ -376,6 +384,7 @@ impl SessionBackend for NativeProcessBackend {
             kill_process_tree(&mut child);
             let _ = child.wait();
         }
+        self.drain_session_readers(handle_id)?;
 
         let mut handle = self.get_status(handle_id)?;
         handle.status = SessionStatus::Stopped;
@@ -513,6 +522,18 @@ impl NativeProcessBackend {
         }
     }
 
+    /// 在宽限期内等待会话的输出读取线程读完剩余输出。
+    fn drain_session_readers(&self, handle_id: SessionHandleId) -> Result<(), String> {
+        let readers = self
+            .readers
+            .lock()
+            .map_err(|_| "reader map poisoned".to_string())?
+            .remove(&handle_id)
+            .unwrap_or_default();
+        drain_readers(readers.into_iter().map(Some));
+        Ok(())
+    }
+
     /// 读取句柄并按当前输出缓冲区现场生成快照。
     fn live_handle(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
         let mut handle = self.get_status(handle_id)?;
@@ -582,6 +603,8 @@ impl NativeProcessBackend {
         };
 
         if let Some(exit_status) = exit_status {
+            // 进程已退出但管道中可能还有未读完的输出，先等读取线程收尾再生成结束快照
+            self.drain_session_readers(handle_id)?;
             let mut handle = self.get_status(handle_id)?;
             handle.status = if exit_status.success() {
                 SessionStatus::Completed
@@ -685,7 +708,7 @@ fn kill_process_tree(child: &mut Child) {
 }
 
 /// 在宽限期内等待输出读取线程结束；超时的线程被分离（后台进程仍持有管道时）。
-fn drain_readers<const N: usize>(readers: [Option<thread::JoinHandle<()>>; N]) {
+fn drain_readers(readers: impl IntoIterator<Item = Option<thread::JoinHandle<()>>>) {
     let deadline = Instant::now() + READER_DRAIN_GRACE;
     for reader in readers.into_iter().flatten() {
         while !reader.is_finished() && Instant::now() < deadline {
@@ -781,12 +804,10 @@ fn spawn_output_reader(
     stream: Option<impl std::io::Read + Send + 'static>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
     prefix: &'static str,
-) {
-    let Some(stream) = stream else {
-        return;
-    };
+) -> Option<thread::JoinHandle<()>> {
+    let stream = stream?;
 
-    thread::spawn(move || {
+    Some(thread::spawn(move || {
         let reader = BufReader::new(stream);
         for line in reader.lines() {
             let Ok(line) = line else {
@@ -803,7 +824,7 @@ fn spawn_output_reader(
             );
             runtime.interaction_state = SessionInteractionState::Idle;
         }
-    });
+    }))
 }
 
 #[cfg(test)]
@@ -942,6 +963,31 @@ mod tests {
         let listed = backend.list_task_sessions(task_id).unwrap();
         assert_eq!(listed[0].output.output, "a\nb");
         backend.stop_session(id).unwrap();
+    }
+
+    /// 首次读到会话已结束时，快照已包含进程退出前写出的全部输出。
+    #[test]
+    fn finished_session_snapshot_includes_trailing_output() {
+        for _ in 0..20 {
+            let backend = NativeProcessBackend::default();
+            let id = backend
+                .start_session(exec_request("seq 1 20000", None))
+                .unwrap()
+                .handle_id;
+            let mut last = None;
+            wait_until(|| {
+                let summary = backend
+                    .read_session(SessionReadRequest {
+                        handle_id: id,
+                        tail_lines: 1,
+                    })
+                    .unwrap();
+                let done = summary.finished_at.is_some();
+                last = Some(summary);
+                done
+            });
+            assert_eq!(last.unwrap().output.output, "20000");
+        }
     }
 
     /// 已结束的 shell_start 会话记录及其输出缓冲区数量有上限。
