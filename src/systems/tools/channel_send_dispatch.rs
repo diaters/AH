@@ -99,6 +99,7 @@ pub fn channel_send_dispatch_system(
                     reasoning_content: None,
                     work_item_id: None,
                     conversation: None,
+                    turn_generation: None,
                 },
                 tool_name: "channel_send".to_string(),
                 tool_output: Ok(tool_output),

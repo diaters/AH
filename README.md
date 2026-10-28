@@ -11,6 +11,10 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - Brain 调度、Agent 配置加载与多 Agent 执行链路
 - `create_tasks` + `wait_tasks` 驱动的任务分解能力
+- Agent loop 控制：任务运行中的输入以引导式插入（steer）在下一个工具结果边界送达，
+  不打断执行；`/stop`（TUI 空输入时 `Esc`）中断当前回合并保留上下文；后台 shell 会话
+  退出与子任务批次完成以 `<task-notification>` 通知所属任务，空闲任务自动重新拉起；
+  `update_todos` 进度清单在 TUI / IM 展示
 - `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
 - Summarization 与 Evaluation 收敛到 `WorkItem` 闭环
 - 工具权限、审批 UI、顺序确认与工具执行链路
@@ -156,6 +160,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 - `HARNESS_MAX_RETRIES`
 - `HARNESS_MAX_TOOL_ITERATIONS`
 - `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS`
+- `HARNESS_MAX_AUTO_WAKES`
 - `HARNESS_AGENTS_CONFIG`
 - `HARNESS_LOG_DIR`
 

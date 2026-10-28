@@ -54,6 +54,7 @@ pub fn build_harness_app(
     // 记忆压缩配置：由 HarnessConfig（env 配置源）投影注入，
     // TaskRuntimePlugin::init_resource::<MemoryConfig>() 保留为默认兜底。
     app.insert_resource(config.memory.clone());
+    app.insert_resource(config.loop_control.clone());
     app.insert_resource(HarnessSettings(config));
     app.insert_resource(Clock::default());
     app.insert_resource(crate::domain::ShutdownState::default());

@@ -15,6 +15,7 @@ mod execution;
 mod frontend;
 mod hook_point;
 mod llm_provider;
+mod loop_control;
 mod memory;
 mod message;
 mod model_chain;
@@ -233,6 +234,14 @@ pub use signal_trigger::{
 
 // skill
 pub use skill::SkillId;
+
+// loop_control
+pub use loop_control::{
+    AutoWakeBudget, BackgroundJob, DeferredResult, InboxDeliveryMessage, InboxItem,
+    InflightLlmRequests, JobOwner, JobSource, LoopControlConfig, MAX_TODO_ITEMS, OwnedJobs,
+    StopRequested, StopTaskMessage, TaskInbox, TaskTodoList, TodoItem, TodoStatus, TurnGeneration,
+    render_inbox_items, render_todos, validate_todos,
+};
 
 // session
 pub use session::{

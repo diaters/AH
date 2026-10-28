@@ -192,6 +192,7 @@ mod tests {
                 reasoning_content: None,
                 work_item_id: None,
                 conversation: None,
+                turn_generation: None,
             },
             tool_name: "shell_exec".to_string(),
             tool_output: Ok(serde_json::json!({"count": 1})),

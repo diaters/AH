@@ -92,6 +92,7 @@ pub(crate) fn spawn_tool_result_message(
         reasoning_content: None,
         work_item_id: req.work_item_id,
         conversation: None,
+        turn_generation: None,
     };
 
     commands.spawn((

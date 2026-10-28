@@ -156,6 +156,11 @@ pub enum ToolEffect {
         /// 输出通道（显式指定或从当前任务继承）
         output_channel: Option<ChannelId>,
     },
+    /// 替换任务进度清单：由 update_todos 工具声明，commit 在主线程写入 `TaskTodoList`。
+    UpdateTodos {
+        task_id: TaskId,
+        items: Vec<crate::domain::TodoItem>,
+    },
     /// 写入 skill 沙盒文件：由 write_skill_file 工具声明，commit_tool_effects_system 在主线程落账。
     WriteSkillFile {
         /// skill 沙盒目录（由 worker 在构造时嵌入，commit 直接使用）

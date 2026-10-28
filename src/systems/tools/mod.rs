@@ -51,7 +51,7 @@ use self::builtin::{
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillTool,
-    SubmitSkillUpdateTool, ViewImageTool, WaitTasksTool, WriteSkillFileTool,
+    SubmitSkillUpdateTool, UpdateTodosTool, ViewImageTool, WaitTasksTool, WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -62,7 +62,7 @@ pub fn register_builtin_tools(
 ) {
     registry.register(ToolDefinition {
         name: "create_tasks".to_string(),
-        description: "Create sub-tasks to delegate work to specialized child agents. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete.".to_string(),
+        description: "Create sub-tasks to delegate work to specialized child agents. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete. Sub-tasks run in the background: call wait_tasks to block for results, or keep working and a <task-notification> with all results will be delivered when the batch finishes.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -159,13 +159,14 @@ pub fn register_builtin_tools(
 
     registry.register(ToolDefinition {
         name: "shell_start".to_string(),
-        description: "异步启动长时间运行或可交互的 shell 会话，适用于 server、watcher、daemon 等持续型任务。返回 session_id 供后续读取、输入或停止。".to_string(),
+        description: "异步启动长时间运行或可交互的 shell 会话，适用于 server、watcher、daemon 等持续型任务。返回 session_id 供后续读取、输入或停止。会话退出时默认会以 <task-notification> 通知你（无需轮询），即使你已结束本轮回复也会被重新唤醒。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "要执行的 shell 命令" },
-                    "cwd": { "type": "string", "description": "命令工作目录" }
+                    "cwd": { "type": "string", "description": "命令工作目录" },
+                    "notify_on_exit": { "type": "boolean", "description": "会话退出后是否通知（默认 true；常驻服务可设为 false）" }
                 },
                 "required": ["command"]
             }),
@@ -656,6 +657,38 @@ pub fn register_builtin_tools(
         required_tag: Some("skill-creator".to_string()),
     });
     executors.register(Box::new(WriteSkillFileTool));
+
+    registry.register(ToolDefinition {
+        name: "update_todos".to_string(),
+        description: "维护当前任务的进度清单，向用户展示你正在做哪一步。每次提交完整列表（覆盖旧列表），同一时间最多一项 in_progress；多步骤任务开始时建立清单，每完成一步及时更新；提交空列表可清空。仅用于展示进度，不会执行任何工作——需要委派或并行执行请使用 create_tasks。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "完整的进度清单（最多 30 项）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string", "description": "步骤描述（祈使句，简短）" },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"]
+                                }
+                            },
+                            "required": ["content", "status"]
+                        }
+                    }
+                },
+                "required": ["todos"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("update_todos".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(UpdateTodosTool));
 }
 
 /// 注册插件贡献的 Tool

@@ -19,6 +19,8 @@ pub enum UserCommand {
     FinishCurrentTask,
     /// /clear - 删除当前任务（不触发终态处理链路）
     ClearCurrentTask,
+    /// /stop - 中断当前回合，保留上下文
+    StopCurrentTask,
     /// /summarize - 触发总结
     Summarize,
     /// /remember - 添加知识到 SharedKnowledgeBase
@@ -57,6 +59,8 @@ impl UserCommand {
             Self::FinishCurrentTask
         } else if trimmed == "/clear" {
             Self::ClearCurrentTask
+        } else if trimmed == "/stop" {
+            Self::StopCurrentTask
         } else if trimmed == "/summarize" {
             Self::Summarize
         } else if let Some(stripped) = trimmed.strip_prefix("/remember ") {
@@ -113,6 +117,14 @@ impl UserCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_stop() {
+        let cmd = UserCommand::parse("/stop");
+        assert_eq!(cmd, UserCommand::StopCurrentTask);
+        assert!(cmd.is_command());
+        assert!(!UserCommand::parse("/stopwatch").is_command());
+    }
 
     #[test]
     fn parse_clear() {

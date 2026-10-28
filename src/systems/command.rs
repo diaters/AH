@@ -6,8 +6,8 @@ use crate::domain::{
     Agent, ClearTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy,
     FinishTaskMessage, NewlyCreatedTask, PendingDispatch, PendingKnowledgeWriteHooks,
     ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
-    ShortTermMemory, SummarizationRequestMessage, SummarizationTrigger, Task, TaskRoutingPolicy,
-    TaskStatus, UserCommand, UserInputMessage,
+    ShortTermMemory, StopTaskMessage, SummarizationRequestMessage, SummarizationTrigger, Task,
+    TaskRoutingPolicy, TaskStatus, UserCommand, UserInputMessage,
 };
 use crate::ecs::EntityIndex;
 
@@ -112,6 +112,29 @@ pub(crate) fn command_parse_system(
                     commands.spawn(FinishTaskMessage { task_id: task.id });
                 } else {
                     debug!(event = "FinishCommandNoTask", "no active task to finish");
+                }
+                commands.entity(entity).despawn();
+            }
+            UserCommand::StopCurrentTask => {
+                // /stop - 中断同通道最近活跃的顶层任务（保留上下文）
+                let target = tasks
+                    .iter()
+                    .filter(|(t, _)| {
+                        !t.status.is_terminal()
+                            && t.parent_task_id.is_none()
+                            && t.origin_channel == Some(input.origin_channel.clone())
+                    })
+                    .max_by_key(|(t, _)| t.updated_at);
+                if let Some((task, _)) = target {
+                    debug!(
+                        event = "StopCommandReceived",
+                        task_id = %task.id,
+                        task_status = ?task.status,
+                        "stopping current turn via /stop command"
+                    );
+                    commands.spawn(StopTaskMessage { task_id: task.id });
+                } else {
+                    debug!(event = "StopCommandNoTask", "no active task to stop");
                 }
                 commands.entity(entity).despawn();
             }
