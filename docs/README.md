@@ -72,8 +72,8 @@
 > 逐篇状态、作用与推荐阅读顺序以 [`design/README.md`](design/README.md) 为唯一索引，
 > 此处不再重复列表（旧列表引用的 9 个文件均已不存在）。
 >
-> 待评审：[`design/2026-10-28-harness-hardening-design.md`](design/2026-10-28-harness-hardening-design.md)
-> （授权范围、图片信任边界、无 TUI 模式等加固方案）。
+> 最新：[`design/2026-10-28-harness-hardening-design.md`](design/2026-10-28-harness-hardening-design.md)
+> （授权范围、图片信任边界、无 TUI 模式等加固方案，已实施）。
 
 ## 活跃规格与计划（superpowers/）
 

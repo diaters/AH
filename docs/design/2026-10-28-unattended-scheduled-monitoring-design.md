@@ -460,7 +460,7 @@ TaskPermissionGrant（任务级） → agent.overrides → agent.default_permiss
 | P0 | `ScheduleDefinition` 合并双账本、`ScheduleStore` 持久化、启动恢复、补跑、重叠规则、`update_scheduled_task` | PR #108 |
 | P1 | `RunLedger`、`ScheduledRun`、`NotifyPolicy`、失败告警、`report_of` 健康信息注入 | P0 |
 | P2 | 预筛探针（`probe_runner`、`ProbeResult` 入口、Confirm 提升） | P1 |
-| P3 | 任务级授权与无人值守拒绝策略（无人值守拒绝已提前实施，见 `fix/harness-hardening`；`granted_tools` 待做） | P1 |
+| P3 | 任务级授权与无人值守拒绝策略（无人值守拒绝已提前实施；`granted_tools` 待做） | P1 |
 | P4 | （`continue` 模式，已推迟，见 §11） | — |
 | P5 | `web_fetch` 工具（先评估 `html2text` 依赖） | 无 |
 
