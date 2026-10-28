@@ -1265,6 +1265,23 @@ impl QqChannel {
             {
                 map.remove(&recipient);
             }
+            drop(map);
+            // 按钮已失效（过期或被同一会话的新审批覆盖），引擎侧审批仍在等待：
+            // 提示改用文本回复，避免点击后毫无反馈
+            if let Err(e) = self
+                .send_text_markdown(
+                    &recipient,
+                    "该审批按钮已失效，请直接回复数字：1=仅本次允许，2=永久允许，3=拒绝。",
+                )
+                .await
+            {
+                tracing::warn!(
+                    event = "QqStaleApprovalNoticeFailed",
+                    recipient = %recipient,
+                    error = %e,
+                    "failed to send stale approval notice"
+                );
+            }
             return None;
         };
         let matched_option = pending.options.iter().find(|opt| opt.id == option_id);
@@ -2022,6 +2039,37 @@ mod tests {
             .await
             .expect("allowlisted member approves");
         assert_eq!(inbound.confirmation.unwrap().request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn interaction_create_with_stale_button_prompts_text_reply() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "m"})))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_open_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let event = serde_json::json!({
+            "id": "interaction_stale",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": { "resolved": { "button_data": format!("{}:allow", Uuid::new_v4()) } }
+        });
+
+        assert!(ch.handle_interaction_create(&event).await.is_none());
+        // MockServer drop 时校验 expect(1)：提示消息恰好发送一次
     }
 
     #[test]

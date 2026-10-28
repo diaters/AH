@@ -167,6 +167,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - Telegram 通道消息撤回（`deleteMessage`）与输入状态指示器（`sendChatAction` with `typing`）
 - QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 - QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
+- QQ 审批按钮受白名单约束；按钮过期或被同会话新审批覆盖后点击，会提示改用 `1`/`2`/`3` 文本回复
 - QQ 通道消息撤回 API（C2C / 群聊 DELETE 端点）
 - QQ 通道输入状态指示器（typing indicator, POST /v2/users/{openid}/typing）
 - QQ 通道交互回调（PUT /interactions/{id}）
@@ -209,7 +210,11 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `/reload-triggers` 命令：运行时热重载 `triggers.toml`，仅替换静态路由；动态 scheduled task 原样保留
 - `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
 - `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`web`
-- 动态 scheduled task 触发后，其 `output_channel` 同时作为审批通道，执行期需要用户确认的工具请求会路由到该 IM 用户；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
+- 动态 scheduled task 触发后，其 `output_channel` 作为输出通道；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
+- 无人值守拒绝（设计 §7.3 的最小子集）：定时任务运行（`ScheduledRun` 标记的 Task 及其子任务）中权限结果为 Confirm 的工具
+  不再发起审批，直接返回 `PermissionDenied` 合成结果并向输出通道推送提醒，避免任务挂起后被重叠规则持续跳过；
+  任务级授权清单（`granted_tools`）仍待 P3
+- 文本审批回复按任务的 `approval_channel` 匹配（缺省回退 `origin_channel`），webhook 事件任务也能用 `1`/`2`/`3` 回复审批
 - 动态定时任务以 `ScheduleDefinition` 为唯一账本（`SchedulerState.dynamic_tasks`），带唯一名称、
   启停状态与 `last_fired_at`；设计见
   [无人值守定时任务与长期监控设计](design/2026-10-28-unattended-scheduled-monitoring-design.md)（P0 已实施）

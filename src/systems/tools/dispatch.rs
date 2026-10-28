@@ -12,7 +12,8 @@ use crate::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
         ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
-        PermissionSource, ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory,
+        PermissionSource, ProfileGenerationContext, ScheduledRun, SharedKnowledgeBase,
+        ShortTermMemory,
         SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task,
         ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolPermission, WaitingReason, WorkItem,
@@ -58,16 +59,19 @@ pub fn tool_dispatch_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在 Allow 路径推送 ToolCallStarted 事件。
+    // scheduled_runs 标记定时任务触发的 Task，用于无人值守判定。
     mut index_clock_loader: (
         ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
+        Query<(), With<ScheduledRun>>,
     ),
 ) {
     let index = &mut index_clock_loader.0;
     let clock = &index_clock_loader.1;
     let frontend_registry = &index_clock_loader.3;
+    let scheduled_runs = &index_clock_loader.4;
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
@@ -448,6 +452,49 @@ pub fn tool_dispatch_system(
                     continue;
                 }
 
+                // 无人值守：定时任务运行（含其子任务）无人可审批，直接拒绝而非挂起等待
+                if is_unattended_run(request.request.task_id, index, &tasks, scheduled_runs) {
+                    emit_permission_audit(
+                        frontend_registry,
+                        output_channel.as_ref(),
+                        agent.id,
+                        &agent.profile.name,
+                        &tool_name,
+                        PermissionAction::Deny,
+                        source,
+                        PermissionAuditContext::Dispatch,
+                    );
+                    warn!(
+                        event = "ToolDeniedUnattended",
+                        tool_name = %tool_name,
+                        agent_id = %agent.id,
+                        task_id = %request.request.task_id,
+                        "confirm tool denied in unattended scheduled run"
+                    );
+                    if let Some(channel) = output_channel.clone() {
+                        let event = EngineEvent::Text {
+                            target: EventTarget::Directed(vec![channel]),
+                            role: crate::domain::MessageRole::System,
+                            content: format!(
+                                "定时任务运行中调用了需要确认的工具 {tool_name}，无人值守运行不能请求审批，已拒绝。"
+                            ),
+                            task_id: Some(request.request.task_id),
+                        };
+                        for frontend in &frontend_registry.frontends {
+                            frontend.push_event(event.clone());
+                        }
+                    }
+                    spawn_tool_error(
+                        &mut commands,
+                        entity,
+                        &request,
+                        ToolError::PermissionDenied(format!(
+                            "工具 {tool_name} 需要用户确认，但定时任务为无人值守运行，不能请求审批。请改用无需确认的方式完成任务，或在结果中说明需要用户手动处理。"
+                        )),
+                    );
+                    continue;
+                }
+
                 // fallback 用户确认
                 debug!(
                     event = "ToolRequiresUserConfirmation",
@@ -528,6 +575,28 @@ pub fn tool_dispatch_system(
     }
 }
 
+/// 任务自身或任一祖先任务由定时任务触发时，视为无人值守运行。
+fn is_unattended_run(
+    task_id: crate::domain::TaskId,
+    index: &EntityIndex,
+    tasks: &Query<(Entity, &mut Task)>,
+    scheduled_runs: &Query<(), With<ScheduledRun>>,
+) -> bool {
+    let mut current = Some(task_id);
+    // 防御性上限，避免异常数据形成环时死循环
+    for _ in 0..64 {
+        let Some(id) = current else { return false };
+        let Some(entity) = index.get_task(&id) else {
+            return false;
+        };
+        if scheduled_runs.contains(entity) {
+            return true;
+        }
+        current = tasks.get(entity).ok().and_then(|(_, t)| t.parent_task_id);
+    }
+    false
+}
+
 /// 推送 `EngineEvent::PermissionAudit` 到所有前端。
 ///
 /// 仅当 `output_channel` 为 `Some` 时推送——无 output_channel 的 task
@@ -584,8 +653,8 @@ mod tests {
     use chrono::Utc;
     use std::collections::HashMap;
 
-    #[test]
-    fn sequential_confirmation_only_one_pending_at_a_time() {
+    /// 构造一个 Agent 对 `shell_exec` 为 Confirm 的 dispatch 测试世界。
+    fn confirm_world() -> (World, crate::domain::TaskId, crate::domain::AgentId, Entity) {
         let mut world = World::new();
 
         // 注册必要资源
@@ -687,9 +756,14 @@ mod tests {
             .agents
             .insert(agent_id, agent_entity);
 
-        // spawn 3 个需要确认的工具请求
-        for _ in 0..3 {
-            world.spawn(ToolExecutionRequestMessage {
+        (world, task_id, agent_id, task_entity)
+    }
+
+    fn shell_exec_request(
+        task_id: crate::domain::TaskId,
+        agent_id: crate::domain::AgentId,
+    ) -> ToolExecutionRequestMessage {
+        ToolExecutionRequestMessage {
                 request: AgentExecutionRequest {
                     task_id,
                     agent_id,
@@ -712,7 +786,16 @@ mod tests {
                 pending_confirmation_options: None,
                 work_item_entity: None,
                 confirmed_once: false,
-            });
+        }
+    }
+
+    #[test]
+    fn sequential_confirmation_only_one_pending_at_a_time() {
+        let (mut world, task_id, agent_id, task_entity) = confirm_world();
+
+        // spawn 3 个需要确认的工具请求
+        for _ in 0..3 {
+            world.spawn(shell_exec_request(task_id, agent_id));
         }
 
         // 运行一次 dispatch 系统
@@ -728,6 +811,73 @@ mod tests {
 
         let task = world.query::<&Task>().get(&world, task_entity).unwrap();
         assert!(task.pending_confirmation_id.is_some());
+    }
+
+    #[test]
+    fn scheduled_run_rejects_confirm_tool_without_requesting_approval() {
+        let (mut world, task_id, agent_id, task_entity) = confirm_world();
+        world.entity_mut(task_entity).insert(crate::domain::ScheduledRun {
+            schedule_id: uuid::Uuid::new_v4(),
+        });
+        world.spawn(shell_exec_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_dispatch_system);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world.query::<&ToolConfirmationRequestMessage>().iter(&world).count(),
+            0,
+            "unattended scheduled run must not request confirmation"
+        );
+        let results: Vec<_> = world
+            .query::<&crate::domain::ToolExecutionResultMessage>()
+            .iter(&world)
+            .map(|m| m.tool_output.clone())
+            .collect();
+        assert!(
+            matches!(results.as_slice(), [Err(ToolError::PermissionDenied(msg))] if msg.contains("无人值守")),
+            "expected one unattended permission denial, got {results:?}"
+        );
+        let task = world.query::<&Task>().get(&world, task_entity).unwrap();
+        assert!(task.pending_confirmation_id.is_none());
+        assert_ne!(task.status, TaskStatus::Waiting(WaitingReason::User));
+    }
+
+    #[test]
+    fn subtask_of_scheduled_run_is_also_unattended() {
+        let (mut world, task_id, agent_id, task_entity) = confirm_world();
+        let parent_id = crate::domain::TaskId::new();
+        let mut parent = world.query::<&Task>().get(&world, task_entity).unwrap().clone();
+        parent.id = parent_id;
+        parent.delegate = None;
+        let parent_entity = world
+            .spawn((
+                parent,
+                crate::domain::ScheduledRun {
+                    schedule_id: uuid::Uuid::new_v4(),
+                },
+            ))
+            .id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(parent_id, parent_entity);
+        world
+            .query::<&mut Task>()
+            .get_mut(&mut world, task_entity)
+            .unwrap()
+            .parent_task_id = Some(parent_id);
+        world.spawn(shell_exec_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_dispatch_system);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world.query::<&ToolConfirmationRequestMessage>().iter(&world).count(),
+            0
+        );
     }
 
     /// 捕获推送事件的 mock frontend

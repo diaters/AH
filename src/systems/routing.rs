@@ -52,11 +52,15 @@ pub(crate) fn user_input_routing_system(
             continue; // 跳过，由 command_parse_system 处理
         }
 
-        // 优先处理处于 Waiting(User) 且正在等待工具确认的任务
+        // 优先处理处于 Waiting(User) 且正在等待工具确认的任务。
+        // 审批请求发往 approval_channel（事件任务没有来源通道），按它匹配回复。
         if let Some((_, task)) = tasks.iter().find(|(_, t)| {
             t.status == TaskStatus::Waiting(WaitingReason::User)
-                && t.origin_channel == Some(input.origin_channel.clone())
                 && t.pending_confirmation_id.is_some()
+                && t.routing_policy
+                    .approval_channel()
+                    .or(t.origin_channel.as_ref())
+                    == Some(&input.origin_channel)
         }) {
             let pending_id = task
                 .pending_confirmation_id
@@ -687,6 +691,34 @@ mod tests {
         let tasks: Vec<&Task> = app.world_mut().query::<&Task>().iter(app.world()).collect();
         assert_eq!(tasks[0].id, task_id);
         assert_eq!(tasks[0].pending_confirmation_id, Some(pending_id));
+    }
+
+    #[test]
+    fn text_confirmation_reaches_event_task_via_approval_channel() {
+        let mut app = App::new();
+        app.add_systems(Update, user_input_routing_system);
+        app.insert_resource(Clock::default());
+
+        // webhook 事件任务：无来源通道，审批通道来自路由配置
+        let pending_id = uuid::Uuid::new_v4();
+        let mut task = make_waiting_task_with_confirmation(qq_channel(), pending_id);
+        task.origin_channel = None;
+        task.routing_policy = crate::domain::TaskRoutingPolicy::event(Some(qq_channel()), None);
+        app.world_mut().spawn(task);
+
+        app.world_mut().spawn(UserInputMessage {
+            content: "1".to_string(),
+            origin_channel: qq_channel(),
+        });
+        app.update();
+
+        let responses: Vec<_> = app
+            .world_mut()
+            .query::<&ToolConfirmationResponseMessage>()
+            .iter(app.world())
+            .map(|r| (r.request_id, r.selected_option.clone()))
+            .collect();
+        assert_eq!(responses, vec![(pending_id, "allow_once".to_string())]);
     }
 
     #[test]
