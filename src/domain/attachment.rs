@@ -58,14 +58,19 @@ pub fn image_mime_type(target: &str) -> Option<&'static str> {
     }
 }
 
-/// 从内容中解析附件标记，返回剩余文本与附件列表。
+/// 内容中的一处附件标记及其字节范围（含方括号）。
+#[derive(Clone, Debug)]
+pub struct AttachmentSpan {
+    pub range: std::ops::Range<usize>,
+    pub attachment: ChannelAttachment,
+}
+
+/// 扫描内容，按出现顺序返回所有附件标记及其位置。
 ///
 /// 支持的标记：`[IMAGE:path]`、`[DOCUMENT:path]`、`[VIDEO:path]`、
 /// `[AUDIO:path]`、`[VOICE:path]`。路径前后空格会被裁剪。
-pub fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
-    let mut attachments = vec![];
-    let mut text = String::new();
-    let mut last_end = 0;
+pub fn find_attachment_spans(content: &str) -> Vec<AttachmentSpan> {
+    let mut spans = vec![];
     let bytes = content.as_bytes();
     let mut i = 0;
 
@@ -85,18 +90,32 @@ pub fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
                     _ => None,
                 };
                 if let Some(kind) = kind {
-                    text.push_str(&content[last_end..i]);
-                    attachments.push(ChannelAttachment {
-                        kind,
-                        target: target.trim().to_string(),
+                    spans.push(AttachmentSpan {
+                        range: i..close + 1,
+                        attachment: ChannelAttachment {
+                            kind,
+                            target: target.trim().to_string(),
+                        },
                     });
-                    last_end = close + 1;
                     i = close + 1;
                     continue;
                 }
             }
         }
         i += 1;
+    }
+    spans
+}
+
+/// 从内容中解析附件标记，返回剩余文本与附件列表。
+pub fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
+    let mut text = String::new();
+    let mut last_end = 0;
+    let mut attachments = vec![];
+    for span in find_attachment_spans(content) {
+        text.push_str(&content[last_end..span.range.start]);
+        last_end = span.range.end;
+        attachments.push(span.attachment);
     }
     text.push_str(&content[last_end..]);
     (text, attachments)
@@ -105,6 +124,18 @@ pub fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_attachment_spans_reports_byte_ranges_of_markers() {
+        let content = "前 [IMAGE: /a.png ] 中 [x:y] [VOICE:/b.wav] 后";
+        let spans = find_attachment_spans(content);
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&content[spans[0].range.clone()], "[IMAGE: /a.png ]");
+        assert_eq!(spans[0].attachment.kind, AttachmentKind::Image);
+        assert_eq!(spans[0].attachment.target, "/a.png");
+        assert_eq!(&content[spans[1].range.clone()], "[VOICE:/b.wav]");
+    }
 
     #[test]
     fn to_marker_round_trips_through_extract() {

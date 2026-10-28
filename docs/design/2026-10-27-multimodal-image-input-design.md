@@ -116,19 +116,25 @@ pub(crate) fn attach_images(task_id: &TaskId, messages: Vec<ChatMessage>) -> Vec
 
 1. __扫描范围__：所有 user 消息（含由 `request.prompt` 生成的当前消息，覆盖
    `build_prompt_with_context` 纯文本拼接路径）和 tool 消息中的 `[IMAGE:target]` 标记。
-2. __数量上限__：按出现顺序收集全部图片，只保留最后 `MAX_IMAGES_PER_REQUEST` 张（默认 10，见 §3.4）；
+   通道说明（`ATTACHMENT_MARKER_SYNTAX_HINT`）里的示例标记不是图片，扫描时排除。
+2. __去重__：同一 `target` 在整次请求内只附带一份，保留首次出现的位置。纯文本路径会把历史与
+   `[Current request]` 拼进同一条 user 消息，当前轮的图片会出现两次；保留首次位置还能让历史前缀
+   在多轮之间字节稳定，不破坏 provider 的提示缓存。
+3. __数量上限__：按去重后的出现顺序，只保留最后 `MAX_IMAGES_PER_REQUEST` 张（默认 10，见 §3.4）；
    更早的图片保留原标记文字，等同于现状。
-3. __user 消息__：把消息内容改为 `[Text(原文), Binary(img1), Binary(img2)...]`，
-   原文保留标记，便于模型把图片与路径对应起来（后续 `channel_send` 回传图片时需要路径）。
-4. __tool 消息__：`ToolResponse` 不能带图，在"连续 tool 消息块"之后插入一条合成 user 消息：
+4. __user 消息__：图片内联在各自标记之后，内容形如
+   `[Text(…[IMAGE:a]), Binary(a), Text(…[IMAGE:b]), Binary(b), Text(尾部)]`，原文逐段保留。
+   图片因此与所属轮次对应，模型不会把历史图片当成本轮新图；标记仍保留，后续 `channel_send`
+   回传图片时需要路径。
+5. __tool 消息__：`ToolResponse` 不能带图，在"连续 tool 消息块"之后插入一条合成 user 消息：
    `[Text("[Tool result image] <path>"), Binary(img)]`。插在整块之后而不是每条之后，
    以满足 OpenAI "assistant(tool_calls) 之后必须紧跟全部 tool 消息" 的约束。
-5. __图片来源__：
+6. __图片来源__：
    - 本地路径 / `file://`：读取文件，按扩展名判定 MIME，`Binary::from_base64`。
    - `http(s)://`：`Binary::from_url`，由 provider 拉取（覆盖 QQ 下载失败的退化标记）。
-6. __校验与降级__：仅接受 `png / jpeg / gif / webp`；单张超过 `MAX_IMAGE_BYTES`
+7. __校验与降级__：仅接受 `png / jpeg / gif / webp`；单张超过 `MAX_IMAGE_BYTES`
    （默认 5 MiB，取各主流 provider 的保守下限）、文件不存在或读取失败时，不附图，
-   在消息中追加说明文本 `[image unavailable: <target> (<reason>)]`，并记 `warn!(event = "LlmImageSkipped", ...)`。
+   在该标记之后插入说明文本 `[image unavailable: <target> (<reason>)]`，并记 `warn!(event = "LlmImageSkipped", ...)`。
    任何单张图片失败都不让整个请求失败。
 
 上限以常量实现：`MAX_IMAGES_PER_REQUEST`（`src/llm/image.rs`）与 `MAX_IMAGE_BYTES`、
