@@ -28,7 +28,8 @@
 
 新提交评审：
 [单通道用户任务、受管进程与持续监控通知修正](specs/2026-10-28-channel-task-and-process-lifecycle-design.md)。
-单通道任务范围已由用户确认；实现方案待书面评审，尚未实施。
+书面规格已由用户确认，按
+[实施计划](plans/2026-10-28-channel-task-and-process-lifecycle.md)分批推进。
 
 | 文件 | 主题 | 状态 |
 |------|------|------|
