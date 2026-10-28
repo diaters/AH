@@ -69,19 +69,11 @@
 
 ## 设计文档（design/）
 
-> 完整状态表见 `design/README.md`。当前共 10 篇：__8 篇当前有效、2 篇历史背景__。
-
-| 文档 | 标注 | 主题 |
-| --- | --- | --- |
-| `design/brain-agent-scheduling.md` | 当前有效 | Brain Agent 调度 |
-| `design/cognitive-load-reduction.md` | 当前有效 | 认知负荷削减 |
-| `design/decision-loop.md` | 当前有效 | 决策循环 |
-| `design/evaluation.md` | 当前有效 | 评估闭环 |
-| `design/task-decomposition.md` | 当前有效 | 任务分解 |
-| `design/tool-architecture.md` | 当前有效 | 工具架构 |
-| `design/user-journey.md` | 当前有效 | 用户旅程 |
-| `design/llm-response-format.md` | 历史背景 | LLM 响应格式（早期方案） |
-| `design/tool-architecture-early.md` | 历史背景 | 早期工具架构（已被 `tool-architecture.md` 取代） |
+> 逐篇状态、作用与推荐阅读顺序以 [`design/README.md`](design/README.md) 为唯一索引，
+> 此处不再重复列表（旧列表引用的 9 个文件均已不存在）。
+>
+> 待评审：[`design/2026-10-28-harness-hardening-design.md`](design/2026-10-28-harness-hardening-design.md)
+> （授权范围、图片信任边界、无 TUI 模式等加固方案）。
 
 ## 活跃规格与计划（superpowers/）
 

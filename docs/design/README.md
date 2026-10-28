@@ -24,6 +24,7 @@
 | `2026-10-28-unattended-scheduled-monitoring-design.md` | 当前有效 | 无人值守定时任务与长期监控：持久化与补跑、预筛探针、可信静默、定时任务级授权 | P0 已实施 |
 | `2026-10-28-loop-steering-and-background-notification-design.md` | 当前有效 | Agent loop：steer、后台通知、`/stop`、进度清单 | 已实施完成 |
 | `2026-10-27-multimodal-image-input-design.md` | 当前有效 | 多模态图片输入：标记晚绑定、`vision` 声明、`view_image`、QQ 纯图片合并 | 已实施完成 |
+| `2026-10-28-harness-hardening-design.md` | 待评审 | 加固：授权范围、图片信任边界、`--headless` 等 | 审查中改变边界的部分 |
 | `2026-08-24-test-seam-quality-remediation-design.md` | 待评审 | 测试接缝质量修正：从实现耦合回归到可观察端口验证 | 基于低质测试清单证据核对与分批治理（基建先行） |
 
 ## 推荐阅读顺序
