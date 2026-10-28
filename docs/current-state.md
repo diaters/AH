@@ -134,7 +134,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 运行中的 `shell_exec` 与 `shell_start` 共用进程注册表并记录真实 Task / Agent 归属；
   backend clone 释放不再终止共享会话，显式幂等 `shutdown()` 拒绝新启动并回收已注册进程，最终共享状态析构仅作兜底
 - Unix 清理在回收组长 PID 前完成进程组信号；已被回收的句柄不再向旧 PGID 发信号。
-  实例级独立守护与主运行时关闭接线仍待后续实施
+  Unix 生产入口已接入独立守护器与显式关闭，宿主正常退出、panic、abort、SIGKILL 通过专用 lifeline EOF 回收同组后代；
+  RPC 与 stdin 分离，长 exec 与阻塞输入不阻塞 EOF 清理，服务故障拒绝新调用。
+  实测为 macOS，Linux / Android 设备回归待完成；详见 [进程守护实现](design/2026-10-29-process-supervisor.md)
 - 输出快照在行数上限之外再按 64 KiB 截断尾部；已结束的会话记录最多保留 128 条
 - 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always`（"本会话允许"）授权会在同一会话内立即复用，后续同工具请求直接执行
 - 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务

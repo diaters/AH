@@ -75,6 +75,8 @@ pub struct NativeProcessBackend {
     pub stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
     lifecycle: Arc<BackendLifecycle>,
+    #[cfg(unix)]
+    supervisor: Option<Arc<super::supervisor::SupervisorClient>>,
     /// exec 与 shell_start 的输出读取线程，结束时限时读取管道中的剩余输出。
     readers: Arc<Mutex<HashMap<SessionHandleId, Vec<thread::JoinHandle<()>>>>>,
 }
@@ -94,6 +96,8 @@ impl Default for NativeProcessBackend {
         let stdins = Arc::default();
         let readers = Arc::default();
         Self {
+            #[cfg(unix)]
+            supervisor: None,
             sessions: Arc::default(),
             runtimes: Arc::default(),
             lifecycle: Arc::new(BackendLifecycle {
@@ -151,6 +155,11 @@ impl SessionBackend for NativeProcessBackend {
         request: SessionStartRequest,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Exec(request), Some(cancel));
+        }
+
         let tail_lines = request.tail_lines;
         let deadline = request
             .timeout_secs
@@ -222,10 +231,20 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn start_session(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Start(request), None);
+        }
+
         self.spawn_registered_process(request, Stdio::piped())
     }
 
     fn read_session(&self, request: SessionReadRequest) -> Result<SessionSummary, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Read(request), None);
+        }
+
         self.refresh_session_state(request.handle_id)?;
         let mut handle = self.get_status(request.handle_id)?;
         handle.output = self.output_snapshot(request.handle_id, request.tail_lines)?;
@@ -234,6 +253,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn list_active_sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::List, None);
+        }
+
         self.refresh_session_state_batch(self.all_session_ids()?)?;
         let active_ids: Vec<_> = self
             .sessions
@@ -247,6 +271,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn input_session(&self, request: SessionInputRequest) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Input(request), None);
+        }
+
         self.set_interaction_state(request.handle_id, SessionInteractionState::Busy)?;
         let stdin = self
             .stdins
@@ -297,6 +326,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn stop_session(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Stop(handle_id), None);
+        }
+
         let process = self
             .processes
             .lock()
@@ -339,6 +373,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn list_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionSummary>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::ListTask(task_id), None);
+        }
+
         self.refresh_session_state_batch(self.task_session_ids(task_id)?)?;
         let active_ids = self.active_session_ids_for_task(task_id)?;
         self.live_summaries(active_ids)
@@ -349,6 +388,14 @@ impl SessionBackend for NativeProcessBackend {
         task_id: TaskId,
         handle_id: SessionHandleId,
     ) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(
+                super::supervisor::Operation::AssertOwner(task_id, handle_id),
+                None,
+            );
+        }
+
         let handle = self.get_status(handle_id)?;
         if handle.owner_task_id != task_id {
             return Err(format!(
@@ -360,11 +407,37 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn stop_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionHandleId>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::StopTask(task_id), None);
+        }
+
         self.stop_sessions(self.active_session_ids_for_task(task_id)?)
     }
 }
 
 impl NativeProcessBackend {
+    /// 创建本实例独占的进程服务；失败直接返回，不降级为本地启动。
+    #[cfg(unix)]
+    pub fn supervised(executable: impl AsRef<std::path::Path>) -> Result<Self, String> {
+        let supervisor = super::supervisor::SupervisorClient::launch(executable.as_ref())?;
+        Ok(Self {
+            supervisor: Some(Arc::new(supervisor)),
+            ..Self::default()
+        })
+    }
+
+    pub fn supervised_current_exe() -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            Self::supervised(std::env::current_exe().map_err(|error| error.to_string())?)
+        }
+        #[cfg(not(unix))]
+        {
+            Err("process supervision requires a supported Unix platform".to_string())
+        }
+    }
+
     /// 共用进程登记与输出生命周期；exec 继承 stdin，会话创建交互输入管道。
     fn spawn_registered_process(
         &self,
@@ -468,6 +541,11 @@ impl NativeProcessBackend {
     /// 幂等关停所有已注册进程；所有 clone 立即拒绝后续 spawn。
     /// 此接口由运行时所有者调用，最终析构仅提供兜底。
     pub fn shutdown(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.shutdown();
+        }
+
         let mut shutdown = self
             .lifecycle
             .shutdown

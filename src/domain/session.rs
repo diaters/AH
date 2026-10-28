@@ -86,7 +86,7 @@ pub struct SessionHandle {
     pub output: SessionOutputSnapshot,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartRequest {
     pub command: String,
     pub session_name: Option<String>,
@@ -100,20 +100,20 @@ pub struct SessionStartRequest {
     pub notify_on_exit: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadRequest {
     pub handle_id: SessionHandleId,
     pub tail_lines: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInputRequest {
     pub handle_id: SessionHandleId,
     pub input: String,
     pub append_newline: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub handle_id: SessionHandleId,
     pub command: String,

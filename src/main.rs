@@ -75,6 +75,16 @@ impl Drop for TuiGuard {
 const HEADLESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref()
+        == Some(harness::systems::tools::backend::supervisor::INTERNAL_FLAG)
+    {
+        return harness::systems::tools::backend::supervisor::run_internal()
+            .map_err(anyhow::Error::msg);
+    }
+    let process_backend =
+        harness::NativeProcessBackend::supervised_current_exe().map_err(anyhow::Error::msg)?;
+
     // `--headless`：不初始化终端，只驱动 ECS；审批只能经 IM 通道完成
     let headless = std::env::args().skip(1).any(|arg| arg == "--headless");
 
@@ -204,6 +214,10 @@ fn main() -> Result<()> {
         frontends,
         channel_manager,
     );
+
+    app.insert_resource(process_backend.clone());
+    // 在 app / channel / runtime 之前析构，覆盖 TUI 初始化等后续错误返回和 panic unwind。
+    let _process_shutdown = ProcessShutdownGuard(process_backend.clone());
 
     // 加载触发器配置（如果已配置）
     let triggers_config_path = app
@@ -347,6 +361,8 @@ fn main() -> Result<()> {
 
     info!(event = "HarnessExiting", total_ticks, "AI Harness exiting");
 
+    process_backend.shutdown().map_err(anyhow::Error::msg)?;
+
     // 优雅关闭 ChannelManager
     {
         let channel_manager = app.world().resource::<ChannelManager>();
@@ -355,6 +371,15 @@ fn main() -> Result<()> {
     let _ = runtime_clone.block_on(channel_handle);
 
     Ok(())
+}
+
+struct ProcessShutdownGuard(harness::NativeProcessBackend);
+impl Drop for ProcessShutdownGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.shutdown() {
+            warn!(event = "ProcessSupervisorShutdownFailed", error = %error, "process service cleanup failed");
+        }
+    }
 }
 
 /// TUI 运行形态的主循环钩子：读取终端事件、消费引擎事件、渲染界面。

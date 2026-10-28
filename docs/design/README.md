@@ -1,5 +1,7 @@
 # 设计文档索引
 
+新增当前有效实现说明：[实例级进程守护实现](2026-10-29-process-supervisor.md)。
+
 本文档用于说明 `docs/design/` 下各设计文档的当前状态与推荐阅读顺序。
 
 历史设计文档（已被取代）已移入 [docs/archive/design/](../archive/design/)。
