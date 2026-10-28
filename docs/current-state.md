@@ -259,7 +259,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 支持 `/plugins` 列出已加载插件、`/reload-plugins` 热重载、`/plugin_id:command` 调用插件命令
 - 重载时自动清除旧插件的工具、技能、Agent 贡献，重新扫描磁盘并注册新贡献
 - host API 提供 `WorldSnapshot`（只读快照）+ `WorldWriter`（写命令攒批回放）的隔离访问模型
-- hook 脚本执行受 1 秒超时保护，按插件字母序顺序派发
+- hook 脚本执行受 200 毫秒超时保护，按插件字母序顺序派发；一帧内累计耗时超过 50 毫秒时告警 `HookBudgetExceeded`
 - 所有关键操作具备结构化审计日志（`PluginToolDeniedByHook`、`PluginToolResultSetByHook` 等）
 
 #### 经验候选治理

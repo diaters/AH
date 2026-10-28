@@ -295,7 +295,7 @@ const SANDBOX_MAX_COLLECTION_LEN: usize = 100_000;
 ///   `Some(_)` 视为终止信号，`UNIT` 即 `()` 等价于无返回值）
 ///
 /// 用于插件工具执行（`run_rhai_tool_script`）；hook 派发仍用
-/// `new_sandboxed_engine`（hook 已有 1s 超时 + 独立线程隔离 + 操作数上限，且
+/// `new_sandboxed_engine`（hook 已有 200ms 超时 + 独立线程隔离 + 操作数上限，且
 /// `on_progress` 的闭包不满足 `Send + Sync`，与 hook 多线程 spawn 不兼容）。
 pub fn new_sandboxed_engine_with_cancel(cancel: CancellationToken) -> Engine {
     let mut engine = new_sandboxed_engine();

@@ -84,6 +84,12 @@ pub fn build_harness_app(
     // Startup: 先加载插件注册表，随后由 tools 系统主动拉取注册插件工具
     //（方向反转：user_plugins 不反向调用 systems），再加载持久化 Agent。
     app.add_systems(Startup, crate::user_plugins::plugin_load_startup_system);
+    // 每帧末检查插件 hook 在 ECS 线程上的累计耗时
+    app.init_resource::<crate::user_plugins::dispatcher::HookFrameBudget>();
+    app.add_systems(
+        bevy_app::Last,
+        crate::user_plugins::dispatcher::hook_budget_check_system,
+    );
     app.add_systems(
         Startup,
         crate::systems::tools::register_plugin_tools_startup_system
