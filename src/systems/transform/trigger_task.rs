@@ -618,8 +618,17 @@ mod tests {
         });
         app.update();
 
-        assert!(created(&mut app).is_empty(), "webhook must not fire scheduled tasks");
-        assert!(definition_of(&app, &kind).unwrap().health.last_fired_at.is_none());
+        assert!(
+            created(&mut app).is_empty(),
+            "webhook must not fire scheduled tasks"
+        );
+        assert!(
+            definition_of(&app, &kind)
+                .unwrap()
+                .health
+                .last_fired_at
+                .is_none()
+        );
     }
 
     #[test]

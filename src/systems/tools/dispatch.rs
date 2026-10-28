@@ -13,8 +13,7 @@ use crate::{
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
         ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
         PermissionSource, ProfileGenerationContext, ScheduledRun, SharedKnowledgeBase,
-        ShortTermMemory,
-        SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task,
+        ShortTermMemory, SkillCreationContext, SkillUpdateContext, SpaceToolRegistry, Task,
         ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolPermission, WaitingReason, WorkItem,
     },
@@ -764,28 +763,28 @@ mod tests {
         agent_id: crate::domain::AgentId,
     ) -> ToolExecutionRequestMessage {
         ToolExecutionRequestMessage {
-                request: AgentExecutionRequest {
-                    task_id,
-                    agent_id,
-                    request_kind: AgentRequestKind::ToolExecution {
-                        tool_name: "shell_exec".to_string(),
-                    },
-                    prompt: String::new(),
-                    system_prompt: None,
-                    tools: vec![],
-                    conversation: None,
-                    work_item_id: None,
-                    model_override: None,
-                    turn_generation: None,
-                    vision: false,
+            request: AgentExecutionRequest {
+                task_id,
+                agent_id,
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "shell_exec".to_string(),
                 },
-                tool_name: "shell_exec".to_string(),
-                tool_input: serde_json::json!({"cmd": "echo ok"}),
-                pending_confirmation_id: None,
-                tool_call_id: None,
-                pending_confirmation_options: None,
-                work_item_entity: None,
-                confirmed_once: false,
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+                turn_generation: None,
+                vision: false,
+            },
+            tool_name: "shell_exec".to_string(),
+            tool_input: serde_json::json!({"cmd": "echo ok"}),
+            pending_confirmation_id: None,
+            tool_call_id: None,
+            pending_confirmation_options: None,
+            work_item_entity: None,
+            confirmed_once: false,
         }
     }
 
@@ -816,9 +815,11 @@ mod tests {
     #[test]
     fn scheduled_run_rejects_confirm_tool_without_requesting_approval() {
         let (mut world, task_id, agent_id, task_entity) = confirm_world();
-        world.entity_mut(task_entity).insert(crate::domain::ScheduledRun {
-            schedule_id: uuid::Uuid::new_v4(),
-        });
+        world
+            .entity_mut(task_entity)
+            .insert(crate::domain::ScheduledRun {
+                schedule_id: uuid::Uuid::new_v4(),
+            });
         world.spawn(shell_exec_request(task_id, agent_id));
 
         let mut schedule = Schedule::default();
@@ -826,7 +827,10 @@ mod tests {
         schedule.run(&mut world);
 
         assert_eq!(
-            world.query::<&ToolConfirmationRequestMessage>().iter(&world).count(),
+            world
+                .query::<&ToolConfirmationRequestMessage>()
+                .iter(&world)
+                .count(),
             0,
             "unattended scheduled run must not request confirmation"
         );
@@ -848,7 +852,11 @@ mod tests {
     fn subtask_of_scheduled_run_is_also_unattended() {
         let (mut world, task_id, agent_id, task_entity) = confirm_world();
         let parent_id = crate::domain::TaskId::new();
-        let mut parent = world.query::<&Task>().get(&world, task_entity).unwrap().clone();
+        let mut parent = world
+            .query::<&Task>()
+            .get(&world, task_entity)
+            .unwrap()
+            .clone();
         parent.id = parent_id;
         parent.delegate = None;
         let parent_entity = world
@@ -875,7 +883,10 @@ mod tests {
         schedule.run(&mut world);
 
         assert_eq!(
-            world.query::<&ToolConfirmationRequestMessage>().iter(&world).count(),
+            world
+                .query::<&ToolConfirmationRequestMessage>()
+                .iter(&world)
+                .count(),
             0
         );
     }

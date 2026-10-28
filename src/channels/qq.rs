@@ -2030,7 +2030,9 @@ mod tests {
         };
 
         assert!(
-            ch.handle_interaction_create(&event("STRANGER")).await.is_none(),
+            ch.handle_interaction_create(&event("STRANGER"))
+                .await
+                .is_none(),
             "non-allowlisted member must not approve"
         );
         // 审批仍保留，白名单用户随后可以正常点击

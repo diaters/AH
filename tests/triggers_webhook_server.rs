@@ -109,5 +109,8 @@ async fn webhook_server_refuses_to_start_with_empty_token() {
     .await
     .expect("server with empty token must fail fast instead of serving");
     let err = result.expect_err("empty auth_token must be rejected");
-    assert!(err.to_string().contains("auth_token"), "unexpected error: {err}");
+    assert!(
+        err.to_string().contains("auth_token"),
+        "unexpected error: {err}"
+    );
 }
