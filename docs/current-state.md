@@ -241,7 +241,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   cron 由 `schedule_catch_up_startup_system` 在启动时判定，一次性任务在路由时判定，超出 7 天的一次性任务删除并通知
 - 重叠规则：同一定时任务上一次运行（`ScheduledRun` 标记的 Task）未进入终态时，本次触发跳过并记录 `ScheduleSkipped`
 - 暂停的定时任务不被 timer 调度，触发也会跳过；`update_scheduled_task` 的 `run_now` 可手动运行（不受暂停影响）
-- 一次性任务触发后自动清理，并记录 `DynamicTaskRemoved` 结构化日志
+- 一次性任务触发时只记 `last_fired_at`（timer 不再调度已触发的一次性任务），运行进入终态后由
+  `once_schedule_completion_system` 删除定义并记录 `DynamicTaskRemoved`；运行未完成就停机时，
+  重启后该任务转为暂停并向输出通道提醒（`OnceScheduleInterrupted`），不自动重跑，
+  可用 `run_now` 重新运行或删除
 
 #### 插件系统
 

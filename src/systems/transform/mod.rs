@@ -10,7 +10,7 @@ mod subtask;
 mod task_completion_hook;
 mod task_creation;
 mod task_lifecycle;
-mod trigger_task;
+pub(crate) mod trigger_task;
 
 pub use chat_round::{
     chat_round_block_system, chat_round_completion_system, chat_session_cleanup_system,

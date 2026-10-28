@@ -191,11 +191,13 @@ mod tests {
 
         app.update();
 
-        let trusted = app.world().get::<TrustedImages>(entity).expect("registered");
+        let trusted = app
+            .world()
+            .get::<TrustedImages>(entity)
+            .expect("registered");
         assert_eq!(
             trusted.0.iter().cloned().collect::<Vec<_>>(),
             vec!["/tmp/ok.png".to_string()]
         );
     }
 }
-

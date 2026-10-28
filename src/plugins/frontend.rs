@@ -8,9 +8,9 @@ use crate::systems::{
     HarnessSet, clear_task_system, command_parse_system, continue_task_system, finish_task_system,
     frontend_input_system, frontend_output_system, input_ingress_system,
     on_message_received_hook_system, on_shared_knowledge_write_hook_system,
-    on_task_created_hook_system, reload_plugins_system, reload_triggers_message_consumer_system,
-    retry_wakeup_system, schedule_catch_up_startup_system, schedule_persist_system,
-    signal_ingest_system, tick_clock_system, trigger_task_routing_system,
+    on_task_created_hook_system, once_schedule_completion_system, reload_plugins_system,
+    reload_triggers_message_consumer_system, retry_wakeup_system, schedule_catch_up_startup_system,
+    schedule_persist_system, signal_ingest_system, tick_clock_system, trigger_task_routing_system,
     user_input_routing_system, user_message_to_task_system,
 };
 
@@ -87,6 +87,10 @@ impl Plugin for FrontendPlugin {
                 // 动态定时任务定义变化时写盘：变更检测保证晚于本系统的修改（如 Maintenance
                 // 阶段的工具效果落账）在下一帧写入，不会遗漏
                 schedule_persist_system.in_set(HarnessSet::Output),
+                // 一次性定时任务的运行进入终态后删除定义（先于写盘，同帧落盘）
+                once_schedule_completion_system
+                    .in_set(HarnessSet::Output)
+                    .before(schedule_persist_system),
             ),
         );
     }

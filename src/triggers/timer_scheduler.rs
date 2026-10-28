@@ -155,7 +155,7 @@ pub async fn run_timer_scheduler(
 ///
 /// - 静态路由仅在 `timer.enabled = true` 时纳入（保留 a37b859 的 gate 语义）
 /// - 动态任务（`schedule_task` 工具创建）仅纳入启用中的定义；暂停的定义不调度，
-///   手动运行（`run_now`）不经 timer
+///   手动运行（`run_now`）不经 timer；已触发（`last_fired_at` 已设置）的一次性任务不调度
 fn build_all_schedules(state: &SchedulerState) -> anyhow::Result<Vec<ScheduledItem>> {
     let mut items = Vec::new();
     if let Some(routes) = state.static_routes()
@@ -170,6 +170,8 @@ fn build_all_schedules(state: &SchedulerState) -> anyhow::Result<Vec<ScheduledIt
     }
     for def in state.dynamic_tasks().iter().filter(|def| def.enabled) {
         match def.schedule.spec() {
+            // 已触发的一次性任务在运行结束前保留定义，但不能再次调度
+            ScheduleSpec::Once(_) if def.health.last_fired_at.is_some() => {}
             ScheduleSpec::Once(at) => {
                 items.push(ScheduledItem::Once {
                     id: def.id,
@@ -250,5 +252,25 @@ mod tests {
             })
             .collect();
         assert_eq!(kinds, vec![active_kind]);
+    }
+
+    #[test]
+    fn fired_once_definitions_are_not_rescheduled() {
+        let past = (Utc::now() - ChronoDuration::minutes(1)).to_rfc3339();
+        let pending = definition(&format!("once:{past}"), true);
+        let pending_kind = pending.kind();
+        let mut fired = definition(&format!("once:{past}"), true);
+        fired.health.last_fired_at = Some(Utc::now());
+        let mut state = SchedulerState::default();
+        *state.dynamic_tasks_mut() = vec![pending, fired];
+
+        let kinds: Vec<String> = build_all_schedules(&state)
+            .unwrap()
+            .into_iter()
+            .map(|item| match item {
+                ScheduledItem::Cron { kind, .. } | ScheduledItem::Once { kind, .. } => kind,
+            })
+            .collect();
+        assert_eq!(kinds, vec![pending_kind]);
     }
 }
