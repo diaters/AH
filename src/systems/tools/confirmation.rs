@@ -226,10 +226,7 @@ pub fn tool_confirmation_result_system(
                         .iter_mut()
                         .find(|a| a.id == tool_request.request.agent_id)
                 {
-                    agent
-                        .tool_permissions
-                        .overrides
-                        .insert(tool_request.tool_name.clone(), ToolPermission::Allow);
+                    agent.grant_permission(tool_request.tool_name.clone());
                     debug!(
                         event = "AgentPermissionUpdated",
                         agent_id = %agent.id,
