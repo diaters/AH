@@ -25,7 +25,7 @@
 | `2026-10-28-loop-steering-and-background-notification-design.md` | 当前有效 | Agent loop：steer、后台通知、`/stop`、进度清单 | 已实施完成 |
 | `2026-10-27-multimodal-image-input-design.md` | 当前有效 | 多模态图片输入：标记晚绑定、`vision` 声明、`view_image`、QQ 纯图片合并 | 已实施完成 |
 | `2026-10-28-harness-hardening-design.md` | 当前有效 | 加固：授权范围、图片信任边界、`--headless` 等 | §2–§8 已实施 |
-| `2026-10-28-conversation-idle-and-approver-binding-design.md` | 待评审 | 多轮会话空闲自动结束；群聊审批绑定发起人 | 待评审 |
+| `2026-10-28-conversation-idle-and-approver-binding-design.md` | 当前有效 | 多轮会话空闲自动结束；群聊审批绑定发起人 | 已实施 |
 | `2026-08-24-test-seam-quality-remediation-design.md` | 待评审 | 测试接缝质量修正：从实现耦合回归到可观察端口验证 | 基于低质测试清单证据核对与分批治理（基建先行） |
 
 ## 推荐阅读顺序

@@ -14,8 +14,8 @@ use crate::{
         ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
         PermissionSource, ProfileGenerationContext, RuntimeGrants, ScheduledRun,
         SharedKnowledgeBase, ShortTermMemory, SkillCreationContext, SkillUpdateContext,
-        SpaceToolRegistry, Task, ToolConfirmationRequestMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolPermission, WaitingReason, WorkItem,
+        SpaceToolRegistry, Task, TaskInitiator, ToolConfirmationRequestMessage, ToolContext,
+        ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason, WorkItem,
         resolve_tool_permission,
     },
     ecs::EntityIndex,
@@ -24,6 +24,7 @@ use crate::{
     systems::NativeProcessBackend,
 };
 
+use super::approval_gate::task_grant_scope;
 use super::orchestrator::restore_task_after_tool;
 use super::orchestrator::{ToolResources, ToolWorldQueries, handle_tool_action, spawn_tool_error};
 
@@ -67,6 +68,7 @@ pub fn tool_dispatch_system(
         Res<FrontendRegistry>,
         Query<(), With<ScheduledRun>>,
         Option<Res<RuntimeGrants>>,
+        Query<&TaskInitiator>,
     ),
 ) {
     let index = &mut index_clock_loader.0;
@@ -74,6 +76,7 @@ pub fn tool_dispatch_system(
     let frontend_registry = &index_clock_loader.3;
     let scheduled_runs = &index_clock_loader.4;
     let runtime_grants = index_clock_loader.5.as_deref();
+    let initiators = &index_clock_loader.6;
     for (entity, mut request) in &mut requests {
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
@@ -160,16 +163,23 @@ pub fn tool_dispatch_system(
             continue;
         }
 
-        let conversation = index
-            .get_task(&request.request.task_id)
-            .and_then(|e| tasks.get(e).ok())
-            .and_then(|(_, t)| t.origin_channel.clone());
+        let scope = task_grant_scope(
+            request.request.task_id,
+            index,
+            |e| {
+                tasks
+                    .get(e)
+                    .ok()
+                    .map(|(_, t)| (t.parent_task_id, t.origin_channel.clone()))
+            },
+            initiators,
+        );
         let (permission, source) = resolve_tool_permission(
             agent,
             &tool_name,
             Some(&registry),
             runtime_grants,
-            conversation.as_ref(),
+            scope.as_ref(),
         );
 
         // 预先提取 output_channel 供 PermissionAudit 使用（避免在三个 match 分支
@@ -841,7 +851,14 @@ mod tests {
             ..origin.clone()
         };
         let mut grants = crate::domain::RuntimeGrants::default();
-        grants.grant(agent_id, "shell_exec", other);
+        grants.grant(
+            agent_id,
+            "shell_exec",
+            crate::domain::GrantScope {
+                conversation: other,
+                initiator: None,
+            },
+        );
         world.insert_resource(grants);
         world.spawn(shell_exec_request(task_id, agent_id));
 
@@ -857,6 +874,54 @@ mod tests {
             1,
             "a grant from another conversation must not skip confirmation"
         );
+    }
+
+    /// 同一群会话中，运行期授权只对授权者自己发起的任务（含子任务）生效。
+    #[test]
+    fn runtime_grant_is_scoped_to_task_initiator() {
+        let confirmations = |grant_initiator: &str| {
+            let (mut world, task_id, agent_id, task_entity) = confirm_world();
+            let mut child = world
+                .query::<&Task>()
+                .get(&world, task_entity)
+                .unwrap()
+                .clone();
+            let origin = child.origin_channel.clone().unwrap();
+            // 原任务作为根任务（发起人 member-a），在其下挂一个子任务发起工具调用
+            world
+                .entity_mut(task_entity)
+                .insert(crate::domain::TaskInitiator("member-a".to_string()));
+            child.id = crate::domain::TaskId::new();
+            child.parent_task_id = Some(task_id);
+            let child_id = child.id;
+            let child_entity = world.spawn(child).id();
+            world
+                .resource_mut::<crate::ecs::EntityIndex>()
+                .tasks
+                .insert(child_id, child_entity);
+            let mut grants = crate::domain::RuntimeGrants::default();
+            grants.grant(
+                agent_id,
+                "shell_exec",
+                crate::domain::GrantScope {
+                    conversation: origin,
+                    initiator: Some(grant_initiator.to_string()),
+                },
+            );
+            world.insert_resource(grants);
+            world.spawn(shell_exec_request(child_id, agent_id));
+
+            let mut schedule = Schedule::default();
+            schedule.add_systems(tool_dispatch_system);
+            schedule.run(&mut world);
+            world
+                .query::<&ToolConfirmationRequestMessage>()
+                .iter(&world)
+                .count()
+        };
+
+        assert_eq!(confirmations("member-a"), 0, "授权者自己的任务复用授权");
+        assert_eq!(confirmations("member-b"), 1, "其他成员的授权不能复用");
     }
 
     #[test]
@@ -906,7 +971,14 @@ mod tests {
             .unwrap()
             .parent_task_id = Some(parent_id);
         let mut grants = crate::domain::RuntimeGrants::default();
-        grants.grant(parent_agent, "shell_exec", origin);
+        grants.grant(
+            parent_agent,
+            "shell_exec",
+            crate::domain::GrantScope {
+                conversation: origin,
+                initiator: None,
+            },
+        );
         world.insert_resource(grants);
         world.spawn(shell_exec_request(task_id, agent_id));
 

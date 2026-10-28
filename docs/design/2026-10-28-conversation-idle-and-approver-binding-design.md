@@ -4,8 +4,9 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 待评审 |
+| 状态 | 当前有效（已评审并实施） |
 | 创建日期 | 2026-10-28 |
+| 实施记录 | 2026-10-28 用户确认推荐方案后实施；实现细节与当前行为以 `docs/current-state.md` 为准 |
 | 来源 | `2026-10-28-harness-hardening-design.md` §9 遗留的两个次要问题 |
 | 相关文档 | `2026-10-28-harness-hardening-design.md`、`2026-05-17-multi-turn-memory-design.md`、`im-channel-adapters.md` |
 
@@ -67,8 +68,8 @@
 
 - __传递发言人__：`ExternalInput::TextWithChannel` 与 `ExternalInput::Confirmation` 新增
   `sender: Option<String>`（平台用户 ID），由 `to_external_input` 填入；TUI、webhook、定时器为 `None`。
-- __记录发起人__：`Task` 新增 `initiator: Option<String>`（`#[serde(default)]`）。顶层任务取创建它的那条
-  输入的 `sender`；子任务继承父任务；webhook 事件任务和定时任务为 `None`。
+- __记录发起人__：由用户输入创建的顶层任务挂 `TaskInitiator` 组件，取创建它的那条输入的 `sender`；
+  子任务不另存，需要时沿父链取根任务的发起人；webhook 事件任务和定时任务没有发起人。
 - __审批判定__：通道配置新增 `approvers: Vec<String>`（`[qq]`、`[telegram]` 各一份，默认为空）。
   一条审批回复（文本或按钮）被接受，当且仅当满足以下任一条件：
   - 回复者等于任务的 `initiator`；
@@ -76,8 +77,8 @@
   - 任务没有 `initiator`（事件任务、定时任务），且 `approvers` 为空：保持现有行为，白名单内任何人可审批。
 - __拒绝反馈__：不满足时不改变任务状态，向通道回复"仅任务发起人或审批人可以审批此操作"，记录
   `ApprovalSenderRejected` 事件。
-- __授权范围__：`RuntimeGrants` 的键扩展为 `(agent, tool, approval_channel, initiator)`。A 的
-  "本会话允许"只对 A 发起的任务生效。
+- __授权范围__：`RuntimeGrants` 的键扩展为 `(agent, tool, GrantScope)`，`GrantScope` 为
+  `(origin_channel, initiator)`。A 的"本会话允许"只对 A 发起的任务生效。
 - __私聊与 TUI 不受影响__：私聊中发言人就是对话方本身，`initiator` 总能匹配；TUI 没有 `sender`，
   所有任务 `initiator` 为 `None` 且没有 `approvers`，沿用现有行为。
 
@@ -90,11 +91,19 @@
 ### 3.4 影响
 
 - 群里只有发起人（或配置的审批人）能放行自己任务的工具调用；其他成员点击按钮或回复数字会收到拒绝提示。
-- 改动面：通道层（QQ、Telegram 的入向转换）、`ExternalInput` 两个变体、`Task` 新字段、审批匹配
-  （`routing.rs` 文本路径、`confirmation.rs` 按钮路径）、`RuntimeGrants` 键、通道配置与文档。
-  `Task` 新字段会波及测试中的结构体字面量。
+- 改动面：通道层（QQ、Telegram 的入向转换）、`ExternalInput` 两个变体与沿途消息的 `sender`、
+  `TaskInitiator` 组件、审批校验（`approval_sender_gate_system`，文本与按钮两条路径汇合后统一校验）、
+  `RuntimeGrants` 键、通道配置与文档。
+- 已知限制：群聊会话上下文仍按群共享。成员 B 在群里的新消息会续上 A 发起、仍在等待用户的会话，
+  这轮执行沿用 A 的发起人身份，因此会复用 A 已给出的"本会话允许"授权；新的审批仍只有 A 或审批人能放行。
+  彻底消除需要群成员会话隔离（见 §3.3）。
 
-### 3.5 备选方案
+### 3.5 实施说明
+
+- 设计稿中"`Task` 新增 `initiator` 字段"改为 `TaskInitiator` 组件：只有根任务需要它，
+  组件避免了波及全部 `Task` 构造点，语义相同。
+
+### 3.6 备选方案
 
 - 只记录审批者身份到日志，不做拦截。改动小，便于事后追溯，但不能阻止越权审批。
 - 群聊中禁用 Confirm 工具（一律拒绝）。最安全，但群聊里的 Agent 基本失去 shell 能力。

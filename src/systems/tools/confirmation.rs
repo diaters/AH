@@ -12,9 +12,9 @@ use crate::{
         ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
         PermissionAuditContext, PermissionSource, ProfileGenerationContext, RuntimeGrants,
         SharedKnowledgeBase, ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task,
-        TaskId, TaskStatus, ToolActionKind, ToolCallingState, ToolConfirmationResponseMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, WaitingReason, WorkItem,
+        TaskId, TaskInitiator, TaskStatus, ToolActionKind, ToolCallingState,
+        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
     infrastructure::skills::SkillLoader,
@@ -22,6 +22,7 @@ use crate::{
     systems::NativeProcessBackend,
 };
 
+use super::approval_gate::task_grant_scope;
 use super::dispatch::emit_permission_audit;
 
 use super::orchestrator::{
@@ -91,12 +92,14 @@ pub fn tool_confirmation_result_system(
         Res<SkillLoader>,
         Res<FrontendRegistry>,
         Option<ResMut<RuntimeGrants>>,
+        Query<&TaskInitiator>,
     ),
 ) {
     let index = &mut index_clock_loader_frontends.0;
     let clock = &index_clock_loader_frontends.1;
     let frontend_registry = &index_clock_loader_frontends.3;
     let runtime_grants = &mut index_clock_loader_frontends.4;
+    let initiators = &index_clock_loader_frontends.5;
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
         let Some((request_entity, tool_request)) = tool_requests
@@ -223,21 +226,28 @@ pub fn tool_confirmation_result_system(
                     "tool execution confirmed by user"
                 );
 
-                // Permanent 模式（"本会话允许"）：按来源会话写入运行期授权。
+                // Permanent 模式（"本会话允许"）：按来源会话 × 发起人写入运行期授权。
                 // 没有来源会话的任务（webhook 事件等）无会话可复用，按仅本次处理。
-                let conversation = index
-                    .get_task(&tool_request.request.task_id)
-                    .and_then(|e| tasks.get(e).ok())
-                    .and_then(|(_, t)| t.origin_channel.clone());
-                let granted = option.mode == GrantMode::Permanent && conversation.is_some();
+                let scope = task_grant_scope(
+                    tool_request.request.task_id,
+                    index,
+                    |e| {
+                        tasks
+                            .get(e)
+                            .ok()
+                            .map(|(_, t)| (t.parent_task_id, t.origin_channel.clone()))
+                    },
+                    initiators,
+                );
+                let granted = option.mode == GrantMode::Permanent && scope.is_some();
                 let granted = granted && runtime_grants.is_some();
-                if let (Some(conversation), Some(runtime_grants)) =
-                    (conversation.filter(|_| granted), runtime_grants.as_mut())
+                if let (Some(scope), Some(runtime_grants)) =
+                    (scope.filter(|_| granted), runtime_grants.as_mut())
                 {
                     runtime_grants.grant(
                         tool_request.request.agent_id,
                         &tool_request.tool_name,
-                        conversation,
+                        scope,
                     );
                 } else if option.mode == GrantMode::Permanent {
                     debug!(

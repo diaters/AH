@@ -1288,15 +1288,19 @@ fn user_allows_tool_always() {
 
     // 验证：allow_always 写入按会话划分的运行期授权，不改配置层 overrides
     let grants = app.world().resource::<harness::domain::RuntimeGrants>();
+    let scope = |conversation| harness::domain::GrantScope {
+        conversation,
+        initiator: None,
+    };
     assert!(
-        grants.allows(agent_id, "shell_exec", Some(&default_channel())),
+        grants.allows(agent_id, "shell_exec", Some(&scope(default_channel()))),
         "allow_always should grant shell_exec within the originating conversation"
     );
     let other_chat = harness::domain::ChannelId {
         user_id: "someone-else".to_string(),
         ..default_channel()
     };
-    assert!(!grants.allows(agent_id, "shell_exec", Some(&other_chat)));
+    assert!(!grants.allows(agent_id, "shell_exec", Some(&scope(other_chat))));
     let overrides_touched = {
         let world = app.world_mut();
         let mut query = world.query::<&Agent>();

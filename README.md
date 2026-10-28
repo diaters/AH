@@ -18,6 +18,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
 - Summarization 与 Evaluation 收敛到 `WorkItem` 闭环
 - 工具权限、审批 UI、顺序确认与工具执行链路
+- 群聊审批绑定任务发起人（可配置 `approvers` 代审）；多轮会话空闲超时自动结束
 - 精简后的 shell 工具集：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - 记忆治理：ShortTermMemory、LongTermMemory、SharedKnowledgeBase 三层收敛，

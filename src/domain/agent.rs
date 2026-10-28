@@ -21,38 +21,42 @@ pub enum PermissionSource {
     RuntimeGrant,
 }
 
+/// 运行期授权的作用范围：任务的来源会话 × 任务树根任务的发起人。
+///
+/// 群聊中会话以群为粒度，发起人区分群成员：成员 A 的授权不会被同群成员 B 发起的任务复用。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrantScope {
+    pub conversation: ChannelId,
+    pub initiator: Option<String>,
+}
+
 /// 运行期授权：用户在审批中选择"本会话允许"后写入。
 ///
-/// 按 (Agent, 工具, 会话) 划分，只在同一会话（任务的 `origin_channel`）内复用，进程内有效、
+/// 按 (Agent, 工具, [`GrantScope`]) 划分，只在同一会话、同一发起人的任务内复用，进程内有效、
 /// 不持久化。没有来源会话的任务（webhook 事件、定时任务）不复用任何运行期授权；
 /// 父 Agent 自动审批只认配置层权限，也不读取这里。
 #[derive(Resource, Debug, Default)]
-pub struct RuntimeGrants(HashSet<(AgentId, String, ChannelId)>);
+pub struct RuntimeGrants(HashSet<(AgentId, String, GrantScope)>);
 
 impl RuntimeGrants {
     /// 记录一次"本会话允许"授权。
-    pub fn grant(&mut self, agent_id: AgentId, tool_name: &str, conversation: ChannelId) {
+    pub fn grant(&mut self, agent_id: AgentId, tool_name: &str, scope: GrantScope) {
         tracing::info!(
             event = "PermissionGrant",
             agent_id = %agent_id,
             tool_name = %tool_name,
-            conversation = ?conversation,
+            conversation = ?scope.conversation,
+            initiator = ?scope.initiator,
             "运行期授权写入（本会话）"
         );
-        self.0
-            .insert((agent_id, tool_name.to_string(), conversation));
+        self.0.insert((agent_id, tool_name.to_string(), scope));
     }
 
-    /// 该会话内是否已授权该 Agent 使用该工具；`conversation` 为 `None` 时恒为否。
-    pub fn allows(
-        &self,
-        agent_id: AgentId,
-        tool_name: &str,
-        conversation: Option<&ChannelId>,
-    ) -> bool {
-        conversation.is_some_and(|c| {
+    /// 该范围内是否已授权该 Agent 使用该工具；`scope` 为 `None`（无来源会话）时恒为否。
+    pub fn allows(&self, agent_id: AgentId, tool_name: &str, scope: Option<&GrantScope>) -> bool {
+        scope.is_some_and(|s| {
             self.0
-                .contains(&(agent_id, tool_name.to_string(), c.clone()))
+                .contains(&(agent_id, tool_name.to_string(), s.clone()))
         })
     }
 }
@@ -64,11 +68,11 @@ pub fn resolve_tool_permission(
     tool_name: &str,
     registry: Option<&crate::domain::SpaceToolRegistry>,
     grants: Option<&RuntimeGrants>,
-    conversation: Option<&ChannelId>,
+    scope: Option<&GrantScope>,
 ) -> (ToolPermission, PermissionSource) {
     let (permission, source) = agent.effective_permission(tool_name, registry);
     if permission == ToolPermission::Confirm
-        && grants.is_some_and(|g| g.allows(agent.id, tool_name, conversation))
+        && grants.is_some_and(|g| g.allows(agent.id, tool_name, scope))
     {
         return (ToolPermission::Allow, PermissionSource::RuntimeGrant);
     }

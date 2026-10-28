@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::{
     domain::{
-        FrontendKind, SystemOutputMessage, Task, TaskId, TaskInitiator,
+        ChannelId, FrontendKind, GrantScope, SystemOutputMessage, Task, TaskId, TaskInitiator,
         ToolConfirmationResponseMessage,
     },
     ecs::EntityIndex,
@@ -39,6 +39,27 @@ pub(crate) fn root_initiator(
         (parent, initiator) = next;
     }
     initiator
+}
+
+/// 任务的运行期授权范围：来源会话 × 任务树根任务的发起人；没有来源会话时为 None。
+///
+/// `task_of` 由调用方按自己的 Task 查询提供，返回实体上任务的 `(父任务 ID, 来源会话)`。
+pub(crate) fn task_grant_scope(
+    task_id: TaskId,
+    index: &EntityIndex,
+    task_of: impl Fn(Entity) -> Option<(Option<TaskId>, Option<ChannelId>)>,
+    initiators: &Query<&TaskInitiator>,
+) -> Option<GrantScope> {
+    let (_, conversation) = task_of(index.get_task(&task_id)?)?;
+    let initiator = root_initiator(task_id, |id| {
+        let entity = index.get_task(&id)?;
+        let (parent, _) = task_of(entity)?;
+        Some((parent, initiators.get(entity).ok().map(|i| i.0.clone())))
+    });
+    Some(GrantScope {
+        conversation: conversation?,
+        initiator,
+    })
 }
 
 /// 审批回复者是否有权放行该任务的审批。

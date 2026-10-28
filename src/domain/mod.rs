@@ -129,7 +129,7 @@ pub type ExecutorFuture =
 // agent
 pub use agent::{
     Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
-    AgentToolPermissions, PermissionSource, RuntimeGrants, resolve_tool_permission,
+    AgentToolPermissions, GrantScope, PermissionSource, RuntimeGrants, resolve_tool_permission,
 };
 
 // chat_session
@@ -413,17 +413,29 @@ mod tests {
             user_id: user.to_string(),
             thread_id: None,
         };
+        let scope = |user: &str, initiator: Option<&str>| GrantScope {
+            conversation: chat(user),
+            initiator: initiator.map(str::to_string),
+        };
         let mut grants = RuntimeGrants::default();
-        grants.grant(agent.id, "shell_exec", chat("group:a"));
+        grants.grant(agent.id, "shell_exec", scope("group:a", Some("member-a")));
 
-        let resolve = |conversation: Option<&ChannelId>| {
-            resolve_tool_permission(&agent, "shell_exec", None, Some(&grants), conversation)
+        let resolve = |scope: Option<&GrantScope>| {
+            resolve_tool_permission(&agent, "shell_exec", None, Some(&grants), scope)
         };
         assert_eq!(
-            resolve(Some(&chat("group:a"))),
+            resolve(Some(&scope("group:a", Some("member-a")))),
             (ToolPermission::Allow, PermissionSource::RuntimeGrant)
         );
-        assert_eq!(resolve(Some(&chat("group:b"))).0, ToolPermission::Confirm);
+        assert_eq!(
+            resolve(Some(&scope("group:a", Some("member-b")))).0,
+            ToolPermission::Confirm,
+            "同群其他成员发起的任务不复用"
+        );
+        assert_eq!(
+            resolve(Some(&scope("group:b", Some("member-a")))).0,
+            ToolPermission::Confirm
+        );
         assert_eq!(
             resolve(None).0,
             ToolPermission::Confirm,
