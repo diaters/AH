@@ -6,6 +6,7 @@ use genai::{
     resolver::{AuthData, Endpoint, ServiceTargetResolver},
 };
 use reqwest_013;
+use std::time::Duration;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -19,6 +20,20 @@ use super::provider::{LlmProviderConfig, LlmProviderKind};
 pub(crate) struct GenaiExecutor {
     client: Client,
     model: Option<String>,
+    /// 单次 LLM 请求的总超时；reqwest 默认不设超时，provider 连接挂住会让任务永远停在 Running。
+    request_timeout: Duration,
+}
+
+/// 单次 LLM 请求默认超时（秒），可由 `HARNESS_LLM_REQUEST_TIMEOUT_SECS` 覆盖。
+const DEFAULT_LLM_REQUEST_TIMEOUT_SECS: u64 = 300;
+
+fn request_timeout_from_env() -> Duration {
+    let secs = std::env::var("HARNESS_LLM_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_LLM_REQUEST_TIMEOUT_SECS);
+    Duration::from_secs(secs)
 }
 
 fn create_reqwest_client() -> Result<reqwest_013::Client> {
@@ -80,13 +95,22 @@ impl GenaiExecutor {
         Ok(Self {
             client,
             model: config.model.clone(),
+            request_timeout: request_timeout_from_env(),
         })
+    }
+
+    /// 覆盖请求超时（测试用短超时）。
+    #[cfg(test)]
+    pub(crate) fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
     }
 }
 
 impl AgentExecutor for GenaiExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         let client = self.client.clone();
+        let request_timeout = self.request_timeout;
         // 模型解析：请求级 model_override 优先，其次 executor 默认模型。
         // 两者皆无时无法确定目标模型，直接返回配置错误而非发送伪模型名。
         let model = match request
@@ -140,13 +164,31 @@ impl AgentExecutor for GenaiExecutor {
             let chat_request = build_chat_request(&request)?;
             let start = Instant::now();
 
-            let response = client
-                .exec_chat(&model, chat_request, None)
-                .await
-                .map_err(|error| {
+            let response = match tokio::time::timeout(
+                request_timeout,
+                client.exec_chat(&model, chat_request, None),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|error| {
                     debug!(error = %error, "genai API error");
                     classify_genai_error(error)
-                })?;
+                })?,
+                Err(_) => {
+                    warn!(
+                        event = "LlmRequestTimeout",
+                        task_id = %request.task_id,
+                        agent_id = %request.agent_id,
+                        model = %model,
+                        timeout_secs = request_timeout.as_secs(),
+                        "LLM request timed out"
+                    );
+                    return Err(ExecutionError::Timeout(format!(
+                        "LLM request exceeded {}s",
+                        request_timeout.as_secs_f32()
+                    )));
+                }
+            };
 
             let duration_ms = start.elapsed().as_millis();
             debug!(
@@ -438,6 +480,41 @@ mod tests {
             captured_raw_body: None,
             response_id: None,
         }
+    }
+
+    // ---- 请求超时 ----
+
+    /// provider 连接挂住时请求必须在超时后返回可重试的 Timeout，而不是让任务永远停在 Running。
+    #[tokio::test]
+    async fn execute_times_out_when_provider_hangs() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(5)))
+            .mount(&server)
+            .await;
+        let config = LlmProviderConfig {
+            provider: LlmProviderKind::OpenAiCompatible,
+            model: Some("m".to_string()),
+            api_key: Some("k".to_string()),
+            api_base: Some(format!("{}/", server.uri())),
+        };
+        let executor = GenaiExecutor::new(&config)
+            .unwrap()
+            .with_request_timeout(std::time::Duration::from_millis(200));
+
+        let started = std::time::Instant::now();
+        let error = executor
+            .execute(sample_request())
+            .await
+            .expect_err("hung provider must time out");
+
+        assert!(matches!(error, ExecutionError::Timeout(_)), "got {error:?}");
+        assert!(error.is_retryable());
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
     }
 
     // ---- execute 模型解析 ----

@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use futures_util::FutureExt as _;
 use tracing::{debug, info, warn};
 
 use crate::domain::{AgentExecutionRequestMessage, AgentExecutionResult, AgentRequestKind, Task};
@@ -73,24 +74,8 @@ pub(crate) fn agent_execution_system(
             && request.work_item_id.is_none();
         let task_id = request.task_id;
         let handle = runtime.0.spawn(async move {
-            let result = if let Some(mut chain) = chain_snapshot {
-                // 有 ModelChainState：执行带降级的请求
-                execute_with_fallback_logic(
-                    &registry,
-                    &mut chain,
-                    request.clone(),
-                    state_sender.clone(),
-                )
-                .await
-            } else {
-                // 无 ModelChainState：使用默认 executor（向后兼容）
-                let default_executor = registry
-                    .get("default")
-                    .or_else(|| registry.executors.values().next().cloned())
-                    .expect("no executor available");
-
-                default_executor.execute(request.clone()).await
-            };
+            let result =
+                execute_request_guarded(&registry, chain_snapshot, &request, state_sender).await;
 
             let reasoning_content = result
                 .as_ref()
@@ -116,6 +101,47 @@ pub(crate) fn agent_execution_system(
         }
 
         commands.entity(entity).despawn();
+    }
+}
+
+/// 执行一次 LLM 请求；缺少 executor 或 executor panic 时转为错误结果。
+///
+/// 调用方无论如何都会拿到结果并回送，任务不会因结果丢失而永远停在 Running。
+async fn execute_request_guarded(
+    registry: &ExecutorRegistry,
+    chain_snapshot: Option<crate::domain::ModelChainState>,
+    request: &crate::domain::AgentExecutionRequest,
+    state_sender: tokio::sync::mpsc::UnboundedSender<crate::domain::ModelChainStateUpdate>,
+) -> Result<crate::domain::AgentExecutionOutput, crate::domain::ExecutionError> {
+    let attempt = async {
+        if let Some(mut chain) = chain_snapshot {
+            // 有 ModelChainState：执行带降级的请求
+            execute_with_fallback_logic(registry, &mut chain, request.clone(), state_sender).await
+        } else {
+            // 无 ModelChainState：使用默认 executor（向后兼容）
+            match registry
+                .get("default")
+                .or_else(|| registry.executors.values().next().cloned())
+            {
+                Some(executor) => executor.execute(request.clone()).await,
+                None => Err(crate::domain::ExecutionError::Unknown(
+                    "no executor available".to_string(),
+                )),
+            }
+        }
+    };
+    match std::panic::AssertUnwindSafe(attempt).catch_unwind().await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::error!(
+                event = "LlmExecutorPanicked",
+                task_id = %request.task_id,
+                "LLM executor panicked, reporting as error"
+            );
+            Err(crate::domain::ExecutionError::Unknown(
+                "LLM executor panicked".to_string(),
+            ))
+        }
     }
 }
 
@@ -304,6 +330,27 @@ mod tests {
         assert!(seen[0].vision, "首个模型声明 vision，请求应启用图片");
         assert_eq!(seen[1].model_override.as_deref(), Some("text-model"));
         assert!(!seen[1].vision, "降级到非视觉模型后应关闭图片");
+    }
+
+    struct PanickingExecutor;
+
+    impl AgentExecutor for PanickingExecutor {
+        fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
+            Box::pin(async { panic!("provider adapter bug") })
+        }
+    }
+
+    #[tokio::test]
+    async fn executor_panic_becomes_error_result() {
+        let registry = ExecutorRegistry::from_single_executor(Arc::new(PanickingExecutor), "p");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = execute_request_guarded(&registry, None, &request(), tx).await;
+
+        assert!(
+            matches!(&result, Err(ExecutionError::Unknown(msg)) if msg.contains("panicked")),
+            "got {result:?}"
+        );
     }
 
     #[test]

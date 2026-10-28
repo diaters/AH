@@ -113,6 +113,7 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 |----------|--------|------|
 | `HARNESS_BRAIN_ENABLED` | `false` | 是否启用 Brain Agent 调度 |
 | `HARNESS_MAX_RETRIES` | `3` | LLM 请求最大重试次数 |
+| `HARNESS_LLM_REQUEST_TIMEOUT_SECS` | `300` | 单次 LLM 请求总超时（秒），超时按可重试的 `Timeout` 处理，避免 provider 连接挂住时任务永远停在 Running |
 | `HARNESS_MAX_TOOL_ITERATIONS` | `5` | 单次用户输入后，LLM 工具调用最大迭代次数 |
 | `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS` | `300` | `wait_tasks` 默认超时时间 |
 | `HARNESS_TOOL_INFLIGHT_TIMEOUT_SECS` | `300` | 异步工具调用全局失联超时（秒），sweeper 推导 `max_duration` 的全局缺省 |
