@@ -33,6 +33,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   `/skill <意图描述>` 命令由 skill-creator Agent 在沙盒中生成新 skill，用户确认后
   rename 原子写回 Agent 的 Skill Package
 - 插件系统：Rhai 脚本扩展，20 个 hook 点，支持贡献工具、技能和 Agent
+- 定时任务：Webhook / cron 信号触发；`schedule_task` 动态定时任务持久化保存，重启后恢复，
+  错过的运行在 7 天内补跑最近一次，支持暂停、修改与立即运行
 - IM 通道：Telegram（长轮询、白名单、媒体附件）+ QQ（WebSocket Gateway、OAuth2、
   富媒体），跨通道隔离，出向-自动回执
 - 图片输入：模型声明 `vision = true` 后，IM 入站图片与 `view_image` 工具结果以真实图片

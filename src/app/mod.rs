@@ -79,7 +79,6 @@ pub fn build_harness_app(
     app.insert_resource(crate::domain::SignalTriggerRegistry::default());
     app.insert_resource(crate::triggers::SchedulerState::default());
     app.insert_resource(crate::triggers::SchedulerStateWatcher::default());
-    app.insert_resource(crate::triggers::ScheduledTaskRegistry::default());
 
     // Startup: 先加载插件注册表，随后由 tools 系统主动拉取注册插件工具
     //（方向反转：user_plugins 不反向调用 systems），再加载持久化 Agent。

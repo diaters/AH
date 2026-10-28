@@ -137,18 +137,19 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   [async-tool-bridge.md](async-tool-bridge.md)
 - 双轨期：`ToolActionKind` 缺省 `Sync`，异步工具 override 为 `Async`；dispatch 按 `kind()`
   分流，Sync 工具继续走旧路径，禁止新增 Sync 工具
-- 六条架构不变量：统一异步、快照进效果出、compute/apply 切分、双账本单一修改入口、
+- 六条架构不变量：统一异步、快照进效果出、compute/apply 切分、调度账本单一修改入口、
   结果落地单点 + exactly-once、双超时分层
 - 三条失联路径（worker panic / 业务超时 / 通道断开）经 sweeper claim 殊途同归到 ingest
   单点落地，exactly-once 由「挂起实体是否还在」唯一裁决
 - 父任务终态触发 worker 取消：`cancel_monitor_system` 调 `CancellationToken.cancel()`，
   worker `select!` 监听后 kill 子进程并回送 cancelled error
 - 通用效果提交：写工具返回声明式 `ToolEffect`，由 `commit_tool_effects_system`（exclusive
-  system）经 `update_scheduler_state` 双资源入口原子落账，结果回送通道由 ingest 下一帧落地
-- 动态定时任务管理三件套已上桥：
+  system）经 `update_scheduler_state` 统一入口落账，结果回送通道由 ingest 下一帧落地
+- 动态定时任务管理四件套已上桥：
   - `list_scheduled_tasks`（纯读，pilot 工具）
-  - `delete_scheduled_task`（写路径，idempotent 语义）
+  - `delete_scheduled_task`（写路径，按 kind 或 name 定位，idempotent 语义）
   - `schedule_task`（写路径，经 `ToolEffect::ScheduleTask` 落账）
+  - `update_scheduled_task`（写路径，修改 / 暂停恢复 / 立即运行，经 `ToolEffect::UpdateSchedule` 落账）
 - `shell_exec` 已迁移至异步桥，CancellationToken 取消路径打通
 - Rhai 插件经 `spawn_blocking` 包裹上桥，插件 API 不变
 - `OwnedToolContext.current_origin_channel` 由 dispatch 从 `Task.origin_channel` 注入，
@@ -209,7 +210,16 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
 - `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`web`
 - 动态 scheduled task 触发后，其 `output_channel` 同时作为审批通道，执行期需要用户确认的工具请求会路由到该 IM 用户；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
-- 动态 scheduled task 仅存内存，进程重启后丢失；一次性任务触发后自动从 registry 清理，并记录 `DynamicTaskRemoved` 结构化日志
+- 动态定时任务以 `ScheduleDefinition` 为唯一账本（`SchedulerState.dynamic_tasks`），带唯一名称、
+  启停状态与 `last_fired_at`；设计见
+  [无人值守定时任务与长期监控设计](design/2026-10-28-unattended-scheduled-monitoring-design.md)（P0 已实施）
+- 持久化：定义变化时由 `schedule_persist_system` 原子写入 `.harness/schedules/schedules.json`，启动时恢复；
+  文件损坏时改名为 `.corrupt-<时间戳>` 后按空启动，读取失败时本次会话不启用持久化
+- 补跑：停机期间错过的运行，7 天内只补跑最近一次并向输出通道推送补跑说明，任务内容前标注原定时间；
+  cron 由 `schedule_catch_up_startup_system` 在启动时判定，一次性任务在路由时判定，超出 7 天的一次性任务删除并通知
+- 重叠规则：同一定时任务上一次运行（`ScheduledRun` 标记的 Task）未进入终态时，本次触发跳过并记录 `ScheduleSkipped`
+- 暂停的定时任务不被 timer 调度，触发也会跳过；`update_scheduled_task` 的 `run_now` 可手动运行（不受暂停影响）
+- 一次性任务触发后自动清理，并记录 `DynamicTaskRemoved` 结构化日志
 
 #### 插件系统
 
@@ -364,6 +374,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Planning WorkItem` 已删除，不再作为未来预留项保留
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
+- 动态定时任务双账本已合并：`DynamicScheduledTask`、`ScheduledTaskInfo`、`ScheduledTaskRegistry` 及其快照类型、
+  `OwnedToolContext.registry` 均已删除，统一由 `ScheduleDefinition` 承载
 - `schedule_task` 专用 commit 链路已退役：`schedule_task_commit_system`、
   `ScheduleTaskRequestMessage`、`ScheduleTaskCommitPending`、`ToolAction::ScheduleTask`
   变体均已删除，写路径统一经 `ToolEffect::ScheduleTask` + `commit_tool_effects_system`

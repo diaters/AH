@@ -12,7 +12,7 @@ use tracing::{debug, info};
 use crate::{
     domain::{
         CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
-        HookPoint, NewlyCreatedTask, PendingDispatch, ShortTermMemory, Task,
+        HookPoint, NewlyCreatedTask, PendingDispatch, ScheduledRun, ShortTermMemory, Task,
     },
     systems::HarnessSettings,
     user_plugins::{
@@ -37,14 +37,14 @@ use crate::{
 
 /// 用户消息转任务 System
 ///
-/// 将用户消息转换为任务实体。
+/// 将用户消息转换为任务实体。定时任务触发的消息携带的 `ScheduledRun` 一并拷到新 Task 上。
 pub fn user_message_to_task_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
     mut index: ResMut<EntityIndex>,
-    messages: Query<(Entity, &CreateTaskMessage)>,
+    messages: Query<(Entity, &CreateTaskMessage, Option<&ScheduledRun>)>,
 ) {
-    for (entity, message) in &messages {
+    for (entity, message, scheduled_run) in &messages {
         // 创建多轮对话任务（Pending 状态）并附带 ShortTermMemory
         let mut stm = ShortTermMemory::default();
         stm.add_entry(EntryRole::User, &message.content, EntryMetadata::default());
@@ -87,7 +87,7 @@ pub fn user_message_to_task_system(
             "new task spawned from user message"
         );
 
-        spawn_task(
+        let task_entity = spawn_task(
             &mut commands,
             &mut index,
             task,
@@ -103,6 +103,9 @@ pub fn user_message_to_task_system(
                 },
             },
         );
+        if let Some(run) = scheduled_run {
+            commands.entity(task_entity).insert(*run);
+        }
         commands.entity(entity).despawn();
     }
 }
@@ -200,4 +203,53 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
         task_id = %task.id,
         "on_task_created hook dispatched for task"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::TaskRoutingPolicy;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.insert_resource(HarnessSettings::default_test());
+        app.init_resource::<EntityIndex>();
+        app.add_systems(Update, user_message_to_task_system);
+        app
+    }
+
+    #[test]
+    fn scheduled_run_marker_is_copied_onto_new_task() {
+        let mut app = app();
+        let schedule_id = uuid::Uuid::new_v4();
+        app.world_mut().spawn((
+            CreateTaskMessage {
+                content: "scheduled".to_string(),
+                origin_channel: None,
+                routing_policy: TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
+            },
+            ScheduledRun { schedule_id },
+        ));
+        app.world_mut().spawn(CreateTaskMessage {
+            content: "plain".to_string(),
+            origin_channel: None,
+            routing_policy: TaskRoutingPolicy::event(None, None),
+        });
+
+        app.update();
+
+        let mut query = app.world_mut().query::<(&Task, Option<&ScheduledRun>)>();
+        let mut seen: Vec<(String, Option<ScheduledRun>)> = query
+            .iter(app.world())
+            .map(|(task, run)| (task.content.clone(), run.copied()))
+            .collect();
+        seen.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            seen,
+            vec![
+                ("plain".to_string(), None),
+                ("scheduled".to_string(), Some(ScheduledRun { schedule_id })),
+            ]
+        );
+    }
 }

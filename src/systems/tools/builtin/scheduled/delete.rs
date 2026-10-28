@@ -1,14 +1,14 @@
 //! delete_scheduled_task 工具——写路径首个客户。
 //!
-//! worker 只做一件事：把入参 `kind` 包成
+//! worker 只做一件事：把入参 `kind` 或 `name` 包成
 //! `ToolWorkerOutput::Effect(ToolEffect::DeleteScheduledTask)`。
 //! 不在 worker 里查存在性——快照可能过期，`existed` 真相在 apply 时刻
 //! （由 `commit_tool_effects_system` 经 `update_scheduler_state` 双资源入口产生）。
 //! 写路径只有「效果 → commit」一条路径，不存在第二条直达落账的通道。
 
 use crate::domain::{
-    BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolContext, ToolEffect, ToolError,
-    ToolFuture, ToolWorkerOutput,
+    BuiltinTool, OwnedToolContext, ScheduleSelector, ToolAction, ToolActionKind, ToolContext,
+    ToolEffect, ToolError, ToolFuture, ToolWorkerOutput,
 };
 
 pub struct DeleteScheduledTaskTool;
@@ -31,15 +31,9 @@ impl BuiltinTool for DeleteScheduledTaskTool {
 
     fn run_async(&self, input: serde_json::Value, _ctx: OwnedToolContext) -> ToolFuture {
         Box::pin(async move {
-            let kind = input
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| {
-                    ToolError::InvalidInput("missing required parameter: kind".to_string())
-                })?;
+            let selector = ScheduleSelector::from_input(&input).map_err(ToolError::InvalidInput)?;
             Ok(ToolWorkerOutput::Effect(ToolEffect::DeleteScheduledTask {
-                kind: kind.to_string(),
+                selector,
             }))
         })
     }

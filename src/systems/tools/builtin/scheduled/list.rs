@@ -1,5 +1,3 @@
-use tracing::warn;
-
 use crate::domain::compute_next_trigger;
 use crate::domain::{
     BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolContext, ToolError, ToolFuture,
@@ -29,32 +27,23 @@ impl BuiltinTool for ListScheduledTasksTool {
             let state = ctx.scheduler_state.ok_or_else(|| {
                 ToolError::InternalState("scheduler snapshot missing".to_string())
             })?;
-            let registry = ctx
-                .registry
-                .ok_or_else(|| ToolError::InternalState("registry snapshot missing".to_string()))?;
 
             let mut tasks = Vec::new();
-            for dt in &state.dynamic_tasks {
-                let Some(info) = registry.tasks.get(&dt.kind) else {
-                    // 过滤不一致项 + 必须 warn（双账本漂移的线上观测）
-                    warn!(
-                        event = "SchedulerLedgerInconsistency",
-                        kind = %dt.kind,
-                        scheduler_count = state.dynamic_tasks.len(),
-                        registry_count = registry.tasks.len(),
-                        "task in SchedulerState but not in Registry; filtered"
-                    );
-                    continue;
-                };
-
+            for def in &state.dynamic_tasks {
                 let mut entry = serde_json::json!({
-                    "kind": dt.kind,
-                    "content": info.content,
-                    "output_channel": info.output_channel,
-                    "is_once": info.is_once,
-                    "created_at": dt.created_at.to_rfc3339(),
+                    "kind": def.kind(),
+                    "name": def.name,
+                    "content": def.content,
+                    "schedule": def.schedule.raw(),
+                    "output_channel": def.output_channel,
+                    "is_once": def.schedule.is_once(),
+                    "enabled": def.enabled,
+                    "created_at": def.created_at.to_rfc3339(),
+                    "last_fired_at": def.health.last_fired_at.map(|t| t.to_rfc3339()),
                 });
-                if let Some(next) = compute_next_trigger(&dt.schedule) {
+                if def.enabled
+                    && let Some(next) = compute_next_trigger(def.schedule.spec())
+                {
                     entry["next_fire_time"] = serde_json::Value::String(next.to_rfc3339());
                 }
                 tasks.push(entry);

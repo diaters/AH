@@ -31,10 +31,16 @@ fn async_result_completed_carries_tool_error() {
 
 #[test]
 fn async_result_can_carry_effect() {
-    let r = ToolAsyncResult::effect("c2", ToolEffect::DeleteScheduledTask { kind: "k".into() });
+    let selector = harness::domain::ScheduleSelector::Name("k".into());
+    let r = ToolAsyncResult::effect(
+        "c2",
+        ToolEffect::DeleteScheduledTask {
+            selector: selector.clone(),
+        },
+    );
     match r.payload {
-        ToolWorkerPayload::Effect(ToolEffect::DeleteScheduledTask { kind }) => {
-            assert_eq!(kind, "k")
+        ToolWorkerPayload::Effect(ToolEffect::DeleteScheduledTask { selector: got }) => {
+            assert_eq!(got, selector)
         }
         other => panic!("unexpected {:?}", other),
     }
@@ -82,5 +88,4 @@ fn owned_context_empty_for_test() {
     let ctx = OwnedToolContext::empty_for_test(300);
     assert_eq!(ctx.tool_inflight_timeout_secs, 300);
     assert!(ctx.scheduler_state.is_none());
-    assert!(ctx.registry.is_none());
 }

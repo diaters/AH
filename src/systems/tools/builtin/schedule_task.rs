@@ -2,19 +2,15 @@
 //!
 //! Task 14 上桥后：`kind() == Async`，sync `execute` 仅防御性返回 `InternalState`，
 //! 真正逻辑在 `run_async` 内——解析参数 → 构造 `ToolEffect::ScheduleTask` 效果，
-//! 由 `commit_tool_effects_system` 经 `update_scheduler_state` 双资源入口落账。
+//! 由 `commit_tool_effects_system` 经 `update_scheduler_state` 统一入口落账。
 
-use std::str::FromStr;
-
-use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
-use cron::Schedule;
+use chrono::Utc;
 use uuid::Uuid;
 
 use crate::domain::{
-    BuiltinTool, ChannelId, FrontendKind, OwnedToolContext, ToolAction, ToolActionKind,
-    ToolContext, ToolEffect, ToolError, ToolFuture, ToolWorkerOutput,
+    BuiltinTool, ChannelId, FrontendKind, OwnedToolContext, ScheduleExpr, ScheduleSpec, ToolAction,
+    ToolActionKind, ToolContext, ToolEffect, ToolError, ToolFuture, ToolWorkerOutput,
 };
-use crate::triggers::ScheduleSpec;
 
 pub struct ScheduleTaskTool;
 
@@ -54,12 +50,16 @@ impl BuiltinTool for ScheduleTaskTool {
             let output_channel =
                 build_output_channel(output_channel_str, target, ctx.current_origin_channel)?;
 
-            let id = Uuid::new_v4();
-            let kind = format!("scheduled:{}", id);
+            let name = input
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
 
             Ok(ToolWorkerOutput::Effect(ToolEffect::ScheduleTask {
-                id,
-                kind,
+                id: Uuid::new_v4(),
+                name,
                 content,
                 schedule,
                 output_channel,
@@ -68,46 +68,17 @@ impl BuiltinTool for ScheduleTaskTool {
     }
 }
 
-/// 解析 `once:` / `cron:` 前缀的调度表达式。
-///
-/// - `once:<RFC3339 或 naive local>`：一次性触发，时间必须在未来。
-/// - `cron:<5 字段>`：周期性触发，内部补齐为 7 字段（`"0 {user_cron} *"`）。
-fn parse_schedule(s: &str) -> Result<ScheduleSpec, ToolError> {
-    if let Some(rest) = s.strip_prefix("once:") {
-        let local = parse_once_time(rest)?;
-        if local <= Local::now() {
-            return Err(ToolError::InvalidInput(
-                "scheduled time is in the past".to_string(),
-            ));
-        }
-        Ok(ScheduleSpec::Once(local.with_timezone(&Utc)))
-    } else if let Some(rest) = s.strip_prefix("cron:") {
-        let cron_expr = format!("0 {} *", rest);
-        let schedule = Schedule::from_str(&cron_expr)
-            .map_err(|e| ToolError::InvalidInput(format!("invalid cron: {}", e)))?;
-        Ok(ScheduleSpec::Cron(Box::new(schedule)))
-    } else {
-        Err(ToolError::InvalidInput(
-            "schedule must start with 'once:' or 'cron:'".to_string(),
-        ))
+/// 解析调度表达式，并要求一次性触发时间在未来。
+pub(crate) fn parse_schedule(s: &str) -> Result<ScheduleExpr, ToolError> {
+    let expr = ScheduleExpr::parse(s).map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+    if let ScheduleSpec::Once(at) = expr.spec()
+        && *at <= Utc::now()
+    {
+        return Err(ToolError::InvalidInput(
+            "scheduled time is in the past".to_string(),
+        ));
     }
-}
-
-/// 解析一次性触发时间。
-///
-/// 先尝试带时区偏移的 RFC 3339，再回退到无偏移的本地时间。
-fn parse_once_time(s: &str) -> Result<DateTime<Local>, ToolError> {
-    // 先尝试带时区偏移的 RFC 3339
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Local));
-    }
-    // 再尝试无偏移的本地时间
-    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
-        .map_err(|e| ToolError::InvalidInput(format!("invalid once time: {}", e)))?;
-    Local
-        .from_local_datetime(&naive)
-        .single()
-        .ok_or_else(|| ToolError::InvalidInput("ambiguous or invalid local time".to_string()))
+    Ok(expr)
 }
 
 /// 构造输出通道。
@@ -152,7 +123,6 @@ mod tests {
     use super::*;
     use crate::domain::BuiltinTool;
     use chrono::Local;
-    use uuid::Uuid;
 
     fn future_local_iso() -> String {
         let future = Local::now() + chrono::Duration::days(1);
@@ -285,13 +255,13 @@ mod tests {
                 content,
                 schedule,
                 output_channel,
-                kind,
+                name,
                 ..
             }) => {
                 assert_eq!(content, "send report");
-                assert!(matches!(schedule, ScheduleSpec::Once(_)));
+                assert!(schedule.is_once());
                 assert_eq!(output_channel, Some(inherited));
-                assert!(kind.starts_with("scheduled:"));
+                assert_eq!(name, None);
             }
             other => panic!("expected ScheduleTask effect, got {:?}", other),
         }
@@ -317,7 +287,7 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(output_channel, Some(inherited));
-                assert!(matches!(schedule, ScheduleSpec::Once(_)));
+                assert!(schedule.is_once());
             }
             other => panic!("expected ScheduleTask effect, got {:?}", other),
         }
@@ -341,7 +311,8 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(content, "daily standup");
-                assert!(matches!(schedule, ScheduleSpec::Cron(_)));
+                assert!(!schedule.is_once());
+                assert_eq!(schedule.raw(), "cron:0 9 * * 1-5");
                 let channel = output_channel.expect("output_channel should be set");
                 assert_eq!(channel.frontend, crate::domain::FrontendKind::Tui);
                 assert_eq!(channel.user_id, "user-1");
@@ -439,21 +410,17 @@ mod tests {
     }
 
     #[test]
-    fn kind_field_starts_with_scheduled_prefix() {
+    fn name_is_trimmed_and_passed_through() {
         let input = serde_json::json!({
             "content": "x",
-            "schedule": format!("once:{}", future_local_iso()),
+            "name": "  forum-watch  ",
+            "schedule": "cron:*/10 * * * *",
             "output_channel": "tui",
             "target": "u"
         });
-        let result = run_async_blocking(input, ctx_with_channel(None));
-        assert!(result.is_ok());
-        match result.unwrap() {
-            ToolWorkerOutput::Effect(ToolEffect::ScheduleTask { kind, id, .. }) => {
-                assert!(kind.starts_with("scheduled:"));
-                let suffix = kind.strip_prefix("scheduled:").unwrap();
-                let parsed = Uuid::parse_str(suffix).expect("kind suffix should be a UUID");
-                assert_eq!(parsed, id);
+        match run_async_blocking(input, ctx_with_channel(None)).unwrap() {
+            ToolWorkerOutput::Effect(ToolEffect::ScheduleTask { name, .. }) => {
+                assert_eq!(name.as_deref(), Some("forum-watch"));
             }
             other => panic!("expected ScheduleTask effect, got {:?}", other),
         }

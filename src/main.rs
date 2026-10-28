@@ -266,6 +266,20 @@ fn main() -> Result<()> {
             webhook: config.webhook.clone(),
         });
     }
+    // 恢复持久化的动态定时任务；补跑判定由 Startup 系统完成。
+    let schedule_store = harness::infrastructure::schedules::ScheduleStore::default_path();
+    // 读取失败（非损坏，如权限问题）时本次会话不启用持久化，避免空状态覆盖磁盘上的定义。
+    match schedule_store.load() {
+        Ok(definitions) => {
+            *initial_state.dynamic_tasks_mut() = definitions;
+            app.world_mut().insert_resource(schedule_store);
+        }
+        Err(e) => warn!(
+            event = "ScheduleStoreLoadFailed",
+            error = %e,
+            "failed to load scheduled tasks, persistence disabled for this session"
+        ),
+    }
     let (scheduler_tx, scheduler_rx) = tokio::sync::watch::channel(initial_state.clone());
     app.world_mut().insert_resource(initial_state);
     app.world_mut()

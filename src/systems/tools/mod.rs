@@ -51,7 +51,8 @@ use self::builtin::{
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillTool,
-    SubmitSkillUpdateTool, UpdateTodosTool, ViewImageTool, WaitTasksTool, WriteSkillFileTool,
+    SubmitSkillUpdateTool, UpdateScheduledTaskTool, UpdateTodosTool, ViewImageTool, WaitTasksTool,
+    WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -413,7 +414,7 @@ pub fn register_builtin_tools(
     // schedule_task tool
     registry.register(ToolDefinition {
         name: "schedule_task".to_string(),
-        description: "安排一个未来由 AI 执行的任务。支持一次性触发（once:ISO时间）或周期性 cron（cron:5字段表达式），结果会发送到指定输出通道。".to_string(),
+        description: "安排一个未来由 AI 执行的任务。支持一次性触发（once:ISO时间）或周期性 cron（cron:5字段表达式），结果会发送到指定输出通道。定时任务会持久保存，进程重启后恢复；停机期间错过的运行在 7 天内只补跑最近一次。定时任务独立于当前任务存在，当前任务结束后仍会继续运行，可用 update_scheduled_task 暂停或修改、delete_scheduled_task 删除。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -421,6 +422,10 @@ pub fn register_builtin_tools(
                     "content": {
                         "type": "string",
                         "description": "任务要执行的提示词/内容"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "可选，便于管理的唯一名称（如 forum-watch）；缺省取 id 前 8 位，重名会被拒绝"
                     },
                     "schedule": {
                         "type": "string",
@@ -448,7 +453,7 @@ pub fn register_builtin_tools(
     // list_scheduled_tasks tool —— pilot 首个异步工具（list 双账本只读）
     registry.register(ToolDefinition {
         name: "list_scheduled_tasks".to_string(),
-        description: "列出当前空间内的动态定时任务（由 schedule_task 工具创建）。返回每个任务的 kind、content、output_channel、is_once、created_at、next_fire_time 等字段；next_fire_time 对 Once 任务显示原始触发时间，对 Cron 任务显示下次触发点。".to_string(),
+        description: "列出当前空间内的动态定时任务（由 schedule_task 工具创建）。返回每个任务的 kind、name、content、schedule、output_channel、is_once、enabled、created_at、last_fired_at、next_fire_time 等字段；next_fire_time 对 Once 任务显示原始触发时间，对 Cron 任务显示下次触发点，已暂停的任务不返回该字段。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -464,17 +469,20 @@ pub fn register_builtin_tools(
     // delete_scheduled_task tool —— 写路径首个客户（声明式效果 → commit 落账）
     registry.register(ToolDefinition {
         name: "delete_scheduled_task".to_string(),
-        description: "删除指定 kind 的动态定时任务（由 schedule_task 工具创建）。返回 {deleted: kind, existed: bool}——existed 表示删除时任务是否还存在（幂等可观测：删不存在的 kind 不会报错，仅 existed=false）。".to_string(),
+        description: "删除指定的动态定时任务（由 schedule_task 工具创建），按 kind 或 name 定位。返回 {deleted, existed}——existed 表示删除时任务是否还存在（幂等可观测：删不存在的任务不会报错，仅 existed=false）。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "要删除的动态定时任务的 kind 字符串（即 list_scheduled_tasks 返回结果中的 kind 字段）"
+                        "description": "要删除的定时任务的 kind（list_scheduled_tasks 返回的 kind 字段）；与 name 二选一"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "要删除的定时任务名称；与 kind 二选一"
                     }
-                },
-                "required": ["kind"]
+                }
             }),
         },
         default_permission: ToolPermission::Allow,
@@ -482,6 +490,47 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(DeleteScheduledTaskTool));
+
+    // update_scheduled_task tool —— 修改 / 暂停恢复 / 立即运行（声明式效果 → commit 落账）
+    registry.register(ToolDefinition {
+        name: "update_scheduled_task".to_string(),
+        description: "修改指定的动态定时任务，按 kind 或 name 定位：可修改 content、schedule，用 enabled 暂停（false）或恢复（true），用 run_now 立即手动运行一次（暂停中也可运行；上一次运行未结束时会被跳过）。至少提供一项修改。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "定时任务的 kind；与 name 二选一"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "定时任务名称；与 kind 二选一"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "可选，新的任务提示词"
+                    },
+                    "schedule": {
+                        "type": "string",
+                        "description": "可选，新的调度表达式，格式同 schedule_task"
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "可选，false 暂停、true 恢复"
+                    },
+                    "run_now": {
+                        "type": "boolean",
+                        "description": "可选，为 true 时立即手动运行一次"
+                    }
+                }
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("update_scheduled_task".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(UpdateScheduledTaskTool));
 
     // Profile update tools (仅 profile-designer 可用)
     registry.register(ToolDefinition {

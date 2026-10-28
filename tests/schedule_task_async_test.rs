@@ -17,7 +17,6 @@ use harness::domain::{
     ToolWorkerOutput,
 };
 use harness::systems::tools::builtin::ScheduleTaskTool;
-use harness::triggers::ScheduleSpec;
 
 fn future_local_iso() -> String {
     let future = Local::now() + chrono::Duration::days(1);
@@ -85,14 +84,12 @@ fn run_async_returns_schedule_task_effect_with_inherited_channel() {
     match output {
         ToolWorkerOutput::Effect(harness::domain::ToolEffect::ScheduleTask {
             content,
-            kind,
             schedule,
             output_channel,
             ..
         }) => {
             assert_eq!(content, "send report");
-            assert!(kind.starts_with("scheduled:"));
-            assert!(matches!(schedule, ScheduleSpec::Once(_)));
+            assert!(schedule.is_once());
             assert_eq!(output_channel, Some(inherited));
         }
         other => panic!("expected ScheduleTask effect, got {:?}", other),
@@ -118,7 +115,7 @@ fn run_async_accepts_rfc3339_once_schedule() {
             schedule,
             ..
         }) => {
-            assert!(matches!(schedule, ScheduleSpec::Once(_)));
+            assert!(schedule.is_once());
             let channel = output_channel.expect("output_channel should be set");
             assert_eq!(channel.frontend, FrontendKind::QQ);
             assert_eq!(channel.user_id, "qq-user");
@@ -147,7 +144,7 @@ fn run_async_accepts_cron_schedule() {
             ..
         }) => {
             assert_eq!(content, "daily standup");
-            assert!(matches!(schedule, ScheduleSpec::Cron(_)));
+            assert!(!schedule.is_once());
         }
         other => panic!("expected ScheduleTask effect, got {:?}", other),
     }
@@ -265,7 +262,7 @@ fn run_async_explicit_output_channel_overrides_inherited() {
 }
 
 #[test]
-fn run_async_kind_field_starts_with_scheduled_prefix() {
+fn run_async_generates_fresh_id_per_call() {
     let tool = ScheduleTaskTool;
     let rt = tokio::runtime::Runtime::new().unwrap();
     let input = serde_json::json!({
@@ -274,20 +271,19 @@ fn run_async_kind_field_starts_with_scheduled_prefix() {
         "output_channel": "tui",
         "target": "u"
     });
-    let output = rt
-        .block_on(tool.run_async(input, ctx_with_channel(None)))
-        .unwrap();
-    match output {
-        ToolWorkerOutput::Effect(harness::domain::ToolEffect::ScheduleTask {
-            id, kind, ..
-        }) => {
-            assert!(kind.starts_with("scheduled:"));
-            let suffix = kind.strip_prefix("scheduled:").unwrap();
-            let parsed = uuid::Uuid::parse_str(suffix).expect("kind suffix should be a UUID");
-            assert_eq!(parsed, id);
-        }
+    let id_of = |output| match output {
+        ToolWorkerOutput::Effect(harness::domain::ToolEffect::ScheduleTask { id, .. }) => id,
         other => panic!("expected ScheduleTask effect, got {:?}", other),
-    }
+    };
+    let first = id_of(
+        rt.block_on(tool.run_async(input.clone(), ctx_with_channel(None)))
+            .unwrap(),
+    );
+    let second = id_of(
+        rt.block_on(tool.run_async(input, ctx_with_channel(None)))
+            .unwrap(),
+    );
+    assert_ne!(first, second);
 }
 
 #[test]

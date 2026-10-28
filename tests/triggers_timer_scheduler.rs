@@ -3,10 +3,17 @@
 //! 不测试真实 cron 等待（太慢），改为通过 watch 通道与 tracing 事件捕获
 //! 验证热加载行为：scheduler 必须在收到新配置后实际重建 schedules 并发出
 //! `TimerSchedulerReloaded` / `TimerSchedulerReloadFailed` 事件。
+//!
+//! 事件捕获使用进程级全局 subscriber（每个测试开头经 [`init_capture`] 安装一次），
+//! 再按线程转发到各测试自己的缓冲区。不用 thread-local `set_default`：并行测试中
+//! 未装 subscriber 的线程先命中某个 callsite 时，tracing 可能把该 callsite 的兴趣
+//! 缓存为 never，导致装了 subscriber 的测试偶发收不到事件。
 
+use std::cell::RefCell;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Once;
 use std::time::Duration;
 
 use crossbeam_channel::unbounded;
@@ -27,10 +34,33 @@ use tracing_subscriber::Registry;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::layer::SubscriberExt;
 
-/// 捕获 tracing 事件中 `event` 字段的值，用于断言 reload 行为是否真实发生。
+/// 当前测试线程捕获到的 `event` 字段值，用于断言 reload 行为是否真实发生。
 #[derive(Clone, Default)]
 struct CapturingLayer {
     events: Arc<Mutex<Vec<String>>>,
+}
+
+thread_local! {
+    static THREAD_CAPTURE: RefCell<Option<Arc<Mutex<Vec<String>>>>> = const { RefCell::new(None) };
+}
+
+/// 全局 subscriber 的转发层：把事件名写入当前线程登记的缓冲区（未登记则丢弃）。
+struct ForwardingLayer;
+
+static INIT_TRACING: Once = Once::new();
+
+/// 安装进程级全局 subscriber（仅首次生效），并为当前线程登记一个新的捕获缓冲区。
+///
+/// 每个测试都应在开头调用，保证任何 callsite 被命中前全局 subscriber 已就位。
+/// `#[tokio::test]` 默认 current-thread runtime，spawned task 与测试同线程。
+fn init_capture() -> CapturingLayer {
+    INIT_TRACING.call_once(|| {
+        tracing::subscriber::set_global_default(Registry::default().with(ForwardingLayer))
+            .expect("global subscriber must be installed once");
+    });
+    let capturing = CapturingLayer::default();
+    THREAD_CAPTURE.with(|slot| *slot.borrow_mut() = Some(capturing.events.clone()));
+    capturing
 }
 
 #[derive(Default)]
@@ -50,12 +80,16 @@ impl Visit for EventNameVisitor {
     }
 }
 
-impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+impl<S: tracing::Subscriber> Layer<S> for ForwardingLayer {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = EventNameVisitor::default();
         event.record(&mut visitor);
         if let Some(name) = visitor.name {
-            self.events.lock().unwrap().push(name);
+            THREAD_CAPTURE.with(|slot| {
+                if let Some(events) = slot.borrow().as_ref() {
+                    events.lock().unwrap().push(name);
+                }
+            });
         }
     }
 }
@@ -85,6 +119,22 @@ fn state_with_timer_route(kind: &str, cron: &str) -> SchedulerState {
         webhook: WebhookConfig::default(),
     });
     state
+}
+
+/// 构造一条动态定时任务定义，返回 (定义, kind)。
+fn dynamic_definition(
+    schedule: harness::domain::ScheduleExpr,
+) -> (harness::domain::ScheduleDefinition, String) {
+    let def = harness::domain::ScheduleDefinition::new(
+        uuid::Uuid::new_v4(),
+        None,
+        "x".to_string(),
+        schedule,
+        None,
+        chrono::Utc::now(),
+    );
+    let kind = def.kind();
+    (def, kind)
 }
 
 fn assert_contains(events: &CapturingLayer, name: &str) {
@@ -128,11 +178,7 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
     let (config_tx, config_rx) = watch::channel(SchedulerState::default());
 
-    let capturing = CapturingLayer::default();
-    let subscriber = Registry::default().with(capturing.clone());
-    // current-thread runtime：spawned task 与本测试同线程，thread-local
-    // default subscriber 会对 scheduler task 生效。
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let capturing = init_capture();
 
     let handle = tokio::spawn(async move {
         let _ = run_timer_scheduler(input_tx, config_rx).await;
@@ -178,6 +224,7 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
 
 #[tokio::test]
 async fn scheduler_initial_config_with_invalid_cron_returns_error() {
+    init_capture();
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
     let bad_state = state_with_timer_route("bad", "not a cron");
     let (_config_tx, config_rx) = watch::channel(bad_state);
@@ -192,9 +239,7 @@ async fn scheduler_starts_with_empty_state_when_no_static_routes() {
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
     let (_config_tx, config_rx) = watch::channel(SchedulerState::default());
 
-    let capturing = CapturingLayer::default();
-    let subscriber = Registry::default().with(capturing.clone());
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let capturing = init_capture();
 
     let handle = tokio::spawn(async move {
         let _ = run_timer_scheduler(input_tx, config_rx).await;
@@ -215,9 +260,9 @@ async fn scheduler_starts_with_empty_state_when_no_static_routes() {
 /// static config 的 reload，验证 scheduler 仍然运行且收到了 Timer 信号。
 #[tokio::test]
 async fn reload_preserves_dynamic_tasks() {
+    init_capture();
     use chrono::Utc;
-    use harness::triggers::{DynamicScheduledTask, ScheduleSpec};
-    use uuid::Uuid;
+    use harness::domain::ScheduleExpr;
 
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
     let initial = SchedulerState::default();
@@ -231,12 +276,9 @@ async fn reload_preserves_dynamic_tasks() {
 
     // 添加一个已过期的一次性动态任务，验证 reload 后仍能触发
     let mut new_state = SchedulerState::default();
-    new_state.dynamic_tasks_mut().push(DynamicScheduledTask {
-        id: Uuid::new_v4(),
-        kind: "scheduled:test".to_string(),
-        schedule: ScheduleSpec::Once(Utc::now() - chrono::Duration::minutes(1)),
-        created_at: Utc::now(),
-    });
+    let past = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    let (def, _kind) = dynamic_definition(ScheduleExpr::parse(&format!("once:{past}")).unwrap());
+    new_state.dynamic_tasks_mut().push(def);
     state_tx.send(new_state).unwrap();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -262,6 +304,7 @@ async fn reload_preserves_dynamic_tasks() {
 /// 下一次触发时间，因此工作日 9:00 的 cron 在本地时区下 hour==9。
 #[test]
 fn cron_schedule_uses_local_timezone() {
+    init_capture();
     use chrono::{Local, Timelike};
     use cron::Schedule;
     use std::str::FromStr;
@@ -284,9 +327,9 @@ fn cron_schedule_uses_local_timezone() {
 /// 永远为 false，任务不会触发，测试会因 timeout 失败。
 #[tokio::test]
 async fn one_shot_task_triggers_and_is_removed() {
+    init_capture();
     use chrono::Utc;
-    use harness::triggers::{DynamicScheduledTask, ScheduleSpec};
-    use uuid::Uuid;
+    use harness::domain::ScheduleExpr;
 
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
     let initial = SchedulerState::default();
@@ -298,12 +341,10 @@ async fn one_shot_task_triggers_and_is_removed() {
 
     // 添加一个 2 秒后触发的一次性任务
     let mut state = SchedulerState::default();
-    state.dynamic_tasks_mut().push(DynamicScheduledTask {
-        id: Uuid::new_v4(),
-        kind: "scheduled:test-once".to_string(),
-        schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::seconds(2)),
-        created_at: Utc::now(),
-    });
+    let soon = (Utc::now() + chrono::Duration::seconds(2)).to_rfc3339();
+    let (def, once_kind) =
+        dynamic_definition(ScheduleExpr::parse(&format!("once:{soon}")).unwrap());
+    state.dynamic_tasks_mut().push(def);
     state_tx.send(state).unwrap();
 
     // 在 10 秒内应收到 ExternalInput::Timer。crossbeam recv 是阻塞调用，
@@ -324,7 +365,7 @@ async fn one_shot_task_triggers_and_is_removed() {
         .expect("channel closed without message");
     match msg {
         ExternalInput::Timer { kind, .. } => {
-            assert_eq!(kind, "scheduled:test-once");
+            assert_eq!(kind, once_kind);
         }
         other => panic!("expected ExternalInput::Timer, got {:?}", other),
     }
@@ -340,26 +381,26 @@ async fn one_shot_task_triggers_and_is_removed() {
 /// 动态 cron 任务时刻完全重合，修复前第二个永远收不到信号。
 #[tokio::test]
 async fn crons_due_at_same_instant_all_fire() {
-    use chrono::Utc;
+    init_capture();
     use cron::Schedule;
-    use harness::triggers::{DynamicScheduledTask, ScheduleSpec};
+    use harness::domain::{ScheduleExpr, ScheduleSpec};
     use std::collections::HashSet;
     use std::str::FromStr;
-    use uuid::Uuid;
 
     let every_second = || {
-        ScheduleSpec::Cron(Box::new(
-            Schedule::from_str("* * * * * * *").expect("valid cron"),
-        ))
+        ScheduleExpr::from_spec_for_test(
+            "every second",
+            ScheduleSpec::Cron(Box::new(
+                Schedule::from_str("* * * * * * *").expect("valid cron"),
+            )),
+        )
     };
     let mut state = SchedulerState::default();
-    for kind in ["scheduled:a", "scheduled:b"] {
-        state.dynamic_tasks_mut().push(DynamicScheduledTask {
-            id: Uuid::new_v4(),
-            kind: kind.to_string(),
-            schedule: every_second(),
-            created_at: Utc::now(),
-        });
+    let mut kinds = Vec::new();
+    for _ in 0..2 {
+        let (def, kind) = dynamic_definition(every_second());
+        state.dynamic_tasks_mut().push(def);
+        kinds.push(kind);
     }
 
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
@@ -388,7 +429,7 @@ async fn crons_due_at_same_instant_all_fire() {
 
     handle.abort();
     assert!(
-        fired.contains("scheduled:a") && fired.contains("scheduled:b"),
+        kinds.iter().all(|k| fired.contains(k)),
         "both crons due at the same instant must fire, got: {:?}",
         fired
     );

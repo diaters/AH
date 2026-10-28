@@ -3,43 +3,61 @@
 //! 消费 `TriggerTaskMessage`，根据 `SignalTriggerRegistry` 中注册的路由，
 //! 把事件触发转换为 `CreateTaskMessage`，使事件任务进入与普通用户输入相同的任务创建链路。
 //!
-//! 对 `scheduled:` 前缀的 Timer 触发，从 `ScheduledTaskRegistry` 查找动态任务
-//! 信息并生成 `CreateTaskMessage`；一次性任务触发后由 `cleanup_scheduled_task_if_once`
-//! 清理，cron 任务保留在 registry 中以便反复触发。
+//! 对 `scheduled:` 前缀的 Timer 触发，从 `SchedulerState` 查找动态定时任务定义
+//! 并生成 `CreateTaskMessage`（见 [`route_scheduled_trigger`]）：暂停与重叠时跳过，
+//! 补跑时在任务内容前标注原定时间并通知用户，触发后记录 `last_fired_at`；
+//! 一次性任务触发后清理，cron 任务保留以便反复触发。
+
+use std::collections::HashSet;
+
+use chrono::{DateTime, Duration, Local, Utc};
+use uuid::Uuid;
 
 use crate::prelude::*;
 use tracing::{debug, info, warn};
 
+use crate::contracts::FrontendRegistry;
 use crate::domain::{
-    CreateTaskMessage, SignalTriggerRegistry, TaskRoutingPolicy, TaskTrigger, TriggerTaskMessage,
+    CATCH_UP_WINDOW, CatchUp, CreateTaskMessage, EngineEvent, EventTarget, MessageRole,
+    ScheduleDefinition, ScheduleFire, ScheduledRun, SignalTriggerRegistry, Task, TaskRoutingPolicy,
+    TaskTrigger, TriggerTaskMessage, catch_up_decision,
 };
-use crate::triggers::{
-    ScheduledTaskRegistry, SchedulerState, SchedulerStateWatcher,
-    update_scheduler_state_with_watcher,
-};
+use crate::triggers::{SchedulerState, SchedulerStateWatcher, update_scheduler_state_with_watcher};
+
+/// 一次性任务晚于原定时间超过该时长才视为补跑（避免把正常的调度延迟标成补跑）。
+const ONCE_CATCH_UP_GRACE: Duration = Duration::seconds(60);
 
 /// 将事件触发消息路由为 `CreateTaskMessage`。
 ///
 /// - Webhook 触发走 `registry.route`，Timer 触发走 `registry.timer_route`
-/// - `scheduled:` 前缀的 Timer 触发走 `ScheduledTaskRegistry` 动态分支
+/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支
 /// - 未注册的触发器会被丢弃并记录结构化日志
 /// - `build_task_input` 失败的触发器会被丢弃
 /// - 静态路由成功后产出 `CreateTaskMessage`，`origin_channel` 为 `None`，
 ///   `routing_policy` 使用 `TaskRoutingPolicy::event`，由路由配置提供审批通道与上下文
 /// - 动态 scheduled task 成功后产出 `CreateTaskMessage`，`routing_policy`
-///   使用 `TaskRoutingPolicy::scheduled_task`，由 `ScheduledTaskInfo` 构造
-/// - 一次性 scheduled task 触发后从 registry 与 `SchedulerState.dynamic_tasks` 中清理，
-///   清理经 `update_scheduler_state_with_watcher` 共享入口，让 `SchedulerStateWatcher`
-///   收到通知（不变量 4 字面成立）
+///   使用 `TaskRoutingPolicy::scheduled_task`，由 `ScheduleDefinition` 构造
+/// - 动态定时任务的状态写入（`last_fired_at`、一次性清理）经
+///   `update_scheduler_state_with_watcher` 共享入口，让 `SchedulerStateWatcher` 收到通知
+#[allow(clippy::too_many_arguments)]
 pub fn trigger_task_routing_system(
     mut commands: Commands,
     registry: Res<SignalTriggerRegistry>,
-    mut scheduled_registry: ResMut<ScheduledTaskRegistry>,
     mut scheduler_state: ResMut<SchedulerState>,
     watcher: Res<SchedulerStateWatcher>,
-    messages: Query<(Entity, &TriggerTaskMessage)>,
+    frontends: Option<Res<FrontendRegistry>>,
+    messages: Query<(Entity, &TriggerTaskMessage, Option<&ScheduleFire>)>,
+    runs: Query<(&Task, &ScheduledRun)>,
+    pending_runs: Query<&ScheduledRun, With<CreateTaskMessage>>,
 ) {
-    for (entity, message) in &messages {
+    // 仍在运行的定时任务：未终态的 Task，加上本帧刚生成、尚未变成 Task 的 CreateTaskMessage
+    let mut active_runs: HashSet<Uuid> = pending_runs.iter().map(|r| r.schedule_id).collect();
+    active_runs.extend(
+        runs.iter()
+            .filter(|(task, _)| !task.status().is_terminal())
+            .map(|(_, run)| run.schedule_id),
+    );
+    for (entity, message, fire) in &messages {
         let trigger = &message.trigger;
         let kind = match trigger {
             TaskTrigger::Timer { kind } => kind.clone(),
@@ -82,40 +100,15 @@ pub fn trigger_task_routing_system(
                 }
             }
         } else if kind.starts_with("scheduled:") {
-            // 先取出所需数据并结束不可变借用，以便后续可变借用清理 registry
-            let task_input = scheduled_registry
-                .get(&kind)
-                .map(|info| (info.build_task_input(), info.build_routing_policy()));
-            match task_input {
-                Some((content, routing_policy)) => {
-                    debug!(
-                        event = "ScheduledTaskMatched",
-                        source = %message.source.0,
-                        kind = %kind,
-                        content_len = content.len(),
-                        "scheduled task routed to CreateTaskMessage"
-                    );
-                    commands.spawn(CreateTaskMessage {
-                        content,
-                        origin_channel: None,
-                        routing_policy,
-                    });
-                    cleanup_scheduled_task_if_once(
-                        &kind,
-                        &mut scheduler_state,
-                        &mut scheduled_registry,
-                        &watcher,
-                    );
-                }
-                None => {
-                    warn!(
-                        event = "ScheduledTaskNotFound",
-                        source = %message.source.0,
-                        kind = %kind,
-                        "dropping scheduled task trigger without registry entry"
-                    );
-                }
-            }
+            route_scheduled_trigger(
+                &mut commands,
+                &kind,
+                fire.copied(),
+                &mut scheduler_state,
+                &watcher,
+                frontends.as_deref(),
+                &mut active_runs,
+            );
         } else {
             warn!(
                 event = "SignalTriggerRouteMissing",
@@ -129,57 +122,179 @@ pub fn trigger_task_routing_system(
     }
 }
 
-/// 一次性 scheduled task 触发后从 registry 与 `SchedulerState.dynamic_tasks` 中清理。
+/// 路由一次动态定时任务触发。
 ///
-/// cron 任务（`is_once == false`）保留在 registry 中以便反复触发。
-///
-/// 清理经 `update_scheduler_state_with_watcher` 共享入口，与 `commit_tool_effects_system`
-/// / `reload_triggers_system` 走同一 `apply_and_notify` 实现，让 `SchedulerStateWatcher`
-/// 在 once 任务清理后收到通知（不变量 4「双账本单一修改入口」字面成立）。
-fn cleanup_scheduled_task_if_once(
+/// `active_runs` 是仍在运行（含本帧刚创建）的定时任务 id 集合，用于重叠判定；
+/// 本次成功触发后把 id 加入其中。
+fn route_scheduled_trigger(
+    commands: &mut Commands,
     kind: &str,
+    fire: Option<ScheduleFire>,
     scheduler_state: &mut ResMut<SchedulerState>,
-    scheduled_registry: &mut ResMut<ScheduledTaskRegistry>,
     watcher: &SchedulerStateWatcher,
+    frontends: Option<&FrontendRegistry>,
+    active_runs: &mut HashSet<Uuid>,
 ) {
-    // 先拷出 is_once 标记，避免不可变借用阻塞后续 remove
-    let Some(is_once) = scheduled_registry.get(kind).map(|info| info.is_once) else {
+    let Some(def) = scheduler_state.find_by_kind(kind).cloned() else {
+        warn!(
+            event = "ScheduledTaskNotFound",
+            kind = %kind,
+            "dropping scheduled task trigger without definition"
+        );
         return;
     };
-    if !is_once {
+    let now = Utc::now();
+
+    // 暂停的定时任务只接受手动运行
+    if !def.enabled && fire != Some(ScheduleFire::Manual) {
+        info!(event = "ScheduleSkipped", kind = %kind, reason = "paused", "scheduled task skipped");
         return;
     }
-    let kind_owned = kind.to_string();
-    update_scheduler_state_with_watcher(
-        scheduler_state,
-        scheduled_registry,
-        watcher,
-        |state, registry| {
-            registry.remove(&kind_owned);
-            state.dynamic_tasks_mut().retain(|t| t.kind != kind_owned);
-        },
-    );
-    info!(
-        event = "DynamicTaskRemoved",
+    if active_runs.contains(&def.id) {
+        info!(
+            event = "ScheduleSkipped",
+            kind = %kind,
+            reason = "overlap",
+            "previous run still in progress, scheduled task skipped"
+        );
+        return;
+    }
+
+    // 一次性任务的补跑在这里判定：重启后 timer 会立即触发已过期的一次性任务
+    let fire = match (fire, catch_up_decision(&def, now, CATCH_UP_WINDOW)) {
+        (None, CatchUp::Fire { missed_at })
+            if def.schedule.is_once() && now - missed_at > ONCE_CATCH_UP_GRACE =>
+        {
+            Some(ScheduleFire::CatchUp { missed_at })
+        }
+        (None, CatchUp::Expired { missed_at }) if def.schedule.is_once() => {
+            remove_definition(scheduler_state, watcher, def.id);
+            info!(
+                event = "ScheduleCatchUpExpired",
+                kind = %kind,
+                missed_at = %missed_at,
+                "one-shot scheduled task expired beyond catch-up window, removed"
+            );
+            notify(
+                frontends,
+                &def,
+                format!(
+                    "定时任务「{}」原定于 {} 运行，已超过补跑期限，未执行并已删除。",
+                    def.name,
+                    format_local(missed_at)
+                ),
+            );
+            return;
+        }
+        (fire, _) => fire,
+    };
+
+    let mut content = def.content.clone();
+    if let Some(ScheduleFire::CatchUp { missed_at }) = fire {
+        content = format!(
+            "[补跑] 本次运行原定于 {}，因 harness 未运行而错过。\n\n{content}",
+            format_local(missed_at)
+        );
+        notify(
+            frontends,
+            &def,
+            format!(
+                "定时任务「{}」错过了原定 {} 的运行，现在补跑一次。",
+                def.name,
+                format_local(missed_at)
+            ),
+        );
+    }
+    debug!(
+        event = "ScheduledTaskMatched",
         kind = %kind,
-        reason = "once scheduled task triggered",
-        "dynamic once scheduled task removed after trigger"
+        fire = ?fire,
+        content_len = content.len(),
+        "scheduled task routed to CreateTaskMessage"
     );
+    commands.spawn((
+        CreateTaskMessage {
+            content,
+            origin_channel: None,
+            routing_policy: TaskRoutingPolicy::scheduled_task(
+                def.output_channel.clone(),
+                "scheduled task",
+            ),
+        },
+        ScheduledRun {
+            schedule_id: def.id,
+        },
+    ));
+    active_runs.insert(def.id);
+
+    let is_once = def.schedule.is_once();
+    update_scheduler_state_with_watcher(scheduler_state, watcher, |state| {
+        if is_once {
+            state.dynamic_tasks_mut().retain(|d| d.id != def.id);
+        } else if let Some(d) = state
+            .dynamic_tasks_mut()
+            .iter_mut()
+            .find(|d| d.id == def.id)
+        {
+            d.health.last_fired_at = Some(now);
+        }
+    });
+    if is_once {
+        info!(
+            event = "DynamicTaskRemoved",
+            kind = %kind,
+            reason = "once scheduled task triggered",
+            "dynamic once scheduled task removed after trigger"
+        );
+    }
+}
+
+fn remove_definition(
+    scheduler_state: &mut ResMut<SchedulerState>,
+    watcher: &SchedulerStateWatcher,
+    id: Uuid,
+) {
+    update_scheduler_state_with_watcher(scheduler_state, watcher, |state| {
+        state.dynamic_tasks_mut().retain(|d| d.id != id);
+    });
+}
+
+/// 向定时任务的输出通道推送一条系统消息（无输出通道或无前端时只记日志）。
+fn notify(frontends: Option<&FrontendRegistry>, def: &ScheduleDefinition, content: String) {
+    let (Some(frontends), Some(channel)) = (frontends, def.output_channel.clone()) else {
+        debug!(
+            event = "ScheduleNoticeDropped",
+            name = %def.name,
+            "no frontend or output channel for scheduled task notice"
+        );
+        return;
+    };
+    let event = EngineEvent::Text {
+        target: EventTarget::Directed(vec![channel]),
+        role: MessageRole::System,
+        content,
+        task_id: None,
+    };
+    for frontend in &frontends.frontends {
+        frontend.push_event(event.clone());
+    }
+}
+
+fn format_local(t: DateTime<Utc>) -> String {
+    t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::{ChannelId, EventTaskRoute, FrontendKind, SignalSource, TaskTrigger};
-    use crate::triggers::{
-        DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo, SchedulerStateWatcher,
-    };
+    use crate::domain::{ScheduleDefinition, ScheduleExpr};
+    use crate::triggers::SchedulerStateWatcher;
     use chrono::Utc;
     use tokio::sync::watch;
     use uuid::Uuid;
 
     fn insert_scheduler_resources(app: &mut App) {
-        app.insert_resource(ScheduledTaskRegistry::default());
         app.insert_resource(SchedulerState::default());
         app.insert_resource(SchedulerStateWatcher::default());
     }
@@ -187,21 +302,40 @@ mod tests {
     /// 与 `insert_scheduler_resources` 类似，但用真实的 `watch::channel` 连接
     /// `SchedulerStateWatcher`，返回 receiver 供测试断言 watch 是否被通知。
     fn insert_scheduler_resources_with_watch(app: &mut App) -> watch::Receiver<SchedulerState> {
-        app.insert_resource(ScheduledTaskRegistry::default());
         app.insert_resource(SchedulerState::default());
         let (tx, rx) = watch::channel(SchedulerState::default());
         app.insert_resource(SchedulerStateWatcher(Some(tx)));
         rx
     }
 
-    /// 构造一个 once 动态任务条目，用于在 `SchedulerState.dynamic_tasks` 预填。
-    fn sample_once_dynamic_task(kind: &str) -> DynamicScheduledTask {
-        DynamicScheduledTask {
-            id: Uuid::new_v4(),
-            kind: kind.to_string(),
-            schedule: ScheduleSpec::Once(Utc::now() + chrono::Duration::minutes(5)),
-            created_at: Utc::now(),
-        }
+    /// 构造一条动态定时任务定义并写入 `SchedulerState`，返回其 kind。
+    fn insert_definition(
+        app: &mut App,
+        content: &str,
+        schedule: &str,
+        output_channel: Option<ChannelId>,
+    ) -> String {
+        let def = ScheduleDefinition::new(
+            Uuid::new_v4(),
+            None,
+            content.to_string(),
+            ScheduleExpr::parse(schedule).unwrap(),
+            output_channel,
+            Utc::now(),
+        );
+        let kind = def.kind();
+        app.world_mut()
+            .resource_mut::<SchedulerState>()
+            .dynamic_tasks_mut()
+            .push(def);
+        kind
+    }
+
+    fn once_in_future() -> String {
+        format!(
+            "once:{}",
+            (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339()
+        )
     }
 
     #[test]
@@ -266,24 +400,12 @@ mod tests {
         insert_scheduler_resources(&mut app);
         app.add_systems(Update, trigger_task_routing_system);
 
-        let id = Uuid::new_v4();
-        let kind = format!("scheduled:{}", id);
         let channel = ChannelId {
             frontend: FrontendKind::Telegram,
             user_id: "chat".to_string(),
             thread_id: None,
         };
-
-        let mut registry = ScheduledTaskRegistry::default();
-        registry.insert(
-            kind.clone(),
-            ScheduledTaskInfo {
-                content: "say hi".to_string(),
-                output_channel: Some(channel.clone()),
-                is_once: true,
-            },
-        );
-        app.insert_resource(registry);
+        let kind = insert_definition(&mut app, "say hi", &once_in_future(), Some(channel.clone()));
 
         app.world_mut().spawn(TriggerTaskMessage {
             source: SignalSource("scheduler:test".to_string()),
@@ -306,9 +428,10 @@ mod tests {
         );
         assert!(
             app.world()
-                .resource::<ScheduledTaskRegistry>()
-                .get(&kind)
-                .is_none()
+                .resource::<SchedulerState>()
+                .find_by_kind(&kind)
+                .is_none(),
+            "once 任务触发后应被清理"
         );
     }
 
@@ -319,24 +442,12 @@ mod tests {
         insert_scheduler_resources(&mut app);
         app.add_systems(Update, trigger_task_routing_system);
 
-        let id = Uuid::new_v4();
-        let kind = format!("scheduled:{}", id);
         let channel = ChannelId {
             frontend: FrontendKind::Tui,
             user_id: "user".to_string(),
             thread_id: None,
         };
-
-        let mut registry = ScheduledTaskRegistry::default();
-        registry.insert(
-            kind.clone(),
-            ScheduledTaskInfo {
-                content: "cron job".to_string(),
-                output_channel: Some(channel),
-                is_once: false,
-            },
-        );
-        app.insert_resource(registry);
+        let kind = insert_definition(&mut app, "cron job", "cron:0 8 * * *", Some(channel));
 
         app.world_mut().spawn(TriggerTaskMessage {
             source: SignalSource("scheduler:test".to_string()),
@@ -352,21 +463,16 @@ mod tests {
             .collect();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "cron job");
-        // cron 任务保留在 registry 中
         assert!(
             app.world()
-                .resource::<ScheduledTaskRegistry>()
-                .get(&kind)
-                .is_some()
+                .resource::<SchedulerState>()
+                .find_by_kind(&kind)
+                .is_some(),
+            "cron 任务应保留"
         );
     }
 
-    /// t1: once 任务触发后 `SchedulerStateWatcher` 必须收到通知。
-    ///
-    /// 这是不变量 4「双账本单一修改入口」的直接契约：`cleanup_scheduled_task_if_once`
-    /// 走 `update_scheduler_state_with_watcher` 共享入口，watch 必须在闭包返回后
-    /// send 一次。若回归到直接 `registry.remove` + `state.retain`，watch 不通知，
-    /// 本测试失败。
+    /// once 任务触发后 `SchedulerStateWatcher` 必须收到通知（清理经统一修改入口）。
     #[test]
     fn once_task_trigger_notifies_scheduler_state_watch() {
         let mut app = App::new();
@@ -374,31 +480,7 @@ mod tests {
         let mut rx = insert_scheduler_resources_with_watch(&mut app);
         app.add_systems(Update, trigger_task_routing_system);
 
-        let id = Uuid::new_v4();
-        let kind = format!("scheduled:{}", id);
-        let channel = ChannelId {
-            frontend: FrontendKind::Telegram,
-            user_id: "chat".to_string(),
-            thread_id: None,
-        };
-
-        let mut registry = ScheduledTaskRegistry::default();
-        registry.insert(
-            kind.clone(),
-            ScheduledTaskInfo {
-                content: "once say hi".to_string(),
-                output_channel: Some(channel),
-                is_once: true,
-            },
-        );
-        app.insert_resource(registry);
-        // 预填 dynamic_tasks，让 t2 能同时验证双账本一致
-        {
-            let mut state = app.world_mut().resource_mut::<SchedulerState>();
-            state
-                .dynamic_tasks_mut()
-                .push(sample_once_dynamic_task(&kind));
-        }
+        let kind = insert_definition(&mut app, "once say hi", &once_in_future(), None);
         // 初始 receiver 值是 default，先标记为已读，便于后续判断是否「再次」发送
         rx.borrow_and_update();
 
@@ -409,80 +491,18 @@ mod tests {
 
         app.update();
 
-        // t1: watch 被通知
         assert!(
             rx.has_changed().unwrap(),
             "SchedulerStateWatcher 必须在 once 任务清理后收到通知"
         );
-        // t2: 双账本一致——registry 与 dynamic_tasks 都不含该 kind
         assert!(
-            app.world()
-                .resource::<ScheduledTaskRegistry>()
-                .get(&kind)
-                .is_none(),
-            "registry 中应已清理 once 任务"
-        );
-        let state = app.world().resource::<SchedulerState>();
-        assert!(
-            !state.dynamic_tasks().iter().any(|t| t.kind == kind),
-            "dynamic_tasks 中应已清理 once 任务，与 registry 保持一致"
-        );
-    }
-
-    /// t3: cron 任务触发后 `SchedulerStateWatcher` 不应收到通知。
-    ///
-    /// 反向断言，防止「为保险在 cron 路径也调 update_scheduler_state_with_watcher」
-    /// 的退化——cron 任务保留在 registry 与 state 中无变化，watch 不应 send。
-    #[test]
-    fn cron_task_trigger_does_not_notify_scheduler_state_watch() {
-        let mut app = App::new();
-        app.insert_resource(SignalTriggerRegistry::default());
-        let mut rx = insert_scheduler_resources_with_watch(&mut app);
-        app.add_systems(Update, trigger_task_routing_system);
-
-        let id = Uuid::new_v4();
-        let kind = format!("scheduled:{}", id);
-        let channel = ChannelId {
-            frontend: FrontendKind::Tui,
-            user_id: "user".to_string(),
-            thread_id: None,
-        };
-
-        let mut registry = ScheduledTaskRegistry::default();
-        registry.insert(
-            kind.clone(),
-            ScheduledTaskInfo {
-                content: "cron job".to_string(),
-                output_channel: Some(channel),
-                is_once: false,
-            },
-        );
-        app.insert_resource(registry);
-        // 初始 receiver 值是 default，标记为已读
-        rx.borrow_and_update();
-
-        app.world_mut().spawn(TriggerTaskMessage {
-            source: SignalSource("scheduler:test".to_string()),
-            trigger: TaskTrigger::Timer { kind: kind.clone() },
-        });
-
-        app.update();
-
-        // t3: watch 未被通知——cron 任务保留，state 无变化
-        assert!(
-            !rx.has_changed().unwrap(),
-            "cron 任务触发不应通知 SchedulerStateWatcher（state 无变化）"
-        );
-        assert!(
-            app.world()
-                .resource::<ScheduledTaskRegistry>()
-                .get(&kind)
-                .is_some()
+            rx.borrow_and_update().find_by_kind(&kind).is_none(),
+            "广播出的状态中应已清理 once 任务"
         );
     }
 
     #[test]
-    fn scheduled_task_without_registry_entry_is_dropped() {
+    fn scheduled_task_without_definition_is_dropped() {
         let mut app = App::new();
         app.insert_resource(SignalTriggerRegistry::default());
         insert_scheduler_resources(&mut app);
@@ -502,5 +522,246 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(count, 0);
+    }
+
+    // ============ 暂停 / 重叠 / 补跑 / 记账 ============
+
+    use std::sync::{Arc, Mutex};
+
+    use crate::domain::{Frontend, ScheduleFire, ScheduledRun, Task, UserAction};
+
+    struct RecordingFrontend(Arc<Mutex<Vec<EngineEvent>>>);
+    impl Frontend for RecordingFrontend {
+        fn kind(&self) -> FrontendKind {
+            FrontendKind::Tui
+        }
+        fn push_event(&self, event: EngineEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+        fn poll_actions(&self) -> Vec<UserAction> {
+            vec![]
+        }
+    }
+
+    fn tui_channel() -> ChannelId {
+        ChannelId {
+            frontend: FrontendKind::Tui,
+            user_id: "user".to_string(),
+            thread_id: None,
+        }
+    }
+
+    /// 带记录前端的路由 App，返回 (app, 前端收到的事件)。
+    fn routing_app() -> (App, Arc<Mutex<Vec<EngineEvent>>>) {
+        let mut app = App::new();
+        app.insert_resource(SignalTriggerRegistry::default());
+        insert_scheduler_resources(&mut app);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(RecordingFrontend(events.clone()))],
+        });
+        app.add_systems(Update, trigger_task_routing_system);
+        (app, events)
+    }
+
+    fn fire(app: &mut App, kind: &str, marker: Option<ScheduleFire>) {
+        let mut entity = app.world_mut().spawn(TriggerTaskMessage {
+            source: SignalSource("scheduler:test".to_string()),
+            trigger: TaskTrigger::Timer {
+                kind: kind.to_string(),
+            },
+        });
+        if let Some(marker) = marker {
+            entity.insert(marker);
+        }
+    }
+
+    fn created(app: &mut App) -> Vec<(String, Option<ScheduledRun>)> {
+        app.world_mut()
+            .query::<(&CreateTaskMessage, Option<&ScheduledRun>)>()
+            .iter(app.world())
+            .map(|(m, r)| (m.content.clone(), r.copied()))
+            .collect()
+    }
+
+    fn definition_of(app: &App, kind: &str) -> Option<ScheduleDefinition> {
+        app.world()
+            .resource::<SchedulerState>()
+            .find_by_kind(kind)
+            .cloned()
+    }
+
+    fn texts(events: &Arc<Mutex<Vec<EngineEvent>>>) -> Vec<String> {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::Text { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cron_trigger_marks_run_and_records_last_fired_at() {
+        let (mut app, _events) = routing_app();
+        let kind = insert_definition(&mut app, "cron job", "cron:0 8 * * *", None);
+        let id = definition_of(&app, &kind).unwrap().id;
+        let before = Utc::now();
+
+        fire(&mut app, &kind, None);
+        app.update();
+
+        assert_eq!(
+            created(&mut app),
+            vec![(
+                "cron job".to_string(),
+                Some(ScheduledRun { schedule_id: id })
+            )]
+        );
+        let last = definition_of(&app, &kind)
+            .unwrap()
+            .health
+            .last_fired_at
+            .expect("last_fired_at recorded");
+        assert!(last >= before);
+    }
+
+    #[test]
+    fn paused_definition_is_skipped_but_manual_run_proceeds() {
+        let (mut app, _events) = routing_app();
+        let kind = insert_definition(&mut app, "paused job", "cron:0 8 * * *", None);
+        app.world_mut()
+            .resource_mut::<SchedulerState>()
+            .find_by_kind_mut(&kind)
+            .unwrap()
+            .enabled = false;
+
+        fire(&mut app, &kind, None);
+        app.update();
+        assert!(created(&mut app).is_empty(), "paused schedule must not run");
+        assert!(
+            definition_of(&app, &kind)
+                .unwrap()
+                .health
+                .last_fired_at
+                .is_none()
+        );
+
+        fire(&mut app, &kind, Some(ScheduleFire::Manual));
+        app.update();
+        assert_eq!(created(&mut app).len(), 1, "manual run ignores pause");
+    }
+
+    #[test]
+    fn overlapping_trigger_is_skipped_while_previous_run_is_active() {
+        let (mut app, _events) = routing_app();
+        let kind = insert_definition(&mut app, "slow job", "cron:*/10 * * * *", None);
+        let id = definition_of(&app, &kind).unwrap().id;
+        let task = Task::from_trigger(
+            "slow job".to_string(),
+            3,
+            TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
+        );
+        let task_entity = app
+            .world_mut()
+            .spawn((task, ScheduledRun { schedule_id: id }))
+            .id();
+
+        fire(&mut app, &kind, None);
+        app.update();
+        assert!(
+            created(&mut app).is_empty(),
+            "active run blocks new trigger"
+        );
+
+        app.world_mut()
+            .get_mut::<Task>(task_entity)
+            .unwrap()
+            .mark_done("done", Utc::now());
+        fire(&mut app, &kind, None);
+        app.update();
+        assert_eq!(created(&mut app).len(), 1, "terminal run no longer blocks");
+    }
+
+    #[test]
+    fn duplicate_triggers_in_same_frame_create_one_run() {
+        let (mut app, _events) = routing_app();
+        let kind = insert_definition(&mut app, "job", "cron:0 8 * * *", None);
+
+        fire(&mut app, &kind, None);
+        fire(&mut app, &kind, Some(ScheduleFire::Manual));
+        app.update();
+
+        assert_eq!(created(&mut app).len(), 1);
+    }
+
+    #[test]
+    fn catch_up_fire_prefixes_content_and_notifies_user() {
+        let (mut app, events) = routing_app();
+        let kind = insert_definition(
+            &mut app,
+            "daily report",
+            "cron:0 8 * * *",
+            Some(tui_channel()),
+        );
+        let missed_at = Utc::now() - chrono::Duration::hours(3);
+
+        fire(&mut app, &kind, Some(ScheduleFire::CatchUp { missed_at }));
+        app.update();
+
+        let runs = created(&mut app);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].0.starts_with("[补跑]"), "content: {}", runs[0].0);
+        assert!(runs[0].0.ends_with("daily report"));
+        let notices = texts(&events);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("补跑"), "notice: {}", notices[0]);
+    }
+
+    #[test]
+    fn overdue_once_beyond_grace_runs_as_catch_up() {
+        let (mut app, events) = routing_app();
+        let at = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        let kind = insert_definition(
+            &mut app,
+            "once job",
+            &format!("once:{at}"),
+            Some(tui_channel()),
+        );
+
+        fire(&mut app, &kind, None);
+        app.update();
+
+        let runs = created(&mut app);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].0.starts_with("[补跑]"));
+        assert_eq!(texts(&events).len(), 1);
+        assert!(
+            definition_of(&app, &kind).is_none(),
+            "once removed after run"
+        );
+    }
+
+    #[test]
+    fn once_beyond_catch_up_window_is_removed_without_running() {
+        let (mut app, events) = routing_app();
+        let at = (Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+        let kind = insert_definition(
+            &mut app,
+            "stale once",
+            &format!("once:{at}"),
+            Some(tui_channel()),
+        );
+
+        fire(&mut app, &kind, None);
+        app.update();
+
+        assert!(created(&mut app).is_empty());
+        assert!(definition_of(&app, &kind).is_none());
+        let notices = texts(&events);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("未执行"), "notice: {}", notices[0]);
     }
 }

@@ -154,7 +154,8 @@ pub async fn run_timer_scheduler(
 /// 合并静态路由与动态任务，构建统一调度列表。
 ///
 /// - 静态路由仅在 `timer.enabled = true` 时纳入（保留 a37b859 的 gate 语义）
-/// - 动态任务（`schedule_task` 工具创建）始终纳入
+/// - 动态任务（`schedule_task` 工具创建）仅纳入启用中的定义；暂停的定义不调度，
+///   手动运行（`run_now`）不经 timer
 fn build_all_schedules(state: &SchedulerState) -> anyhow::Result<Vec<ScheduledItem>> {
     let mut items = Vec::new();
     if let Some(routes) = state.static_routes()
@@ -167,19 +168,19 @@ fn build_all_schedules(state: &SchedulerState) -> anyhow::Result<Vec<ScheduledIt
             });
         }
     }
-    for task in state.dynamic_tasks() {
-        match &task.schedule {
+    for def in state.dynamic_tasks().iter().filter(|def| def.enabled) {
+        match def.schedule.spec() {
             ScheduleSpec::Once(at) => {
                 items.push(ScheduledItem::Once {
-                    id: task.id,
-                    kind: task.kind.clone(),
+                    id: def.id,
+                    kind: def.kind(),
                     at: *at,
                 });
             }
             ScheduleSpec::Cron(schedule) => {
                 items.push(ScheduledItem::Cron {
                     schedule: schedule.clone(),
-                    kind: task.kind.clone(),
+                    kind: def.kind(),
                 });
             }
         }
@@ -210,5 +211,44 @@ fn reload_state(
                 "keeping old schedules"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{ScheduleDefinition, ScheduleExpr};
+
+    fn definition(schedule: &str, enabled: bool) -> ScheduleDefinition {
+        let mut def = ScheduleDefinition::new(
+            uuid::Uuid::new_v4(),
+            None,
+            "x".to_string(),
+            ScheduleExpr::parse(schedule).unwrap(),
+            None,
+            Utc::now(),
+        );
+        def.enabled = enabled;
+        def
+    }
+
+    #[test]
+    fn paused_definitions_are_not_scheduled() {
+        let active = definition("cron:0 8 * * *", true);
+        let active_kind = active.kind();
+        let paused_cron = definition("cron:0 9 * * *", false);
+        let future = (Utc::now() + ChronoDuration::hours(1)).to_rfc3339();
+        let paused_once = definition(&format!("once:{future}"), false);
+        let mut state = SchedulerState::default();
+        *state.dynamic_tasks_mut() = vec![active, paused_cron, paused_once];
+
+        let kinds: Vec<String> = build_all_schedules(&state)
+            .unwrap()
+            .into_iter()
+            .map(|item| match item {
+                ScheduledItem::Cron { kind, .. } | ScheduledItem::Once { kind, .. } => kind,
+            })
+            .collect();
+        assert_eq!(kinds, vec![active_kind]);
     }
 }

@@ -4,9 +4,7 @@
 //! - 通道消息：`ToolWorkerPayload` / `ToolAsyncResult` / `ToolResultSender` / `ToolResultReceiver`
 //! - 挂起实体与在飞标记：`ToolRequestPending` / `InFlightToolCall`
 //! - 声明式写效果：`ToolEffect` / `ToolEffectPending`
-//! - Owned 上下文与调度双账本快照：`OwnedToolContext` / `SchedulerStateSnapshot`
-//!   / `DynamicScheduledTaskSnapshot` / `ScheduledTaskRegistrySnapshot`
-//!   / `ScheduledTaskInfoSnapshot`
+//! - Owned 上下文与调度快照：`OwnedToolContext` / `SchedulerStateSnapshot`
 //!
 //! ## 结果落地单点原则
 //!
@@ -28,9 +26,9 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::ScheduleSpec;
 use crate::domain::SessionBackend;
 use crate::domain::{AgentExecutionRequest, ChannelId, ExperienceCandidate, TaskId, ToolError};
+use crate::domain::{ScheduleDefinition, ScheduleExpr, ScheduleSelector};
 
 // ============ 通道消息 ============
 
@@ -133,28 +131,42 @@ pub struct InFlightToolCall {
 /// 新增写效果 = 加一个变体 + commit 加一支 arm。
 #[derive(Debug, Clone)]
 pub enum ToolEffect {
-    /// 删除指定 kind 的动态定时任务（如周期任务的「停掉」语义）。
+    /// 删除指定的动态定时任务（如周期任务的「停掉」语义）。
     DeleteScheduledTask {
-        /// 任务类型字符串，形如 `scheduled:<uuid>`。
-        kind: String,
+        /// 按 kind（`scheduled:<uuid>`）或名称定位。
+        selector: ScheduleSelector,
     },
-    /// 创建一次性或周期性动态任务（schedule_task 工具上桥后走此效果）。
+    /// 创建一次性或周期性动态定时任务（schedule_task 工具上桥后走此效果）。
     ///
     /// worker 声明意图，`commit_tool_effects_system` 经 `update_scheduler_state`
-    /// 双资源入口落账（`SchedulerState.dynamic_tasks` 追加 + `ScheduledTaskRegistry`
-    /// 插入），watch 一次广播。`next_trigger` 等「apply 时刻才知道的真相」也由
-    /// commit 计算，与 `DeleteScheduledTask::existed` 同源同律。
+    /// 统一入口落账为一条 `ScheduleDefinition`，watch 一次广播。名称冲突、`next_trigger`
+    /// 等「apply 时刻才知道的真相」由 commit 判定与计算，与 `DeleteScheduledTask::existed` 同律。
     ScheduleTask {
-        /// 任务 ID（由 worker 生成）
+        /// 定义 ID（由 worker 生成），kind 派生为 `scheduled:<id>`
         id: uuid::Uuid,
-        /// 任务类型字符串，形如 `scheduled:<uuid>`
-        kind: String,
+        /// 用户可读名称；缺省时由定义取 id 前 8 位
+        name: Option<String>,
         /// 任务内容/提示词
         content: String,
-        /// 调度规格（once 或 cron）
-        schedule: ScheduleSpec,
+        /// 调度表达式（once 或 cron）
+        schedule: ScheduleExpr,
         /// 输出通道（显式指定或从当前任务继承）
         output_channel: Option<ChannelId>,
+    },
+    /// 修改指定的动态定时任务（内容、调度、启停），可选立即手动运行一次。
+    ///
+    /// 定位与修改都在 apply 时刻进行：worker 只校验入参，任务是否存在由 commit 判定。
+    UpdateSchedule {
+        /// 按 kind 或名称定位。
+        selector: ScheduleSelector,
+        /// 新的任务提示词。
+        content: Option<String>,
+        /// 新的调度表达式。
+        schedule: Option<ScheduleExpr>,
+        /// 启用（恢复）或暂停。
+        enabled: Option<bool>,
+        /// 是否立即手动运行一次（不受暂停影响，仍受重叠规则约束）。
+        run_now: bool,
     },
     /// 替换任务进度清单：由 update_todos 工具声明，commit 在主线程写入 `TaskTodoList`。
     UpdateTodos {
@@ -200,8 +212,6 @@ pub struct ToolEffectPending {
 pub struct OwnedToolContext {
     /// 调度状态快照（需要读定时任务的工具由 dispatch 填充）。
     pub scheduler_state: Option<Arc<SchedulerStateSnapshot>>,
-    /// 任务注册表快照（需要读任务列表的工具由 dispatch 填充）。
-    pub registry: Option<Arc<ScheduledTaskRegistrySnapshot>>,
     /// 全局失联超时（秒）—— sweeper 推导 max_duration 的全局缺省。
     pub tool_inflight_timeout_secs: u64,
     /// `shell_exec` 默认业务超时（秒）——入参 `timeout_secs` 缺省时的 fallback。
@@ -234,7 +244,6 @@ impl Default for OwnedToolContext {
     fn default() -> Self {
         Self {
             scheduler_state: None,
-            registry: None,
             tool_inflight_timeout_secs: 0,
             shell_default_exec_timeout_secs: 0,
             backend: None,
@@ -250,11 +259,10 @@ impl Default for OwnedToolContext {
 impl OwnedToolContext {
     /// 测试构造器：无快照，仅全局配置。
     ///
-    /// 真实 dispatch 会用带快照的构造器填充 scheduler_state / registry。
+    /// 真实 dispatch 会用带快照的构造器填充 scheduler_state。
     pub fn empty_for_test(tool_inflight_timeout_secs: u64) -> Self {
         Self {
             scheduler_state: None,
-            registry: None,
             tool_inflight_timeout_secs,
             shell_default_exec_timeout_secs: tool_inflight_timeout_secs,
             backend: None,
@@ -267,44 +275,11 @@ impl OwnedToolContext {
     }
 }
 
-/// 调度状态快照（动态任务账本）。
+/// 调度状态快照（动态定时任务定义）。
 ///
 /// 由 dispatch 从 `SchedulerState` 抓取，worker 只读。
 #[derive(Debug, Clone, Default)]
 pub struct SchedulerStateSnapshot {
-    /// 当前所有动态调度任务的快照。
-    pub dynamic_tasks: Vec<DynamicScheduledTaskSnapshot>,
-}
-
-/// 动态调度任务快照（对应运行时 `DynamicScheduledTask`）。
-#[derive(Debug, Clone)]
-pub struct DynamicScheduledTaskSnapshot {
-    /// 任务 ID。
-    pub id: uuid::Uuid,
-    /// 任务类型字符串。
-    pub kind: String,
-    /// 调度规格（一次性或 cron 周期）。
-    pub schedule: ScheduleSpec,
-    /// 创建时间。
-    pub created_at: DateTime<Utc>,
-}
-
-/// 任务注册表快照（静态任务账本）。
-///
-/// 由 dispatch 从 `SpaceToolRegistry` 抓取，worker 只读。
-#[derive(Debug, Clone, Default)]
-pub struct ScheduledTaskRegistrySnapshot {
-    /// 任务名 → 任务信息。
-    pub tasks: std::collections::HashMap<String, ScheduledTaskInfoSnapshot>,
-}
-
-/// 静态调度任务信息快照。
-#[derive(Debug, Clone)]
-pub struct ScheduledTaskInfoSnapshot {
-    /// 任务内容描述。
-    pub content: String,
-    /// 输出通道（可空）。
-    pub output_channel: Option<ChannelId>,
-    /// 是否为一次性任务。
-    pub is_once: bool,
+    /// 当前所有动态定时任务定义的快照。
+    pub dynamic_tasks: Vec<ScheduleDefinition>,
 }

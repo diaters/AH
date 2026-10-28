@@ -4,9 +4,10 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 当前有效（已评审，未实施） |
+| 状态 | 当前有效（P0 已实施） |
 | 创建日期 | 2026-10-28 |
 | 前置变更 | PR #108：同一时刻到期的多个 cron 全部触发 |
+| 实施记录 | P0：`docs/superpowers/plans/2026-10-28-schedule-p0-persistence.md` |
 | 相关文档 | `2026-10-28-loop-steering-and-background-notification-design.md`、`docs/async-tool-bridge.md` |
 
 ---

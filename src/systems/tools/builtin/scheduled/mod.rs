@@ -2,6 +2,8 @@
 
 pub mod delete;
 pub mod list;
+pub mod update;
 
 pub use delete::DeleteScheduledTaskTool;
 pub use list::ListScheduledTasksTool;
+pub use update::UpdateScheduledTaskTool;

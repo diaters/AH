@@ -224,8 +224,12 @@ pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, Providers
 pub use prompt_template::{render_template, validate_template};
 
 // schedule
-pub use schedule::ScheduleSpec;
 pub(crate) use schedule::compute_next_trigger;
+pub use schedule::{
+    CATCH_UP_WINDOW, CatchUp, ScheduleDefinition, ScheduleExpr, ScheduleFire, ScheduleHealth,
+    ScheduleParseError, ScheduleSelector, ScheduleSpec, ScheduledRun, catch_up_decision,
+    schedule_kind,
+};
 
 // signal_trigger
 pub use signal_trigger::{
@@ -279,8 +283,7 @@ pub use tool_runtime::ToolCallingState;
 
 // tool_async
 pub use tool_async::{
-    DynamicScheduledTaskSnapshot, InFlightToolCall, OwnedToolContext, ScheduledTaskInfoSnapshot,
-    ScheduledTaskRegistrySnapshot, SchedulerStateSnapshot, ToolAsyncResult, ToolEffect,
+    InFlightToolCall, OwnedToolContext, SchedulerStateSnapshot, ToolAsyncResult, ToolEffect,
     ToolEffectPending, ToolRequestPending, ToolResultReceiver, ToolResultSender, ToolWorkerPayload,
 };
 

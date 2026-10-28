@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use common::mock_executor::CannedExecutor;
 use crossbeam_channel::unbounded;
-use harness::triggers::{ScheduledTaskInfo, ScheduledTaskRegistry};
+use harness::domain::{ScheduleDefinition, ScheduleExpr};
+use harness::triggers::SchedulerState;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
     domain::AgentExecutor, domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions,
@@ -179,21 +180,21 @@ fn scheduled_task_approval_request_routes_to_output_channel() {
     app.update();
     spawn_default_agent(&mut app);
 
-    let task_id = harness::domain::TaskId::new();
-    let kind = format!("scheduled:{}", task_id);
     let output_channel = qq_channel("qq-test-group");
-
-    {
-        let mut registry = app.world_mut().resource_mut::<ScheduledTaskRegistry>();
-        registry.insert(
-            kind.clone(),
-            ScheduledTaskInfo {
-                content: "execute scheduled command".to_string(),
-                output_channel: Some(output_channel.clone()),
-                is_once: true,
-            },
-        );
-    }
+    let at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let def = ScheduleDefinition::new(
+        uuid::Uuid::new_v4(),
+        None,
+        "execute scheduled command".to_string(),
+        ScheduleExpr::parse(&format!("once:{at}")).unwrap(),
+        Some(output_channel.clone()),
+        chrono::Utc::now(),
+    );
+    let kind = def.kind();
+    app.world_mut()
+        .resource_mut::<SchedulerState>()
+        .dynamic_tasks_mut()
+        .push(def);
 
     app.world_mut().spawn(harness::domain::TriggerTaskMessage {
         source: harness::domain::SignalSource("timer".to_string()),
