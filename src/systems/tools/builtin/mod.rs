@@ -26,6 +26,7 @@ pub use read_skill_file::ReadSkillFileTool;
 pub use schedule_task::ScheduleTaskTool;
 pub use scheduled::DeleteScheduledTaskTool;
 pub use scheduled::ListScheduledTasksTool;
+pub use scheduled::UpdateScheduledTaskTool;
 pub use shell::{
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
 };

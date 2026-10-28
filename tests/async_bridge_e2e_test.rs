@@ -29,12 +29,10 @@ use harness::domain::{
     ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolFuture, ToolRequestPending,
     ToolWorkerOutput,
 };
+use harness::domain::{ScheduleDefinition, ScheduleExpr};
 use harness::ecs::EntityIndex;
 use harness::systems::tools::builtin::scheduled::ListScheduledTasksTool;
-use harness::triggers::ScheduleSpec;
-use harness::triggers::scheduled_task::{
-    DynamicScheduledTask, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerState,
-};
+use harness::triggers::scheduled_task::SchedulerState;
 use uuid::Uuid;
 
 // ============ 共享 fixture ============
@@ -129,26 +127,17 @@ fn world_with_list_tool() -> World {
     world.insert_resource(executors);
     world.insert_resource(harness::systems::HarnessSettings::default_test());
 
-    // 双账本各一条任务（造 list 的数据源）—— dynamic_tasks 与 registry 一致
+    // 一条定义（造 list 的数据源）
     let mut state = SchedulerState::default();
-    state.dynamic_tasks_mut().push(DynamicScheduledTask {
-        id: Uuid::new_v4(),
-        kind: "daily".into(),
-        schedule: ScheduleSpec::Once(now(&world)),
-        created_at: now(&world),
-    });
+    state.dynamic_tasks_mut().push(ScheduleDefinition::new(
+        Uuid::new_v4(),
+        Some("daily".into()),
+        "每日报告".into(),
+        ScheduleExpr::parse("cron:0 9 * * *").unwrap(),
+        None,
+        now(&world),
+    ));
     world.insert_resource(state);
-
-    let mut registry = ScheduledTaskRegistry::default();
-    registry.insert(
-        "daily",
-        ScheduledTaskInfo {
-            content: "每日报告".into(),
-            output_channel: None,
-            is_once: false,
-        },
-    );
-    world.insert_resource(registry);
 
     world
 }
@@ -234,7 +223,7 @@ fn e2e_full_chain_dispatch_to_restore() {
         .as_array()
         .expect("tasks array in tool_output");
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0]["kind"], "daily");
+    assert_eq!(tasks[0]["name"], "daily");
     assert_eq!(tasks[0]["content"], "每日报告");
 
     // 挂起实体已 despawn（实体足迹闭环——dispatch 改造 + ingest despawn）
@@ -756,26 +745,17 @@ fn world_with_delete_tool() -> World {
     world.insert_resource(executors);
     world.insert_resource(harness::systems::HarnessSettings::default_test());
 
-    // 双账本各一条 "victim" 任务——dynamic_tasks 与 registry 一致
+    // 一条名为 "victim" 的定义
     let mut state = SchedulerState::default();
-    state.dynamic_tasks_mut().push(DynamicScheduledTask {
-        id: Uuid::new_v4(),
-        kind: "victim".into(),
-        schedule: ScheduleSpec::Once(now(&world)),
-        created_at: now(&world),
-    });
+    state.dynamic_tasks_mut().push(ScheduleDefinition::new(
+        Uuid::new_v4(),
+        Some("victim".into()),
+        "to be deleted".into(),
+        ScheduleExpr::parse("cron:0 9 * * *").unwrap(),
+        None,
+        now(&world),
+    ));
     world.insert_resource(state);
-
-    let mut registry = ScheduledTaskRegistry::default();
-    registry.insert(
-        "victim",
-        ScheduledTaskInfo {
-            content: "to be deleted".into(),
-            output_channel: None,
-            is_once: true,
-        },
-    );
-    world.insert_resource(registry);
 
     world
 }
@@ -787,9 +767,9 @@ fn run_delete_full_chain(world: &mut World, tool_call_id: &str) -> Entity {
     let agent_id = harness::domain::AgentId::new();
     spawn_calling_state(world, task_id, agent_id, &[tool_call_id]);
 
-    // 构造 delete_scheduled_task 请求，tool_input = {"kind": "victim"}
+    // 构造 delete_scheduled_task 请求，tool_input = {"name": "victim"}
     let mut req = make_request("delete_scheduled_task", tool_call_id, task_id, agent_id);
-    req.tool_input = serde_json::json!({"kind": "victim"});
+    req.tool_input = serde_json::json!({"name": "victim"});
     let pending_entity = world.spawn(req).id();
 
     // 1. dispatch：原地改造为挂起实体 + worker 起跑（worker 返回 Effect payload）
@@ -873,20 +853,12 @@ fn e2e_delete_full_chain() {
     assert_eq!(output["deleted"], "victim");
     assert_eq!(output["existed"], true);
 
-    // 双账本都空了
     assert!(
         world
             .resource::<SchedulerState>()
             .dynamic_tasks()
             .is_empty(),
         "SchedulerState should be empty after delete"
-    );
-    assert!(
-        world
-            .resource::<ScheduledTaskRegistry>()
-            .get("victim")
-            .is_none(),
-        "Registry should not contain victim after delete"
     );
 
     // 挂起实体与效果实体都不剩

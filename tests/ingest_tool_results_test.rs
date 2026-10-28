@@ -126,7 +126,9 @@ fn ingest_routes_effect_to_pending_entity_without_landing_result() {
         .0
         .send(ToolAsyncResult::effect(
             "call-i3",
-            ToolEffect::DeleteScheduledTask { kind: "k".into() },
+            ToolEffect::DeleteScheduledTask {
+                selector: harness::domain::ScheduleSelector::Name("k".into()),
+            },
         ))
         .unwrap();
 

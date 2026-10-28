@@ -502,6 +502,7 @@ prompt_template = "执行每日摘要"
 内置工具 `schedule_task` 允许 Agent 动态安排未来 AI 任务：
 
 - `content`: 任务提示词
+- `name`: 可选，唯一名称（如 `forum-watch`），缺省取 id 前 8 位，重名拒绝
 - `schedule`: `"once:2026-07-07T09:00:00"` 或 `"cron:0 9 * * 1-5"`
 - `output_channel`: 可选， `"tui" | "telegram" | "qq" | "feishu" | "web"`
 - `target`: 可选，指定通道目标 user_id
@@ -510,7 +511,17 @@ prompt_template = "执行每日摘要"
 显式指定 `output_channel` 时必须同时提供 `target`。
 `once:` 表达式接受 RFC 3339 带偏移时间或无偏移的本地时间，时间不能过去。
 `cron:` 表达式按系统本地时区解释（如 `0 9 * * 1-5` 表示本地工作日 9:00）。
-动态任务仅存内存，进程重启后丢失。
+动态任务持久化到 `.harness/schedules/schedules.json`（相对工作目录），进程重启后恢复：
+
+- 停机期间错过的运行，7 天内只补跑最近一次，并向输出通道推送补跑说明；超出 7 天不补跑
+- 同一定时任务上一次运行未结束时，本次触发跳过
+- 文件损坏时改名为 `schedules.json.corrupt-<时间戳>` 并按空启动
+
+管理工具：
+
+- `list_scheduled_tasks`：列出定义、启停状态、上次与下次触发时间
+- `update_scheduled_task`：按 `kind` 或 `name` 修改 `content` / `schedule`，`enabled` 暂停或恢复，`run_now` 立即运行一次
+- `delete_scheduled_task`：按 `kind` 或 `name` 删除
 
 ## 已废弃的旧配置语义
 

@@ -30,14 +30,13 @@ use crate::{
     domain::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
-        PermissionAction, PermissionAuditContext, PermissionSource, ScheduledTaskInfoSnapshot,
-        ScheduledTaskRegistrySnapshot, SkillCreationContext, SpaceToolRegistry, Task,
-        ToolActionKind, ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission,
-        ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
+        PermissionAction, PermissionAuditContext, PermissionSource, SkillCreationContext,
+        SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult, ToolExecutionRequestMessage,
+        ToolPermission, ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
-    triggers::scheduled_task::{ScheduledTaskRegistry, SchedulerState},
+    triggers::scheduled_task::SchedulerState,
 };
 
 use super::dispatch::emit_permission_audit;
@@ -76,7 +75,6 @@ pub fn async_tool_dispatch_system(
     sender: Res<ToolResultSender>,
     backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
     scheduler_state: Option<Res<SchedulerState>>,
-    scheduled_registry: Option<Res<ScheduledTaskRegistry>>,
     experience_store: Option<Res<crate::domain::ExperienceStore>>,
     frontend_registry: Option<Res<FrontendRegistry>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
@@ -195,10 +193,6 @@ pub fn async_tool_dispatch_system(
             scheduler_state: scheduler_state
                 .as_deref()
                 .map(build_scheduler_snapshot)
-                .map(Arc::new),
-            registry: scheduled_registry
-                .as_deref()
-                .map(build_registry_snapshot)
                 .map(Arc::new),
             tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
             shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
@@ -329,27 +323,5 @@ pub fn async_tool_dispatch_system(
             timeout_secs = timeout.num_seconds(),
             "async tool parked and worker spawned"
         );
-    }
-}
-
-/// 从 `ScheduledTaskRegistry` 构造一份 owned 快照。
-///
-/// 与 `build_scheduler_snapshot` 对称：dispatch 挂起现场调用，worker 零 ECS 接触。
-/// Task 5 不需要本函数，故留作本模块私有。
-fn build_registry_snapshot(registry: &ScheduledTaskRegistry) -> ScheduledTaskRegistrySnapshot {
-    ScheduledTaskRegistrySnapshot {
-        tasks: registry
-            .iter()
-            .map(|(kind, info)| {
-                (
-                    kind.clone(),
-                    ScheduledTaskInfoSnapshot {
-                        content: info.content.clone(),
-                        output_channel: info.output_channel.clone(),
-                        is_once: info.is_once,
-                    },
-                )
-            })
-            .collect(),
     }
 }

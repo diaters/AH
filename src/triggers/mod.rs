@@ -18,8 +18,7 @@ pub use config::{
     build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
 };
 pub use scheduled_task::{
-    DynamicScheduledTask, ScheduledItem, ScheduledTaskInfo, ScheduledTaskRegistry, SchedulerRoutes,
-    SchedulerState, SchedulerStateWatcher, update_scheduler_state,
+    ScheduledItem, SchedulerRoutes, SchedulerState, SchedulerStateWatcher, update_scheduler_state,
     update_scheduler_state_with_watcher,
 };
 pub use timer_scheduler::run_timer_scheduler;
@@ -105,12 +104,12 @@ pub fn reload_triggers_system(world: &mut World) {
     let webhook_count = new_config.webhook.routes.len();
     let timer_count = new_config.timer.routes.len();
 
-    update_scheduler_state(world, |state, _registry| {
+    update_scheduler_state(world, |state| {
         state.set_static_routes(SchedulerRoutes {
             timer: new_config.timer.clone(),
             webhook: new_config.webhook.clone(),
         });
-        // dynamic_tasks 保持不变；_registry 不动（静态路由热加载不写动态任务表）
+        // dynamic_tasks 保持不变（静态路由热加载不写动态任务表）
     });
 
     world.insert_resource(new_registry);

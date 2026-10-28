@@ -113,15 +113,6 @@ pub(crate) fn build_scheduler_snapshot(
     state: &SchedulerState,
 ) -> crate::domain::SchedulerStateSnapshot {
     crate::domain::SchedulerStateSnapshot {
-        dynamic_tasks: state
-            .dynamic_tasks()
-            .iter()
-            .map(|dt| crate::domain::DynamicScheduledTaskSnapshot {
-                id: dt.id,
-                kind: dt.kind.clone(),
-                schedule: dt.schedule.clone(),
-                created_at: dt.created_at,
-            })
-            .collect(),
+        dynamic_tasks: state.dynamic_tasks().to_vec(),
     }
 }

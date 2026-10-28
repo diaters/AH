@@ -100,11 +100,12 @@ worker 只做 compute（I/O、轮询、格式化）；改状态全部在 ECS 侧
 每加一个写效果 = 枚举加一个变体 + commit 加一支 arm，是有意的「慢动作」设计，不接受
 绕过。
 
-### 3.4 双账本单一修改入口
+### 3.4 调度账本单一修改入口
 
-`SchedulerState` + `ScheduledTaskRegistry` 的一切修改走 `update_scheduler_state(world,
-|state, registry| ...)` 单一入口，watch 只广播一次。两条账本在任何写路径下保持原子
-一致——单边删除时记 `LedgerDriftOnDelete` 警告但不回滚（已 dispatched 的任务无法回收）。
+动态定时任务只有 `SchedulerState.dynamic_tasks`（`ScheduleDefinition` 列表）一份账本，一切修改走
+`update_scheduler_state(world, |state| ...)` 或 `update_scheduler_state_with_watcher` 单一入口，
+watch 只广播一次。持久化由 `schedule_persist_system` 基于变更检测写穿，写路径无需逐个处理落盘。
+（历史上曾与 `ScheduledTaskRegistry` 构成双账本，已合并。）
 
 ### 3.5 结果落地单点 + exactly-once
 
@@ -232,7 +233,6 @@ __写工具__（schedule_task / delete_scheduled_task 等）：worker 不碰状�
 | 字段 | 用途 | 谁填充 |
 |------|------|--------|
 | `scheduler_state` | `SchedulerState` 只读快照 | dispatch（按需） |
-| `registry` | `ScheduledTaskRegistry` 只读快照 | dispatch（按需） |
 | `tool_inflight_timeout_secs` | 全局 sweeper 缺省秒数 | dispatch |
 | `shell_default_exec_timeout_secs` | shell 业务超时 fallback | dispatch |
 | `backend` | `Arc<dyn SessionBackend>` 句柄 | dispatch（按需） |
@@ -284,8 +284,8 @@ dispatch 创建 `CancellationToken`，挂两份：
   `ToolResultSender/Receiver`、`async_tool_dispatch_system`、`ingest_tool_results_system`、
   `sweep_inflight_tool_calls`、`cancel_monitor_system`、`ToolEffect` 枚举、
   `commit_tool_effects_system`
-- `list_scheduled_tasks` / `delete_scheduled_task` / `schedule_task` 三个动态定时任务
-  管理工具已上桥
+- `list_scheduled_tasks` / `delete_scheduled_task` / `schedule_task` / `update_scheduled_task`
+  四个动态定时任务管理工具已上桥
 - `shell_exec` 已迁移（CancellationToken 取消路径）
 - Rhai 插件 `spawn_blocking` 包裹（插件 API 不变）
 - 三条失联路径（panic / 超时 / 通道断开）的 exactly-once 兜底

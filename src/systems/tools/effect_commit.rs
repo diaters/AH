@@ -1,6 +1,6 @@
 //! 通用效果提交：写效果的唯一应用点。
 //!
-//! 每个效果 arm 必须经 `update_scheduler_state` 双资源入口落账；
+//! 定时任务类效果 arm 必须经 `update_scheduler_state` 统一入口落账；
 //! 应用后把最终结果（含 apply 时刻才知道的真相，如 `existed`）送回通道，
 //! 由 ingest 下一帧落地——结果落地仍单点。
 //!
@@ -10,17 +10,19 @@
 
 use bevy_ecs::prelude::*;
 use chrono::Utc;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::contracts::FrontendRegistry;
-use crate::domain::compute_next_trigger;
 use crate::domain::{
     EngineEvent, EventTarget, Task, TaskId, TaskTodoList, TodoItem, TodoStatus, ToolAsyncResult,
     ToolEffect, ToolEffectPending, ToolError, ToolResultSender, render_todos,
 };
+use crate::domain::{
+    ScheduleDefinition, ScheduleFire, SignalSource, TaskTrigger, TriggerTaskMessage,
+    compute_next_trigger,
+};
 use crate::ecs::EntityIndex;
 use crate::triggers::scheduled_task::update_scheduler_state;
-use crate::triggers::{DynamicScheduledTask, ScheduleSpec, ScheduledTaskInfo};
 
 /// exclusive system：直接拿 `&mut World` 调 `update_scheduler_state`。
 ///
@@ -43,70 +45,115 @@ pub fn commit_tool_effects_system(world: &mut World) {
 
 /// 应用单个声明式效果，返回最终喂给 LLM 的结果值。
 ///
-/// 写效果经 `update_scheduler_state` 双资源入口原子落账；
+/// 定时任务写效果经 `update_scheduler_state` 统一入口落账；
 /// `existed` / `next_trigger` 等「apply 时刻才知道的真相」在这里计算并回送。
 fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Value, ToolError> {
     match effect {
-        ToolEffect::DeleteScheduledTask { kind } => {
+        ToolEffect::DeleteScheduledTask { selector } => {
             let mut existed = false;
-            update_scheduler_state(world, |state, registry| {
+            update_scheduler_state(world, |state| {
                 let before = state.dynamic_tasks().len();
-                state.dynamic_tasks_mut().retain(|dt| dt.kind != *kind);
-                let removed_from_state = state.dynamic_tasks().len() < before;
-                let removed_from_registry = registry.remove(kind).is_some();
-                existed = removed_from_state || removed_from_registry;
-                if removed_from_state != removed_from_registry {
-                    warn!(
-                        event = "LedgerDriftOnDelete",
-                        kind = %kind,
-                        in_state = removed_from_state,
-                        in_registry = removed_from_registry,
-                        "delete removed from only one ledger"
-                    );
-                }
+                state
+                    .dynamic_tasks_mut()
+                    .retain(|def| !selector.matches(def));
+                existed = state.dynamic_tasks().len() < before;
             });
-            Ok(serde_json::json!({ "deleted": kind, "existed": existed }))
+            Ok(serde_json::json!({ "deleted": selector.label(), "existed": existed }))
         }
         ToolEffect::ScheduleTask {
             id,
-            kind,
+            name,
             content,
             schedule,
             output_channel,
         } => {
-            let is_once = matches!(schedule, ScheduleSpec::Once(_));
-            let kind_owned = kind.clone();
-            let content_owned = content.clone();
-            let output_channel_owned = output_channel.clone();
-            let id_owned = *id;
-            let schedule_clone = schedule.clone();
-
-            // 双账本单一修改入口：state + registry 同一闭包内落账，watch 一次广播。
             // created_at 用 apply 时刻的 Utc::now()——「apply 时刻才知道的真相」原则。
-            update_scheduler_state(world, |state, registry| {
-                state.dynamic_tasks_mut().push(DynamicScheduledTask {
-                    id: id_owned,
-                    kind: kind_owned.clone(),
-                    schedule: schedule_clone.clone(),
-                    created_at: Utc::now(),
-                });
-                registry.insert(
-                    kind_owned,
-                    ScheduledTaskInfo {
-                        content: content_owned,
-                        output_channel: output_channel_owned,
-                        is_once,
-                    },
-                );
+            let def = ScheduleDefinition::new(
+                *id,
+                name.clone(),
+                content.clone(),
+                schedule.clone(),
+                output_channel.clone(),
+                Utc::now(),
+            );
+            let kind = def.kind();
+            let def_name = def.name.clone();
+            let mut name_taken = false;
+            update_scheduler_state(world, |state| {
+                name_taken = state.dynamic_tasks().iter().any(|d| d.name == def.name);
+                if !name_taken {
+                    state.dynamic_tasks_mut().push(def);
+                }
             });
+            if name_taken {
+                return Err(ToolError::InvalidInput(format!(
+                    "scheduled task name already exists: {def_name}"
+                )));
+            }
 
             // next_trigger 在 apply 时刻计算（Once 直接返回；Cron 算下一次本地时区触发）
-            let next_trigger = compute_next_trigger(schedule).map(|t| t.to_rfc3339());
+            let next_trigger = compute_next_trigger(schedule.spec()).map(|t| t.to_rfc3339());
 
             Ok(serde_json::json!({
                 "status": "scheduled",
                 "schedule_id": id.to_string(),
+                "name": def_name,
                 "kind": kind,
+                "next_trigger": next_trigger,
+            }))
+        }
+        ToolEffect::UpdateSchedule {
+            selector,
+            content,
+            schedule,
+            enabled,
+            run_now,
+        } => {
+            let mut updated: Option<ScheduleDefinition> = None;
+            update_scheduler_state(world, |state| {
+                if let Some(def) = state
+                    .dynamic_tasks_mut()
+                    .iter_mut()
+                    .find(|d| selector.matches(d))
+                {
+                    if let Some(content) = content {
+                        def.content = content.clone();
+                    }
+                    if let Some(schedule) = schedule {
+                        def.schedule = schedule.clone();
+                    }
+                    if let Some(enabled) = enabled {
+                        def.enabled = *enabled;
+                    }
+                    updated = Some(def.clone());
+                }
+            });
+            let def = updated.ok_or_else(|| {
+                ToolError::InvalidInput(format!("scheduled task not found: {}", selector.label()))
+            })?;
+            // 手动运行走与定时触发相同的路由链路（重叠规则同样适用）
+            if *run_now {
+                world.spawn((
+                    TriggerTaskMessage {
+                        source: SignalSource("schedule:manual".to_string()),
+                        trigger: TaskTrigger::Timer { kind: def.kind() },
+                    },
+                    ScheduleFire::Manual,
+                ));
+            }
+            let next_trigger = def
+                .enabled
+                .then(|| compute_next_trigger(def.schedule.spec()))
+                .flatten()
+                .map(|t| t.to_rfc3339());
+            Ok(serde_json::json!({
+                "status": "updated",
+                "kind": def.kind(),
+                "name": def.name,
+                "content": def.content,
+                "schedule": def.schedule.raw(),
+                "enabled": def.enabled,
+                "run_now": run_now,
                 "next_trigger": next_trigger,
             }))
         }
