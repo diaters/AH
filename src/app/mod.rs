@@ -20,6 +20,9 @@ use crate::{
     },
 };
 
+mod run_loop;
+pub use run_loop::{HeadlessLoop, LoopHooks, run_loop};
+
 /// 触发器配置路径 Resource：见 `domain::TriggersConfigPath`（装配期投影注入）。
 pub use crate::domain::TriggersConfigPath;
 

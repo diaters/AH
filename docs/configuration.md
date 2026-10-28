@@ -132,7 +132,10 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | `HARNESS_NOTIFICATION_COALESCE_MS` | `300` | 空闲任务被后台通知唤醒前的合并窗口（毫秒） |
 | `HARNESS_BACKGROUND_POLL_MS` | `500` | 后台任务（shell 会话 / 子任务批次）完成检测的轮询间隔（毫秒） |
 
-### TUI 主循环
+### 主循环
+
+TUI 与 `--headless` 共用同一主循环（`harness::app::run_loop`）。`--headless` 不注册 TUI 前端，
+启动时要求至少配置一个 IM 通道。
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|

@@ -1,13 +1,20 @@
-use std::{path::PathBuf, sync::Arc, thread, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use crossterm::event::{self, Event, KeyEventKind};
 use harness::tui::{App, TuiFrontend};
 use harness::{
-    app::{app_is_idle, build_harness_app},
+    app::{HeadlessLoop, LoopHooks, build_harness_app, run_loop},
     channels::{Channel, ChannelManager, QqChannel, TelegramChannel},
-    domain::{EngineEvent, ExternalInput, Frontend, ShutdownState, UserAction},
+    domain::{EngineEvent, ExternalInput, Frontend, UserAction},
     llm::ExecutorRegistry,
     systems::{HarnessConfig, HarnessSettings},
 };
@@ -64,7 +71,13 @@ impl Drop for TuiGuard {
     }
 }
 
+/// headless 下收到第一个关闭信号后，等待运行时空闲的最长时间。
+const HEADLESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+
 fn main() -> Result<()> {
+    // `--headless`：不初始化终端，只驱动 ECS；审批只能经 IM 通道完成
+    let headless = std::env::args().skip(1).any(|arg| arg == "--headless");
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls ring crypto provider");
@@ -80,24 +93,33 @@ fn main() -> Result<()> {
             panic_info = %info,
             "panic occurred in main thread"
         );
-        // 兜底：确保 panic 时终端也能被正确恢复
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableMouseCapture,
-            crossterm::event::DisableBracketedPaste,
-        );
-        ratatui::restore();
+        // 兜底：确保 panic 时终端也能被正确恢复（headless 未接管终端）
+        if !headless {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                crossterm::event::DisableBracketedPaste,
+            );
+            ratatui::restore();
+        }
         default_hook(info);
     }));
 
     info!(
         event = "HarnessStarting",
         version = env!("CARGO_PKG_VERSION"),
-        "AI Harness TUI starting"
+        headless,
+        "AI Harness starting"
     );
 
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);
     let config = HarnessConfig::from_env()?;
+    if headless && config.channels.telegram.is_none() && config.channels.qq.is_none() {
+        anyhow::bail!(
+            "--headless requires at least one IM channel (HARNESS_CHANNELS_CONFIG): \
+             without a terminal, approvals can only be answered over IM"
+        );
+    }
 
     // 启动期配置校验：agents.toml 损坏或重名时立即退出，而非运行期 panic
     harness::infrastructure::incubation::agent_registry::validate_agent_config(
@@ -126,8 +148,6 @@ fn main() -> Result<()> {
     // 创建 Frontend channel
     let (event_tx, event_rx) = unbounded::<EngineEvent>();
     let (action_tx, action_rx) = unbounded::<UserAction>();
-
-    let tui_frontend = TuiFrontend::new(event_tx, action_rx);
 
     // 构建通道列表
     let mut channel_list: Vec<Arc<dyn Channel>> = vec![];
@@ -168,8 +188,11 @@ fn main() -> Result<()> {
     };
     let runtime_clone = runtime.clone();
 
-    // 构建 frontends：TUI + 所有 IM 通道前端
-    let mut frontends: Vec<Box<dyn Frontend>> = vec![Box::new(tui_frontend)];
+    // 构建 frontends：TUI（headless 下不注册）+ 所有 IM 通道前端
+    let mut frontends: Vec<Box<dyn Frontend>> = Vec::new();
+    if !headless {
+        frontends.push(Box::new(TuiFrontend::new(event_tx, action_rx)));
+    }
     frontends.extend(channel_frontends);
 
     // 构建 ECS app
@@ -296,173 +319,33 @@ fn main() -> Result<()> {
 
     info!(
         event = "EcsAppBuilt",
-        "ECS app built, entering TUI main loop"
+        headless, "ECS app built, entering main loop"
     );
 
-    // 启用 crossterm 的鼠标和粘贴支持
-    crossterm::execute!(
-        std::io::stdout(),
-        crossterm::event::EnableMouseCapture,
-        crossterm::event::EnableBracketedPaste,
-    )?;
-
-    // 启动 ratatui
-    let _guard = TuiGuard;
-    let mut terminal = ratatui::init();
-    let mut app_state = App::new(action_tx);
-
-    let mut tick: u64 = 0;
-
-    loop {
-        // 1. 处理 crossterm 事件
-        let mut key_count = 0u32;
-        let mut paste_count = 0u32;
-        let mut mouse_count = 0u32;
-
-        // 用非致命方式读取事件，避免 IME 等场景下的错误导致整个程序退出
-        match event::poll(Duration::ZERO) {
-            Ok(true) => loop {
-                let ev = match event::read() {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        warn!(
-                            event = "CrosstermReadError",
-                            error = %e,
-                            "failed to read terminal event, skipping"
-                        );
-                        break;
-                    }
-                };
-                match ev {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        app_state.handle_key_event(key);
-                        key_count += 1;
-                    }
-                    Event::Key(key) => {
-                        // Release / Repeat 事件忽略，避免 IME 组合过程中的误触发
-                        debug!(
-                            event = "KeyEventIgnored",
-                            kind = ?key.kind,
-                            code = ?key.code,
-                            "ignored non-press key event"
-                        );
-                    }
-                    Event::Mouse(mouse) => {
-                        app_state.handle_mouse_event(mouse);
-                        mouse_count += 1;
-                    }
-                    Event::Paste(text) => {
-                        app_state.handle_paste(&text);
-                        paste_count += 1;
-                    }
-                    _ => {}
-                }
-                // 检查是否还有待处理事件
-                match event::poll(Duration::ZERO) {
-                    Ok(true) => continue,
-                    Ok(false) => break,
-                    Err(e) => {
-                        warn!(
-                            event = "CrosstermPollError",
-                            error = %e,
-                            "failed to poll terminal events"
-                        );
-                        break;
-                    }
-                }
-            },
-            Ok(false) => {}
-            Err(e) => {
-                warn!(
-                    event = "CrosstermPollError",
-                    error = %e,
-                    "failed to poll terminal events"
-                );
-            }
-        }
-
-        if key_count > 0 || paste_count > 0 {
-            debug!(
-                event = "InputProcessed",
-                key_count,
-                paste_count,
-                mode = ?app_state.mode,
-                "processed input events"
-            );
-        }
-
-        // 2. 从 channel 拉取 EngineEvent，更新 TUI 状态
-        let mut engine_event_count = 0u32;
-        while let Ok(ev) = event_rx.try_recv() {
-            debug!(
-                event = "EngineEventReceived",
-                event_kind = ?ev,
-                "received engine event from channel"
-            );
-            app_state.handle_engine_event(ev);
-            engine_event_count += 1;
-        }
-
-        // 3. 驱动 ECS
-        app.update();
-
-        let shutdown_requested = app.world().resource::<ShutdownState>().requested;
-        let idle = app_is_idle(app.world_mut());
-        let had_input = key_count > 0 || paste_count > 0 || mouse_count > 0;
-        let had_engine_events = engine_event_count > 0;
-        let settings = app.world().resource::<HarnessSettings>();
-        let sleep_ms = if idle && !had_input && !had_engine_events {
-            settings.0.idle_poll_ms
-        } else {
-            settings.0.active_poll_ms
+    let total_ticks = if headless {
+        let signals = Arc::new(AtomicUsize::new(0));
+        spawn_shutdown_signal_listener(&runtime, input_tx.clone(), signals.clone());
+        run_loop(
+            &mut app,
+            &mut HeadlessLoop::new(signals, HEADLESS_SHUTDOWN_GRACE),
+        )
+    } else {
+        // 启用 crossterm 的鼠标和粘贴支持
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::EnableMouseCapture,
+            crossterm::event::EnableBracketedPaste,
+        )?;
+        let _guard = TuiGuard;
+        let mut tui = TuiLoop {
+            terminal: ratatui::init(),
+            app_state: App::new(action_tx),
+            event_rx,
         };
-        let should_render = !idle || had_input || had_engine_events;
+        run_loop(&mut app, &mut tui)
+    };
 
-        if tick.is_multiple_of(300) {
-            debug!(
-                event = "TuiLoopHeartbeat",
-                tick,
-                shutdown_requested,
-                idle,
-                sleep_ms,
-                should_render,
-                should_quit = app_state.should_quit,
-                messages = app_state.messages.len(),
-                agents = app_state.agents.len(),
-                tasks = app_state.tasks.len(),
-                pending_approvals = app_state.pending_approvals.len(),
-                "TUI main loop heartbeat"
-            );
-        }
-
-        if shutdown_requested && idle {
-            info!(
-                event = "GracefulShutdown",
-                tick, "shutdown requested and app is idle, exiting"
-            );
-            break;
-        }
-
-        // 4. 退出检查
-        if app_state.should_quit {
-            info!(event = "UserQuit", tick, "user requested quit, exiting");
-            break;
-        }
-
-        // 5. 渲染 TUI（空闲且无新事件时跳过无意义重绘）
-        if should_render && let Err(e) = terminal.draw(|frame| app_state.render(frame)) {
-            warn!(event = "RenderError", error = %e, "TUI render failed");
-        }
-
-        thread::sleep(Duration::from_millis(sleep_ms));
-        tick += 1;
-    }
-
-    info!(
-        event = "HarnessExiting",
-        total_ticks = tick,
-        "AI Harness TUI exiting"
-    );
+    info!(event = "HarnessExiting", total_ticks, "AI Harness exiting");
 
     // 优雅关闭 ChannelManager
     {
@@ -471,7 +354,161 @@ fn main() -> Result<()> {
     }
     let _ = runtime_clone.block_on(channel_handle);
 
-    // TuiGuard drop 时会自动禁用 mouse capture / bracketed paste 并恢复终端
-
     Ok(())
+}
+
+/// TUI 运行形态的主循环钩子：读取终端事件、消费引擎事件、渲染界面。
+struct TuiLoop {
+    terminal: ratatui::DefaultTerminal,
+    app_state: App,
+    event_rx: Receiver<EngineEvent>,
+}
+
+impl LoopHooks for TuiLoop {
+    fn poll(&mut self) -> bool {
+        let input_count = self.poll_terminal_events();
+        let mut engine_event_count = 0u32;
+        while let Ok(ev) = self.event_rx.try_recv() {
+            debug!(
+                event = "EngineEventReceived",
+                event_kind = ?ev,
+                "received engine event from channel"
+            );
+            self.app_state.handle_engine_event(ev);
+            engine_event_count += 1;
+        }
+        input_count > 0 || engine_event_count > 0
+    }
+
+    fn render(&mut self, active: bool) {
+        // 空闲且无新事件时跳过无意义重绘
+        if active && let Err(e) = self.terminal.draw(|frame| self.app_state.render(frame)) {
+            warn!(event = "RenderError", error = %e, "TUI render failed");
+        }
+    }
+
+    fn should_quit(&self) -> bool {
+        self.app_state.should_quit
+    }
+
+    fn heartbeat(&self, tick: u64) {
+        debug!(
+            event = "TuiLoopHeartbeat",
+            tick,
+            messages = self.app_state.messages.len(),
+            agents = self.app_state.agents.len(),
+            tasks = self.app_state.tasks.len(),
+            pending_approvals = self.app_state.pending_approvals.len(),
+            "TUI main loop heartbeat"
+        );
+    }
+}
+
+impl TuiLoop {
+    /// 读取全部待处理的终端事件，返回处理的输入事件数（按键 / 粘贴 / 鼠标）。
+    ///
+    /// 用非致命方式读取事件，避免 IME 等场景下的错误导致整个程序退出。
+    fn poll_terminal_events(&mut self) -> u32 {
+        let mut count = 0u32;
+        loop {
+            match event::poll(Duration::ZERO) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(e) => {
+                    warn!(
+                        event = "CrosstermPollError",
+                        error = %e,
+                        "failed to poll terminal events"
+                    );
+                    break;
+                }
+            }
+            let ev = match event::read() {
+                Ok(ev) => ev,
+                Err(e) => {
+                    warn!(
+                        event = "CrosstermReadError",
+                        error = %e,
+                        "failed to read terminal event, skipping"
+                    );
+                    break;
+                }
+            };
+            match ev {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    self.app_state.handle_key_event(key);
+                    count += 1;
+                }
+                Event::Key(key) => {
+                    // Release / Repeat 事件忽略，避免 IME 组合过程中的误触发
+                    debug!(
+                        event = "KeyEventIgnored",
+                        kind = ?key.kind,
+                        code = ?key.code,
+                        "ignored non-press key event"
+                    );
+                }
+                Event::Mouse(mouse) => {
+                    self.app_state.handle_mouse_event(mouse);
+                    count += 1;
+                }
+                Event::Paste(text) => {
+                    self.app_state.handle_paste(&text);
+                    count += 1;
+                }
+                _ => {}
+            }
+        }
+        if count > 0 {
+            debug!(
+                event = "InputProcessed",
+                input_count = count,
+                mode = ?self.app_state.mode,
+                "processed input events"
+            );
+        }
+        count
+    }
+}
+
+/// headless 下监听 SIGINT / SIGTERM：每个信号计数一次，第一个信号请求优雅关闭。
+fn spawn_shutdown_signal_listener(
+    runtime: &tokio::runtime::Runtime,
+    input_tx: Sender<ExternalInput>,
+    signals: Arc<AtomicUsize>,
+) {
+    runtime.spawn(async move {
+        #[cfg(unix)]
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    warn!(event = "SigtermHandlerFailed", error = %e, "cannot listen for SIGTERM");
+                    None
+                }
+            };
+        loop {
+            #[cfg(unix)]
+            let received = match terminate.as_mut() {
+                Some(term) => tokio::select! {
+                    r = tokio::signal::ctrl_c() => r.is_ok(),
+                    r = term.recv() => r.is_some(),
+                },
+                None => tokio::signal::ctrl_c().await.is_ok(),
+            };
+            #[cfg(not(unix))]
+            let received = tokio::signal::ctrl_c().await.is_ok();
+            if !received {
+                return;
+            }
+            let count = signals.fetch_add(1, Ordering::SeqCst) + 1;
+            info!(
+                event = "ShutdownSignalReceived",
+                count, "shutdown signal received"
+            );
+            if count == 1 {
+                let _ = input_tx.send(ExternalInput::Shutdown);
+            }
+        }
+    });
 }
