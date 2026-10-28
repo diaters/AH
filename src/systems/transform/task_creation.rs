@@ -92,6 +92,8 @@ pub fn user_message_to_task_system(
                 continue; // 保留创建消息，等旧 worker/会话真实结束。
             }
             if let Some(&(task_id, task_entity)) = reserved.get(channel) {
+                tracing::debug!(event = "ConversationDuplicateCreateRedirected", %task_id, ?channel,
+                    "same-frame duplicate creation becomes steer");
                 TrustedImages::register(&mut commands, task_entity, &message.content);
                 let mut delivery = commands.spawn(crate::domain::InboxDeliveryMessage {
                     task_id,
@@ -167,6 +169,10 @@ pub fn user_message_to_task_system(
             "new task spawned from user message"
         );
 
+        if let Some(channel) = &message.origin_channel {
+            tracing::debug!(event = "ConversationSlotReserved", task_id = %task.id, ?channel,
+                "user root reserves the conversation slot");
+        }
         let task_id = task.id;
         let task_entity = spawn_task(
             &mut commands,

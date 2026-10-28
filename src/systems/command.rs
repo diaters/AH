@@ -43,6 +43,9 @@ pub(crate) fn command_parse_system(
                 })
                 .collect();
             if roots.len() > 1 {
+                tracing::warn!(event = "ConversationSlotConflict", channel = ?input.origin_channel,
+                    task_ids = ?roots.iter().map(|(task, _)| task.id).collect::<Vec<_>>(),
+                    "multiple unfinished user roots reject ambiguous command");
                 commands.spawn(crate::domain::SystemOutputMessage {
                     task_id: roots[0].0.id,
                     content: "此通道存在多个未结束的用户任务，无法确定命令归属；请先修复冲突任务。"

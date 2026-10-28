@@ -69,6 +69,8 @@ pub(crate) fn user_input_routing_system(
             .map(|(_, task)| task.id)
             .collect();
         if roots.len() > 1 {
+            tracing::warn!(event = "ConversationSlotConflict", channel = ?input.origin_channel,
+                task_ids = ?roots, "multiple unfinished user roots reject ambiguous input");
             commands.spawn(SystemOutputMessage {
                 task_id: roots[0],
                 content: "此通道存在多个未结束的用户任务，无法确定输入归属；请先修复冲突任务。"

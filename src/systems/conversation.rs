@@ -61,6 +61,7 @@ pub(crate) fn channel_is_closing(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conversation_input_order_system(
     mut commands: Commands,
+    mut deferred_logged: Local<HashSet<Entity>>,
     inputs: Query<(Entity, &UserInputMessage, Option<&InputSequence>)>,
     tasks: Query<&Task>,
     inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
@@ -110,15 +111,22 @@ pub(crate) fn conversation_input_order_system(
                     .any(|task| task.id == clear.task_id && is_user_root(task, &channel))
             });
         let mut barrier = false;
-        for (position, (entity, input, _)) in inputs.into_iter().enumerate() {
+        for (position, (entity, input, sequence_number)) in inputs.into_iter().enumerate() {
             let command = UserCommand::parse(&input.content).is_command();
             let blocked = closing || barrier || (position > 0 && command);
             if blocked {
+                if deferred_logged.insert(entity) {
+                    tracing::debug!(event = "ConversationInputDeferred", channel = ?channel,
+                        input_sequence = sequence_number, closing,
+                        "input retained behind conversation command or cleanup barrier");
+                }
                 commands.entity(entity).insert(InputBlocked);
             } else {
+                deferred_logged.remove(&entity);
                 commands.entity(entity).remove::<InputBlocked>();
             }
             barrier |= command;
         }
     }
+    deferred_logged.retain(|entity| inputs.contains(*entity));
 }
