@@ -18,6 +18,7 @@ mod runtime_config;
 mod schedule;
 mod summarization;
 mod sweeper;
+mod task_retention;
 pub mod tools;
 pub mod transform;
 
@@ -61,7 +62,9 @@ pub(crate) use memory::{
 };
 pub(crate) use memory_hook::{on_ltm_evicted_hook_system, on_ltm_write_hook_system};
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
-pub use schedule::{schedule_catch_up_startup_system, schedule_persist_system};
+pub use schedule::{
+    once_schedule_completion_system, schedule_catch_up_startup_system, schedule_persist_system,
+};
 pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{
     NativeProcessBackend, approval_dispatch_system, approval_result_system,
@@ -76,6 +79,7 @@ pub(crate) use tools::{
 // `pub(crate)` 仅 crate 内可见）。
 pub use runtime_config::{BrainConfig, HarnessConfig, HarnessSettings};
 pub use sweeper::sweep_inflight_tool_calls;
+pub use task_retention::terminal_task_retention_system;
 pub use tools::async_tool_dispatch_system;
 pub use tools::cancel_monitor_system;
 pub use tools::commit_tool_effects_system;

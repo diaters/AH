@@ -86,6 +86,7 @@ fn on_message_dispatched_removes_marker() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
     };
     let entity = app

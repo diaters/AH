@@ -30,9 +30,10 @@ use crate::{
     domain::SessionBackend,
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
-        PermissionAction, PermissionAuditContext, PermissionSource, SkillCreationContext,
-        SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult, ToolExecutionRequestMessage,
-        ToolPermission, ToolRequestPending, ToolResultSender, ToolWorkerOutput, ToolWorkerPayload,
+        PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants,
+        SkillCreationContext, SpaceToolRegistry, Task, ToolActionKind, ToolAsyncResult,
+        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolResultSender,
+        ToolWorkerOutput, ToolWorkerPayload, resolve_tool_permission,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
@@ -77,12 +78,14 @@ pub fn async_tool_dispatch_system(
     scheduler_state: Option<Res<SchedulerState>>,
     experience_store: Option<Res<crate::domain::ExperienceStore>>,
     frontend_registry: Option<Res<FrontendRegistry>>,
+    runtime_grants: Option<Res<RuntimeGrants>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
     let index = &index_agents_tasks_skill_ctx.0;
     let agents = &index_agents_tasks_skill_ctx.1;
     let tasks = &index_agents_tasks_skill_ctx.2;
     let skill_creation_contexts = &index_agents_tasks_skill_ctx.3;
+    let runtime_grants = runtime_grants.as_deref();
 
     for (entity, request) in &requests {
         // 等待确认的请求不归这里管（Confirm 路径先行）
@@ -122,8 +125,17 @@ pub fn async_tool_dispatch_system(
             if registry.get(&request.tool_name).is_none() {
                 continue; // 工具定义不在 registry → 留给 sync 路径
             }
-            let (permission, _source) =
-                agent.effective_permission(&request.tool_name, Some(registry));
+            let conversation = index
+                .get_task(&request.request.task_id)
+                .and_then(|e| tasks.get(e).ok())
+                .and_then(|t| t.origin_channel.as_ref());
+            let (permission, _source) = resolve_tool_permission(
+                agent,
+                &request.tool_name,
+                Some(registry),
+                runtime_grants,
+                conversation,
+            );
             if matches!(permission, ToolPermission::Confirm) {
                 continue; // 需要确认 → 留给 sync 路径设置 confirmation
             }
@@ -281,7 +293,13 @@ pub fn async_tool_dispatch_system(
                         .get_agent(&request.request.agent_id)
                         .and_then(|e| agents.get(e).ok()),
                 )
-                .map(|(r, a)| a.effective_permission(&tool_name, Some(r)).1)
+                .map(|(r, a)| {
+                    let conversation = index
+                        .get_task(&request.request.task_id)
+                        .and_then(|e| tasks.get(e).ok())
+                        .and_then(|t| t.origin_channel.as_ref());
+                    resolve_tool_permission(a, &tool_name, Some(r), runtime_grants, conversation).1
+                })
                 .unwrap_or(PermissionSource::AgentDefault);
             emit_permission_audit(
                 frontend_registry,

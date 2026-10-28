@@ -2,6 +2,8 @@
 //!
 //! 附件标记解析：`[IMAGE:path]` 等标记从消息内容中提取为结构化附件。
 
+use crate::prelude::{Commands, Component, Entity};
+
 #[derive(Clone, Debug)]
 pub struct ChannelAttachment {
     pub kind: AttachmentKind,
@@ -119,6 +121,40 @@ pub fn extract_attachments(content: &str) -> (String, Vec<ChannelAttachment>) {
     }
     text.push_str(&content[last_end..]);
     (text, attachments)
+}
+
+/// 任务的可信图片登记表：只有登记过的 `[IMAGE:...]` 目标会在 LLM 适配层绑定为真实图片。
+///
+/// 登记来源只有用户会话输入（新建任务、续轮、steer、`ask_user` 回答）与 `view_image` 的成功结果；
+/// webhook 内容、定时任务内容、shell 输出等其他来源的标记保持为文本，避免提示注入借标记读取本地文件。
+#[derive(Component, Debug, Default, Clone)]
+pub struct TrustedImages(pub std::collections::HashSet<String>);
+
+impl TrustedImages {
+    /// 把内容中出现的图片标记目标登记到任务实体上（不存在时创建登记表）。
+    pub fn register(commands: &mut Commands, task_entity: Entity, content: &str) {
+        let targets = image_targets(content);
+        if targets.is_empty() {
+            return;
+        }
+        let extra = targets.clone();
+        commands
+            .entity(task_entity)
+            .entry::<TrustedImages>()
+            .and_modify(move |mut trusted| trusted.0.extend(extra))
+            .or_insert(TrustedImages(targets.into_iter().collect()));
+    }
+}
+
+/// 内容中的图片标记目标（去除空目标与通道语法说明中的示例标记）。
+pub fn image_targets(content: &str) -> Vec<String> {
+    let content = content.replace(ATTACHMENT_MARKER_SYNTAX_HINT, "");
+    find_attachment_spans(&content)
+        .into_iter()
+        .map(|span| span.attachment)
+        .filter(|a| a.kind == AttachmentKind::Image && !a.target.is_empty())
+        .map(|a| a.target)
+        .collect()
 }
 
 #[cfg(test)]

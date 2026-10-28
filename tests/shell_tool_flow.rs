@@ -117,6 +117,7 @@ fn test_config() -> HarnessConfig {
         shell_default_stop_timeout_secs: 10,
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
+        terminal_task_retention_secs: 3600,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -251,6 +252,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "printf 'hello\\n'; sleep 1" }),
@@ -288,6 +290,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id, "tail_lines": 20 }),
@@ -345,6 +348,7 @@ fn shell_list_returns_only_active_sessions() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),
@@ -371,6 +375,7 @@ fn shell_list_returns_only_active_sessions() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_list".to_string(),
         tool_input: serde_json::json!({}),
@@ -430,6 +435,7 @@ fn shell_exec_returns_result_message() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -503,6 +509,7 @@ fn shell_exec_passes_env_to_child_process() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({
@@ -562,6 +569,7 @@ fn shell_start_returns_running_handle() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -630,6 +638,7 @@ fn shell_start_passes_env_to_child_process() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
@@ -683,6 +692,7 @@ fn shell_start_passes_env_to_child_process() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({
@@ -749,6 +759,7 @@ fn shell_exec_with_exit_code_error() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -814,6 +825,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -856,6 +868,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -970,6 +983,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
@@ -1010,6 +1024,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({
@@ -1112,6 +1127,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1188,6 +1204,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1245,6 +1262,7 @@ fn shell_read_returns_output_text() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1291,6 +1309,7 @@ fn shell_read_returns_output_text() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1354,6 +1373,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1433,6 +1453,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 2" }),
@@ -1561,6 +1582,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1590,6 +1612,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_list".to_string(),
         tool_input: serde_json::json!({}),
@@ -1658,6 +1681,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "shell_start".to_string(),
             tool_input: serde_json::json!({ "command": command }),
@@ -1785,6 +1809,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1830,6 +1855,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id }),
@@ -1901,6 +1927,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "cat" }),
@@ -1946,6 +1973,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id, "input": "hello" }),
@@ -2016,6 +2044,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -2061,6 +2090,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_stop".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id }),
@@ -2131,6 +2161,7 @@ fn task_termination_stops_owned_shell_sessions() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),
@@ -2207,6 +2238,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),

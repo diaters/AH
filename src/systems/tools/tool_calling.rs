@@ -335,6 +335,7 @@ pub(crate) fn handle_tool_calls_response(
                     model_override: None,
                     turn_generation: None,
                     vision: false,
+                    trusted_images: Vec::new(),
                 },
                 tool_name: call.name.clone(),
                 tool_input,
@@ -539,6 +540,7 @@ pub fn tool_calling_orchestrator_system(
             model_override: None,
             turn_generation: None,
             vision: false,
+            trusted_images: Vec::new(),
         };
 
         debug!(

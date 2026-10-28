@@ -21,6 +21,7 @@ fn spawn_pending(world: &mut bevy_ecs::prelude::World, call_id: &str) -> bevy_ec
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     world
         .spawn((

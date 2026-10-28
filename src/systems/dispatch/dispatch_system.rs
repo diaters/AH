@@ -314,6 +314,7 @@ pub fn dispatch_system(
                     model_override: None,
                     turn_generation: None,
                     vision: false,
+                    trusted_images: Vec::new(),
                 },
             },
             MessageDispatchedHookPending,
@@ -530,6 +531,7 @@ pub fn dispatch_system(
                         model_override: None,
                         turn_generation: None,
                         vision: false,
+                        trusted_images: Vec::new(),
                     };
 
                     task.mark_waiting_for_agent(agent.id, clock.0);

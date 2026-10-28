@@ -27,6 +27,7 @@ fn sample_request(kind: AgentRequestKind) -> AgentExecutionRequest {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     }
 }
 

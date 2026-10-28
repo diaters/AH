@@ -1,7 +1,8 @@
-//! schedule_task 动态任务审批路由集成测试
+//! schedule_task 动态任务无人值守审批集成测试
 //!
 //! 验证由 schedule_task 创建的一次性动态任务触发后，执行 Agent 调用需要确认的
-//! shell_exec 工具时，审批请求被正确路由到任务 output_channel 指定的 QQ 用户。
+//! shell_exec 工具时，不发起审批（无人值守运行无人可审批），而是直接拒绝，
+//! 并向任务 output_channel 指定的 QQ 用户推送提醒（设计 §7.3）。
 
 mod common;
 
@@ -54,7 +55,10 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::systems::BrainConfig { enabled: true }),
+        brain: Some(harness::systems::BrainConfig {
+            enabled: true,
+            fallback_agent: None,
+        }),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -64,6 +68,7 @@ fn test_config() -> HarnessConfig {
         shell_default_stop_timeout_secs: 10,
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
+        terminal_task_retention_secs: 3600,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -154,7 +159,7 @@ impl Frontend for CapturingQQFrontend {
 }
 
 #[test]
-fn scheduled_task_approval_request_routes_to_output_channel() {
+fn scheduled_task_confirm_tool_is_denied_and_notified_to_output_channel() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (_input_tx, input_rx) = unbounded();
     let runtime = Arc::new(Runtime::new().expect("tokio runtime should be created"));
@@ -206,34 +211,30 @@ fn scheduled_task_approval_request_routes_to_output_channel() {
         app.update();
     }
 
-    let approval_requests: Vec<_> = {
-        let events = events.lock().unwrap();
-        events
-            .iter()
-            .filter_map(|event| match event {
-                EngineEvent::ApprovalRequest { target, .. } => Some(target.clone()),
-                _ => None,
-            })
-            .collect()
-    };
-
+    let events = events.lock().unwrap().clone();
     assert!(
-        !approval_requests.is_empty(),
-        "QQ MockFrontend 应收到审批请求"
+        !events
+            .iter()
+            .any(|event| matches!(event, EngineEvent::ApprovalRequest { .. })),
+        "无人值守运行不应发起审批请求"
     );
 
-    let directed = approval_requests
+    let notice_targets: Vec<_> = events
         .iter()
-        .find_map(|target| match target {
-            EventTarget::Directed(channels) => Some(channels.clone()),
-            EventTarget::Broadcast => None,
+        .filter_map(|event| match event {
+            EngineEvent::Text {
+                target, content, ..
+            } if content.contains("无人值守") => match target {
+                EventTarget::Directed(channels) => Some(channels.clone()),
+                EventTarget::Broadcast => None,
+            },
+            _ => None,
         })
-        .expect("审批请求应为 Directed 目标");
-
+        .collect();
     assert_eq!(
-        directed,
-        vec![output_channel.clone()],
-        "审批请求目标应与 scheduled task 的 output_channel 一致"
+        notice_targets,
+        vec![vec![output_channel.clone()]],
+        "拒绝提醒应推送到 scheduled task 的 output_channel"
     );
 
     let task = app

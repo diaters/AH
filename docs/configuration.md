@@ -112,10 +112,13 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `HARNESS_BRAIN_ENABLED` | `false` | 是否启用 Brain Agent 调度 |
+| `HARNESS_BRAIN_FALLBACK_AGENT` | 未设置 | Brain 未能给出可用决策时直接派发的 Persistent Agent 名称；未设置时任务直接失败 |
 | `HARNESS_MAX_RETRIES` | `3` | LLM 请求最大重试次数 |
+| `HARNESS_LLM_REQUEST_TIMEOUT_SECS` | `300` | 单次 LLM 请求总超时（秒），超时按可重试的 `Timeout` 处理，避免 provider 连接挂住时任务永远停在 Running |
 | `HARNESS_MAX_TOOL_ITERATIONS` | `5` | 单次用户输入后，LLM 工具调用最大迭代次数 |
 | `HARNESS_DEFAULT_WAIT_TASKS_TIMEOUT_SECS` | `300` | `wait_tasks` 默认超时时间 |
 | `HARNESS_TOOL_INFLIGHT_TIMEOUT_SECS` | `300` | 异步工具调用全局失联超时（秒），sweeper 推导 `max_duration` 的全局缺省 |
+| `HARNESS_TERMINAL_TASK_RETENTION_SECS` | `3600` | 终态任务树保留时长（秒）：树内任务全部终态且超过该时长、无未终态 WorkItem 时整树回收 |
 | `HARNESS_AGENTS_CONFIG` | `agents.toml` | Agent 配置文件路径 |
 | `HARNESS_LOG_DIR` | `logs` | JSONL 日志输出目录 |
 
@@ -129,7 +132,10 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 | `HARNESS_NOTIFICATION_COALESCE_MS` | `300` | 空闲任务被后台通知唤醒前的合并窗口（毫秒） |
 | `HARNESS_BACKGROUND_POLL_MS` | `500` | 后台任务（shell 会话 / 子任务批次）完成检测的轮询间隔（毫秒） |
 
-### TUI 主循环
+### 主循环
+
+TUI 与 `--headless` 共用同一主循环（`harness::app::run_loop`）。`--headless` 不注册 TUI 前端，
+启动时要求至少配置一个 IM 通道。
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
@@ -469,7 +475,7 @@ prompt_template = "执行每日摘要"
 |------|------|------|------|
 | `webhook.enabled` | bool | 否 | 是否启用 webhook 服务器，默认 `false` |
 | `webhook.listen_addr` | string | 是（启用时） | 监听地址，格式 `host:port` |
-| `webhook.auth_token` | string | 否 | 共享认证 token；设置后请求需携带 `Authorization: Bearer <token>` |
+| `webhook.auth_token` | string | 启用时必填 | 请求头 `X-Webhook-Token: <token>`；为空时 server 拒绝启动 |
 | `webhook.routes[].kind` | string | 是 | 触发 kind 标识，用于匹配 `SignalTriggerRegistry` 路由 |
 | `webhook.routes[].approval_channel` | table | 否 | 审批通道，包含 `frontend` 和 `user_id` 字段 |
 | `webhook.routes[].approval_context` | string | 否 | 审批上下文描述 |

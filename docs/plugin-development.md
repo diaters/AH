@@ -176,8 +176,9 @@ if tool_name == "my-plugin:echo" {
 ### 执行模型
 
 - 每个脚本在独立线程中执行
-- 单次执行超时 1 秒
+- 单次执行超时 200 毫秒（hook 在 ECS 线程上同步等待）；一帧内 hook 累计耗时超过 50 毫秒时记录 `HookBudgetExceeded` 警告
 - 引擎最大调用深度 32 层
+- 操作数上限 100 万次；单个字符串最大 1 MiB，数组 / map 最多 10 万个元素，超出时脚本以错误终止
 - 不加载标准库（无文件系统/网络访问）
 - 所有与 Harness 的交互通过 Host API 函数完成
 
@@ -548,7 +549,7 @@ Hook 执行错误以 `HookScriptError` 记录，包含插件 ID、hook 点和错
 |------|------|----------|
 | `Function not found: len` | Rhai 沙箱引擎未注册该类型的方法 | 检查是否对 Host API 返回值调用了未注册的方法 |
 | `HookScriptError` + `Function not found` | 脚本调用了不存在的 Host API 函数 | 检查函数名拼写，参考 Host API 参考章节 |
-| `HookTimeout` | 脚本执行超过 1 秒 | 减少循环次数或简化逻辑 |
+| `HookTimeout` | 脚本执行超过 200 毫秒 | 减少循环次数或简化逻辑 |
 | `PluginToolSchemaInvalid` | JSON Schema 不合法 | 使用 `jsonschema` 验证器检查 schema 文件 |
 | `no executor for 'plugin:tool'` | 工具注册时 executor key 不匹配 | 确认工具 id 不含冒号，命名空间由框架自动添加 |
 | `400 Bad Request` + `function.name` | 工具名包含非法字符 | 框架已自动处理冒号映射，确认 id 仅含字母数字和下划线 |
@@ -564,7 +565,7 @@ Hook 执行错误以 `HookScriptError` 记录，包含插件 ID、hook 点和错
 
 ## 限制与注意事项
 
-- 单脚本执行超时 1 秒，超时后结果被忽略
+- 单脚本执行超时 200 毫秒，超时后结果被忽略
 - `tool_deny` 仅在 `on_tool_called` 中有效
 - `tool_set_result` 仅在 `on_tool_returned` 中有效
 - `create_task` 创建的 Task 使用 `plugin` 用户 ID 标记来源
@@ -572,7 +573,7 @@ Hook 执行错误以 `HookScriptError` 记录，包含插件 ID、hook 点和错
 - `emit_message` 在 v1 中仅记录日志，消息不会路由到其他插件
 - `CreateWorkItem` / `SetApprovalDecision` / `ExperienceSetPinned` 等
   WorldCommand 在 v1 中尚未实现回放
-- 超时线程不会强制终止，可能在后台继续运行（v1 接受此潜在泄漏）
+- 超时线程不会强制终止，但受操作数上限约束，死循环脚本也会在有限步内终止
 - 单个插件的 `[[commands]]` 中 `display` 不允许重复
 
 ## 完整示例

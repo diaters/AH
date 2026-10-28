@@ -259,7 +259,9 @@ pub(crate) fn frontend_output_system(
                 } else {
                     match opt.mode {
                         crate::domain::GrantMode::Once => "仅本次允许".to_string(),
-                        crate::domain::GrantMode::Permanent => "永久允许此工具".to_string(),
+                        crate::domain::GrantMode::Permanent => {
+                            "本次运行内对该会话允许此工具".to_string()
+                        }
                     }
                 },
             })

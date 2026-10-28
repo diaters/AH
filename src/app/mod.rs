@@ -20,6 +20,9 @@ use crate::{
     },
 };
 
+mod run_loop;
+pub use run_loop::{HeadlessLoop, LoopHooks, run_loop};
+
 /// 触发器配置路径 Resource：见 `domain::TriggersConfigPath`（装配期投影注入）。
 pub use crate::domain::TriggersConfigPath;
 
@@ -63,6 +66,7 @@ pub fn build_harness_app(
     // 中心索引：外部 UUID 身份 → ECS Entity 映射。
     // 写入由 spawn/despawn 中心封装维护；陈旧兜底见下方 Maintenance 清理系统。
     app.init_resource::<crate::ecs::EntityIndex>();
+    app.init_resource::<crate::domain::RuntimeGrants>();
 
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());
@@ -83,6 +87,12 @@ pub fn build_harness_app(
     // Startup: 先加载插件注册表，随后由 tools 系统主动拉取注册插件工具
     //（方向反转：user_plugins 不反向调用 systems），再加载持久化 Agent。
     app.add_systems(Startup, crate::user_plugins::plugin_load_startup_system);
+    // 每帧末检查插件 hook 在 ECS 线程上的累计耗时
+    app.init_resource::<crate::user_plugins::dispatcher::HookFrameBudget>();
+    app.add_systems(
+        bevy_app::Last,
+        crate::user_plugins::dispatcher::hook_budget_check_system,
+    );
     app.add_systems(
         Startup,
         crate::systems::tools::register_plugin_tools_startup_system
@@ -130,6 +140,12 @@ pub fn build_harness_app(
             crate::ecs::cleanup_index_on_agent_remove,
         )
             .in_set(HarnessSet::Maintenance),
+    );
+
+    // 终态任务树过保留期后回收，避免长期运行时实体无限增长。
+    app.add_systems(
+        Update,
+        crate::systems::terminal_task_retention_system.in_set(HarnessSet::Maintenance),
     );
 
     app

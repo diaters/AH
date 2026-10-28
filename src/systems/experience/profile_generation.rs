@@ -612,6 +612,7 @@ fn spawn_profile_approval(
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "profile_generation".to_string(),
             tool_input: serde_json::json!({

@@ -131,6 +131,14 @@ cargo run
 cargo run
 ```
 
+无终端运行（服务器上的无人值守监控）：不初始化 TUI，只驱动运行时，审批经 IM 通道完成，
+因此必须配置至少一个 IM 通道（`HARNESS_CHANNELS_CONFIG`）。SIGINT / SIGTERM 触发优雅退出，
+30 秒内未空闲或收到第二个信号时直接退出。
+
+```bash
+cargo run -- --headless
+```
+
 ### 编译检查
 
 ```bash

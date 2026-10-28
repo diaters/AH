@@ -130,6 +130,7 @@ fn smoke_request(prompt: &str, tools: Vec<ToolDefinition>) -> AgentExecutionRequ
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     }
 }
 

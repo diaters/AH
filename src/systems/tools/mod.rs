@@ -444,7 +444,7 @@ pub fn register_builtin_tools(
                 "required": ["content", "schedule"]
             }),
         },
-        default_permission: ToolPermission::Allow,
+        default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("schedule_task".to_string()),
         required_tag: None,
     });
@@ -526,7 +526,7 @@ pub fn register_builtin_tools(
                 }
             }),
         },
-        default_permission: ToolPermission::Allow,
+        default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("update_scheduled_task".to_string()),
         required_tag: None,
     });

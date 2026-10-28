@@ -30,14 +30,14 @@ const ONCE_CATCH_UP_GRACE: Duration = Duration::seconds(60);
 /// 将事件触发消息路由为 `CreateTaskMessage`。
 ///
 /// - Webhook 触发走 `registry.route`，Timer 触发走 `registry.timer_route`
-/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支
+/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支（Webhook 不进入该分支）
 /// - 未注册的触发器会被丢弃并记录结构化日志
 /// - `build_task_input` 失败的触发器会被丢弃
 /// - 静态路由成功后产出 `CreateTaskMessage`，`origin_channel` 为 `None`，
 ///   `routing_policy` 使用 `TaskRoutingPolicy::event`，由路由配置提供审批通道与上下文
 /// - 动态 scheduled task 成功后产出 `CreateTaskMessage`，`routing_policy`
 ///   使用 `TaskRoutingPolicy::scheduled_task`，由 `ScheduleDefinition` 构造
-/// - 动态定时任务的状态写入（`last_fired_at`、一次性清理）经
+/// - 动态定时任务的状态写入（`last_fired_at`、过期一次性任务清理）经
 ///   `update_scheduler_state_with_watcher` 共享入口，让 `SchedulerStateWatcher` 收到通知
 #[allow(clippy::too_many_arguments)]
 pub fn trigger_task_routing_system(
@@ -99,7 +99,8 @@ pub fn trigger_task_routing_system(
                     );
                 }
             }
-        } else if kind.starts_with("scheduled:") {
+        } else if matches!(trigger, TaskTrigger::Timer { .. }) && kind.starts_with("scheduled:") {
+            // 动态定时任务只接受 timer 触发；webhook 路径不能借 kind 前缀触发定时任务
             route_scheduled_trigger(
                 &mut commands,
                 &kind,
@@ -227,11 +228,10 @@ fn route_scheduled_trigger(
     ));
     active_runs.insert(def.id);
 
-    let is_once = def.schedule.is_once();
+    // 一次性任务也只记账不删除：运行进入终态后由 `once_schedule_completion_system` 删除，
+    // timer 依据 `last_fired_at` 不再调度已触发的一次性任务
     update_scheduler_state_with_watcher(scheduler_state, watcher, |state| {
-        if is_once {
-            state.dynamic_tasks_mut().retain(|d| d.id != def.id);
-        } else if let Some(d) = state
+        if let Some(d) = state
             .dynamic_tasks_mut()
             .iter_mut()
             .find(|d| d.id == def.id)
@@ -239,14 +239,6 @@ fn route_scheduled_trigger(
             d.health.last_fired_at = Some(now);
         }
     });
-    if is_once {
-        info!(
-            event = "DynamicTaskRemoved",
-            kind = %kind,
-            reason = "once scheduled task triggered",
-            "dynamic once scheduled task removed after trigger"
-        );
-    }
 }
 
 fn remove_definition(
@@ -260,7 +252,11 @@ fn remove_definition(
 }
 
 /// 向定时任务的输出通道推送一条系统消息（无输出通道或无前端时只记日志）。
-fn notify(frontends: Option<&FrontendRegistry>, def: &ScheduleDefinition, content: String) {
+pub(crate) fn notify(
+    frontends: Option<&FrontendRegistry>,
+    def: &ScheduleDefinition,
+    content: String,
+) {
     let (Some(frontends), Some(channel)) = (frontends, def.output_channel.clone()) else {
         debug!(
             event = "ScheduleNoticeDropped",
@@ -280,7 +276,7 @@ fn notify(frontends: Option<&FrontendRegistry>, def: &ScheduleDefinition, conten
     }
 }
 
-fn format_local(t: DateTime<Utc>) -> String {
+pub(crate) fn format_local(t: DateTime<Utc>) -> String {
     t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
 }
 
@@ -426,12 +422,15 @@ mod tests {
             messages[0].routing_policy.approval_channel(),
             Some(&channel)
         );
+        let def = app
+            .world()
+            .resource::<SchedulerState>()
+            .find_by_kind(&kind)
+            .cloned()
+            .expect("once 任务在运行结束前保留定义");
         assert!(
-            app.world()
-                .resource::<SchedulerState>()
-                .find_by_kind(&kind)
-                .is_none(),
-            "once 任务触发后应被清理"
+            def.health.last_fired_at.is_some(),
+            "触发时记录 last_fired_at"
         );
     }
 
@@ -472,7 +471,8 @@ mod tests {
         );
     }
 
-    /// once 任务触发后 `SchedulerStateWatcher` 必须收到通知（清理经统一修改入口）。
+    /// once 任务触发后 `SchedulerStateWatcher` 必须收到通知（触发记账经统一修改入口），
+    /// timer 据 `last_fired_at` 不再重复调度它。
     #[test]
     fn once_task_trigger_notifies_scheduler_state_watch() {
         let mut app = App::new();
@@ -493,11 +493,13 @@ mod tests {
 
         assert!(
             rx.has_changed().unwrap(),
-            "SchedulerStateWatcher 必须在 once 任务清理后收到通知"
+            "SchedulerStateWatcher 必须在 once 任务触发记账后收到通知"
         );
         assert!(
-            rx.borrow_and_update().find_by_kind(&kind).is_none(),
-            "广播出的状态中应已清理 once 任务"
+            rx.borrow_and_update()
+                .find_by_kind(&kind)
+                .is_some_and(|d| d.health.last_fired_at.is_some()),
+            "广播出的状态中 once 任务应已标记为已触发"
         );
     }
 
@@ -601,6 +603,33 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn webhook_with_scheduled_kind_does_not_fire_dynamic_task() {
+        let (mut app, _events) = routing_app();
+        let kind = insert_definition(&mut app, "cron job", "cron:0 8 * * *", None);
+
+        app.world_mut().spawn(TriggerTaskMessage {
+            source: SignalSource("webhook".to_string()),
+            trigger: TaskTrigger::Webhook {
+                kind: kind.clone(),
+                body: serde_json::json!({}),
+            },
+        });
+        app.update();
+
+        assert!(
+            created(&mut app).is_empty(),
+            "webhook must not fire scheduled tasks"
+        );
+        assert!(
+            definition_of(&app, &kind)
+                .unwrap()
+                .health
+                .last_fired_at
+                .is_none()
+        );
     }
 
     #[test]
@@ -739,8 +768,8 @@ mod tests {
         assert!(runs[0].0.starts_with("[补跑]"));
         assert_eq!(texts(&events).len(), 1);
         assert!(
-            definition_of(&app, &kind).is_none(),
-            "once removed after run"
+            definition_of(&app, &kind).is_some_and(|d| d.health.last_fired_at.is_some()),
+            "once kept (marked fired) until the run reaches a terminal state"
         );
     }
 

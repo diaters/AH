@@ -13,6 +13,7 @@ use crate::{
     domain::{
         CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
         HookPoint, NewlyCreatedTask, PendingDispatch, ScheduledRun, ShortTermMemory, Task,
+        TrustedImages,
     },
     systems::HarnessSettings,
     user_plugins::{
@@ -105,6 +106,10 @@ pub fn user_message_to_task_system(
         );
         if let Some(run) = scheduled_run {
             commands.entity(task_entity).insert(*run);
+        }
+        // 只有来自用户会话的输入可信；事件 / 定时任务内容中的图片标记不绑定
+        if message.origin_channel.is_some() {
+            TrustedImages::register(&mut commands, task_entity, &message.content);
         }
         commands.entity(entity).despawn();
     }
@@ -249,6 +254,47 @@ mod tests {
             vec![
                 ("plain".to_string(), None),
                 ("scheduled".to_string(), Some(ScheduledRun { schedule_id })),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_conversation_input_registers_trusted_images() {
+        let mut app = app();
+        let channel = crate::domain::ChannelId {
+            frontend: crate::domain::FrontendKind::QQ,
+            user_id: "user:u".to_string(),
+            thread_id: None,
+        };
+        app.world_mut().spawn(CreateTaskMessage {
+            content: "看看 [IMAGE:/tmp/user.png]".to_string(),
+            origin_channel: Some(channel.clone()),
+            routing_policy: TaskRoutingPolicy::conversational(channel),
+        });
+        app.world_mut().spawn(CreateTaskMessage {
+            content: "webhook 内容 [IMAGE:/etc/secret.png]".to_string(),
+            origin_channel: None,
+            routing_policy: TaskRoutingPolicy::event(None, None),
+        });
+
+        app.update();
+
+        let mut query = app.world_mut().query::<(&Task, Option<&TrustedImages>)>();
+        let mut seen: Vec<(bool, Option<Vec<String>>)> = query
+            .iter(app.world())
+            .map(|(task, trusted)| {
+                (
+                    task.origin_channel.is_some(),
+                    trusted.map(|t| t.0.iter().cloned().collect()),
+                )
+            })
+            .collect();
+        seen.sort_by_key(|(conversational, _)| *conversational);
+        assert_eq!(
+            seen,
+            vec![
+                (false, None),
+                (true, Some(vec!["/tmp/user.png".to_string()])),
             ]
         );
     }

@@ -10,10 +10,10 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, EngineEvent, EventTarget,
         ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
-        PermissionAuditContext, PermissionSource, ProfileGenerationContext, SharedKnowledgeBase,
-        ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task, TaskId, TaskStatus,
-        ToolActionKind, ToolCallingState, ToolConfirmationResponseMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolPermission,
+        PermissionAuditContext, PermissionSource, ProfileGenerationContext, RuntimeGrants,
+        SharedKnowledgeBase, ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task,
+        TaskId, TaskStatus, ToolActionKind, ToolCallingState, ToolConfirmationResponseMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
         ToolReturnedHookPending, WaitingReason, WorkItem,
     },
     ecs::EntityIndex,
@@ -58,7 +58,7 @@ fn restore_task_to_tool_execution(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tool_confirmation_result_system(
     mut commands: Commands,
-    mut agents: Query<&mut Agent>,
+    agents: Query<&mut Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
     knowledge: Res<SharedKnowledgeBase>,
@@ -84,16 +84,19 @@ pub fn tool_confirmation_result_system(
     // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
     // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
     // frontend_registry 用于在用户确认路径推送 ToolCallStarted 事件。
+    // runtime_grants 记录"本会话允许"授权（按 Agent × 工具 × 会话）。
     mut index_clock_loader_frontends: (
         ResMut<EntityIndex>,
         Res<Clock>,
         Res<SkillLoader>,
         Res<FrontendRegistry>,
+        Option<ResMut<RuntimeGrants>>,
     ),
 ) {
     let index = &mut index_clock_loader_frontends.0;
     let clock = &index_clock_loader_frontends.1;
     let frontend_registry = &index_clock_loader_frontends.3;
+    let runtime_grants = &mut index_clock_loader_frontends.4;
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
         let Some((request_entity, tool_request)) = tool_requests
@@ -220,28 +223,33 @@ pub fn tool_confirmation_result_system(
                     "tool execution confirmed by user"
                 );
 
-                // Permanent 模式：更新 Agent 权限
-                if option.mode == GrantMode::Permanent
-                    && let Some(mut agent) = agents
-                        .iter_mut()
-                        .find(|a| a.id == tool_request.request.agent_id)
+                // Permanent 模式（"本会话允许"）：按来源会话写入运行期授权。
+                // 没有来源会话的任务（webhook 事件等）无会话可复用，按仅本次处理。
+                let conversation = index
+                    .get_task(&tool_request.request.task_id)
+                    .and_then(|e| tasks.get(e).ok())
+                    .and_then(|(_, t)| t.origin_channel.clone());
+                let granted = option.mode == GrantMode::Permanent && conversation.is_some();
+                let granted = granted && runtime_grants.is_some();
+                if let (Some(conversation), Some(runtime_grants)) =
+                    (conversation.filter(|_| granted), runtime_grants.as_mut())
                 {
-                    agent
-                        .tool_permissions
-                        .overrides
-                        .insert(tool_request.tool_name.clone(), ToolPermission::Allow);
+                    runtime_grants.grant(
+                        tool_request.request.agent_id,
+                        &tool_request.tool_name,
+                        conversation,
+                    );
+                } else if option.mode == GrantMode::Permanent {
                     debug!(
-                        event = "AgentPermissionUpdated",
-                        agent_id = %agent.id,
+                        event = "RuntimeGrantSkippedNoConversation",
                         tool_name = %tool_request.tool_name,
-                        new_permission = ?ToolPermission::Allow,
-                        "agent permission updated to Allow permanently"
+                        task_id = %tool_request.request.task_id,
+                        "task has no origin conversation, grant treated as once"
                     );
                 }
 
-                // 权限审计：Permanent grant（用户确认路径写入永久权限）。
-                // 仅在 Permanent 模式下发出；Once 模式未改 overrides，不发 Grant 审计。
-                if option.mode == GrantMode::Permanent {
+                // 权限审计：运行期授权写入时发出 Grant；仅本次允许不发。
+                if granted {
                     let agent_name = index
                         .get_agent(&tool_request.request.agent_id)
                         .and_then(|e| agents.get(e).ok())
@@ -258,7 +266,7 @@ pub fn tool_confirmation_result_system(
                         &agent_name,
                         &tool_request.tool_name,
                         PermissionAction::Grant,
-                        PermissionSource::AgentOverride,
+                        PermissionSource::RuntimeGrant,
                         PermissionAuditContext::UserConfirmation,
                     );
                 }
@@ -315,8 +323,9 @@ pub fn tool_confirmation_result_system(
                 // **allow_once 路径**：设置 `confirmed_once = true` 让 async_tool_dispatch_system
                 // 跳过权限检查直接认领——否则 Confirm 权限的 Async 工具会陷入
                 // 「确认 → 清除 pending_id → sync 路径再派发审批」的循环。
-                // `allow_always` 路径已通过 `overrides.insert(Allow)` 更新永久权限，
-                // async_tool_dispatch_system 会直接认领，无需 `confirmed_once`。
+                // 写入了运行期授权（"本会话允许"）时，async_tool_dispatch_system 解析权限
+                // 即为 Allow，会直接认领，无需 `confirmed_once`；未写入（含无来源会话退化为
+                // 仅本次）时必须设置。
                 if executor.kind() == ToolActionKind::Async {
                     debug!(
                         event = "ToolConfirmationApprovedAsync",
@@ -327,7 +336,7 @@ pub fn tool_confirmation_result_system(
                     );
                     let mut updated_request = tool_request.clone();
                     updated_request.pending_confirmation_id = None;
-                    if option.mode == crate::domain::GrantMode::Once {
+                    if !granted {
                         updated_request.confirmed_once = true;
                     }
                     commands.entity(request_entity).insert(updated_request);
@@ -583,6 +592,7 @@ mod tests {
                 model_override: None,
                 turn_generation: None,
                 vision: false,
+                trusted_images: Vec::new(),
             },
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"cmd": "echo ok"}),

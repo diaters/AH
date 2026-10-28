@@ -248,6 +248,7 @@ fn llm_tool_calling_complete_loop() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -317,6 +318,7 @@ fn tool_calling_exceeds_max_iterations() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -382,6 +384,7 @@ fn tool_calling_records_to_short_term_memory() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -451,6 +454,7 @@ fn tool_calling_soft_limit_returns_synthetic_result() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });
@@ -511,6 +515,7 @@ fn tool_calling_hard_limit_forces_failure() {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
     app.world_mut()
         .spawn(harness::domain::AgentExecutionRequestMessage { request });

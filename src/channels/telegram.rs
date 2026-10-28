@@ -161,28 +161,13 @@ impl TelegramChannel {
     }
 
     async fn persist_allowed_user(&self, user_id: &str, path: &Path) -> Result<(), ChannelError> {
-        use crate::channels::config::ChannelConfigs;
-        let mut configs: ChannelConfigs = tokio::fs::read_to_string(path)
-            .await
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default();
-        let tg = configs.telegram.get_or_insert_with(|| self.config.clone());
-        if !tg.allowed_users.iter().any(|u| u == user_id) {
-            tg.allowed_users.push(user_id.to_string());
-        }
-        let content = toml::to_string_pretty(&configs).map_err(|e| ChannelError::Api {
-            code: 0,
-            message: e.to_string(),
-        })?;
-        tokio::fs::write(path, content)
-            .await
-            .map_err(|e| ChannelError::Api {
-                code: 0,
-                message: e.to_string(),
-            })?;
-
-        Ok(())
+        crate::channels::config::ChannelConfigs::append_telegram_allowed_user(
+            path,
+            user_id,
+            self.config.clone(),
+        )
+        .await
+        .map_err(|message| ChannelError::Api { code: 0, message })
     }
 
     fn supported_attachment_kinds(&self) -> Vec<AttachmentKind> {

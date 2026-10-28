@@ -324,6 +324,7 @@ fn scenario_config() -> HarnessConfig {
         shell_default_stop_timeout_secs: 10,
         tool_inflight_timeout_secs: 300,
         shell_max_buffer_bytes_per_stream: 64 * 1024,
+        terminal_task_retention_secs: 3600,
         active_poll_ms: 16,
         idle_poll_ms: 150,
         channels: Default::default(),
@@ -710,6 +711,7 @@ fn build_judge_request(data: &JudgePromptData) -> AgentExecutionRequest {
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     }
 }
 

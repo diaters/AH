@@ -8,19 +8,71 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
+use crate::contracts::FrontendRegistry;
 use crate::domain::{
-    CATCH_UP_WINDOW, CatchUp, ScheduleFire, SignalSource, TaskTrigger, TriggerTaskMessage,
-    catch_up_decision,
+    CATCH_UP_WINDOW, CatchUp, ScheduleFire, ScheduledRun, SignalSource, Task, TaskTrigger,
+    TriggerTaskMessage, catch_up_decision,
 };
 use crate::infrastructure::schedules::ScheduleStore;
 use crate::prelude::*;
-use crate::triggers::SchedulerState;
+use crate::systems::transform::trigger_task::{format_local, notify};
+use crate::triggers::{SchedulerState, SchedulerStateWatcher, update_scheduler_state_with_watcher};
 
-/// 启动时为错过运行的 cron 定时任务各补跑一次（只补最近一次）。
+/// 启动时为错过运行的 cron 定时任务各补跑一次（只补最近一次），并处理上次被中断的一次性任务。
 ///
-/// 一次性任务不在这里处理：timer 启动后会立即触发已过期的一次性任务，补跑标注与过期
-/// 删除由 `trigger_task_routing_system` 在路由时判定，避免重复触发。
-pub fn schedule_catch_up_startup_system(mut commands: Commands, state: Res<SchedulerState>) {
+/// 未触发的一次性任务不在这里处理：timer 启动后会立即触发已过期的一次性任务，补跑标注与
+/// 过期删除由 `trigger_task_routing_system` 在路由时判定，避免重复触发。
+///
+/// 已触发（`last_fired_at` 已设置）却仍在账本中的一次性任务，说明上次运行未进入终态就停机了：
+/// 不自动重跑（避免重复副作用），转为暂停并提醒用户用 `run_now` 重新运行或删除。
+pub fn schedule_catch_up_startup_system(
+    mut commands: Commands,
+    mut state: ResMut<SchedulerState>,
+    watcher: Option<Res<SchedulerStateWatcher>>,
+    frontends: Option<Res<FrontendRegistry>>,
+) {
+    let interrupted: Vec<_> = state
+        .dynamic_tasks()
+        .iter()
+        .filter(|d| d.enabled && d.schedule.is_once() && d.health.last_fired_at.is_some())
+        .cloned()
+        .collect();
+    if !interrupted.is_empty() {
+        let ids: Vec<_> = interrupted.iter().map(|d| d.id).collect();
+        let pause = |state: &mut SchedulerState| {
+            for d in state.dynamic_tasks_mut() {
+                if ids.contains(&d.id) {
+                    d.enabled = false;
+                }
+            }
+        };
+        match watcher.as_deref() {
+            Some(watcher) => update_scheduler_state_with_watcher(&mut state, watcher, pause),
+            None => pause(&mut state),
+        }
+        for def in &interrupted {
+            warn!(
+                event = "OnceScheduleInterrupted",
+                name = %def.name,
+                "one-shot scheduled run was interrupted before completion, paused"
+            );
+            let fired_at = def
+                .health
+                .last_fired_at
+                .map(format_local)
+                .unwrap_or_default();
+            notify(
+                frontends.as_deref(),
+                def,
+                format!(
+                    "一次性定时任务「{}」于 {fired_at} 开始运行后 harness 停止，运行未完成。\
+                     已暂停该任务，可用 update_scheduled_task 的 run_now 重新运行，或删除它。",
+                    def.name
+                ),
+            );
+        }
+    }
+
     let now = Utc::now();
     for def in state.dynamic_tasks() {
         if !def.enabled || def.schedule.is_once() {
@@ -52,6 +104,44 @@ pub fn schedule_catch_up_startup_system(mut commands: Commands, state: Res<Sched
                 );
             }
         }
+    }
+}
+
+/// 一次性定时任务的运行进入终态后删除其定义。
+///
+/// 触发时只记 `last_fired_at`（timer 据此不再调度），定义保留到运行结束：运行失败或进程
+/// 中途停止时定义仍在，重启后由 `schedule_catch_up_startup_system` 转为暂停并提醒。
+pub fn once_schedule_completion_system(
+    runs: Query<(&Task, &ScheduledRun), Changed<Task>>,
+    mut state: ResMut<SchedulerState>,
+    watcher: Res<SchedulerStateWatcher>,
+) {
+    let finished: Vec<_> = runs
+        .iter()
+        .filter(|(task, _)| task.status().is_terminal())
+        .filter_map(|(_, run)| {
+            state
+                .dynamic_tasks()
+                .iter()
+                .find(|d| d.id == run.schedule_id && d.schedule.is_once())
+                .map(|d| (d.id, d.kind()))
+        })
+        .collect();
+    if finished.is_empty() {
+        return;
+    }
+    update_scheduler_state_with_watcher(&mut state, &watcher, |state| {
+        state
+            .dynamic_tasks_mut()
+            .retain(|d| !finished.iter().any(|(id, _)| *id == d.id));
+    });
+    for (_, kind) in &finished {
+        info!(
+            event = "DynamicTaskRemoved",
+            kind = %kind,
+            reason = "once scheduled run finished",
+            "dynamic once scheduled task removed after its run finished"
+        );
     }
 }
 
@@ -203,5 +293,100 @@ mod tests {
         });
         app.update();
         assert!(!path.exists());
+    }
+
+    fn once_definition(name: &str) -> ScheduleDefinition {
+        let at = (Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+        let mut def = definition(name);
+        def.schedule = ScheduleExpr::parse(&format!("once:{at}")).unwrap();
+        def
+    }
+
+    /// 已触发却仍在账本中的一次性任务：上次运行被中断，转为暂停且不自动重跑。
+    #[test]
+    fn startup_pauses_interrupted_once_without_rerun() {
+        let mut interrupted = once_definition("interrupted");
+        interrupted.health.last_fired_at = Some(Utc::now() - chrono::Duration::minutes(5));
+        let pending = once_definition("pending");
+
+        let mut app = startup_app(vec![interrupted.clone(), pending.clone()]);
+
+        let state = app.world().resource::<SchedulerState>();
+        let enabled = |id| {
+            state
+                .dynamic_tasks()
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .enabled
+        };
+        assert!(!enabled(interrupted.id), "interrupted once must be paused");
+        assert!(
+            enabled(pending.id),
+            "unfired once stays enabled for the timer"
+        );
+        assert!(catch_up_messages(&mut app).is_empty());
+    }
+
+    fn completion_app(defs: Vec<ScheduleDefinition>) -> App {
+        let mut state = SchedulerState::default();
+        *state.dynamic_tasks_mut() = defs;
+        let mut app = App::new();
+        app.insert_resource(state);
+        app.insert_resource(SchedulerStateWatcher::default());
+        app.add_systems(Update, once_schedule_completion_system);
+        app
+    }
+
+    fn run_task(status: crate::domain::TaskStatus) -> Task {
+        let mut task = Task::from_trigger(
+            "run".to_string(),
+            3,
+            crate::domain::TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
+        );
+        task.status = status;
+        task
+    }
+
+    #[test]
+    fn once_definition_removed_only_after_run_finishes() {
+        let once = once_definition("once");
+        let cron = definition("cron");
+        let mut app = completion_app(vec![once.clone(), cron.clone()]);
+        let running = app
+            .world_mut()
+            .spawn((
+                run_task(crate::domain::TaskStatus::Running),
+                ScheduledRun {
+                    schedule_id: once.id,
+                },
+            ))
+            .id();
+        app.world_mut().spawn((
+            run_task(crate::domain::TaskStatus::Done),
+            ScheduledRun {
+                schedule_id: cron.id,
+            },
+        ));
+
+        app.update();
+        let ids = |app: &App| -> Vec<_> {
+            app.world()
+                .resource::<SchedulerState>()
+                .dynamic_tasks()
+                .iter()
+                .map(|d| d.id)
+                .collect()
+        };
+        assert_eq!(
+            ids(&app),
+            vec![once.id, cron.id],
+            "running once and cron are kept"
+        );
+
+        app.world_mut().get_mut::<Task>(running).unwrap().status =
+            crate::domain::TaskStatus::Failed(crate::domain::FailureReason::Unknown);
+        app.update();
+        assert_eq!(ids(&app), vec![cron.id], "once removed after its run fails");
     }
 }

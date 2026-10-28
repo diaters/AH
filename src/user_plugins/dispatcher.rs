@@ -1,12 +1,13 @@
 //! Hook 派发器。
 //!
 //! 按 `PluginRegistry.plugins()` 字母序逐插件执行订阅 AST。
-//! 每个脚本在独立线程中运行，受 `HOOK_TIMEOUT=1s` 限制。
+//! 每个脚本在独立线程中运行，受 `HOOK_TIMEOUT=200ms` 限制；一帧内的 hook 累计耗时记入
+//! `HookFrameBudget`，超过 `HOOK_FRAME_BUDGET` 时由 `hook_budget_check_system` 告警。
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
@@ -16,7 +17,7 @@ use crate::domain::HookPoint;
 use crate::domain::{
     ChannelId, DispatchHint, DispatchKind, DispatchStrategy, FrontendKind, PendingDispatch, Task,
 };
-use crate::prelude::World;
+use crate::prelude::{ResMut, Resource, World};
 use crate::user_plugins::host_api;
 use crate::user_plugins::host_api::approval::ApprovalContext;
 use crate::user_plugins::host_api::entity_query::WorldSnapshot;
@@ -75,13 +76,36 @@ pub struct HookDispatchInput<'a> {
     pub ctx_builder: Box<dyn Fn(&LoadedPlugin, &mut World) -> PluginContext + 'a>,
 }
 
-/// v1 hook 单脚本超时 1 秒。
-const HOOK_TIMEOUT: Duration = Duration::from_secs(1);
+/// hook 单脚本超时：hook 在 ECS 线程上同步等待，超时过长会让整个主循环卡顿。
+const HOOK_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// 一帧内 hook 累计耗时的告警阈值。
+pub const HOOK_FRAME_BUDGET: Duration = Duration::from_millis(50);
+
+/// 一帧内 hook 派发的累计耗时：`dispatch_hook` 累加，`hook_budget_check_system` 每帧检查并清零。
+#[derive(Resource, Debug, Default)]
+pub struct HookFrameBudget {
+    pub spent: Duration,
+}
+
+/// 每帧末检查 hook 累计耗时，超过 `HOOK_FRAME_BUDGET` 时告警，然后清零。
+pub fn hook_budget_check_system(mut budget: ResMut<HookFrameBudget>) {
+    if budget.spent > HOOK_FRAME_BUDGET {
+        warn!(
+            event = "HookBudgetExceeded",
+            spent_ms = budget.spent.as_millis() as u64,
+            budget_ms = HOOK_FRAME_BUDGET.as_millis() as u64,
+            "plugin hooks blocked the ECS thread longer than the per-frame budget"
+        );
+    }
+    budget.spent = Duration::ZERO;
+}
 
 /// 派发入口。按 registry.plugins() 字母序逐插件执行订阅 AST。
 ///
 /// 返回累积的 `HookOutcome`：多次 deny 取最后一个；replaced_result 取最后一次 set。
 pub fn dispatch_hook(input: HookDispatchInput<'_>) -> HookOutcome {
+    let started = Instant::now();
     let outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
     let subscribers: Vec<LoadedPlugin> = input
         .registry
@@ -116,6 +140,9 @@ pub fn dispatch_hook(input: HookDispatchInput<'_>) -> HookOutcome {
         }
     }
 
+    if let Some(mut budget) = input.world.get_resource_mut::<HookFrameBudget>() {
+        budget.spent += started.elapsed();
+    }
     outcome.lock().unwrap().clone()
 }
 
@@ -182,12 +209,12 @@ fn run_one_ast(
                 event = "HookTimeout",
                 plugin = %plugin.manifest.id,
                 point = ?point,
-                "hook script exceeded 1s, ignored"
+                "hook script exceeded timeout, ignored"
             );
         }
     }
-    // 注：超时线程在后台继续运行直到脚本退出。v1 接受这一潜在泄漏，因为 host API
-    // 都是同步进程内快速操作，最长 1s 内必然结束。
+    // 注：超时线程在后台继续运行直到脚本退出；引擎的操作数上限保证脚本
+    // （含死循环）有限步内终止，泄漏有界。
     let _ = handle;
 }
 
@@ -269,10 +296,82 @@ fn apply_world_command(world: &mut World, cmd: WorldCommand) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::Schedule;
+
+    fn plugin_dir_with_hook(script: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("budget");
+        std::fs::create_dir_all(root.join("hooks")).unwrap();
+        std::fs::write(
+            root.join("manifest.toml"),
+            "id = \"budget\"\napi_version = 1\n[[hooks]]\nevent = \"on_task_created\"\nscript = \"hooks/h.rhai\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("hooks/h.rhai"), script).unwrap();
+        dir
+    }
+
+    fn dispatch(world: &mut World, registry: &mut PluginRegistry) {
+        let (writer_tx, _writer_rx) = crossbeam_channel::unbounded();
+        let (message_tx, _message_rx) = crossbeam_channel::unbounded();
+        let tx = writer_tx.clone();
+        dispatch_hook(HookDispatchInput {
+            point: HookPoint::OnTaskCreated,
+            world,
+            registry,
+            writer_tx,
+            ctx_builder: Box::new(
+                move |plugin: &LoadedPlugin, _world: &mut World| PluginContext {
+                    snapshot: WorldSnapshot::empty(),
+                    writer: WorldWriter::new(tx.clone()),
+                    outcome: Arc::new(Mutex::new(HookOutcome::default())),
+                    plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
+                    approval: ApprovalContext {
+                        current_request_id: None,
+                    },
+                    experience: ExperienceContext {
+                        store: Arc::new(crate::domain::ExperienceStore::default()),
+                    },
+                    skills: SkillsSnapshot::empty(),
+                    message: MessageContext {
+                        plugin_id: plugin.manifest.id.clone(),
+                        tx: message_tx.clone(),
+                    },
+                    temp_resource: TempResourceSlot::new(),
+                    tool: ToolCallContext::default(),
+                },
+            ),
+        });
+    }
+
+    /// hook 派发耗时累加到本帧预算，供 `hook_budget_check_system` 检查。
+    #[test]
+    fn dispatch_records_time_into_frame_budget() {
+        let dir = plugin_dir_with_hook("let x = 0; for i in 0..20000 { x += i; }");
+        let mut registry = crate::user_plugins::loader::load_plugins_from_dir(dir.path());
+        assert_eq!(registry.plugins().len(), 1);
+        let mut world = World::new();
+        world.init_resource::<HookFrameBudget>();
+
+        dispatch(&mut world, &mut registry);
+
+        assert!(world.resource::<HookFrameBudget>().spent > Duration::ZERO);
+    }
 
     #[test]
-    fn empty_registry_dispatches_no_op() {
-        // 占位：集成测试在 Phase 8 编写。
-        let _ = HookOutcome::default();
+    fn budget_check_resets_each_frame() {
+        let mut world = World::new();
+        world.insert_resource(HookFrameBudget {
+            spent: HOOK_FRAME_BUDGET * 3,
+        });
+        let mut schedule = Schedule::default();
+        schedule.add_systems(hook_budget_check_system);
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<HookFrameBudget>().spent, Duration::ZERO);
+    }
+
+    #[test]
+    fn hook_timeout_is_short_enough_for_the_ecs_thread() {
+        assert!(HOOK_TIMEOUT <= Duration::from_millis(200));
     }
 }

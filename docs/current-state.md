@@ -16,6 +16,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 - 用户输入经过 Frontend、Signal、Task、Dispatch、Execution、Writeback 形成闭环
 - TUI 已作为当前主要交互入口
+- 无终端运行形态：`--headless` 不初始化 TUI，只驱动运行时（审批经 IM 通道），启动时要求至少配置一个 IM 通道；
+  SIGINT / SIGTERM 请求优雅退出，30 秒内未空闲或收到第二个信号时直接退出。TUI 与 headless 共用
+  `harness::app::run_loop`，前端差异由 `LoopHooks` 提供
 - 结构化日志、CI、集成测试与回归测试已接入主流程
 - Android aarch64 支持（rustls TLS 后端），可通过交叉编译在 Android 设备运行
 
@@ -25,6 +28,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `WorkItem` 作为内部执行单元
 - `Evaluation` 与 `Summarization` 已迁移到 `WorkItem` 闭环
 - `AgentExecutionRequest` 作为瞬时执行请求，不承担长期业务状态
+- 终态任务回收：`terminal_task_retention_system` 每 30 秒扫描，任务树内全部终态且超过
+  `HARNESS_TERMINAL_TASK_RETENTION_SECS`（默认 1 小时）、无未终态 WorkItem 时整树销毁并清理终态派发去重集合；
+  仍处于 `Waiting(User)` 的多轮任务不回收（需 `/finish` 或 `/clear`）
 
 #### 协作与编排
 
@@ -44,7 +50,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - SubTask 派发前置：`subtask_dispatch_preparation_system` 负责 DAG 依赖检查、兄弟任务结果收集、
   `AgentSpawnSpec` 准备，完成后附加 `PendingDispatch`
 - Brain LLM 决策：Brain Agent 选择执行 Agent + skill，产出 `PendingDispatch(DirectDelegate)`；
-  LLM 失败直接标记 Task 为 `Failed`，不 fallback
+  LLM 失败、输出无法解析或选了不存在的 Agent 时默认标记 Task 为 `Failed`；显式配置
+  `HARNESS_BRAIN_FALLBACK_AGENT` 后改为不注入 skill 直接派发给该 Agent（`BrainFallbackUsed`）
 - skill 注入：对所有 Task 适用（max 1），仅限 Persistent Agent，通过 `TaskInjectedSkill`
   Component 注入；Brain 选中 skill 时按依赖闭包收窄注入（`build_injected_skills`），
   未选中或闭包为空时维持全量注入（G4 行为变更最小化）
@@ -119,7 +126,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - shell 工具已收敛为六个意图化工具：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`
 - shell 输出语义已收敛为"最新快照"，不再对 LLM 暴露伪增量游标协议
-- 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always` 授权的权限会立即复用，后续同工具请求直接执行
+- shell 子进程以独立进程组运行：超时 / 取消 / `shell_stop` 终止整个进程组，后台孙进程不会成为孤儿；
+  进程退出后输出读取线程只等待 500ms 宽限期，后台进程持有管道时不再阻塞 `shell_exec`
+- 输出快照在行数上限之外再按 64 KiB 截断尾部；已结束的会话记录最多保留 128 条
+- 同一任务的多个工具确认请求现在按顺序逐个弹出；`allow_always`（"本会话允许"）授权会在同一会话内立即复用，后续同工具请求直接执行
 - 等待工具确认期间，文本输入 `1`/`2`/`3` 会被识别为确认选项（QQ 文本确认），其他文本会提示重试而不是创建新任务
 
 #### 工具权限决策链路
@@ -128,6 +138,11 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `Agent::effective_permission(tool_name, registry)` 是权限查询单一入口
 - `default_permission_explicit` 字段区分显式/隐式 Confirm，仅隐式 Confirm 回退到工具默认
 - 子 Agent 权限继承：父 Confirm → 子 Confirm（不再降为 Allow）
+- 运行期授权（`RuntimeGrants`）：用户选择"本会话允许"时按（Agent, 工具, 任务 `origin_channel`）记录，进程内有效、
+  不持久化、不写入 `agent.overrides`；只把 Confirm 提升为 Allow，从不放宽 Deny。没有来源会话的任务
+  （webhook 事件、定时任务）不复用任何运行期授权，选择该选项时按仅本次处理。权限查询入口为
+  `resolve_tool_permission`（配置层三层回退 + 运行期授权）
+- 父 Agent 自动审批（MVP）只认配置层权限，不读运行期授权，也不写入任何持续授权
 - `EngineEvent::PermissionAudit` 审计事件覆盖 dispatch / async_dispatch / confirmation / approval 路径
 
 #### 异步工具桥
@@ -164,9 +179,11 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `ChannelOutboundMessage` 携带 `MessageKind`（LLMReply/TaskStatus/ApprovalRequest/System/Recall/Other）
 - IM 通道状态消息治理：任务状态消息滚动撤回（发新撤旧，避免 2 分钟超时）、入向 ACK 用 typing 替代（C2C）、审批请求消息点击后撤回、LLM 回复到达时撤回最终态状态消息
 - Telegram 通道接入（长轮询、白名单、文本分块发送）
+- `/bind` 配对授权回写 `channels.toml` 统一经 `ChannelConfigs::update_file`：原子写入，文件无法解析时拒绝覆盖
 - Telegram 通道消息撤回（`deleteMessage`）与输入状态指示器（`sendChatAction` with `typing`）
 - QQ 通道接入（WebSocket Gateway、OAuth2、markdown/富媒体发送、审批文本回复匹配）
 - QQ 文本回复 `1`/`2`/`3` 可直接作为工具确认选项，非选项文本会收到重试提示
+- QQ 审批按钮受白名单约束；按钮过期或被同会话新审批覆盖后点击，会提示改用 `1`/`2`/`3` 文本回复
 - QQ 通道消息撤回 API（C2C / 群聊 DELETE 端点）
 - QQ 通道输入状态指示器（typing indicator, POST /v2/users/{openid}/typing）
 - QQ 通道交互回调（PUT /interactions/{id}）
@@ -176,6 +193,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - QQ 纯图片消息合并：移动端逐张发送的图片按发送者缓存，与下一条常规文字消息合并为一条输入
 - 图片输入：`[IMAGE:path]` 标记在 LLM adapter 边界晚绑定为图片 ContentPart
   （设计：[2026-10-27-multimodal-image-input-design.md](design/2026-10-27-multimodal-image-input-design.md)）
+- 图片信任边界：只有任务 `TrustedImages` 登记表中的目标会被晚绑定。登记来源为用户会话输入
+  （新建任务、续轮、steer、`ask_user` 回答）与 `view_image` 成功结果（插件替换过的输出除外）；
+  webhook / 定时任务内容、shell 输出等其他来源的标记保留为文本并附 `untrusted source` 说明
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复、`SystemOutputMessage`、任务失败提示等按 `output_channel`
@@ -208,8 +228,14 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `triggers.toml` 配置文件：声明 webhook 监听地址、路由、auth token 与 timer cron 表达式、路由
 - `/reload-triggers` 命令：运行时热重载 `triggers.toml`，仅替换静态路由；动态 scheduled task 原样保留
 - `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
+- `schedule_task` 与 `update_scheduled_task` 默认需要用户确认（会写入持久化、之后无人值守执行的任务），
+  确认卡片展示完整参数（名称、调度、内容、输出通道）；`list_scheduled_tasks` / `delete_scheduled_task` 直接允许
 - `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`web`
-- 动态 scheduled task 触发后，其 `output_channel` 同时作为审批通道，执行期需要用户确认的工具请求会路由到该 IM 用户；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
+- 动态 scheduled task 触发后，其 `output_channel` 作为输出通道；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
+- 无人值守拒绝（设计 §7.3 的最小子集）：定时任务运行（`ScheduledRun` 标记的 Task 及其子任务）中权限结果为 Confirm 的工具
+  不再发起审批，直接返回 `PermissionDenied` 合成结果并向输出通道推送提醒，避免任务挂起后被重叠规则持续跳过；
+  任务级授权清单（`granted_tools`）仍待 P3
+- 文本审批回复按任务的 `approval_channel` 匹配（缺省回退 `origin_channel`），webhook 事件任务也能用 `1`/`2`/`3` 回复审批
 - 动态定时任务以 `ScheduleDefinition` 为唯一账本（`SchedulerState.dynamic_tasks`），带唯一名称、
   启停状态与 `last_fired_at`；设计见
   [无人值守定时任务与长期监控设计](design/2026-10-28-unattended-scheduled-monitoring-design.md)（P0 已实施）
@@ -219,7 +245,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   cron 由 `schedule_catch_up_startup_system` 在启动时判定，一次性任务在路由时判定，超出 7 天的一次性任务删除并通知
 - 重叠规则：同一定时任务上一次运行（`ScheduledRun` 标记的 Task）未进入终态时，本次触发跳过并记录 `ScheduleSkipped`
 - 暂停的定时任务不被 timer 调度，触发也会跳过；`update_scheduled_task` 的 `run_now` 可手动运行（不受暂停影响）
-- 一次性任务触发后自动清理，并记录 `DynamicTaskRemoved` 结构化日志
+- 一次性任务触发时只记 `last_fired_at`（timer 不再调度已触发的一次性任务），运行进入终态后由
+  `once_schedule_completion_system` 删除定义并记录 `DynamicTaskRemoved`；运行未完成就停机时，
+  重启后该任务转为暂停并向输出通道提醒（`OnceScheduleInterrupted`），不自动重跑，
+  可用 `run_now` 重新运行或删除
 
 #### 插件系统
 
@@ -233,7 +262,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 支持 `/plugins` 列出已加载插件、`/reload-plugins` 热重载、`/plugin_id:command` 调用插件命令
 - 重载时自动清除旧插件的工具、技能、Agent 贡献，重新扫描磁盘并注册新贡献
 - host API 提供 `WorldSnapshot`（只读快照）+ `WorldWriter`（写命令攒批回放）的隔离访问模型
-- hook 脚本执行受 1 秒超时保护，按插件字母序顺序派发
+- hook 脚本执行受 200 毫秒超时保护，按插件字母序顺序派发；一帧内累计耗时超过 50 毫秒时告警 `HookBudgetExceeded`
 - 所有关键操作具备结构化审计日志（`PluginToolDeniedByHook`、`PluginToolResultSetByHook` 等）
 
 #### 经验候选治理

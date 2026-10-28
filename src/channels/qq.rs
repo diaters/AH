@@ -1230,6 +1230,17 @@ impl QqChannel {
             }
         };
 
+        // 按钮点击与文本消息同样受白名单约束，否则任意群成员都能批准工具调用
+        if !self.is_user_allowed(&sender_id).await {
+            tracing::warn!(
+                event = "QqInteractionUserDenied",
+                user_openid = %sender_id,
+                recipient = %recipient,
+                "interaction from user not in allowed list ignored"
+            );
+            return None;
+        }
+
         // 匹配 pending approval（遵循 try_match_approval_reply 的锁模式：
         // 读锁→clone→drop→写锁仅 remove→drop→无锁区做 HTTP/channel send）
         // 同时检查 TTL，与 try_match_approval_reply 行为一致
@@ -1253,6 +1264,23 @@ impl QqChannel {
                 && now - p.created_at > PENDING_APPROVAL_TTL_SECS
             {
                 map.remove(&recipient);
+            }
+            drop(map);
+            // 按钮已失效（过期或被同一会话的新审批覆盖），引擎侧审批仍在等待：
+            // 提示改用文本回复，避免点击后毫无反馈
+            if let Err(e) = self
+                .send_text_markdown(
+                    &recipient,
+                    "该审批按钮已失效，请直接回复数字：1=仅本次允许，2=本会话允许，3=拒绝。",
+                )
+                .await
+            {
+                tracing::warn!(
+                    event = "QqStaleApprovalNoticeFailed",
+                    recipient = %recipient,
+                    error = %e,
+                    "failed to send stale approval notice"
+                );
             }
             return None;
         };
@@ -1946,6 +1974,104 @@ mod tests {
             pairing_enabled: false,
             pairing_code: None,
         }
+    }
+
+    /// 白名单放行所有用户的配置（交互回调测试关注匹配逻辑本身）。
+    fn make_open_config() -> QqConfig {
+        QqConfig {
+            allowed_users: vec!["*".to_string()],
+            ..make_config()
+        }
+    }
+
+    #[tokio::test]
+    async fn interaction_create_from_non_allowlisted_member_is_ignored() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/groups/GROUP456/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "m"})))
+            .mount(&mock_server)
+            .await;
+
+        let config = QqConfig {
+            allowed_users: vec!["OWNER".to_string()],
+            ..make_config()
+        };
+        let ch = QqChannel::new(config).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let request_id = Uuid::new_v4();
+        ch.record_pending_approval(
+            "group:GROUP456",
+            request_id,
+            vec![crate::domain::ApprovalOption {
+                id: "allow_always".to_string(),
+                label: "本会话允许".to_string(),
+                description: String::new(),
+            }],
+        )
+        .await;
+
+        let event = |member: &str| {
+            serde_json::json!({
+                "id": "interaction_x",
+                "type": 11,
+                "chat_type": 1,
+                "group_openid": "GROUP456",
+                "group_member_openid": member,
+                "data": { "resolved": { "button_data": format!("{request_id}:allow_always") } }
+            })
+        };
+
+        assert!(
+            ch.handle_interaction_create(&event("STRANGER"))
+                .await
+                .is_none(),
+            "non-allowlisted member must not approve"
+        );
+        // 审批仍保留，白名单用户随后可以正常点击
+        let inbound = ch
+            .handle_interaction_create(&event("OWNER"))
+            .await
+            .expect("allowlisted member approves");
+        assert_eq!(inbound.confirmation.unwrap().request_id, request_id);
+    }
+
+    #[tokio::test]
+    async fn interaction_create_with_stale_button_prompts_text_reply() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/USER123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "m"})))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let ch = QqChannel::new(make_open_config()).with_api_base(mock_server.uri());
+        ch.set_token_for_test("fake_token").await;
+        let event = serde_json::json!({
+            "id": "interaction_stale",
+            "type": 11,
+            "chat_type": 2,
+            "user_openid": "USER123",
+            "data": { "resolved": { "button_data": format!("{}:allow", Uuid::new_v4()) } }
+        });
+
+        assert!(ch.handle_interaction_create(&event).await.is_none());
+        // MockServer drop 时校验 expect(1)：提示消息恰好发送一次
     }
 
     #[test]
@@ -2805,7 +2931,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        let ch = QqChannel::new(make_open_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
         let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
         ch.record_pending_approval(
@@ -2858,7 +2984,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        let ch = QqChannel::new(make_open_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
         let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
         ch.record_pending_approval(
@@ -2909,7 +3035,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
+        let ch = QqChannel::new(make_open_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
         let request_id = Uuid::parse_str("01912345-6789-7abc-8def-0123456789ab").unwrap();
         ch.record_pending_approval(

@@ -92,3 +92,25 @@ async fn webhook_with_invalid_json_returns_400() {
         .expect("request");
     assert_eq!(resp.status(), 400);
 }
+
+#[tokio::test]
+async fn webhook_server_refuses_to_start_with_empty_token() {
+    let (input_tx, _input_rx) = unbounded::<ExternalInput>();
+    let config = WebhookConfig {
+        enabled: true,
+        listen_addr: "127.0.0.1:0".to_string(),
+        auth_token: "  ".to_string(),
+        routes: vec![],
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        run_webhook_server(input_tx, config),
+    )
+    .await
+    .expect("server with empty token must fail fast instead of serving");
+    let err = result.expect_err("empty auth_token must be rejected");
+    assert!(
+        err.to_string().contains("auth_token"),
+        "unexpected error: {err}"
+    );
+}

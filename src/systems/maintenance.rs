@@ -341,18 +341,7 @@ fn handle_spawn_request(
         return;
     };
 
-    // 过滤 tools：保留父 Agent 非 Deny 的工具，并继承父的 effective_permission
-    let parent_perms: Vec<(String, ToolPermission)> = request
-        .tools
-        .iter()
-        .filter_map(|tool| {
-            let (perm, _source) = parent_agent.effective_permission(tool, Some(registry));
-            if perm == ToolPermission::Deny {
-                return None;
-            }
-            Some((tool.clone(), perm))
-        })
-        .collect();
+    let parent_perms = inherited_tool_permissions(parent_agent, registry, &request.tools);
 
     let allowed_tools: Vec<String> = parent_perms.iter().map(|(t, _)| t.clone()).collect();
 
@@ -469,6 +458,7 @@ fn handle_spawn_request(
         model_override: None,
         turn_generation: None,
         vision: false,
+        trusted_images: Vec::new(),
     };
 
     commands.spawn((
@@ -573,11 +563,26 @@ pub(crate) fn validate_required_tags_system(
     validate_required_tags(&tool_registry, &agent_list);
 }
 
+/// 子 Agent 的工具权限继承：保留父 Agent 非 Deny 的工具，并继承父的 effective_permission。
+fn inherited_tool_permissions(
+    parent: &Agent,
+    registry: &SpaceToolRegistry,
+    tools: &[String],
+) -> Vec<(String, ToolPermission)> {
+    tools
+        .iter()
+        .filter_map(|tool| {
+            let (perm, _source) = parent.effective_permission(tool, Some(registry));
+            (perm != ToolPermission::Deny).then(|| (tool.clone(), perm))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod o2_inheritance_tests {
     //! O2 子 Agent 权限继承单元测试
     //!
-    //! 验证 `handle_spawn_request` 中 `parent_perms` 的 filter_map 逻辑：
+    //! 验证 `handle_spawn_request` 使用的 `inherited_tool_permissions`：
     //! 父 Confirm → 子 Confirm（不再降为 Allow）；父 Allow → 子 Allow；
     //! 父 Deny → 工具不传入子 overrides。
 
@@ -627,25 +632,6 @@ mod o2_inheritance_tests {
         registry
     }
 
-    /// 复刻 `handle_spawn_request` 中构造 `parent_perms` 的 filter_map 逻辑，
-    /// 让单元测试不依赖 Commands / World 即可验证权限继承语义。
-    fn collect_parent_perms(
-        parent: &Agent,
-        registry: &SpaceToolRegistry,
-        tools: &[String],
-    ) -> Vec<(String, ToolPermission)> {
-        tools
-            .iter()
-            .filter_map(|tool| {
-                let (perm, _source) = parent.effective_permission(tool, Some(registry));
-                if perm == ToolPermission::Deny {
-                    return None;
-                }
-                Some((tool.clone(), perm))
-            })
-            .collect()
-    }
-
     /// 父 Confirm → 子 Confirm（不再降为 Allow）
     #[test]
     fn child_inherits_confirm_from_parent_confirm() {
@@ -654,7 +640,8 @@ mod o2_inheritance_tests {
         let parent = make_parent(ToolPermission::Deny, true, overrides);
         let registry = make_registry_with("shell_exec", ToolPermission::Allow);
 
-        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+        let parent_perms =
+            inherited_tool_permissions(&parent, &registry, &["shell_exec".to_string()]);
 
         assert_eq!(parent_perms.len(), 1, "Confirm 工具应保留");
         assert_eq!(parent_perms[0].0, "shell_exec");
@@ -673,7 +660,8 @@ mod o2_inheritance_tests {
         let parent = make_parent(ToolPermission::Deny, true, overrides);
         let registry = make_registry_with("shell_exec", ToolPermission::Confirm);
 
-        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+        let parent_perms =
+            inherited_tool_permissions(&parent, &registry, &["shell_exec".to_string()]);
 
         assert_eq!(parent_perms.len(), 1, "Allow 工具应保留");
         assert_eq!(
@@ -691,7 +679,8 @@ mod o2_inheritance_tests {
         let parent = make_parent(ToolPermission::Deny, true, overrides);
         let registry = make_registry_with("shell_exec", ToolPermission::Allow);
 
-        let parent_perms = collect_parent_perms(&parent, &registry, &["shell_exec".to_string()]);
+        let parent_perms =
+            inherited_tool_permissions(&parent, &registry, &["shell_exec".to_string()]);
 
         assert!(
             parent_perms.is_empty(),

@@ -129,7 +129,7 @@ pub type ExecutorFuture =
 // agent
 pub use agent::{
     Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
-    AgentToolPermissions, PermissionSource,
+    AgentToolPermissions, PermissionSource, RuntimeGrants, resolve_tool_permission,
 };
 
 // chat_session
@@ -174,7 +174,8 @@ pub use execution::{
 // attachment
 pub use attachment::{
     ATTACHMENT_MARKER_SYNTAX_HINT, AttachmentKind, AttachmentSpan, ChannelAttachment,
-    MAX_IMAGE_BYTES, extract_attachments, find_attachment_spans, image_mime_type,
+    MAX_IMAGE_BYTES, TrustedImages, extract_attachments, find_attachment_spans, image_mime_type,
+    image_targets,
 };
 
 // frontend
@@ -389,9 +390,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_grant_permission_updates_overrides() {
-        let mut agent = Agent {
-            id: AgentId::nil(),
+    fn runtime_grant_lifts_confirm_only_within_same_conversation() {
+        let agent = Agent {
+            id: AgentId::new(),
             profile: AgentProfile {
                 name: "test".to_string(),
                 model: "test-model".to_string(),
@@ -406,17 +407,30 @@ mod tests {
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         };
+        let chat = |user: &str| ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: user.to_string(),
+            thread_id: None,
+        };
+        let mut grants = RuntimeGrants::default();
+        grants.grant(agent.id, "shell_exec", chat("group:a"));
 
+        let resolve = |conversation: Option<&ChannelId>| {
+            resolve_tool_permission(&agent, "shell_exec", None, Some(&grants), conversation)
+        };
         assert_eq!(
-            agent.effective_permission("new_tool", None).0,
-            ToolPermission::Confirm
+            resolve(Some(&chat("group:a"))),
+            (ToolPermission::Allow, PermissionSource::RuntimeGrant)
         );
-
-        agent.grant_permission("new_tool".to_string());
-
+        assert_eq!(resolve(Some(&chat("group:b"))).0, ToolPermission::Confirm);
         assert_eq!(
-            agent.effective_permission("new_tool", None).0,
-            ToolPermission::Allow
+            resolve(None).0,
+            ToolPermission::Confirm,
+            "无来源会话的任务不复用"
+        );
+        assert!(
+            agent.tool_permissions.overrides.is_empty(),
+            "运行期授权不写入配置层 overrides"
         );
     }
 

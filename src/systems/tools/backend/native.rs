@@ -22,6 +22,12 @@ use crate::{
 
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const LIVE_SESSION_TAIL_LINES: usize = 200;
+/// 单次返回给 LLM 的输出快照字节上限（行数上限挡不住超长单行）。
+const MAX_SNAPSHOT_BYTES: usize = 64 * 1024;
+/// 保留的已结束会话记录上限，超出时淘汰最早结束的记录。
+const MAX_RETAINED_FINISHED_SESSIONS: usize = 128;
+/// 进程退出后等待输出读取线程收尾的宽限期；后台孙进程持有管道时不再无限等待。
+const READER_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 struct SessionOutputBuffer {
@@ -83,118 +89,8 @@ impl std::fmt::Debug for NativeProcessBackend {
 
 impl SessionBackend for NativeProcessBackend {
     fn exec_blocking(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
-        let handle_id = SessionHandleId::new();
-        let mut command = StdCommand::new("sh");
-        command.arg("-c").arg(&request.command);
-        if let Some(cwd) = request.cwd.as_ref() {
-            command.current_dir(cwd);
-        }
-        command.envs(&request.env);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
-        let started_at = Utc::now();
-        let deadline = request
-            .timeout_secs
-            .map(|timeout_secs| Instant::now() + Duration::from_secs(timeout_secs));
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let buffer = Arc::new(Mutex::new(SessionOutputBuffer::empty()));
-        let mut stdout_reader =
-            spawn_blocking_output_reader(stdout, Arc::clone(&buffer), "", MAX_OUTPUT_BYTES);
-        let mut stderr_reader = spawn_blocking_output_reader(
-            stderr,
-            Arc::clone(&buffer),
-            "[stderr] ",
-            MAX_OUTPUT_BYTES,
-        );
-
-        loop {
-            if let Some(exit_status) = child.try_wait().map_err(|error| error.to_string())? {
-                if let Some(reader) = stdout_reader.take() {
-                    let _ = reader.join();
-                }
-                if let Some(reader) = stderr_reader.take() {
-                    let _ = reader.join();
-                }
-                let buffer_snapshot = buffer
-                    .lock()
-                    .map_err(|_| "output buffer poisoned".to_string())?
-                    .clone();
-
-                let output = snapshot_from_buffer(&buffer_snapshot, request.tail_lines);
-
-                let handle = SessionHandle {
-                    handle_id,
-                    backend: SessionBackendKind::Native,
-                    status: if exit_status.success() {
-                        SessionStatus::Completed
-                    } else {
-                        SessionStatus::ExitedWithError
-                    },
-                    command: request.command,
-                    session_name: request.session_name,
-                    cwd: request.cwd,
-                    exit_code: exit_status.code(),
-                    timed_out: false,
-                    interaction_required: false,
-                    started_at,
-                    finished_at: Some(Utc::now()),
-                    owner_task_id: request.owner_task_id,
-                    owner_agent_id: request.owner_agent_id,
-                    output,
-                };
-
-                self.sessions
-                    .lock()
-                    .map_err(|_| "session map poisoned".to_string())?
-                    .insert(handle_id, handle.clone());
-
-                return Ok(handle);
-            }
-
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(reader) = stdout_reader.take() {
-                    let _ = reader.join();
-                }
-                if let Some(reader) = stderr_reader.take() {
-                    let _ = reader.join();
-                }
-                let buffer_snapshot = buffer
-                    .lock()
-                    .map_err(|_| "output buffer poisoned".to_string())?
-                    .clone();
-                let output = snapshot_from_buffer(&buffer_snapshot, request.tail_lines);
-                let handle = SessionHandle {
-                    handle_id,
-                    backend: SessionBackendKind::Native,
-                    status: SessionStatus::Stopped,
-                    command: request.command,
-                    session_name: request.session_name,
-                    cwd: request.cwd,
-                    exit_code: None,
-                    timed_out: true,
-                    interaction_required: false,
-                    started_at,
-                    finished_at: Some(Utc::now()),
-                    owner_task_id: request.owner_task_id,
-                    owner_agent_id: request.owner_agent_id,
-                    output,
-                };
-
-                self.sessions
-                    .lock()
-                    .map_err(|_| "session map poisoned".to_string())?
-                    .insert(handle_id, handle.clone());
-
-                return Ok(handle);
-            }
-
-            thread::sleep(Duration::from_millis(10));
-        }
+        // 永不取消的 token：阻塞执行与取消感知执行共用同一实现
+        self.exec_with_cancel(request, tokio_util::sync::CancellationToken::new())
     }
 
     /// 取消感知版本：复用 `exec_blocking` 的子进程启动 + reader 线程逻辑，
@@ -215,6 +111,7 @@ impl SessionBackend for NativeProcessBackend {
         }
         command.envs(&request.env);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        isolate_process_group(&mut command);
 
         let mut child = command.spawn().map_err(|error| error.to_string())?;
         let started_at = Utc::now();
@@ -236,12 +133,7 @@ impl SessionBackend for NativeProcessBackend {
 
         loop {
             if let Some(exit_status) = child.try_wait().map_err(|error| error.to_string())? {
-                if let Some(reader) = stdout_reader.take() {
-                    let _ = reader.join();
-                }
-                if let Some(reader) = stderr_reader.take() {
-                    let _ = reader.join();
-                }
+                drain_readers([stdout_reader.take(), stderr_reader.take()]);
                 let buffer_snapshot = buffer
                     .lock()
                     .map_err(|_| "output buffer poisoned".to_string())?
@@ -270,36 +162,23 @@ impl SessionBackend for NativeProcessBackend {
                     output,
                 };
 
-                self.sessions
-                    .lock()
-                    .map_err(|_| "session map poisoned".to_string())?
-                    .insert(handle_id, handle.clone());
+                self.record_finished(handle.clone())?;
 
                 return Ok(handle);
             }
 
             // 取消信号检查：父任务终态触发 cancel_monitor → 本处 kill 子进程并返回 Err
             if cancel.is_cancelled() {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
                 let _ = child.wait();
-                if let Some(reader) = stdout_reader.take() {
-                    let _ = reader.join();
-                }
-                if let Some(reader) = stderr_reader.take() {
-                    let _ = reader.join();
-                }
+                drain_readers([stdout_reader.take(), stderr_reader.take()]);
                 return Err("cancelled".to_string());
             }
 
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
                 let _ = child.wait();
-                if let Some(reader) = stdout_reader.take() {
-                    let _ = reader.join();
-                }
-                if let Some(reader) = stderr_reader.take() {
-                    let _ = reader.join();
-                }
+                drain_readers([stdout_reader.take(), stderr_reader.take()]);
                 let buffer_snapshot = buffer
                     .lock()
                     .map_err(|_| "output buffer poisoned".to_string())?
@@ -322,10 +201,7 @@ impl SessionBackend for NativeProcessBackend {
                     output,
                 };
 
-                self.sessions
-                    .lock()
-                    .map_err(|_| "session map poisoned".to_string())?
-                    .insert(handle_id, handle.clone());
+                self.record_finished(handle.clone())?;
 
                 return Ok(handle);
             }
@@ -354,6 +230,7 @@ impl SessionBackend for NativeProcessBackend {
             command.current_dir(cwd);
         }
         command.envs(&request.env);
+        isolate_process_group(&mut command);
         let mut child = command.spawn().map_err(|error| error.to_string())?;
         let stdin_available = child.stdin.take().map(|s| Arc::new(Mutex::new(s)));
         let stdout = child.stdout.take();
@@ -521,7 +398,7 @@ impl SessionBackend for NativeProcessBackend {
             let mut child = process
                 .lock()
                 .map_err(|_| "process mutex poisoned".to_string())?;
-            let _ = child.kill();
+            kill_process_tree(&mut child);
             let _ = child.wait();
         }
 
@@ -778,10 +655,81 @@ impl Drop for NativeProcessBackend {
 
         for process in processes {
             if let Ok(mut child) = process.lock() {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
             }
         }
     }
+}
+
+impl NativeProcessBackend {
+    /// 记录已结束的会话，并把已结束记录数量限制在上限内（淘汰最早结束的）。
+    fn record_finished(&self, handle: SessionHandle) -> Result<(), String> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "session map poisoned".to_string())?;
+        sessions.insert(handle.handle_id, handle);
+        let mut finished: Vec<_> = sessions
+            .values()
+            .filter_map(|h| h.finished_at.map(|at| (at, h.handle_id)))
+            .collect();
+        if finished.len() > MAX_RETAINED_FINISHED_SESSIONS {
+            finished.sort();
+            let excess = finished.len() - MAX_RETAINED_FINISHED_SESSIONS;
+            for (_, id) in finished.into_iter().take(excess) {
+                sessions.remove(&id);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 让子进程成为独立进程组的组长，便于超时 / 取消时连同后台孙进程一起终止。
+fn isolate_process_group(command: &mut StdCommand) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
+/// 终止子进程及其进程组；只杀 `sh` 会留下孤儿进程，并让输出管道一直不关闭。
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: killpg 只向该进程组发送信号，pid 来自本进程 spawn 的子进程（组长）
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+/// 在宽限期内等待输出读取线程结束；超时的线程被分离（后台进程仍持有管道时）。
+fn drain_readers<const N: usize>(readers: [Option<thread::JoinHandle<()>>; N]) {
+    let deadline = Instant::now() + READER_DRAIN_GRACE;
+    for reader in readers.into_iter().flatten() {
+        while !reader.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if reader.is_finished() {
+            let _ = reader.join();
+        }
+    }
+}
+
+/// 把文本截断为不超过 `max_bytes` 的尾部（落在字符边界上）。
+fn tail_bytes(content: &str, max_bytes: usize) -> (&str, bool) {
+    if content.len() <= max_bytes {
+        return (content, false);
+    }
+    let mut start = content.len() - max_bytes;
+    while !content.is_char_boundary(start) {
+        start += 1;
+    }
+    (&content[start..], true)
 }
 
 /// Truncates output to the last N lines.
@@ -840,11 +788,12 @@ fn snapshot_from_buffer(
     tail_lines_limit: usize,
 ) -> SessionOutputSnapshot {
     let joined = buffer.chunks.iter().cloned().collect::<Vec<_>>().join("");
-    let (combined_tail, combined_truncated, returned_lines) = tail_lines(&joined, tail_lines_limit);
+    let (combined_tail, lines_truncated, _) = tail_lines(&joined, tail_lines_limit);
+    let (combined_tail, bytes_truncated) = tail_bytes(&combined_tail, MAX_SNAPSHOT_BYTES);
     SessionOutputSnapshot {
-        output: combined_tail,
-        returned_lines,
-        truncated: combined_truncated,
+        output: combined_tail.to_string(),
+        returned_lines: combined_tail.lines().count(),
+        truncated: lines_truncated || bytes_truncated,
     }
 }
 
@@ -896,6 +845,114 @@ fn spawn_output_reader(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exec_request(command: &str, timeout_secs: Option<u64>) -> SessionStartRequest {
+        SessionStartRequest {
+            command: command.to_string(),
+            session_name: None,
+            cwd: None,
+            env: HashMap::new(),
+            timeout_secs,
+            tail_lines: 200,
+            owner_task_id: TaskId::new(),
+            owner_agent_id: crate::domain::AgentId::new(),
+            notify_on_exit: false,
+        }
+    }
+
+    fn pid_alive(pid: &str) -> bool {
+        StdCommand::new("kill")
+            .args(["-0", pid])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// 命令留下继承 stdout 的后台进程时，sh 退出后不应等到后台进程结束。
+    #[cfg(unix)]
+    #[test]
+    fn exec_returns_promptly_when_background_child_holds_stdout() {
+        let backend = NativeProcessBackend::default();
+        let started = Instant::now();
+        let handle = backend
+            .exec_blocking(exec_request("sleep 30 & echo $!; echo done", None))
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert!(handle.output.output.contains("done"));
+        let pid = handle
+            .output
+            .output
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
+        let _ = StdCommand::new("kill").arg(&pid).status();
+    }
+
+    /// 超时时整个进程组被终止，后台孙进程不会成为孤儿。
+    #[cfg(unix)]
+    #[test]
+    fn exec_timeout_kills_whole_process_group() {
+        let backend = NativeProcessBackend::default();
+        let started = Instant::now();
+        let handle = backend
+            .exec_blocking(exec_request("sleep 30 & echo $!; sleep 30", Some(1)))
+            .unwrap();
+        assert!(handle.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+        let pid = handle
+            .output
+            .output
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_string();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            !pid_alive(&pid),
+            "background child {pid} survived the timeout"
+        );
+    }
+
+    /// 快照按字节截断尾部，避免单行超长输出整体灌入上下文。
+    #[test]
+    fn snapshot_caps_output_bytes() {
+        let mut buffer = SessionOutputBuffer::empty();
+        let long_line = "x".repeat(MAX_SNAPSHOT_BYTES * 2);
+        append_output(
+            &mut buffer,
+            &format!("{long_line}\nend\n"),
+            MAX_OUTPUT_BYTES * 4,
+        );
+        let snapshot = snapshot_from_buffer(&buffer, 200);
+        assert!(snapshot.output.len() <= MAX_SNAPSHOT_BYTES);
+        assert!(snapshot.output.ends_with("end"));
+        assert!(snapshot.truncated);
+    }
+
+    /// 已结束的 exec 记录数量有上限，长时间运行不会无限增长。
+    #[test]
+    fn finished_exec_records_are_bounded() {
+        let backend = NativeProcessBackend::default();
+        for _ in 0..(MAX_RETAINED_FINISHED_SESSIONS + 10) {
+            backend.exec_blocking(exec_request("true", None)).unwrap();
+        }
+        let retained = backend.sessions.lock().unwrap().len();
+        assert!(
+            retained <= MAX_RETAINED_FINISHED_SESSIONS,
+            "retained {retained}"
+        );
+    }
 
     #[test]
     fn tail_lines_returns_only_latest_lines() {

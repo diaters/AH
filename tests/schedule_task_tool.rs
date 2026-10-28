@@ -6,7 +6,7 @@
 //! （覆盖见 `tests/schedule_task_commit_test.rs`）。本文件仅保留
 //! `trigger_task_routing_system` 在收到 `Timer { kind: "scheduled:..." }` 触发后
 //! 从 `SchedulerState` 取出动态定时任务定义生成 `CreateTaskMessage`、
-//! 并对一次性任务做清理的回归测试。
+//! 并对一次性任务记账（运行结束后才删除，见 `once_schedule_completion_system`）的回归测试。
 
 use harness::prelude::*;
 
@@ -68,12 +68,12 @@ fn scheduled_task_trigger_routes_to_create_task_message() {
         "output_channel should come from the definition"
     );
 
-    // 一次性任务触发后应被清理
+    // 一次性任务触发后只记账、保留到运行结束（timer 依据 last_fired_at 不再调度）
     assert!(
         app.world()
             .resource::<SchedulerState>()
             .find_by_kind(&kind)
-            .is_none(),
-        "one-shot task must be removed after trigger"
+            .is_some_and(|d| d.health.last_fired_at.is_some()),
+        "one-shot task must be kept and marked fired until its run finishes"
     );
 }
