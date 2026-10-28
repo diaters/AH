@@ -216,6 +216,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `triggers.toml` 配置文件：声明 webhook 监听地址、路由、auth token 与 timer cron 表达式、路由
 - `/reload-triggers` 命令：运行时热重载 `triggers.toml`，仅替换静态路由；动态 scheduled task 原样保留
 - `schedule_task` 内置工具：Agent 可动态安排未来 AI 任务，支持 `once:<ISO>` 一次性触发与 `cron:<5字段>` 周期性触发
+- `schedule_task` 与 `update_scheduled_task` 默认需要用户确认（会写入持久化、之后无人值守执行的任务），
+  确认卡片展示完整参数（名称、调度、内容、输出通道）；`list_scheduled_tasks` / `delete_scheduled_task` 直接允许
 - `schedule_task` 任务的 `output_channel` 默认继承当前任务 `origin_channel`，显式指定时可覆盖到 `tui`/`telegram`/`qq`/`web`
 - 动态 scheduled task 触发后，其 `output_channel` 作为输出通道；若对应 frontend 未注册，任务将明确失败并记录 `FrontendApprovalRouteInvalid`
 - 无人值守拒绝（设计 §7.3 的最小子集）：定时任务运行（`ScheduledRun` 标记的 Task 及其子任务）中权限结果为 Confirm 的工具

@@ -25,3 +25,19 @@ fn agents_example_parses_and_references_only_existing_tools() {
         }
     }
 }
+
+/// 会写入持久化定时任务的工具默认需要确认；只读与删除保持直接允许。
+#[test]
+fn schedule_write_tools_default_to_confirm() {
+    use harness::domain::ToolPermission;
+
+    let mut registry = SpaceToolRegistry::default();
+    let mut executors = BuiltinToolExecutors::default();
+    register_builtin_tools(&mut registry, &mut executors);
+    let permission = |name: &str| registry.get(name).unwrap().default_permission;
+
+    assert_eq!(permission("schedule_task"), ToolPermission::Confirm);
+    assert_eq!(permission("update_scheduled_task"), ToolPermission::Confirm);
+    assert_eq!(permission("list_scheduled_tasks"), ToolPermission::Allow);
+    assert_eq!(permission("delete_scheduled_task"), ToolPermission::Allow);
+}

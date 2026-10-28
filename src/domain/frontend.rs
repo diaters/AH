@@ -287,6 +287,24 @@ pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> 
                 }
             })
             .unwrap_or_default(),
+        "schedule_task" => {
+            let field = |key: &str| tool_input.get(key).and_then(|v| v.as_str()).unwrap_or("");
+            let content = field("content");
+            let preview = if content.chars().count() > 50 {
+                format!("{}…", content.chars().take(50).collect::<String>())
+            } else {
+                content.to_string()
+            };
+            format!("{} {} 「{preview}」", field("name"), field("schedule"))
+                .trim()
+                .to_string()
+        }
+        "update_scheduled_task" | "delete_scheduled_task" => tool_input
+            .get("name")
+            .or_else(|| tool_input.get("kind"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         "create_tasks" => tool_input
             .get("tasks")
             .and_then(|v| v.as_array())
@@ -358,6 +376,24 @@ pub trait Frontend: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summarize_schedule_task_shows_name_schedule_and_content() {
+        let input = serde_json::json!({
+            "name": "daily-report",
+            "schedule": "cron:0 8 * * *",
+            "content": "汇总昨天的告警"
+        });
+        assert_eq!(
+            summarize_tool_input("schedule_task", &input),
+            "daily-report cron:0 8 * * * 「汇总昨天的告警」"
+        );
+        let update = serde_json::json!({"name": "daily-report", "enabled": false});
+        assert_eq!(
+            summarize_tool_input("update_scheduled_task", &update),
+            "daily-report"
+        );
+    }
 
     #[test]
     fn summarize_shell_exec_command() {
