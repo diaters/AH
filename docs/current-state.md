@@ -30,7 +30,10 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `AgentExecutionRequest` 作为瞬时执行请求，不承担长期业务状态
 - 终态任务回收：`terminal_task_retention_system` 每 30 秒扫描，任务树内全部终态且超过
   `HARNESS_TERMINAL_TASK_RETENTION_SECS`（默认 1 小时）、无未终态 WorkItem 时整树销毁并清理终态派发去重集合；
-  仍处于 `Waiting(User)` 的多轮任务不回收（需 `/finish` 或 `/clear`）
+  仍处于 `Waiting(User)` 的多轮任务不回收
+- 空闲会话自动结束：`conversation_idle_system` 把等待用户输入（`Waiting(User)` / `Waiting(AskUser)`）超过
+  `HARNESS_CONVERSATION_IDLE_SECS`（默认 24 小时，0 关闭）的顶层任务按 `/finish` 路径结束并向会话通道推送提示，
+  之后由终态回收清理；等待工具审批的任务不受影响
 
 #### 协作与编排
 

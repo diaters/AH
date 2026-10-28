@@ -50,6 +50,8 @@ pub struct HarnessConfig {
     pub shell_max_buffer_bytes_per_stream: usize,
     /// 终态任务树保留时长（秒），超过后整树回收，避免长期运行时实体无限增长
     pub terminal_task_retention_secs: u64,
+    /// 顶层多轮会话等待用户输入的空闲上限（秒），超过后自动结束；0 表示关闭
+    pub conversation_idle_secs: u64,
     /// TUI 主循环在活跃状态下的轮询间隔（毫秒）
     pub active_poll_ms: u64,
     /// TUI 主循环在空闲状态下的轮询间隔（毫秒）
@@ -164,6 +166,10 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3600),
+            conversation_idle_secs: std::env::var("HARNESS_CONVERSATION_IDLE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(86400),
             active_poll_ms: std::env::var("HARNESS_ACTIVE_POLL_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -217,6 +223,7 @@ impl Default for HarnessConfig {
             tool_inflight_timeout_secs: 300,
             shell_max_buffer_bytes_per_stream: 64 * 1024,
             terminal_task_retention_secs: 3600,
+            conversation_idle_secs: 86400,
             active_poll_ms: 16,
             idle_poll_ms: 150,
             channels: crate::channels::config::ChannelConfigs::default(),
