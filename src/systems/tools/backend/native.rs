@@ -44,8 +44,6 @@ enum SessionInteractionState {
 
 #[derive(Debug, Clone)]
 struct SessionRuntimeState {
-    stdout: SessionOutputBuffer,
-    stderr: SessionOutputBuffer,
     combined: SessionOutputBuffer,
     interaction_state: SessionInteractionState,
 }
@@ -64,8 +62,6 @@ impl SessionRuntimeState {
     /// 创建 backend 私有的空运行态。
     fn empty() -> Self {
         Self {
-            stdout: SessionOutputBuffer::empty(),
-            stderr: SessionOutputBuffer::empty(),
             combined: SessionOutputBuffer::empty(),
             interaction_state: SessionInteractionState::Idle,
         }
@@ -217,7 +213,6 @@ impl SessionBackend for NativeProcessBackend {
         let cwd = request.cwd.clone();
         let owner_task_id = request.owner_task_id;
         let owner_agent_id = request.owner_agent_id;
-        let sessions = Arc::clone(&self.sessions);
 
         let mut command = StdCommand::new("sh");
         command
@@ -279,20 +274,8 @@ impl SessionBackend for NativeProcessBackend {
             .map_err(|_| "runtime map poisoned".to_string())?
             .insert(handle_id, SessionRuntimeState::empty());
 
-        spawn_output_reader(
-            handle_id,
-            stdout,
-            Arc::clone(&sessions),
-            Arc::clone(&self.runtimes),
-            true,
-        );
-        spawn_output_reader(
-            handle_id,
-            stderr,
-            sessions,
-            Arc::clone(&self.runtimes),
-            false,
-        );
+        spawn_output_reader(handle_id, stdout, Arc::clone(&self.runtimes), "");
+        spawn_output_reader(handle_id, stderr, Arc::clone(&self.runtimes), "[stderr] ");
 
         debug!(
             event = "ShellSessionStarted",
@@ -317,23 +300,15 @@ impl SessionBackend for NativeProcessBackend {
 
     fn list_active_sessions(&self) -> Result<Vec<SessionSummary>, String> {
         self.refresh_session_state_batch(self.all_session_ids()?)?;
-        let sessions = self
+        let active_ids: Vec<_> = self
             .sessions
             .lock()
-            .map_err(|_| "session map poisoned".to_string())?;
-        Ok(sessions
+            .map_err(|_| "session map poisoned".to_string())?
             .values()
-            .filter(|handle| {
-                matches!(
-                    handle.status,
-                    SessionStatus::Starting
-                        | SessionStatus::Running
-                        | SessionStatus::WaitingForInput
-                )
-            })
-            .cloned()
-            .map(|handle| self.session_summary(handle))
-            .collect())
+            .filter(|handle| is_active(handle.status))
+            .map(|handle| handle.handle_id)
+            .collect();
+        self.live_summaries(active_ids)
     }
 
     fn input_session(&self, request: SessionInputRequest) -> Result<SessionHandle, String> {
@@ -383,7 +358,7 @@ impl SessionBackend for NativeProcessBackend {
         );
 
         self.refresh_session_state(request.handle_id)?;
-        self.get_status(request.handle_id)
+        self.live_handle(request.handle_id)
     }
 
     fn stop_session(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
@@ -406,10 +381,7 @@ impl SessionBackend for NativeProcessBackend {
         handle.status = SessionStatus::Stopped;
         handle.finished_at = Some(Utc::now());
         handle.output = self.output_snapshot(handle_id, LIVE_SESSION_TAIL_LINES)?;
-        self.sessions
-            .lock()
-            .map_err(|_| "session map poisoned".to_string())?
-            .insert(handle_id, handle.clone());
+        self.record_finished(handle.clone())?;
 
         // Clean up process and stdin resources
         self.processes
@@ -432,24 +404,8 @@ impl SessionBackend for NativeProcessBackend {
 
     fn list_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionSummary>, String> {
         self.refresh_session_state_batch(self.task_session_ids(task_id)?)?;
-        let sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| "session map poisoned".to_string())?;
-        Ok(sessions
-            .values()
-            .filter(|handle| {
-                handle.owner_task_id == task_id
-                    && matches!(
-                        handle.status,
-                        SessionStatus::Starting
-                            | SessionStatus::Running
-                            | SessionStatus::WaitingForInput
-                    )
-            })
-            .cloned()
-            .map(|handle| self.session_summary(handle))
-            .collect())
+        let active_ids = self.active_session_ids_for_task(task_id)?;
+        self.live_summaries(active_ids)
     }
 
     fn assert_task_owns_session(
@@ -530,15 +486,7 @@ impl NativeProcessBackend {
             .map_err(|_| "session map poisoned".to_string())?;
         Ok(sessions
             .values()
-            .filter(|handle| {
-                handle.owner_task_id == task_id
-                    && matches!(
-                        handle.status,
-                        SessionStatus::Starting
-                            | SessionStatus::Running
-                            | SessionStatus::WaitingForInput
-                    )
-            })
+            .filter(|handle| handle.owner_task_id == task_id && is_active(handle.status))
             .map(|handle| handle.handle_id)
             .collect())
     }
@@ -563,6 +511,24 @@ impl NativeProcessBackend {
         } else {
             Ok(self.get_status(handle_id)?.output)
         }
+    }
+
+    /// 读取句柄并按当前输出缓冲区现场生成快照。
+    fn live_handle(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
+        let mut handle = self.get_status(handle_id)?;
+        handle.output = self.output_snapshot(handle_id, LIVE_SESSION_TAIL_LINES)?;
+        Ok(handle)
+    }
+
+    /// 为一组会话生成带现场输出快照的摘要。
+    fn live_summaries(
+        &self,
+        handle_ids: Vec<SessionHandleId>,
+    ) -> Result<Vec<SessionSummary>, String> {
+        handle_ids
+            .into_iter()
+            .map(|id| Ok(self.session_summary(self.live_handle(id)?)))
+            .collect()
     }
 
     /// 将内部句柄投影为 runtime 对外返回的摘要结构。
@@ -626,10 +592,7 @@ impl NativeProcessBackend {
             handle.finished_at = Some(Utc::now());
             handle.output = self.output_snapshot(handle_id, LIVE_SESSION_TAIL_LINES)?;
 
-            self.sessions
-                .lock()
-                .map_err(|_| "session map poisoned".to_string())?
-                .insert(handle_id, handle);
+            self.record_finished(handle)?;
             self.processes
                 .lock()
                 .map_err(|_| "process map poisoned".to_string())?
@@ -662,7 +625,8 @@ impl Drop for NativeProcessBackend {
 }
 
 impl NativeProcessBackend {
-    /// 记录已结束的会话，并把已结束记录数量限制在上限内（淘汰最早结束的）。
+    /// 记录已结束的会话，并把已结束记录数量限制在上限内（淘汰最早结束的），
+    /// 被淘汰会话的输出缓冲区一并释放。
     fn record_finished(&self, handle: SessionHandle) -> Result<(), String> {
         let mut sessions = self
             .sessions
@@ -676,12 +640,25 @@ impl NativeProcessBackend {
         if finished.len() > MAX_RETAINED_FINISHED_SESSIONS {
             finished.sort();
             let excess = finished.len() - MAX_RETAINED_FINISHED_SESSIONS;
+            let mut runtimes = self
+                .runtimes
+                .lock()
+                .map_err(|_| "runtime map poisoned".to_string())?;
             for (_, id) in finished.into_iter().take(excess) {
                 sessions.remove(&id);
+                runtimes.remove(&id);
             }
         }
         Ok(())
     }
+}
+
+/// 会话是否仍在运行（未进入结束状态）。
+fn is_active(status: SessionStatus) -> bool {
+    matches!(
+        status,
+        SessionStatus::Starting | SessionStatus::Running | SessionStatus::WaitingForInput
+    )
 }
 
 /// 让子进程成为独立进程组的组长，便于超时 / 取消时连同后台孙进程一起终止。
@@ -797,13 +774,13 @@ fn snapshot_from_buffer(
     }
 }
 
-/// 后台读取 stdout/stderr，并把最新快照写回 SessionHandle。
+/// 后台读取 stdout/stderr 并追加到会话输出缓冲区；快照在读取时才生成，
+/// 避免输出密集的进程每行都重建一次快照。
 fn spawn_output_reader(
     handle_id: SessionHandleId,
     stream: Option<impl std::io::Read + Send + 'static>,
-    sessions: Arc<Mutex<HashMap<SessionHandleId, SessionHandle>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
-    is_stdout: bool,
+    prefix: &'static str,
 ) {
     let Some(stream) = stream else {
         return;
@@ -815,29 +792,16 @@ fn spawn_output_reader(
             let Ok(line) = line else {
                 break;
             };
-            let snapshot = {
-                let mut runtimes = runtimes.lock().expect("runtime map poisoned");
-                let Some(runtime) = runtimes.get_mut(&handle_id) else {
-                    break;
-                };
-
-                let prefix = if is_stdout { "" } else { "[stderr] " };
-                let chunk = format!("{prefix}{line}\n");
-                let buffer = if is_stdout {
-                    &mut runtime.stdout
-                } else {
-                    &mut runtime.stderr
-                };
-                append_output(buffer, &chunk, MAX_OUTPUT_BYTES);
-                append_output(&mut runtime.combined, &chunk, MAX_OUTPUT_BYTES);
-                runtime.interaction_state = SessionInteractionState::Idle;
-                snapshot_from_buffer(&runtime.combined, LIVE_SESSION_TAIL_LINES)
+            let mut runtimes = runtimes.lock().expect("runtime map poisoned");
+            let Some(runtime) = runtimes.get_mut(&handle_id) else {
+                break;
             };
-
-            let mut sessions = sessions.lock().expect("session map poisoned");
-            if let Some(handle) = sessions.get_mut(&handle_id) {
-                handle.output = snapshot;
-            }
+            append_output(
+                &mut runtime.combined,
+                &format!("{prefix}{line}\n"),
+                MAX_OUTPUT_BYTES,
+            );
+            runtime.interaction_state = SessionInteractionState::Idle;
         }
     });
 }
@@ -951,6 +915,67 @@ mod tests {
         assert!(
             retained <= MAX_RETAINED_FINISHED_SESSIONS,
             "retained {retained}"
+        );
+    }
+
+    fn wait_until(mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(Instant::now() < deadline, "condition not met within 5s");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// 输出读取线程只追加缓冲区，快照在读取时才生成。
+    #[test]
+    fn live_session_snapshot_is_built_on_read() {
+        let backend = NativeProcessBackend::default();
+        let request = exec_request("printf 'a\\nb\\n'; sleep 30", None);
+        let task_id = request.owner_task_id;
+        let handle = backend.start_session(request).unwrap();
+        let id = handle.handle_id;
+        wait_until(|| backend.runtimes.lock().unwrap()[&id].combined.chunks.len() == 2);
+
+        let stored = backend.sessions.lock().unwrap()[&id].output.clone();
+        assert!(stored.output.is_empty(), "reader wrote a snapshot");
+
+        let listed = backend.list_task_sessions(task_id).unwrap();
+        assert_eq!(listed[0].output.output, "a\nb");
+        backend.stop_session(id).unwrap();
+    }
+
+    /// 已结束的 shell_start 会话记录及其输出缓冲区数量有上限。
+    #[test]
+    fn finished_shell_sessions_and_buffers_are_bounded() {
+        let backend = NativeProcessBackend::default();
+        for _ in 0..(MAX_RETAINED_FINISHED_SESSIONS + 10) {
+            let id = backend
+                .start_session(exec_request("echo hi", None))
+                .unwrap()
+                .handle_id;
+            let mut last = None;
+            wait_until(|| {
+                let summary = backend
+                    .read_session(SessionReadRequest {
+                        handle_id: id,
+                        tail_lines: 10,
+                    })
+                    .unwrap();
+                let done = summary.finished_at.is_some();
+                last = Some(summary);
+                done
+            });
+            assert!(last.unwrap().output.output.contains("hi"));
+        }
+        let sessions = backend.sessions.lock().unwrap().len();
+        let runtimes = backend.runtimes.lock().unwrap().len();
+        assert!(
+            sessions <= MAX_RETAINED_FINISHED_SESSIONS,
+            "sessions {sessions}"
+        );
+        assert!(
+            runtimes <= MAX_RETAINED_FINISHED_SESSIONS,
+            "runtimes {runtimes}"
         );
     }
 
