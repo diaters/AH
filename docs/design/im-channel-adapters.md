@@ -135,6 +135,9 @@ pub trait Channel: Send + Sync + 'static {
 - ChannelId 编码：`user:<openid>` 私聊，`group:<openid>` 群聊。
 - 支持收发媒体附件（图片、文档、音频等），非原生格式自动降级为文件发送。
 - 入向附件下载到 `qq_files/` 工作目录。
+- 纯图片消息合并：QQ 移动端每张图片单独一条消息，纯图片消息按 `(recipient, sender)` 静默缓存，
+  与该发送者下一条常规文字消息合并（不设超时，每个键最多 20 张）；被审批回复、评审反馈或
+  `/bind` 消费的文字不触发合并。
 - 监听异常自动重启：指数退避（1s → 60s）。
 
 ### 飞书 / Lark（后续阶段）
@@ -159,6 +162,9 @@ pub trait Channel: Send + Sync + 'static {
 | 其他 | 以上皆无 | 回复 `暂不支持该消息类型。` |
 
 下载的入向附件保存在工作目录下的 `telegram_files/` 中，文件名会清理路径遍历字符。
+
+模型声明 `vision = true` 时，`[IMAGE:...]` 标记会作为真实图片发给模型，
+见 [2026-10-27-multimodal-image-input-design.md](2026-10-27-multimodal-image-input-design.md)。
 
 ### 出向消息与附件标记
 

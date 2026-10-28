@@ -29,6 +29,7 @@ fn spawn_inflight(
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     world
         .spawn((

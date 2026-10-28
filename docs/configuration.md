@@ -157,6 +157,32 @@ Agent 配置通过 `HARNESS_AGENTS_CONFIG` 指定的 TOML 文件加载（默认 
 | 向后兼容 | 留空时由 WorkItem 自身的 `system_prompt` 决定，保持向后兼容 |
 | 当前使用方 | 仅 `profile-designer` 使用此字段 |
 
+### `[[agent.models]]` 段
+
+按顺序声明 Agent 的模型降级链，第一个为最高优先级。
+
+| 字段 | 类型 | 默认值 | 作用 |
+|------|------|--------|------|
+| `provider` | `String` | 必填 | `providers.toml` 中的 provider 名称 |
+| `model` | `String` | 必填 | 模型名 |
+| `fallback_cooldown_secs` | `Option<u64>` | 全局默认 | 从该模型降级后的冷却期 |
+| `vision` | `bool` | `false` | 模型是否接受图片输入 |
+
+`vision = true` 时，用户消息与工具结果中的 `[IMAGE:path]` 标记会作为真实图片发给模型
+（单次请求最多 10 张，单张不超过 5 MiB，仅 png/jpeg/gif/webp）；`false` 或降级到未声明的模型时，
+图片保持文本标记，与此前行为一致。
+
+```toml
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+vision = true
+
+[[agent.models]]
+provider = "deepseek"
+model = "deepseek-chat"   # 不支持图片，降级后自动退回文本标记
+```
+
 ### `[agent.tools]` 段
 
 `[agent.tools]` 段配置 Agent 的工具权限，支持 `default_permission` 字段与各工具的 `Allow` / `Confirm` / `Deny` 覆盖项。

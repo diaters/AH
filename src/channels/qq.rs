@@ -10,10 +10,13 @@ use serde_json::json;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+mod pending_images;
+
 use crate::channels::config::QqConfig;
 use crate::channels::traits::{
     Channel, ChannelError, ChannelInboundMessage, InboundConfirmation, parse_callback_data,
 };
+use pending_images::PendingImages;
 
 const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
 const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
@@ -328,6 +331,8 @@ pub struct QqChannel {
     /// 记录审批请求消息的 msg_id，key 为 approval_id（request_id 字符串）。
     /// 用户点击按钮后据此撤回审批请求消息。
     pending_approval_msg_ids: Arc<RwLock<HashMap<String, String>>>,
+    /// 待合并的纯图片消息：等同一发送者的下一条常规消息到达后合并
+    pending_images: Arc<RwLock<PendingImages>>,
 }
 
 impl QqChannel {
@@ -348,6 +353,7 @@ impl QqChannel {
             auth_url: QQ_AUTH_URL.to_string(),
             pending_approvals: Arc::new(RwLock::new(HashMap::new())),
             pending_feedback: Arc::new(RwLock::new(HashMap::new())),
+            pending_images: Arc::new(RwLock::new(PendingImages::default())),
             pending_approval_msg_ids: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -1754,6 +1760,17 @@ impl Channel for QqChannel {
                                 continue;
                             }
 
+                            // QQ 移动端逐张发送图片：纯图片消息先静默缓存，等下一条常规消息合并。
+                            // 放在反馈/审批匹配之前，避免图片被当作评审反馈或审批回复。
+                            if self
+                                .pending_images
+                                .write()
+                                .await
+                                .try_buffer(&recipient, &user_openid, &content)
+                            {
+                                continue;
+                            }
+
                             // 检查是否有待处理反馈：若有，将文本作为 feedback 发送 Confirmation
                             let pending_fb = {
                                 self.pending_feedback.write().await.remove(&recipient)
@@ -1850,7 +1867,12 @@ impl Channel for QqChannel {
                                 continue;
                             }
 
-                            // 常规消息
+                            // 常规消息：合并此前缓存的纯图片消息
+                            let content = self
+                                .pending_images
+                                .write()
+                                .await
+                                .merge_into(&recipient, &user_openid, &content);
                             let inbound = ChannelInboundMessage {
                                 channel_name: self.name().to_string(),
                                 sender_id: user_openid.clone(),

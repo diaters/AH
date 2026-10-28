@@ -95,6 +95,9 @@ pub struct AgentExecutionRequest {
     /// 覆盖 executor 的默认模型（用于多模型 provider）
     #[serde(default)]
     pub model_override: Option<String>,
+    /// 当前模型是否接受图片输入（由模型链条目的 `vision` 写入）
+    #[serde(default)]
+    pub vision: bool,
 }
 
 /// Agent 执行结果
@@ -135,6 +138,7 @@ mod tests {
             conversation: None,
             work_item_id: Some(uuid::Uuid::new_v4()),
             model_override: None,
+            vision: false,
         };
 
         assert!(request.work_item_id.is_some());
@@ -153,6 +157,7 @@ mod tests {
             conversation: None,
             work_item_id: None,
             model_override: Some("gpt-4.1-mini".to_string()),
+            vision: false,
         };
 
         assert_eq!(request.model_override, Some("gpt-4.1-mini".to_string()));

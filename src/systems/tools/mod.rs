@@ -51,7 +51,7 @@ use self::builtin::{
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
     SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillTool,
-    SubmitSkillUpdateTool, WaitTasksTool, WriteSkillFileTool,
+    SubmitSkillUpdateTool, ViewImageTool, WaitTasksTool, WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -248,6 +248,25 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ShellStopTool));
+
+    // 图片查看：返回 [IMAGE:...] 标记，视觉模型下一轮请求中会看到真实图片
+    registry.register(ToolDefinition {
+        name: "view_image".to_string(),
+        description: "查看本地图片文件（png/jpeg/gif/webp，不超过 5 MiB）。适合查看截图、下载的图片或生成的图表。仅当当前模型支持视觉输入时才能看到图片内容，否则只返回路径信息。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "图片路径，相对路径基于工作目录" }
+                },
+                "required": ["path"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("view_image".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(ViewImageTool));
 
     // Experience candidate tools
     registry.register(ToolDefinition {

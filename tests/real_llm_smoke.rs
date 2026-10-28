@@ -127,6 +127,7 @@ fn smoke_request(prompt: &str, tools: Vec<ToolDefinition>) -> AgentExecutionRequ
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     }
 }
 

@@ -654,6 +654,7 @@ fn build_judge_request(data: &JudgePromptData) -> AgentExecutionRequest {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     }
 }
 

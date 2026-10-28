@@ -162,6 +162,7 @@ fn allowed_tool_executes_directly() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -268,6 +269,7 @@ fn denied_tool_does_not_execute() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -357,6 +359,7 @@ fn confirm_tool_requires_user_confirmation() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -454,6 +457,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -573,6 +577,7 @@ fn user_denies_tool_confirmation() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -680,6 +685,7 @@ fn user_allows_tool_once() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -851,6 +857,7 @@ fn child_agent_confirm_routes_to_parent() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -983,6 +990,7 @@ fn confirmation_denied_rejects_tool() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1112,6 +1120,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1202,6 +1211,7 @@ fn user_allows_tool_always() {
         conversation: None,
         work_item_id: None,
         model_override: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,

@@ -267,6 +267,7 @@ fn skill_creation_approval_finds_context_and_triggers_writeback() {
                 conversation: None,
                 work_item_id: None,
                 model_override: None,
+                vision: false,
             },
             tool_name: "experience_governance".to_string(),
             tool_input: serde_json::json!({ "candidate_id": candidate_id.to_string() }),
