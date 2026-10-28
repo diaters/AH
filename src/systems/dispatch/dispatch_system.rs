@@ -313,6 +313,7 @@ pub fn dispatch_system(
                     work_item_id: Some(work_item.id),
                     model_override: None,
                     turn_generation: None,
+                    vision: false,
                 },
             },
             MessageDispatchedHookPending,
@@ -528,6 +529,7 @@ pub fn dispatch_system(
                         work_item_id: None,
                         model_override: None,
                         turn_generation: None,
+                        vision: false,
                     };
 
                     task.mark_waiting_for_agent(agent.id, clock.0);

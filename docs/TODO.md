@@ -124,7 +124,9 @@
 - [x] __跨通道隔离__：用户输入仅路由到同一通道的 Task，命令限定在发出通道生效
 - [ ] __飞书 / Lark 通道__：tenant_access_token、WebSocket/Webhook、interactive card
 - [ ] __媒体附件__：统一 `[IMAGE:path]`、`[VIDEO:path]`、`[DOCUMENT:path]`、`[VOICE:path]`
-  标记，支持三平台下载/上传
+  标记，支持三平台下载/上传（图片已可作为多模态输入发给视觉模型，见
+  `docs/design/2026-10-27-multimodal-image-input-design.md`）
+- [ ] __TUI 图片输入__：TUI 中附带本地图片（如 `/image <路径>`），复用 `[IMAGE:path]` 标记链路
 - [ ] __Telegram 增强__：stream 模式 `editMessageText` 草稿更新、群组 `mention_only` @ 检测、
   webhook 接收模式
 

@@ -68,6 +68,7 @@ fn make_request(
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: tool_name.into(),
         tool_input: serde_json::json!({}),

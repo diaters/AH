@@ -224,6 +224,7 @@ fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness 
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
     });
     update_with_yield(&mut app, 3);

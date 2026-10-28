@@ -8,9 +8,11 @@ tags = ["llm", "default", "general"]
 description = "默认 LLM Agent，处理通用任务"
 
 # 多模型降级链示例：按顺序声明，第一个为最高优先级
+# vision = true 声明该模型接受图片输入；降级到未声明的模型时图片以文本标记发送
 [[agent.models]]
 provider = "openai"
 model = "gpt-4.1-mini"
+vision = true
 
 [[agent.models]]
 provider = "deepseek"

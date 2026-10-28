@@ -129,6 +129,7 @@ mod tests {
                 work_item_id: None,
                 model_override: None,
                 turn_generation: None,
+                vision: false,
             },
         };
         let entity = world.spawn((msg, MessageDispatchedHookPending)).id();
@@ -161,6 +162,7 @@ mod tests {
                 work_item_id: None,
                 model_override: None,
                 turn_generation: None,
+                vision: false,
             },
         };
         let entity = world.spawn((msg, MessageDispatchedHookPending)).id();

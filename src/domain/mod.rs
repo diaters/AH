@@ -173,7 +173,8 @@ pub use execution::{
 
 // attachment
 pub use attachment::{
-    ATTACHMENT_MARKER_SYNTAX_HINT, AttachmentKind, ChannelAttachment, extract_attachments,
+    ATTACHMENT_MARKER_SYNTAX_HINT, AttachmentKind, ChannelAttachment, MAX_IMAGE_BYTES,
+    extract_attachments, image_mime_type,
 };
 
 // frontend

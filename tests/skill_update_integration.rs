@@ -1063,6 +1063,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_section() {
             work_item_id: Some(work_item_id),
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "submit_skill_update".to_string(),
         tool_input: serde_json::json!({
@@ -1245,6 +1246,7 @@ fn submit_skill_update_dry_run_accepts_valid_operations() {
             work_item_id: Some(work_item_id),
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "submit_skill_update".to_string(),
         tool_input: serde_json::json!({
@@ -1405,6 +1407,7 @@ fn submit_skill_update_rejects_when_work_item_entity_is_none() {
             work_item_id: Some(work_item_id),
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "submit_skill_update".to_string(),
         tool_input: serde_json::json!({
@@ -1891,6 +1894,7 @@ fn submit_skill_update_dry_run_rejects_nonexistent_subsection() {
             work_item_id: Some(work_item_id),
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "submit_skill_update".to_string(),
         tool_input: serde_json::json!({
@@ -2068,6 +2072,7 @@ fn submit_skill_update_dry_run_accepts_valid_subsection_operation() {
             work_item_id: Some(work_item_id),
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "submit_skill_update".to_string(),
         tool_input: serde_json::json!({

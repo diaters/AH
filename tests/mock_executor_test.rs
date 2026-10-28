@@ -26,6 +26,7 @@ fn sample_request(kind: AgentRequestKind) -> AgentExecutionRequest {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     }
 }
 

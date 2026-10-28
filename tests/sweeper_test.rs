@@ -30,6 +30,7 @@ fn spawn_inflight(
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     world
         .spawn((

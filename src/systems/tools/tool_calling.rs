@@ -334,6 +334,7 @@ pub(crate) fn handle_tool_calls_response(
                     work_item_id: result.work_item_id,
                     model_override: None,
                     turn_generation: None,
+                    vision: false,
                 },
                 tool_name: call.name.clone(),
                 tool_input,
@@ -537,6 +538,7 @@ pub fn tool_calling_orchestrator_system(
             work_item_id: state.work_item_id,
             model_override: None,
             turn_generation: None,
+            vision: false,
         };
 
         debug!(

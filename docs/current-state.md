@@ -58,6 +58,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `ModelChainState` Component 追踪降级状态
 - 429（限流）/402（配额耗尽）错误自动降级到下一优先级
 - 冷却期自动恢复到原优先级
+- 模型条目 `vision` 声明视觉能力，降级到非视觉模型时图片自动退回文本标记
 - `providers.toml` 配置文件支持多 provider 实例
 - 向后兼容：现有 `model` 字段和环境变量配置继续工作
 - genai 适配层错误分类覆盖非流式 `exec_chat` 路径：HTTP 状态码从
@@ -112,6 +113,7 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 工具权限、审批流程、结果回写与用户确认 UI 已可用
 - `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
 - `ask_user` 工具：LLM 在工具调用循环中向用户提出开放文本问题，用户回复作为工具结果返回（声明式 Sync 工具，详见 [async-tool-bridge.md](async-tool-bridge.md#sync-工具分类)）
+- `view_image` 工具：校验本地图片并返回 `[IMAGE:path]` 标记，视觉模型在下一轮请求中看到真实图片
 - `Space` 已收敛为最小共享资源边界，当前只保留 `SharedKnowledgeBase` 和
   `SpaceToolRegistry`
 - shell 工具已收敛为六个意图化工具：
@@ -170,6 +172,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - QQ 通道交互事件监听（INTERACTION_CREATE）与按钮点击闭环
 - QQ 通道审批消息使用原生 InlineKeyboard 按钮交互（含 reject_with_feedback 两步流程）
 - QQ 通道 send 方法返回 message_id（QqMessageResponse）
+- QQ 纯图片消息合并：移动端逐张发送的图片按发送者缓存，与下一条常规文字消息合并为一条输入
+- 图片输入：`[IMAGE:path]` 标记在 LLM adapter 边界晚绑定为图片 ContentPart
+  （设计：[2026-10-27-multimodal-image-input-design.md](design/2026-10-27-multimodal-image-input-design.md)）
 - `channel_send` 工具主动推送
 - `origin_channel` 从入向消息透传到 `Task`
 - IM 出向-自动回执：Agent 文本回复、`SystemOutputMessage`、任务失败提示等按 `output_channel`

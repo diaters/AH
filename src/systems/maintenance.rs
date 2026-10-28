@@ -214,6 +214,7 @@ fn spawn_persistent_agent_from_entry(
             provider: default_provider,
             model: model.clone(),
             fallback_cooldown_secs: None,
+            vision: false,
         }]
     } else {
         vec![]
@@ -467,6 +468,7 @@ fn handle_spawn_request(
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     commands.spawn((

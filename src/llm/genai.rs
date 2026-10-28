@@ -192,6 +192,11 @@ fn build_chat_request(request: &AgentExecutionRequest) -> Result<ChatRequest, Ex
         messages.push(ChatMessage::user(&request.prompt));
     }
 
+    // 视觉模型：把 `[IMAGE:...]` 标记晚绑定为图片；非视觉模型原样发送文本标记
+    if request.vision {
+        messages = super::image::attach_images(&request.task_id, messages);
+    }
+
     let mut chat_req = ChatRequest::new(messages);
 
     if let Some(system_prompt) = &request.system_prompt {
@@ -418,6 +423,7 @@ mod tests {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         }
     }
 
@@ -545,6 +551,22 @@ mod tests {
         assert_eq!(chat_req.messages.len(), 2);
         assert_eq!(chat_req.messages[0].content.first_text(), Some("earlier"));
         assert_eq!(chat_req.messages[1].content.first_text(), Some("hello"));
+    }
+
+    #[test]
+    fn build_chat_request_attaches_images_only_when_vision_enabled() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("a.png");
+        std::fs::write(&path, b"\x89PNG fake").unwrap();
+        let mut request = sample_request();
+        request.prompt = format!("看图 [IMAGE:{}]", path.display());
+
+        let chat_req = build_chat_request(&request).unwrap();
+        assert!(chat_req.messages[0].content.binaries().is_empty());
+
+        request.vision = true;
+        let chat_req = build_chat_request(&request).unwrap();
+        assert_eq!(chat_req.messages[0].content.binaries().len(), 1);
     }
 
     #[test]

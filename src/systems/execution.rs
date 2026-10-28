@@ -138,8 +138,9 @@ async fn execute_with_fallback_logic(
             ))
         })?;
 
-        // 设置 model_override
+        // 设置 model_override 与视觉能力：降级到非视觉模型时图片自动退回文本标记
         request.model_override = Some(entry.model.clone());
+        request.vision = entry.vision;
 
         // 执行
         let result = executor.execute(request.clone()).await;
@@ -215,5 +216,104 @@ pub(crate) fn model_chain_state_update_system(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{
+        AgentExecutionOutput, AgentExecutionRequest, AgentExecutor, ExecutionError, ExecutorFuture,
+        ModelChainEntry, ModelChainState, OutputContent,
+    };
+    use std::sync::{Arc, Mutex};
+
+    /// 记录收到的请求；`fail` 为 true 时返回可降级错误。
+    struct RecordingExecutor {
+        fail: bool,
+        seen: Arc<Mutex<Vec<AgentExecutionRequest>>>,
+    }
+
+    impl AgentExecutor for RecordingExecutor {
+        fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+            self.seen.lock().unwrap().push(request);
+            let fail = self.fail;
+            Box::pin(async move {
+                if fail {
+                    Err(ExecutionError::QuotaExhausted("quota".to_string()))
+                } else {
+                    Ok(AgentExecutionOutput {
+                        content: OutputContent::Text("ok".to_string()),
+                        reasoning_content: None,
+                    })
+                }
+            })
+        }
+    }
+
+    fn entry(provider: &str, vision: bool) -> ModelChainEntry {
+        ModelChainEntry {
+            provider: provider.to_string(),
+            model: format!("{provider}-model"),
+            fallback_cooldown_secs: None,
+            vision,
+        }
+    }
+
+    fn request() -> AgentExecutionRequest {
+        AgentExecutionRequest {
+            task_id: crate::domain::TaskId::nil(),
+            agent_id: crate::domain::AgentId::nil(),
+            request_kind: AgentRequestKind::LlmCompletion,
+            prompt: "hi".to_string(),
+            system_prompt: None,
+            tools: vec![],
+            conversation: None,
+            work_item_id: None,
+            model_override: None,
+            vision: false,
+            turn_generation: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fallback_rewrites_vision_from_each_model_entry() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = ExecutorRegistry::from_single_executor(
+            Arc::new(RecordingExecutor {
+                fail: true,
+                seen: seen.clone(),
+            }),
+            "vision",
+        );
+        registry.executors.insert(
+            "text".to_string(),
+            Arc::new(RecordingExecutor {
+                fail: false,
+                seen: seen.clone(),
+            }),
+        );
+        let mut chain = ModelChainState::new(vec![entry("vision", true), entry("text", false)], 60);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = execute_with_fallback_logic(&registry, &mut chain, request(), tx).await;
+
+        assert!(result.is_ok());
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].vision, "首个模型声明 vision，请求应启用图片");
+        assert_eq!(seen[1].model_override.as_deref(), Some("text-model"));
+        assert!(!seen[1].vision, "降级到非视觉模型后应关闭图片");
+    }
+
+    #[test]
+    fn model_chain_entry_vision_defaults_to_false() {
+        let entry: ModelChainEntry =
+            toml::from_str("provider = \"openai\"\nmodel = \"gpt-4.1-mini\"").unwrap();
+        assert!(!entry.vision);
+
+        let entry: ModelChainEntry =
+            toml::from_str("provider = \"openai\"\nmodel = \"gpt-4.1\"\nvision = true").unwrap();
+        assert!(entry.vision);
     }
 }

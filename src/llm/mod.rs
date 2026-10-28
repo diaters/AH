@@ -1,5 +1,6 @@
 mod factory;
 mod genai;
+mod image;
 mod judge_prompt;
 mod provider;
 mod registry;

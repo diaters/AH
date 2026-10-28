@@ -2728,6 +2728,7 @@ mod tests {
                 work_item_id: None,
                 model_override: None,
                 turn_generation: None,
+                vision: false,
             },
             tool_name: "ask_user".to_string(),
             tool_input: serde_json::json!({"question": "what is your name?"}),

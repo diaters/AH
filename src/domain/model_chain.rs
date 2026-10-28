@@ -28,6 +28,9 @@ pub struct ModelChainEntry {
     pub model: String,
     #[serde(default)]
     pub fallback_cooldown_secs: Option<u64>,
+    /// 模型是否接受图片输入；默认 false，图片以 `[IMAGE:...]` 文本标记发送
+    #[serde(default)]
+    pub vision: bool,
 }
 
 /// Agent 运行时的模型链状态（Bevy Component）
@@ -92,11 +95,13 @@ mod tests {
                 provider: "openai".to_string(),
                 model: "gpt-4.1-mini".to_string(),
                 fallback_cooldown_secs: None,
+                vision: false,
             },
             ModelChainEntry {
                 provider: "deepseek".to_string(),
                 model: "deepseek-chat".to_string(),
                 fallback_cooldown_secs: Some(120),
+                vision: false,
             },
         ]
     }

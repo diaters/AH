@@ -163,6 +163,7 @@ fn allowed_tool_executes_directly() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -270,6 +271,7 @@ fn denied_tool_does_not_execute() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -360,6 +362,7 @@ fn confirm_tool_requires_user_confirmation() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -458,6 +461,7 @@ fn tool_call_is_recorded_to_short_term_memory() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -578,6 +582,7 @@ fn user_denies_tool_confirmation() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -686,6 +691,7 @@ fn user_allows_tool_once() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -858,6 +864,7 @@ fn child_agent_confirm_routes_to_parent() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -991,6 +998,7 @@ fn confirmation_denied_rejects_tool() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1121,6 +1129,7 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,
@@ -1212,6 +1221,7 @@ fn user_allows_tool_always() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
     app.world_mut().spawn(ToolExecutionRequestMessage {
         request,

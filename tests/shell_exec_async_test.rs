@@ -53,6 +53,7 @@ fn make_request(
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_exec".into(),
         tool_input,

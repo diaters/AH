@@ -250,6 +250,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "printf 'hello\\n'; sleep 1" }),
@@ -286,6 +287,7 @@ fn shell_read_returns_status_and_latest_snapshot() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id, "tail_lines": 20 }),
@@ -342,6 +344,7 @@ fn shell_list_returns_only_active_sessions() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),
@@ -367,6 +370,7 @@ fn shell_list_returns_only_active_sessions() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_list".to_string(),
         tool_input: serde_json::json!({}),
@@ -425,6 +429,7 @@ fn shell_exec_returns_result_message() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -497,6 +502,7 @@ fn shell_exec_passes_env_to_child_process() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({
@@ -555,6 +561,7 @@ fn shell_start_returns_running_handle() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -622,6 +629,7 @@ fn shell_start_passes_env_to_child_process() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
@@ -674,6 +682,7 @@ fn shell_start_passes_env_to_child_process() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({
@@ -739,6 +748,7 @@ fn shell_exec_with_exit_code_error() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -803,6 +813,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -844,6 +855,7 @@ fn shell_stop_transitions_a_running_session_to_stopped() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -957,6 +969,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({
@@ -996,6 +1009,7 @@ fn shell_input_returns_error_when_stdin_is_unavailable() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({
@@ -1097,6 +1111,7 @@ fn shell_exec_and_shell_start_share_core_result_fields() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1172,6 +1187,7 @@ fn shell_exec_timeout_returns_stopped_and_timed_out() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1228,6 +1244,7 @@ fn shell_read_returns_output_text() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1273,6 +1290,7 @@ fn shell_read_returns_output_text() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1335,6 +1353,7 @@ fn shell_exec_times_out_returns_stopped_with_tail_output() {
         work_item_id: None,
         model_override: None,
         turn_generation: None,
+        vision: false,
     };
 
     app.world_mut().spawn(ToolExecutionRequestMessage {
@@ -1413,6 +1432,7 @@ fn shell_exec_uses_default_timeout_when_omitted() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 2" }),
@@ -1540,6 +1560,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1568,6 +1589,7 @@ fn shell_list_only_returns_sessions_for_current_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_list".to_string(),
         tool_input: serde_json::json!({}),
@@ -1635,6 +1657,7 @@ fn shell_list_only_returns_active_sessions_after_task_cleanup() {
                 work_item_id: None,
                 model_override: None,
                 turn_generation: None,
+                vision: false,
             },
             tool_name: "shell_start".to_string(),
             tool_input: serde_json::json!({ "command": command }),
@@ -1761,6 +1784,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -1805,6 +1829,7 @@ fn shell_read_rejects_session_owned_by_another_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_read".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id }),
@@ -1875,6 +1900,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "cat" }),
@@ -1919,6 +1945,7 @@ fn shell_input_rejects_session_owned_by_another_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_input".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id, "input": "hello" }),
@@ -1988,6 +2015,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 5" }),
@@ -2032,6 +2060,7 @@ fn shell_stop_rejects_session_owned_by_another_task() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_stop".to_string(),
         tool_input: serde_json::json!({ "session_id": session_id }),
@@ -2101,6 +2130,7 @@ fn task_termination_stops_owned_shell_sessions() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),
@@ -2176,6 +2206,7 @@ fn failed_task_also_stops_owned_shell_sessions() {
             work_item_id: None,
             model_override: None,
             turn_generation: None,
+            vision: false,
         },
         tool_name: "shell_start".to_string(),
         tool_input: serde_json::json!({ "command": "sleep 30" }),

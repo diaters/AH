@@ -98,6 +98,9 @@ pub struct AgentExecutionRequest {
     /// 回合代次（由 `context_attachment_system` 打标，`/stop` 后过期结果据此丢弃）
     #[serde(default)]
     pub turn_generation: Option<u64>,
+    /// 当前模型是否接受图片输入（由模型链条目的 `vision` 写入）
+    #[serde(default)]
+    pub vision: bool,
 }
 
 /// Agent 执行结果
@@ -142,6 +145,7 @@ mod tests {
             work_item_id: Some(uuid::Uuid::new_v4()),
             model_override: None,
             turn_generation: None,
+            vision: false,
         };
 
         assert!(request.work_item_id.is_some());
@@ -161,6 +165,7 @@ mod tests {
             work_item_id: None,
             model_override: Some("gpt-4.1-mini".to_string()),
             turn_generation: None,
+            vision: false,
         };
 
         assert_eq!(request.model_override, Some("gpt-4.1-mini".to_string()));
