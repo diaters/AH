@@ -68,14 +68,66 @@ impl SessionRuntimeState {
     }
 }
 
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Clone)]
 pub struct NativeProcessBackend {
     pub sessions: Arc<Mutex<HashMap<SessionHandleId, SessionHandle>>>,
     pub processes: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<Child>>>>>,
     pub stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
-    /// shell_start 会话的输出读取线程，会话结束时等待其读完管道中的剩余输出。
+    lifecycle: Arc<BackendLifecycle>,
+    /// exec 与 shell_start 的输出读取线程，结束时限时读取管道中的剩余输出。
     readers: Arc<Mutex<HashMap<SessionHandleId, Vec<thread::JoinHandle<()>>>>>,
+}
+
+/// 所有 backend handle 共享唯一的清理责任；reader 线程不持有此 guard。
+struct BackendLifecycle {
+    /// spawn + 注册与 shutdown 串行化，防止关停快照之后又出现新进程。
+    shutdown: Mutex<bool>,
+    processes: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<Child>>>>>,
+    stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
+    readers: Arc<Mutex<HashMap<SessionHandleId, Vec<thread::JoinHandle<()>>>>>,
+}
+
+impl Default for NativeProcessBackend {
+    fn default() -> Self {
+        let processes = Arc::default();
+        let stdins = Arc::default();
+        let readers = Arc::default();
+        Self {
+            sessions: Arc::default(),
+            runtimes: Arc::default(),
+            lifecycle: Arc::new(BackendLifecycle {
+                shutdown: Mutex::new(false),
+                processes: Arc::clone(&processes),
+                stdins: Arc::clone(&stdins),
+                readers: Arc::clone(&readers),
+            }),
+            processes,
+            stdins,
+            readers,
+        }
+    }
+}
+
+impl Drop for BackendLifecycle {
+    fn drop(&mut self) {
+        // 显式 shutdown 是主路径；最后一个 handle 的析构只作兜底。
+        if let Ok(mut processes) = self.processes.lock() {
+            for process in processes.values() {
+                if let Ok(mut child) = process.lock() {
+                    kill_process_tree(&mut child);
+                    let _ = child.wait();
+                }
+            }
+            processes.clear();
+        }
+        if let Ok(mut stdins) = self.stdins.lock() {
+            stdins.clear();
+        }
+        if let Ok(mut readers) = self.readers.lock() {
+            drain_readers(readers.drain().flat_map(|(_, readers)| readers).map(Some));
+        }
+    }
 }
 
 impl std::fmt::Debug for NativeProcessBackend {
@@ -91,124 +143,94 @@ impl SessionBackend for NativeProcessBackend {
         self.exec_with_cancel(request, tokio_util::sync::CancellationToken::new())
     }
 
-    /// 取消感知版本：复用 `exec_blocking` 的子进程启动 + reader 线程逻辑，
-    /// 把 `try_wait + sleep(10ms)` 循环改为 `try_wait + sleep(10ms) + cancel.is_cancelled()`。
-    ///
-    /// cancel 触发时：kill 子进程 + wait + 返回 `Err("cancelled")`。
+    /// 一次性 exec 与 shell_start 共用进程注册表、输出缓冲和 Task 归属。
+    /// 所有退出路径都清理同组后代并回收组长；取消返回 `Err("cancelled")`。
     /// 这是同步方法（返回 `Result`，不是 `Future`），worker 侧用 `spawn_blocking` 包裹。
     fn exec_with_cancel(
         &self,
         request: SessionStartRequest,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<SessionHandle, String> {
-        let handle_id = SessionHandleId::new();
-        let mut command = StdCommand::new("sh");
-        command.arg("-c").arg(&request.command);
-        if let Some(cwd) = request.cwd.as_ref() {
-            command.current_dir(cwd);
-        }
-        command.envs(&request.env);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        isolate_process_group(&mut command);
-
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
-        let started_at = Utc::now();
+        let tail_lines = request.tail_lines;
         let deadline = request
             .timeout_secs
-            .map(|timeout_secs| Instant::now() + Duration::from_secs(timeout_secs));
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let buffer = Arc::new(Mutex::new(SessionOutputBuffer::empty()));
-        let mut stdout_reader =
-            spawn_blocking_output_reader(stdout, Arc::clone(&buffer), "", MAX_OUTPUT_BYTES);
-        let mut stderr_reader = spawn_blocking_output_reader(
-            stderr,
-            Arc::clone(&buffer),
-            "[stderr] ",
-            MAX_OUTPUT_BYTES,
-        );
-
+            .map(|seconds| Instant::now() + Duration::from_secs(seconds));
+        let handle = self.start_session(request)?;
+        let id = handle.handle_id;
+        // 保存自己的 child 引用；task cleanup 可以从公共注册表移除它。
+        let process = self
+            .processes
+            .lock()
+            .map_err(|_| "process map poisoned".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "exec process disappeared".to_string())?;
         loop {
-            if let Some(exit_status) = child.try_wait().map_err(|error| error.to_string())? {
-                drain_readers([stdout_reader.take(), stderr_reader.take()]);
-                let buffer_snapshot = buffer
+            if cancel.is_cancelled() {
+                self.stop_session(id)?;
+                return Err("cancelled".to_string());
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let mut handle = self.stop_session(id)?;
+                handle.timed_out = true;
+                handle.output = self.output_snapshot(id, tail_lines)?;
+                self.record_finished(handle.clone())?;
+                return Ok(handle);
+            }
+            let exit_status = {
+                let mut child = process
                     .lock()
-                    .map_err(|_| "output buffer poisoned".to_string())?
-                    .clone();
-
-                let output = snapshot_from_buffer(&buffer_snapshot, request.tail_lines);
-
-                let handle = SessionHandle {
-                    handle_id,
-                    backend: SessionBackendKind::Native,
-                    status: if exit_status.success() {
+                    .map_err(|_| "process mutex poisoned".to_string())?;
+                match poll_process_exit(&mut child) {
+                    Ok(status) => status,
+                    Err(error) => {
+                        // 轮询错误同样负责清理，而非把子进程遗留给析构兜底。
+                        kill_process_tree(&mut child);
+                        let _ = child.wait();
+                        drop(child);
+                        self.stop_session(id)?;
+                        return Err(error.to_string());
+                    }
+                }
+            };
+            if let Some(exit_status) = exit_status {
+                self.drain_session_readers(id)?;
+                let mut handle = self.get_status(id)?;
+                // 显式 task cleanup 的 Stopped 语义不能被 worker 晚到的完成覆盖。
+                if handle.status != SessionStatus::Stopped {
+                    handle.status = if exit_status.success() {
                         SessionStatus::Completed
                     } else {
                         SessionStatus::ExitedWithError
-                    },
-                    command: request.command,
-                    session_name: request.session_name,
-                    cwd: request.cwd,
-                    exit_code: exit_status.code(),
-                    timed_out: false,
-                    interaction_required: false,
-                    started_at,
-                    finished_at: Some(Utc::now()),
-                    owner_task_id: request.owner_task_id,
-                    owner_agent_id: request.owner_agent_id,
-                    output,
-                };
-
+                    };
+                    handle.exit_code = exit_status.code();
+                }
+                handle.finished_at = Some(Utc::now());
+                handle.output = self.output_snapshot(id, tail_lines)?;
                 self.record_finished(handle.clone())?;
-
-                return Ok(handle);
-            }
-
-            // 取消信号检查：父任务终态触发 cancel_monitor → 本处 kill 子进程并返回 Err
-            if cancel.is_cancelled() {
-                kill_process_tree(&mut child);
-                let _ = child.wait();
-                drain_readers([stdout_reader.take(), stderr_reader.take()]);
-                return Err("cancelled".to_string());
-            }
-
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                kill_process_tree(&mut child);
-                let _ = child.wait();
-                drain_readers([stdout_reader.take(), stderr_reader.take()]);
-                let buffer_snapshot = buffer
+                self.processes
                     .lock()
-                    .map_err(|_| "output buffer poisoned".to_string())?
-                    .clone();
-                let output = snapshot_from_buffer(&buffer_snapshot, request.tail_lines);
-                let handle = SessionHandle {
-                    handle_id,
-                    backend: SessionBackendKind::Native,
-                    status: SessionStatus::Stopped,
-                    command: request.command,
-                    session_name: request.session_name,
-                    cwd: request.cwd,
-                    exit_code: None,
-                    timed_out: true,
-                    interaction_required: false,
-                    started_at,
-                    finished_at: Some(Utc::now()),
-                    owner_task_id: request.owner_task_id,
-                    owner_agent_id: request.owner_agent_id,
-                    output,
-                };
-
-                self.record_finished(handle.clone())?;
-
+                    .map_err(|_| "process map poisoned".to_string())?
+                    .remove(&id);
+                self.stdins
+                    .lock()
+                    .map_err(|_| "stdin map poisoned".to_string())?
+                    .remove(&id);
                 return Ok(handle);
             }
-
             thread::sleep(Duration::from_millis(10));
         }
     }
 
     fn start_session(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
+        let shutdown = self
+            .lifecycle
+            .shutdown
+            .lock()
+            .map_err(|_| "shutdown mutex poisoned".to_string())?;
+        if *shutdown {
+            return Err("native process backend is shut down".to_string());
+        }
         let handle_id = SessionHandleId::new();
         let command_text = request.command.clone();
         let session_name = request.session_name.clone();
@@ -381,7 +403,7 @@ impl SessionBackend for NativeProcessBackend {
             let mut child = process
                 .lock()
                 .map_err(|_| "process mutex poisoned".to_string())?;
-            kill_process_tree(&mut child);
+            terminate_process_tree(&mut child);
             let _ = child.wait();
         }
         self.drain_session_readers(handle_id)?;
@@ -433,28 +455,93 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn stop_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionHandleId>, String> {
-        let active_ids = self.active_session_ids_for_task(task_id)?;
-        let mut stopped = Vec::new();
-        for id in active_ids {
-            match self.stop_session(id) {
-                Ok(_) => {
-                    stopped.push(id);
-                }
-                Err(e) => {
-                    debug!(
-                        event = "TaskSessionStopFailed",
-                        handle_id = %id,
-                        error = %e,
-                        "failed to stop session during task cleanup, continuing"
-                    );
-                }
-            }
-        }
-        Ok(stopped)
+        self.stop_sessions(self.active_session_ids_for_task(task_id)?)
     }
 }
 
 impl NativeProcessBackend {
+    /// 幂等关停所有已注册进程；所有 clone 立即拒绝后续 spawn。
+    /// 此接口由运行时所有者调用，最终析构仅提供兜底。
+    pub fn shutdown(&self) -> Result<(), String> {
+        let mut shutdown = self
+            .lifecycle
+            .shutdown
+            .lock()
+            .map_err(|_| "shutdown mutex poisoned".to_string())?;
+        *shutdown = true;
+        let ids: Vec<_> = self
+            .processes
+            .lock()
+            .map_err(|_| "process map poisoned".to_string())?
+            .keys()
+            .copied()
+            .collect();
+        self.stop_sessions(ids).map(|_| ())
+    }
+
+    /// 批量停止共用一秒 TERM 宽限与一次输出 drain 宽限，避免随会话数串行累加。
+    fn stop_sessions(&self, ids: Vec<SessionHandleId>) -> Result<Vec<SessionHandleId>, String> {
+        let processes: Vec<_> = {
+            let processes = self
+                .processes
+                .lock()
+                .map_err(|_| "process map poisoned".to_string())?;
+            ids.iter()
+                .filter_map(|id| processes.get(id).cloned())
+                .collect()
+        };
+        for process in &processes {
+            if let Ok(mut child) = process.lock() {
+                send_termination_signal(&mut child);
+            }
+        }
+        #[cfg(unix)]
+        {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while processes.iter().any(|process| {
+                process
+                    .lock()
+                    .is_ok_and(|child| matches!(observe_child_exit(&child), Ok(false)))
+            }) && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        for process in &processes {
+            if let Ok(mut child) = process.lock() {
+                kill_process_tree(&mut child);
+                let _ = child.wait();
+            }
+        }
+        let readers: Vec<_> = {
+            let mut readers = self
+                .readers
+                .lock()
+                .map_err(|_| "reader map poisoned".to_string())?;
+            ids.iter()
+                .flat_map(|id| readers.remove(id).unwrap_or_default())
+                .collect()
+        };
+        drain_readers(readers.into_iter().map(Some));
+        let mut stopped = Vec::new();
+        let mut errors = Vec::new();
+        for id in ids {
+            match self.stop_session(id) {
+                Ok(_) => stopped.push(id),
+                Err(error) => {
+                    debug!(event = "TaskSessionStopFailed", handle_id = %id, error = %error,
+                        "failed to stop session during batch cleanup, continuing");
+                    errors.push(format!("session {id}: {error}"));
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(stopped)
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
     /// 读取最新会话句柄，若进程已结束则先同步状态。
     fn get_status(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
         self.sessions
@@ -599,7 +686,7 @@ impl NativeProcessBackend {
             let mut child = process
                 .lock()
                 .map_err(|_| "process mutex poisoned".to_string())?;
-            child.try_wait().map_err(|error| error.to_string())?
+            poll_process_exit(&mut child).map_err(|error| error.to_string())?
         };
 
         if let Some(exit_status) = exit_status {
@@ -627,23 +714,6 @@ impl NativeProcessBackend {
         }
 
         Ok(())
-    }
-}
-
-impl Drop for NativeProcessBackend {
-    fn drop(&mut self) {
-        let processes: Vec<_> = self
-            .processes
-            .lock()
-            .ok()
-            .map(|map| map.values().cloned().collect())
-            .unwrap_or_default();
-
-        for process in processes {
-            if let Ok(mut child) = process.lock() {
-                kill_process_tree(&mut child);
-            }
-        }
     }
 }
 
@@ -695,11 +765,75 @@ fn isolate_process_group(command: &mut StdCommand) {
     let _ = command;
 }
 
-/// 终止子进程及其进程组；只杀 `sh` 会留下孤儿进程，并让输出管道一直不关闭。
+/// 观察组长退出但暂不回收 PID；在 killpg 之前保留 PID，阻止 PGID 被复用。
+#[cfg(unix)]
+fn observe_child_exit(child: &Child) -> std::io::Result<bool> {
+    // SAFETY: waitid 写入完整 siginfo，P_PID 只观察本进程直接拥有的 child。
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.si_signo != 0)
+}
+
+/// 在组长被回收之前清理同组后代，再由 Child 保存真实退出码。
+fn poll_process_exit(child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+    #[cfg(unix)]
+    match observe_child_exit(child) {
+        Ok(false) => return Ok(None),
+        Ok(true) => {
+            kill_process_tree(child);
+            return child.wait().map(Some);
+        }
+        // 另一路 stop/refresh 已回收时，Child::try_wait 读取其缓存，不再信号旧 PGID。
+        Err(error) if error.raw_os_error() == Some(libc::ECHILD) => {}
+        Err(error) => return Err(error),
+    }
+    child.try_wait()
+}
+
+fn send_termination_signal(child: &mut Child) {
+    #[cfg(unix)]
+    if observe_child_exit(child).is_ok()
+        && let Ok(pid) = libc::pid_t::try_from(child.id())
+    {
+        // SAFETY: 未回收的组长 PID 保留，确保只向其原始进程组发信号。
+        unsafe {
+            libc::killpg(pid, libc::SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+}
+
+/// 显式停止先给进程组最多一秒处理 TERM，再强杀同组残留；全程保留组长 PID。
+fn terminate_process_tree(child: &mut Child) {
+    send_termination_signal(child);
+    #[cfg(unix)]
+    {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while matches!(observe_child_exit(child), Ok(false)) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    kill_process_tree(child);
+}
+
+/// 只有尚未回收、仍由本进程拥有的组长才允许信号其 PGID。
 fn kill_process_tree(child: &mut Child) {
     #[cfg(unix)]
-    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
-        // SAFETY: killpg 只向该进程组发送信号，pid 来自本进程 spawn 的子进程（组长）
+    if observe_child_exit(child).is_ok()
+        && let Ok(pid) = libc::pid_t::try_from(child.id())
+    {
+        // SAFETY: 未回收的组长 PID 仍保留，spawn 为它创建了独立进程组。
         unsafe {
             libc::killpg(pid, libc::SIGKILL);
         }
@@ -758,28 +892,6 @@ fn append_output(buffer: &mut SessionOutputBuffer, content: &str, max_bytes: usi
             break;
         }
     }
-}
-
-/// 为阻塞执行读取 stdout/stderr，并将内容追加到共享的输出缓冲区中。
-fn spawn_blocking_output_reader(
-    stream: Option<impl std::io::Read + Send + 'static>,
-    buffer: Arc<Mutex<SessionOutputBuffer>>,
-    prefix: &'static str,
-    max_bytes: usize,
-) -> Option<thread::JoinHandle<()>> {
-    let stream = stream?;
-
-    Some(thread::spawn(move || {
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            let Ok(line) = line else {
-                break;
-            };
-
-            let mut buffer = buffer.lock().expect("output buffer poisoned");
-            append_output(&mut buffer, &format!("{prefix}{line}\n"), max_bytes);
-        }
-    }))
 }
 
 /// 根据输出缓冲区生成返回快照。
@@ -845,12 +957,236 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn pid_alive(pid: &str) -> bool {
-        StdCommand::new("kill")
-            .args(["-0", pid])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        let Ok(pid) = pid.parse::<libc::pid_t>() else {
+            return false;
+        };
+        // SAFETY: 信号 0 只检查进程是否存在。
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_allows_sigterm_handler_before_forced_cleanup() {
+        let backend = NativeProcessBackend::default();
+        let handle = backend
+            .start_session(exec_request(
+                "trap 'echo terminated; exit 0' TERM; echo ready; while :; do sleep 1; done",
+                None,
+            ))
+            .unwrap();
+        wait_until(|| {
+            backend
+                .read_session(SessionReadRequest {
+                    handle_id: handle.handle_id,
+                    tail_lines: 10,
+                })
+                .unwrap()
+                .output
+                .output
+                .contains("ready")
+        });
+        let stopped = backend.stop_session(handle.handle_id).unwrap();
+        assert!(
+            stopped.output.output.contains("terminated"),
+            "SIGTERM handler never ran: {:?}",
+            stopped.output
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_shared_owner_drop_reaps_process() {
+        let backend = NativeProcessBackend::default();
+        let id = backend
+            .start_session(exec_request("sleep 30", None))
+            .unwrap()
+            .handle_id;
+        let child = backend.processes.lock().unwrap()[&id].clone();
+        drop(backend);
+        let child = child.lock().unwrap();
+        assert_eq!(
+            observe_child_exit(&child).unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_forces_term_ignoring_process_within_bound() {
+        let backend = NativeProcessBackend::default();
+        let handle = backend
+            .start_session(exec_request(
+                "trap '' TERM; echo ready; while :; do sleep 1; done",
+                None,
+            ))
+            .unwrap();
+        wait_until(|| {
+            backend
+                .output_snapshot(handle.handle_id, 10)
+                .unwrap()
+                .output
+                .contains("ready")
+        });
+        let started = Instant::now();
+        backend.stop_session(handle.handle_id).unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(backend.processes.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_uses_one_grace_period_for_all_sessions() {
+        let backend = NativeProcessBackend::default();
+        for _ in 0..6 {
+            let handle = backend
+                .start_session(exec_request(
+                    "trap '' TERM; echo ready; while :; do sleep 1; done",
+                    None,
+                ))
+                .unwrap();
+            wait_until(|| {
+                backend
+                    .output_snapshot(handle.handle_id, 10)
+                    .unwrap()
+                    .output
+                    .contains("ready")
+            });
+        }
+        let started = Instant::now();
+        backend.shutdown().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "shutdown serialized grace periods: {:?}",
+            started.elapsed()
+        );
+        assert!(backend.processes.lock().unwrap().is_empty());
+        assert!(backend.list_active_sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shutdown_is_shared_idempotent_and_reaps_sessions() {
+        let backend = NativeProcessBackend::default();
+        let clone = backend.clone();
+        backend
+            .start_session(exec_request("sleep 30", None))
+            .unwrap();
+        clone.shutdown().unwrap();
+        backend.shutdown().unwrap();
+        assert!(backend.processes.lock().unwrap().is_empty());
+        assert!(backend.list_active_sessions().unwrap().is_empty());
+        assert!(backend.start_session(exec_request("true", None)).is_err());
+        assert!(clone.exec_blocking(exec_request("true", None)).is_err());
+    }
+
+    #[test]
+    fn dropping_clone_preserves_live_session() {
+        let backend = NativeProcessBackend::default();
+        let handle = backend
+            .start_session(exec_request("sleep 30", None))
+            .unwrap();
+        drop(backend.clone());
+        thread::sleep(Duration::from_millis(50));
+        let still_running = backend
+            .list_active_sessions()
+            .unwrap()
+            .iter()
+            .any(|session| session.handle_id == handle.handle_id);
+        let _ = backend.stop_session(handle.handle_id);
+        assert!(
+            still_running,
+            "dropping an unrelated clone killed a live session"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_exec_kills_nohup_descendants_on_success_and_error() {
+        for exit_code in [0, 7] {
+            let backend = NativeProcessBackend::default();
+            let handle = backend
+                .exec_blocking(exec_request(
+                    &format!("nohup sleep 30 >/dev/null 2>&1 & echo $!; exit {exit_code}"),
+                    None,
+                ))
+                .unwrap();
+            assert_eq!(handle.exit_code, Some(exit_code));
+            let pid = handle.output.output.trim();
+            thread::sleep(Duration::from_millis(100));
+            let survived = pid_alive(pid);
+            if survived {
+                let _ = StdCommand::new("kill").arg(pid).status();
+            }
+            assert!(!survived, "completed exec left nohup descendant {pid}");
+        }
+    }
+
+    #[test]
+    fn running_exec_is_registered_and_task_cleanup_stops_it() {
+        let backend = NativeProcessBackend::default();
+        let request = exec_request("sleep 30", None);
+        let task_id = request.owner_task_id;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let worker_backend = backend.clone();
+        let worker_cancel = cancel.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let result = worker_backend.exec_with_cancel(request, worker_cancel);
+            let _ = done_tx.send(());
+            result
+        });
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let registered = loop {
+            if !backend.list_task_sessions(task_id).unwrap().is_empty() {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        let stopped = backend.stop_task_sessions(task_id).unwrap();
+        let finished_by_owner_cleanup = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        cancel.cancel();
+        let _ = worker.join().unwrap();
+        assert!(
+            finished_by_owner_cleanup,
+            "owner cleanup failed to stop exec without cancellation fallback"
+        );
+        assert!(registered, "running exec was invisible to task cleanup");
+        assert_eq!(stopped.len(), 1);
+        assert!(backend.processes.lock().unwrap().is_empty());
+        assert!(backend.list_task_sessions(task_id).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_exec_kills_descendants_and_releases_owned_process() {
+        let backend = NativeProcessBackend::default();
+        let path = std::env::temp_dir().join(format!("harness-exec-{}.pid", uuid::Uuid::new_v4()));
+        let request = exec_request(
+            &format!(
+                "nohup sleep 30 >/dev/null 2>&1 & echo $! > '{}'; wait",
+                path.display()
+            ),
+            None,
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let worker_backend = backend.clone();
+        let worker_cancel = cancel.clone();
+        let worker = thread::spawn(move || worker_backend.exec_with_cancel(request, worker_cancel));
+        wait_until(|| {
+            std::fs::read_to_string(&path).is_ok_and(|pid| pid.trim().parse::<u32>().is_ok())
+        });
+        let pid = std::fs::read_to_string(&path).unwrap();
+        cancel.cancel();
+        assert_eq!(worker.join().unwrap().unwrap_err(), "cancelled");
+        wait_until(|| !pid_alive(pid.trim()));
+        std::fs::remove_file(path).unwrap();
+        assert!(backend.processes.lock().unwrap().is_empty());
+        assert!(backend.list_active_sessions().unwrap().is_empty());
     }
 
     /// 命令留下继承 stdout 的后台进程时，sh 退出后不应等到后台进程结束。

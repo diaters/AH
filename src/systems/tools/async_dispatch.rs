@@ -224,6 +224,7 @@ pub fn async_tool_dispatch_system(
             backend: backend_arc,
             experience_candidates,
             current_task_id: Some(task_id),
+            current_agent_id: Some(request.request.agent_id),
             current_origin_channel,
             current_skill_dir,
             cancel: cancel.clone(),

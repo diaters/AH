@@ -228,6 +228,8 @@ pub struct OwnedToolContext {
     /// 当前任务 ID。dispatch 从 `request.request.task_id` 取，供 worker
     /// 在日志或快照关联场景使用；不需要的工具保持 `None`。
     pub current_task_id: Option<TaskId>,
+    /// 实际发起工具调用的 Agent，由 dispatch 从请求注入。
+    pub current_agent_id: Option<crate::domain::AgentId>,
     /// 当前任务的 `origin_channel`，schedule_task 等需要继承输出通道的工具
     /// 由 dispatch 从 `Task.origin_channel` 读取并注入。未显式指定 `output_channel`
     /// 时用作 fallback；不需要继承通道的工具保持 `None`。
@@ -249,6 +251,7 @@ impl Default for OwnedToolContext {
             backend: None,
             experience_candidates: None,
             current_task_id: None,
+            current_agent_id: None,
             current_origin_channel: None,
             current_skill_dir: None,
             cancel: CancellationToken::new(),
@@ -268,6 +271,7 @@ impl OwnedToolContext {
             backend: None,
             experience_candidates: None,
             current_task_id: None,
+            current_agent_id: None,
             current_origin_channel: None,
             current_skill_dir: None,
             cancel: CancellationToken::new(),

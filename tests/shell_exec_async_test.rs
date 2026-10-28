@@ -328,3 +328,41 @@ fn stop_requested_cancels_worker_without_terminal_parent() {
         wait_for_tool_result(&mut world, 3000).expect("worker should return after /stop cancel");
     assert_eq!(result.tool_call_id, "stop-1");
 }
+
+/// dispatch 必须将调用方 Task/Agent 真值带入 backend，任务清理才能找到运行中的 exec。
+#[test]
+fn async_exec_preserves_real_task_and_agent_ownership() {
+    use harness::domain::SessionBackend;
+    let mut world = world_with_shell_exec();
+    let (_, task_id) = spawn_waiting_task(&mut world, "owned exec");
+    let agent_id = harness::domain::AgentId::new();
+    world.spawn(make_request(
+        serde_json::json!({"command": "sleep 30"}),
+        "owner-1",
+        task_id,
+        agent_id,
+    ));
+    world
+        .run_system_once(harness::systems::async_tool_dispatch_system)
+        .unwrap();
+    let backend = world.resource::<harness::NativeProcessBackend>().clone();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let registered = loop {
+        if let Some(handle) = backend.sessions.lock().unwrap().values().next().cloned() {
+            break Some(handle);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let stopped = backend.stop_task_sessions(task_id).unwrap();
+    for cancel in world.query::<&InFlightToolCall>().iter(&world) {
+        cancel.cancel.cancel();
+    }
+    let _ = wait_for_tool_result(&mut world, 3000);
+    let handle = registered.expect("running shell_exec must be registered");
+    assert_eq!(handle.owner_task_id, task_id);
+    assert_eq!(handle.owner_agent_id, agent_id);
+    assert_eq!(stopped.len(), 1);
+}

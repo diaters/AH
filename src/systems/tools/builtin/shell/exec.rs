@@ -5,7 +5,7 @@
 //!
 //! 现路径：`kind() == Async`，dispatch 把请求改造为挂起实体 + spawn worker；
 //! worker 在 `run_async` 内 `spawn_blocking` 包裹 `backend.exec_with_cancel`，
-//! 用 `tokio::select!` 监听 `ctx.cancel.cancelled()`，触发时返回
+//! backend 监听 `ctx.cancel`，清理进程和输出 reader 后返回
 //! `Err(ToolError::ExecutionFailed("cancelled"))`。
 //!
 //! 业务超时三层链不动：入参 `timeout_secs` → `shell_default_exec_timeout_secs`
@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use crate::domain::SessionBackend;
 use crate::domain::{
-    AgentId, BuiltinTool, OwnedToolContext, SessionStartRequest, ShellExecResult, TaskId,
-    ToolAction, ToolActionKind, ToolContext, ToolError, ToolFuture, ToolWorkerOutput,
+    BuiltinTool, OwnedToolContext, SessionStartRequest, ShellExecResult, ToolAction,
+    ToolActionKind, ToolContext, ToolError, ToolFuture, ToolWorkerOutput,
 };
 
 /// 缺省 tail_lines（与原 sync 路径 ToolContext 字段保持一致）。
@@ -92,11 +92,7 @@ impl BuiltinTool for ShellExecTool {
                 )
             })?;
 
-            // 3. 构造 SessionStartRequest——task_id / agent_id 由 dispatch 通过
-            //    OwnedToolContext 间接传入；但当前 OwnedToolContext 没有这两个字段。
-            //    owner_task_id / owner_agent_id 在 backend 内仅用于 session 归属审计，
-            //    shell_exec 是一次性 exec 不开 session，传 nil 不影响行为。
-            //    若后续需要真实归属，dispatch 注入 OwnedToolContext 时补充即可。
+            // 3. 保留 dispatch 注入的真实归属，运行中的 exec 也参与 Task 清理。
             let request = SessionStartRequest {
                 command,
                 session_name: None,
@@ -104,8 +100,16 @@ impl BuiltinTool for ShellExecTool {
                 env,
                 timeout_secs,
                 tail_lines,
-                owner_task_id: TaskId::nil(),
-                owner_agent_id: AgentId::nil(),
+                owner_task_id: ctx.current_task_id.ok_or_else(|| {
+                    ToolError::InternalState(
+                        "shell_exec requires current Task ownership".to_string(),
+                    )
+                })?,
+                owner_agent_id: ctx.current_agent_id.ok_or_else(|| {
+                    ToolError::InternalState(
+                        "shell_exec requires current Agent ownership".to_string(),
+                    )
+                })?,
                 notify_on_exit: false,
             };
 
@@ -114,27 +118,14 @@ impl BuiltinTool for ShellExecTool {
             let join_handle =
                 tokio::task::spawn_blocking(move || backend.exec_with_cancel(request, cancel));
 
-            // 5. select! 监听 cancel 与 spawn_blocking 句柄
-            let result = tokio::select! {
-                // 父任务取消：让 spawn_blocking 继续 race 完成（无法中断 OS 线程），
-                // 但提前返回 cancelled 错误让 ingest 闭合
-                _ = ctx.cancel.cancelled() => {
-                    return Err(ToolError::ExecutionFailed("cancelled".to_string()));
-                }
-                handle_result = join_handle => match handle_result {
-                    Ok(Ok(handle)) => Ok(handle),
-                    Ok(Err(error)) => {
-                        if error == "cancelled" {
-                            Err(ToolError::ExecutionFailed("cancelled".to_string()))
-                        } else {
-                            Err(ToolError::ExecutionFailed(error))
-                        }
-                    }
-                    Err(join_err) => Err(ToolError::ExecutionFailed(format!(
-                        "spawn_blocking join failed: {join_err}"
-                    ))),
-                },
-            }?;
+            // 5. 等待 backend 完成取消清理，避免结果已回传但 OS 子进程仍在运行。
+            // spawn_blocking 不能强制 abort；token 由内部轮询消费并执行 kill + reap。
+            let result = join_handle
+                .await
+                .map_err(|join_err| {
+                    ToolError::ExecutionFailed(format!("spawn_blocking join failed: {join_err}"))
+                })?
+                .map_err(ToolError::ExecutionFailed)?;
 
             // 6. 正常完成：把 handle 转 ShellExecResult
             Ok(ToolWorkerOutput::Value(
@@ -148,6 +139,26 @@ impl BuiltinTool for ShellExecTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{AgentId, TaskId};
+
+    #[test]
+    fn missing_owner_context_rejects_exec_before_spawn() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for missing_task in [true, false] {
+            let backend = crate::systems::tools::NativeProcessBackend::default();
+            let mut ctx = OwnedToolContext::empty_for_test(30);
+            ctx.backend = Some(Arc::new(backend.clone()));
+            ctx.current_task_id = (!missing_task).then(TaskId::new);
+            ctx.current_agent_id = missing_task.then(AgentId::new);
+            let result = runtime
+                .block_on(ShellExecTool.run_async(serde_json::json!({"command": "true"}), ctx));
+            assert!(
+                matches!(result, Err(ToolError::InternalState(_))),
+                "missing owner must reject exec: {result:?}"
+            );
+            assert!(backend.sessions.lock().unwrap().is_empty());
+        }
+    }
 
     #[test]
     fn shell_exec_kind_is_async() {
