@@ -178,6 +178,7 @@ if tool_name == "my-plugin:echo" {
 - 每个脚本在独立线程中执行
 - 单次执行超时 1 秒
 - 引擎最大调用深度 32 层
+- 操作数上限 100 万次；单个字符串最大 1 MiB，数组 / map 最多 10 万个元素，超出时脚本以错误终止
 - 不加载标准库（无文件系统/网络访问）
 - 所有与 Harness 的交互通过 Host API 函数完成
 
@@ -572,7 +573,7 @@ Hook 执行错误以 `HookScriptError` 记录，包含插件 ID、hook 点和错
 - `emit_message` 在 v1 中仅记录日志，消息不会路由到其他插件
 - `CreateWorkItem` / `SetApprovalDecision` / `ExperienceSetPinned` 等
   WorldCommand 在 v1 中尚未实现回放
-- 超时线程不会强制终止，可能在后台继续运行（v1 接受此潜在泄漏）
+- 超时线程不会强制终止，但受操作数上限约束，死循环脚本也会在有限步内终止
 - 单个插件的 `[[commands]]` 中 `display` 不允许重复
 
 ## 完整示例
