@@ -158,8 +158,8 @@ exactly-once 闭合。sweeper claim 是「兜底的兜底」——`catch_unwind`
 `cancel_monitor_system` 与 sweeper 对称：sweeper 扫「超时」发 error + claim；
 cancel_monitor 扫「父任务终态」调用 `CancellationToken.cancel()` + claim。
 
-触发链：父任务终态 → cancel_monitor `token.cancel()` → worker `tokio::select!` 监听
-`cancel.cancelled()` → kill 子进程 → 回 `Err(ExecutionFailed("cancelled"))` → ingest
+触发链：父任务终态 → cancel_monitor `token.cancel()` → worker 消费取消信号
+→ 清理子进程与同组后代、回收组长、限时 drain 输出 → 回 `Err(ExecutionFailed("cancelled"))` → ingest
 落地。claim 后 sweeper 不再扫这个实体，挂起实体保留等 ingest 收到 cancelled error。
 
 ## 5. 新工具开发指南
@@ -238,8 +238,9 @@ __写工具__（schedule_task / delete_scheduled_task 等）：worker 不碰状�
 | `backend` | `Arc<dyn SessionBackend>` 句柄 | dispatch（按需） |
 | `experience_candidates` | 经验候选快照 | dispatch（按 task_id 过滤） |
 | `current_task_id` | 当前任务 ID | dispatch |
+| `current_agent_id` | 实际调用 Agent ID | dispatch（从工具请求） |
 | `current_origin_channel` | 当前任务 origin_channel（schedule_task 继承用） | dispatch（从 `Task.origin_channel`） |
-| `cancel` | `CancellationToken` 句柄 | dispatch（worker `select!` 监听） |
+| `cancel` | `CancellationToken` 句柄 | dispatch（worker 消费取消信号） |
 
 `OwnedToolContext::empty_for_test(secs)` 提供测试构造捷径。
 
@@ -248,10 +249,18 @@ __写工具__（schedule_task / delete_scheduled_task 等）：worker 不碰状�
 dispatch 创建 `CancellationToken`，挂两份：
 
 - 一份到 `InFlightToolCall.cancel`（`cancel_monitor_system` 用）
-- 一份到 `OwnedToolContext.cancel`（worker 在 `run_async` 内 `tokio::select!` 监听用）
+- 一份到 `OwnedToolContext.cancel`（worker 或其 backend 消费取消信号）
 
-长任务工具（shell_exec 等）在 worker 内必须 `select!` 监听 `cancel.canceled()`，父任务
-终态时能及时 kill 子进程并回送 cancelled error。
+长任务工具必须及时消费取消信号。`shell_exec` 将 token 传给阻塞 backend，
+通过异步等待 `spawn_blocking` 结果，确保进程清理已结束才回送 cancelled error。
+backend 对显式停止先发 TERM，最多等待一秒，再强杀同组残留；输出 drain 宽限为 500ms。
+
+`dispatch` 将真实 Task / Agent 注入 owned context，缺失归属的 `shell_exec` 在 spawn 前拒绝执行。
+运行中的 exec 与 `shell_start` 都登记在 backend 中，因此 Task 清理能找到两者。
+两者共用登记与输出处理；exec 继承宿主 stdin，`shell_start` 创建供 `shell_input` 使用的交互输入管道。
+clone 只共享管理器，释放临时 clone 不会停止会话；`NativeProcessBackend::shutdown()`
+作为幂等显式关闭入口，阻止后续启动并回收当前注册进程。批量关闭与 Task 清理共用一秒 TERM 宽限和一次 500ms 输出 drain 宽限，避免逐会话串行累加。最终共享状态析构只负责遗漏路径的兜底；
+实例级独立守护与主运行时关闭接线属于后续工作。
 
 ### 5.5 测试纪律
 

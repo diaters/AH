@@ -46,6 +46,7 @@
 
 | 文档 | 状态 | 定位 |
 | --- | --- | --- |
+| `analysis/2026-10-29-process-ownership-quality-review.md` | 自查记录 | 任务 A 终态竞态修正与验证边界 |
 | `analysis/skill-path-injection-improvement.md` | 待评审 | Skill 路径注入改进方案（历史分析） |
 | `analysis/test-seam-quality-low-value-inventory.md` | 待评审 | 低质量测试清单与原因（Seam 与证伪力评估），评审后拆解为修复任务 |
 
@@ -76,6 +77,10 @@
 > （授权范围、图片信任边界、无 TUI 模式等加固方案，已实施）。
 
 ## 活跃规格与计划（superpowers/）
+
+新增评审稿：
+[单通道用户任务、受管进程与持续监控通知修正](superpowers/specs/2026-10-28-channel-task-and-process-lifecycle-design.md)。
+本文为实施前评审输入，不代表当前能力已变更。
 
 > 完整清单见 `superpowers/README.md`。当前：__13 个活跃计划、12 个规格__（其中 11 篇标注 `当前有效`，1 篇草案，1 篇待补状态）。
 

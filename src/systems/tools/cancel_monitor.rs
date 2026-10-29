@@ -5,15 +5,16 @@
 //! 两者操作不同条件子集，claim 后都不 despawn 挂起实体——落地与 despawn
 //! 只发生在 `ingest_tool_results_system` 单点。
 //!
-//! 触发链：父任务终态 → cancel_monitor `token.cancel()` → worker
-//! `tokio::select!` 监听 `cancel.cancelled()` → kill 子进程 → 回
-//! `Err(ToolError::ExecutionFailed("cancelled"))` → ingest 落地。
+//! 触发链：父任务终态 → cancel_monitor `token.cancel()` → worker 或 backend
+//! 协作消费取消信号 → 清理所属资源 → 回送 cancelled error → ingest 落地。
+//! `shell_exec` 等待 backend 完成进程清理和回收后，才回送
+//! `Err(ToolError::ExecutionFailed("cancelled"))`。
 //!
 //! claim 语义：摘除 `InFlightToolCall` 后 sweeper 不再扫这个实体（防重复发 error）；
 //! 挂起实体保留等 ingest 收到 worker 回送的 cancelled error 后落地 + despawn。
-//! 若 worker 在 cancel 后未能及时回送（极端 race），sweeper 已无法兜底
-//! （`InFlightToolCall` 已摘除）——但 `CancellationToken` 的 `select!` 路径
-//! 保证 worker 一定会退出，回送通道不会断。
+//! claim 后 sweeper 已无法兜底（`InFlightToolCall` 已摘除）。取消是协作式约定，
+//! 此 system 不等待 worker 退出，也不保证其一定回送；具体工具与 backend
+//! 负责消费 token 并完成清理，不能把发出取消信号等同于资源已经释放。
 
 use crate::prelude::*;
 use tracing::debug;
@@ -51,7 +52,7 @@ pub fn cancel_monitor_system(
             "parent task terminal; cancelling worker"
         );
 
-        // 触发取消（worker tokio::select! 监听 → kill 子进程 → 回 error）
+        // 发出取消信号，由 worker 或 backend 协作消费并完成资源清理。
         in_flight.cancel.cancel();
 
         // claim：摘除在飞标记，防止 sweeper 重复发 error
