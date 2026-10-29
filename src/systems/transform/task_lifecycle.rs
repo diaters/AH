@@ -218,7 +218,7 @@ pub fn task_termination_system(
                     task_id: task.id,
                     content: format!("会话资源清理失败，暂不释放通道名额：{e}"),
                 });
-                tracing::warn!(event = "ConversationCleanupFailed", task_id = %task.id, error = %e, "conversation cleanup failed");
+                tracing::warn!(event = "ConversationCleanupFailed", task_id = %task.id, error_type = "SessionCleanup", error = %e, "conversation cleanup failed");
                 debug!(
                     event = "TaskShellSessionsStopFailed",
                     task_id = %task.id,
@@ -506,7 +506,7 @@ pub fn clear_task_system(
             cleanup_errors.sort();
             let reason = cleanup_errors.join("; ");
             if reported_failures.get(&msg.task_id) != Some(&reason) {
-                tracing::warn!(event = "ConversationCleanupFailed", task_id = %msg.task_id, error = %reason, "conversation cleanup remains blocked");
+                tracing::warn!(event = "ConversationCleanupFailed", task_id = %msg.task_id, error_type = "SessionCleanup", error = %reason, "conversation cleanup remains blocked");
                 commands.spawn(crate::domain::SystemOutputMessage {
                     task_id: msg.task_id,
                     content: format!("会话清理未完成，暂时保留通道占用：{reason}"),
