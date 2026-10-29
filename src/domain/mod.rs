@@ -345,6 +345,7 @@ pub struct AgentEntry {
 
 // ============ 测试 ============
 
+pub(crate) use message::InputSequencer;
 pub use message::{InputBlocked, InputSequence};
 
 #[cfg(test)]

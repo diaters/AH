@@ -21,6 +21,7 @@ pub struct FrontendPlugin;
 
 impl Plugin for FrontendPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<crate::domain::InputSequencer>();
         // 启动补跑：为错过运行的 cron 定时任务生成一次补跑触发
         app.add_systems(Startup, schedule_catch_up_startup_system);
         app.add_systems(
