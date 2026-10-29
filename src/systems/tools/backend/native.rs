@@ -9,7 +9,7 @@ use std::{
 
 use crate::prelude::Resource;
 use chrono::Utc;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use crate::{
     domain::SessionBackend,
@@ -75,6 +75,8 @@ pub struct NativeProcessBackend {
     pub stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
     lifecycle: Arc<BackendLifecycle>,
+    #[cfg(unix)]
+    supervisor: Option<Arc<super::supervisor::SupervisorClient>>,
     /// exec 与 shell_start 的输出读取线程，结束时限时读取管道中的剩余输出。
     readers: Arc<Mutex<HashMap<SessionHandleId, Vec<thread::JoinHandle<()>>>>>,
 }
@@ -94,6 +96,8 @@ impl Default for NativeProcessBackend {
         let stdins = Arc::default();
         let readers = Arc::default();
         Self {
+            #[cfg(unix)]
+            supervisor: None,
             sessions: Arc::default(),
             runtimes: Arc::default(),
             lifecycle: Arc::new(BackendLifecycle {
@@ -116,7 +120,7 @@ impl Drop for BackendLifecycle {
             for process in processes.values() {
                 if let Ok(mut child) = process.lock() {
                     kill_process_tree(&mut child);
-                    let _ = child.wait();
+                    let _ = reap_child(&mut child);
                 }
             }
             processes.clear();
@@ -151,12 +155,18 @@ impl SessionBackend for NativeProcessBackend {
         request: SessionStartRequest,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Exec(request), Some(cancel));
+        }
+
         let tail_lines = request.tail_lines;
         let deadline = request
             .timeout_secs
             .map(|seconds| Instant::now() + Duration::from_secs(seconds));
         let handle = self.spawn_registered_process(request, Stdio::inherit())?;
         let id = handle.handle_id;
+        let _scope = self.session_span(id).entered();
         // 保存自己的 child 引用；task cleanup 可以从公共注册表移除它。
         let process = self
             .processes
@@ -185,7 +195,7 @@ impl SessionBackend for NativeProcessBackend {
                     Err(error) => {
                         // 轮询错误同样负责清理，而非把子进程遗留给析构兜底。
                         kill_process_tree(&mut child);
-                        let _ = child.wait();
+                        let _ = reap_child(&mut child);
                         drop(child);
                         self.stop_session(id)?;
                         return Err(error.to_string());
@@ -222,10 +232,20 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn start_session(&self, request: SessionStartRequest) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Start(request), None);
+        }
+
         self.spawn_registered_process(request, Stdio::piped())
     }
 
     fn read_session(&self, request: SessionReadRequest) -> Result<SessionSummary, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Read(request), None);
+        }
+
         self.refresh_session_state(request.handle_id)?;
         let mut handle = self.get_status(request.handle_id)?;
         handle.output = self.output_snapshot(request.handle_id, request.tail_lines)?;
@@ -234,6 +254,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn list_active_sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::List, None);
+        }
+
         self.refresh_session_state_batch(self.all_session_ids()?)?;
         let active_ids: Vec<_> = self
             .sessions
@@ -247,6 +272,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn input_session(&self, request: SessionInputRequest) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Input(request), None);
+        }
+
         self.set_interaction_state(request.handle_id, SessionInteractionState::Busy)?;
         let stdin = self
             .stdins
@@ -297,6 +327,12 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn stop_session(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::Stop(handle_id), None);
+        }
+
+        let _scope = self.session_span(handle_id).entered();
         let process = self
             .processes
             .lock()
@@ -309,7 +345,7 @@ impl SessionBackend for NativeProcessBackend {
                 .lock()
                 .map_err(|_| "process mutex poisoned".to_string())?;
             terminate_process_tree(&mut child);
-            let _ = child.wait();
+            let _ = reap_child(&mut child);
         }
         self.drain_session_readers(handle_id)?;
 
@@ -329,9 +365,10 @@ impl SessionBackend for NativeProcessBackend {
             .map_err(|_| "stdin map poisoned".to_string())?
             .remove(&handle_id);
 
-        debug!(
+        info!(
             event = "ShellSessionStopped",
             handle_id = %handle_id,
+            task_id = %handle.owner_task_id, agent_id = %handle.owner_agent_id,
             "shell_stop session stopped (real process killed)"
         );
 
@@ -339,6 +376,11 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn list_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionSummary>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::ListTask(task_id), None);
+        }
+
         self.refresh_session_state_batch(self.task_session_ids(task_id)?)?;
         let active_ids = self.active_session_ids_for_task(task_id)?;
         self.live_summaries(active_ids)
@@ -349,6 +391,14 @@ impl SessionBackend for NativeProcessBackend {
         task_id: TaskId,
         handle_id: SessionHandleId,
     ) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(
+                super::supervisor::Operation::AssertOwner(task_id, handle_id),
+                None,
+            );
+        }
+
         let handle = self.get_status(handle_id)?;
         if handle.owner_task_id != task_id {
             return Err(format!(
@@ -360,11 +410,66 @@ impl SessionBackend for NativeProcessBackend {
     }
 
     fn stop_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionHandleId>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::StopTask(task_id), None);
+        }
+
         self.stop_sessions(self.active_session_ids_for_task(task_id)?)
     }
 }
 
 impl NativeProcessBackend {
+    /// 创建本实例独占的进程服务；失败直接返回，不降级为本地启动。
+    #[cfg(unix)]
+    pub fn supervised(executable: impl AsRef<std::path::Path>) -> Result<Self, String> {
+        let supervisor = super::supervisor::SupervisorClient::launch(executable.as_ref(), None)?;
+        Ok(Self {
+            supervisor: Some(Arc::new(supervisor)),
+            ..Self::default()
+        })
+    }
+
+    /// 显式写入独立同步进程审计文件；默认构造器不创建用户日志。
+    #[cfg(unix)]
+    pub fn supervised_with_log(
+        executable: impl AsRef<std::path::Path>,
+        log_path: &std::path::Path,
+    ) -> Result<Self, String> {
+        let supervisor =
+            super::supervisor::SupervisorClient::launch(executable.as_ref(), Some(log_path))?;
+        Ok(Self {
+            supervisor: Some(Arc::new(supervisor)),
+            ..Self::default()
+        })
+    }
+
+    pub fn supervised_current_exe_with_log(log_path: &std::path::Path) -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            Self::supervised_with_log(
+                std::env::current_exe().map_err(|error| error.to_string())?,
+                log_path,
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = log_path;
+            Err("process supervision requires a supported Unix platform".to_string())
+        }
+    }
+
+    pub fn supervised_current_exe() -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            Self::supervised(std::env::current_exe().map_err(|error| error.to_string())?)
+        }
+        #[cfg(not(unix))]
+        {
+            Err("process supervision requires a supported Unix platform".to_string())
+        }
+    }
+
     /// 共用进程登记与输出生命周期；exec 继承 stdin，会话创建交互输入管道。
     fn spawn_registered_process(
         &self,
@@ -403,6 +508,7 @@ impl NativeProcessBackend {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
+        let pid = child.id();
         let child = Arc::new(Mutex::new(child));
         self.processes
             .lock()
@@ -455,10 +561,10 @@ impl NativeProcessBackend {
             .map_err(|_| "reader map poisoned".to_string())?
             .insert(handle_id, readers.into_iter().flatten().collect());
 
-        debug!(
+        info!(
             event = "ShellSessionStarted",
-            handle_id = %handle_id,
-            command = %handle.command,
+            handle_id = %handle_id, pid, process_group = pid,
+            task_id = %handle.owner_task_id, agent_id = %handle.owner_agent_id,
             "native shell process registered"
         );
 
@@ -468,6 +574,11 @@ impl NativeProcessBackend {
     /// 幂等关停所有已注册进程；所有 clone 立即拒绝后续 spawn。
     /// 此接口由运行时所有者调用，最终析构仅提供兜底。
     pub fn shutdown(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.shutdown();
+        }
+
         let mut shutdown = self
             .lifecycle
             .shutdown
@@ -492,10 +603,11 @@ impl NativeProcessBackend {
                 .lock()
                 .map_err(|_| "process map poisoned".to_string())?;
             ids.iter()
-                .filter_map(|id| processes.get(id).cloned())
+                .filter_map(|id| processes.get(id).cloned().map(|process| (*id, process)))
                 .collect()
         };
-        for process in &processes {
+        for (id, process) in &processes {
+            let _scope = self.session_span(*id).entered();
             if let Ok(mut child) = process.lock() {
                 send_termination_signal(&mut child);
             }
@@ -503,7 +615,7 @@ impl NativeProcessBackend {
         #[cfg(unix)]
         {
             let deadline = Instant::now() + Duration::from_secs(1);
-            while processes.iter().any(|process| {
+            while processes.iter().any(|(_, process)| {
                 process
                     .lock()
                     .is_ok_and(|child| matches!(observe_child_exit(&child), Ok(false)))
@@ -512,10 +624,11 @@ impl NativeProcessBackend {
                 thread::sleep(Duration::from_millis(10));
             }
         }
-        for process in &processes {
+        for (id, process) in &processes {
+            let _scope = self.session_span(*id).entered();
             if let Ok(mut child) = process.lock() {
                 kill_process_tree(&mut child);
-                let _ = child.wait();
+                let _ = reap_child(&mut child);
             }
         }
         let readers: Vec<_> = {
@@ -534,7 +647,11 @@ impl NativeProcessBackend {
             match self.stop_session(id) {
                 Ok(_) => stopped.push(id),
                 Err(error) => {
-                    debug!(event = "TaskSessionStopFailed", handle_id = %id, error = %error,
+                    let owner = self.get_status(id).ok();
+                    warn!(event = "TaskSessionStopFailed", handle_id = %id,
+                        task_id = ?owner.as_ref().map(|handle| handle.owner_task_id),
+                        agent_id = ?owner.as_ref().map(|handle| handle.owner_agent_id),
+                        error_type = "SessionCleanup", error = %error,
                         "failed to stop session during batch cleanup, continuing");
                     errors.push(format!("session {id}: {error}"));
                 }
@@ -544,6 +661,16 @@ impl NativeProcessBackend {
             Ok(stopped)
         } else {
             Err(errors.join("; "))
+        }
+    }
+
+    /// 每次清理都附带所有权上下文，守护器独立日志无需反查宿主日志。
+    fn session_span(&self, id: SessionHandleId) -> tracing::Span {
+        match self.get_status(id) {
+            Ok(handle) => tracing::info_span!("OwnedProcess",
+                task_id = %handle.owner_task_id, agent_id = %handle.owner_agent_id,
+                session_id = %id),
+            Err(_) => tracing::Span::none(),
         }
     }
 
@@ -675,6 +802,7 @@ impl NativeProcessBackend {
 
     /// 同步后台进程状态到会话句柄，避免 shell_read/list 读到过期状态。
     fn refresh_session_state(&self, handle_id: SessionHandleId) -> Result<(), String> {
+        let _scope = self.session_span(handle_id).entered();
         let process = {
             self.processes
                 .lock()
@@ -806,7 +934,7 @@ fn poll_process_exit(child: &mut Child) -> std::io::Result<Option<std::process::
         Ok(false) => return Ok(None),
         Ok(true) => {
             kill_process_tree(child);
-            return child.wait().map(Some);
+            return reap_child(child).map(Some);
         }
         // 另一路 stop/refresh 已回收时，Child::try_wait 读取其缓存，不再信号旧 PGID。
         Err(error) if error.raw_os_error() == Some(libc::ECHILD) => {}
@@ -815,15 +943,33 @@ fn poll_process_exit(child: &mut Child) -> std::io::Result<Option<std::process::
     child.try_wait()
 }
 
+fn reap_child(child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(unix)]
+    let owned = observe_child_exit(child).is_ok();
+    #[cfg(not(unix))]
+    let owned = true;
+    let status = child.wait()?;
+    if owned {
+        info!(event = "ProcessReaped", pid = child.id(), exit_code = ?status.code(), "owned process reaped");
+    }
+    Ok(status)
+}
+
 fn send_termination_signal(child: &mut Child) {
     #[cfg(unix)]
     if observe_child_exit(child).is_ok()
         && let Ok(pid) = libc::pid_t::try_from(child.id())
     {
         // SAFETY: 未回收的组长 PID 保留，确保只向其原始进程组发信号。
-        unsafe {
-            libc::killpg(pid, libc::SIGTERM);
-        }
+        // SAFETY: 上方已经确认未回收的组长保留该 PGID。
+        let result = unsafe { libc::killpg(pid, libc::SIGTERM) };
+        info!(
+            event = "ProcessGroupTermSent",
+            pid,
+            process_group = pid,
+            delivered = result == 0,
+            "requested graceful process group stop"
+        );
     }
     #[cfg(not(unix))]
     let _ = child.kill();
@@ -849,9 +995,15 @@ fn kill_process_tree(child: &mut Child) {
         && let Ok(pid) = libc::pid_t::try_from(child.id())
     {
         // SAFETY: 未回收的组长 PID 仍保留，spawn 为它创建了独立进程组。
-        unsafe {
-            libc::killpg(pid, libc::SIGKILL);
-        }
+        // SAFETY: 上方已经确认未回收的组长保留该 PGID。
+        let result = unsafe { libc::killpg(pid, libc::SIGKILL) };
+        info!(
+            event = "ProcessGroupKillSent",
+            pid,
+            process_group = pid,
+            delivered = result == 0,
+            "forced remaining owned process group to stop"
+        );
     }
     let _ = child.kill();
 }

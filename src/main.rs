@@ -21,7 +21,7 @@ use harness::{
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
 
-fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
+fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, PathBuf) {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -36,13 +36,13 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
         .from_env_lossy();
 
     let log_dir = std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
-    let file_appender = tracing_appender::rolling::never(
-        &log_dir,
-        format!(
-            "harness_{}.jsonl",
-            chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
-        ),
-    );
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let process_log = PathBuf::from(&log_dir).join(format!(
+        "harness_{timestamp}_{}.processes.jsonl",
+        std::process::id()
+    ));
+    let file_appender =
+        tracing_appender::rolling::never(&log_dir, format!("harness_{timestamp}.jsonl"));
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -53,7 +53,7 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 
     tracing_subscriber::registry().with(file_layer).init();
 
-    guard
+    (guard, process_log)
 }
 
 /// RAII guard ensuring terminal is restored even on panic.
@@ -75,6 +75,13 @@ impl Drop for TuiGuard {
 const HEADLESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref()
+        == Some(harness::systems::tools::backend::supervisor::INTERNAL_FLAG)
+    {
+        return harness::systems::tools::backend::supervisor::run_internal()
+            .map_err(anyhow::Error::msg);
+    }
     // `--headless`：不初始化终端，只驱动 ECS；审批只能经 IM 通道完成
     let headless = std::env::args().skip(1).any(|arg| arg == "--headless");
 
@@ -83,7 +90,11 @@ fn main() -> Result<()> {
         .expect("failed to install rustls ring crypto provider");
 
     dotenvy::from_filename(".env.local").ok();
-    let _log_guard = init_tracing();
+    let (_log_guard, process_log) = init_tracing();
+    // 正常入口必须先加载 dotenv 和日志，再让守护器继承宿主环境。
+    let process_backend =
+        harness::NativeProcessBackend::supervised_current_exe_with_log(&process_log)
+            .map_err(anyhow::Error::msg)?;
 
     // 安装 panic hook：确保 panic 时日志能 flush，并恢复终端
     let default_hook = std::panic::take_hook();
@@ -109,6 +120,7 @@ fn main() -> Result<()> {
         event = "HarnessStarting",
         version = env!("CARGO_PKG_VERSION"),
         headless,
+        process_log = %process_log.display(),
         "AI Harness starting"
     );
 
@@ -204,6 +216,10 @@ fn main() -> Result<()> {
         frontends,
         channel_manager,
     );
+
+    app.insert_resource(process_backend.clone());
+    // 在 app / channel / runtime 之前析构，覆盖 TUI 初始化等后续错误返回和 panic unwind。
+    let _process_shutdown = ProcessShutdownGuard(process_backend.clone());
 
     // 加载触发器配置（如果已配置）
     let triggers_config_path = app
@@ -347,6 +363,8 @@ fn main() -> Result<()> {
 
     info!(event = "HarnessExiting", total_ticks, "AI Harness exiting");
 
+    process_backend.shutdown().map_err(anyhow::Error::msg)?;
+
     // 优雅关闭 ChannelManager
     {
         let channel_manager = app.world().resource::<ChannelManager>();
@@ -355,6 +373,15 @@ fn main() -> Result<()> {
     let _ = runtime_clone.block_on(channel_handle);
 
     Ok(())
+}
+
+struct ProcessShutdownGuard(harness::NativeProcessBackend);
+impl Drop for ProcessShutdownGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.shutdown() {
+            warn!(event = "ProcessSupervisorShutdownFailed", error = %error, "process service cleanup failed");
+        }
+    }
 }
 
 /// TUI 运行形态的主循环钩子：读取终端事件、消费引擎事件、渲染界面。

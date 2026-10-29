@@ -21,7 +21,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 群聊审批绑定任务发起人（可配置 `approvers` 代审）；多轮会话空闲超时自动结束
 - 精简后的 shell 工具集：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`；
-  一次性 exec 返回前清理同组后台后代，运行中的 exec 与会话都登记真实 Task / Agent 归属
+  一次性 exec 返回前清理同组后台后代，运行中的 exec 与会话都登记真实 Task / Agent 归属；
+  Unix 生产入口由独立守护器实际启动命令，宿主正常退出或异常死亡后按实例回收受管进程组
 - 记忆治理：ShortTermMemory、LongTermMemory、SharedKnowledgeBase 三层收敛，
   支持衰退淘汰与 JSON 文件持久化
 - 经验候选治理：两层分层汇聚模型，顶层治理后知识/技能落盘与孵化提案
