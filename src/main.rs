@@ -21,7 +21,7 @@ use harness::{
 use tokio::runtime::Runtime;
 use tracing::{debug, info, warn};
 
-fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
+fn init_tracing() -> (tracing_appender::non_blocking::WorkerGuard, PathBuf) {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -36,13 +36,13 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
         .from_env_lossy();
 
     let log_dir = std::env::var("HARNESS_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
-    let file_appender = tracing_appender::rolling::never(
-        &log_dir,
-        format!(
-            "harness_{}.jsonl",
-            chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
-        ),
-    );
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let process_log = PathBuf::from(&log_dir).join(format!(
+        "harness_{timestamp}_{}.processes.jsonl",
+        std::process::id()
+    ));
+    let file_appender =
+        tracing_appender::rolling::never(&log_dir, format!("harness_{timestamp}.jsonl"));
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -53,7 +53,7 @@ fn init_tracing() -> tracing_appender::non_blocking::WorkerGuard {
 
     tracing_subscriber::registry().with(file_layer).init();
 
-    guard
+    (guard, process_log)
 }
 
 /// RAII guard ensuring terminal is restored even on panic.
@@ -82,9 +82,6 @@ fn main() -> Result<()> {
         return harness::systems::tools::backend::supervisor::run_internal()
             .map_err(anyhow::Error::msg);
     }
-    let process_backend =
-        harness::NativeProcessBackend::supervised_current_exe().map_err(anyhow::Error::msg)?;
-
     // `--headless`：不初始化终端，只驱动 ECS；审批只能经 IM 通道完成
     let headless = std::env::args().skip(1).any(|arg| arg == "--headless");
 
@@ -93,7 +90,11 @@ fn main() -> Result<()> {
         .expect("failed to install rustls ring crypto provider");
 
     dotenvy::from_filename(".env.local").ok();
-    let _log_guard = init_tracing();
+    let (_log_guard, process_log) = init_tracing();
+    // 正常入口必须先加载 dotenv 和日志，再让守护器继承宿主环境。
+    let process_backend =
+        harness::NativeProcessBackend::supervised_current_exe_with_log(&process_log)
+            .map_err(anyhow::Error::msg)?;
 
     // 安装 panic hook：确保 panic 时日志能 flush，并恢复终端
     let default_hook = std::panic::take_hook();
@@ -119,6 +120,7 @@ fn main() -> Result<()> {
         event = "HarnessStarting",
         version = env!("CARGO_PKG_VERSION"),
         headless,
+        process_log = %process_log.display(),
         "AI Harness starting"
     );
 

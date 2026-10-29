@@ -33,7 +33,26 @@ fn host_fixture() {
     let Some(directory) = std::env::var_os(HOST_DIR).map(PathBuf::from) else {
         return;
     };
-    let backend = NativeProcessBackend::supervised(env!("CARGO_BIN_EXE_harness")).unwrap();
+    // 与生产正常入口一致，必须先加载环境，再启动独立服务。
+    dotenvy::from_filename(".env.local").ok();
+    let backend = if std::env::var("HARNESS_LIFECYCLE_EXEC_MODE").as_deref() == Ok("logged") {
+        NativeProcessBackend::supervised_with_log(
+            env!("CARGO_BIN_EXE_harness"),
+            &directory.join("supervisor.jsonl"),
+        )
+        .unwrap()
+    } else {
+        NativeProcessBackend::supervised(env!("CARGO_BIN_EXE_harness")).unwrap()
+    };
+    if std::env::var("HARNESS_LIFECYCLE_EXEC_MODE").as_deref() == Ok("dotenv") {
+        backend
+            .exec_blocking(request(format!(
+                "review-env-command > '{}'",
+                directory.join("dotenv-result").display()
+            )))
+            .unwrap();
+        return;
+    }
     if std::env::var("HARNESS_LIFECYCLE_EXEC_MODE").as_deref() == Ok("eof") {
         let mut command = request("cat; echo done".to_string());
         command.timeout_secs = Some(1);
@@ -45,11 +64,18 @@ fn host_fixture() {
         assert_eq!(result.output.output, "done");
         return;
     }
-    let command = request(format!(
+    let mut command = request(format!(
         "echo $$ > '{}'; nohup sleep 120 >/dev/null 2>&1 & echo $! > '{}'; wait",
         directory.join("leader").display(),
         directory.join("descendant").display(),
     ));
+    if std::env::var("HARNESS_LIFECYCLE_EXEC_MODE").as_deref() == Ok("logged") {
+        command.command.push_str(" # do-not-log-review-secret");
+        command.env.insert(
+            "HARNESS_REVIEW_SECRET".to_string(),
+            "do-not-log-review-secret".to_string(),
+        );
+    }
     if std::env::var("HARNESS_LIFECYCLE_EXEC_MODE").as_deref() == Ok("long") {
         let worker_backend = backend.clone();
         thread::spawn(move || worker_backend.exec_blocking(command));
@@ -368,8 +394,11 @@ fn exec_timeout_and_interactive_session_use_separate_stdin() {
 
 #[test]
 fn supervisor_death_fails_closed_without_unmanaged_spawn() {
-    let backend = supervised();
     let directory = tempfile::tempdir().unwrap();
+    let log_path = directory.path().join("unexpected-exit.jsonl");
+    let backend =
+        NativeProcessBackend::supervised_with_log(env!("CARGO_BIN_EXE_harness"), &log_path)
+            .unwrap();
     backend
         .start_session(request(format!(
             "echo $$ > '{}'; echo $PPID > '{}'; exec sleep 120",
@@ -387,6 +416,12 @@ fn supervisor_death_fails_closed_without_unmanaged_spawn() {
     let refused = backend.start_session(request("true".to_string())).is_err();
     leader.cleanup();
     assert!(refused, "backend silently fell back to unmanaged execution");
+    assert!(
+        std::fs::read_to_string(log_path)
+            .unwrap()
+            .contains("ProcessSupervisorAbnormalExit"),
+        "unexpected service death was not independently logged"
+    );
 }
 
 #[test]
@@ -461,6 +496,7 @@ fn supervised_exec_inherits_controlled_eof_stdin() {
         .args(["--exact", "host_fixture", "--nocapture"])
         .env(HOST_DIR, directory.path())
         .env("HARNESS_LIFECYCLE_EXEC_MODE", "eof")
+        .current_dir(directory.path())
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -473,6 +509,16 @@ fn supervised_exec_inherits_controlled_eof_stdin() {
     assert!(
         String::from_utf8_lossy(&result.stdout).contains("1 passed"),
         "host fixture was not executed"
+    );
+    assert!(
+        !std::fs::read_dir(directory.path())
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "jsonl")),
+        "default test constructor created a user log"
     );
 }
 
@@ -565,4 +611,179 @@ fn oversized_request_fails_closed_and_does_not_spawn() {
             .is_err()
     );
     backend.shutdown().unwrap();
+}
+
+#[test]
+fn review_blocked_input_has_a_deadline_without_external_shutdown() {
+    use harness::domain::SessionInputRequest;
+    let backend = supervised();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("blocked-deadline");
+    let handle = backend
+        .start_session(request(format!(
+            "echo $$ > '{}'; exec sleep 120",
+            path.display()
+        )))
+        .unwrap();
+    let identity = Identity::from_file(&path);
+    let other_path = directory.path().join("other-owned");
+    backend
+        .start_session(request(format!(
+            "echo $$ > '{}'; exec sleep 120",
+            other_path.display()
+        )))
+        .unwrap();
+    let other_identity = Identity::from_file(&other_path);
+    let worker_backend = backend.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = worker_backend.input_session(SessionInputRequest {
+            handle_id: handle.handle_id,
+            input: "x".repeat(1024 * 1024),
+            append_newline: false,
+        });
+        let _ = tx.send(result);
+    });
+    let reply = rx.recv_timeout(Duration::from_secs(5));
+    let finished_without_help = reply.is_ok();
+    let survived_at_reply = identity.running() || other_identity.running();
+    // 只有超出观察期限后才从测试外部清理；这不能算作被测超时实现。
+    if !finished_without_help {
+        let _ = backend.shutdown();
+    }
+    identity.cleanup();
+    other_identity.cleanup();
+    worker.join().unwrap();
+    assert!(
+        finished_without_help,
+        "blocked shell_input never reached a completion deadline without external shutdown"
+    );
+    let error = reply.unwrap().unwrap_err();
+    assert!(
+        error.contains("timed out") && error.contains("all instance processes"),
+        "timeout scope missing: {error}"
+    );
+    assert!(
+        !survived_at_reply,
+        "timeout returned before instance cleanup completed"
+    );
+    assert!(backend.start_session(request("true".to_string())).is_err());
+}
+
+#[test]
+fn review_supervisor_logs_survive_host_sigkill_and_cover_cleanup() {
+    let mut host = Host::launch_mode("logged");
+    let identities = host.processes();
+    host.end("kill");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while identities.iter().any(Identity::running) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    for identity in &identities {
+        identity.cleanup();
+    }
+    let path = host.directory.path().join("supervisor.jsonl");
+    let text = loop {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if text.contains("ProcessSupervisorStopped") && text.ends_with('\n')
+            || Instant::now() >= deadline
+        {
+            break text;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let entries: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).expect("supervisor log must contain complete JSON records")
+        })
+        .collect();
+    for event in [
+        "ProcessSupervisorStarted",
+        "ShellSessionStarted",
+        "ProcessLifelineClosed",
+        "ProcessGroupKillSent",
+        "ProcessReaped",
+        "ShellSessionStopped",
+        "ProcessSupervisorStopped",
+    ] {
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["fields"]["event"] == event),
+            "missing independent cleanup event {event}: {text}"
+        );
+    }
+    assert!(
+        entries
+            .iter()
+            .filter(|entry| entry["fields"]["event"] == "ShellSessionStarted")
+            .all(|entry| entry["fields"]["pid"].is_number()
+                && entry["fields"]["task_id"].is_string()
+                && entry["fields"]["agent_id"].is_string())
+    );
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry["fields"]["event"].as_str(),
+            Some("ProcessGroupTermSent" | "ProcessGroupKillSent" | "ProcessReaped")
+        )
+    }) {
+        assert!(
+            entry["span"]["task_id"].is_string() && entry["span"]["session_id"].is_string(),
+            "process cleanup event lost its task/session identity: {entry}"
+        );
+    }
+    assert!(
+        !text.contains("do-not-log-review-secret"),
+        "command/environment payload leaked into lifecycle log"
+    );
+}
+
+#[test]
+fn review_dotenv_environment_reaches_supervised_shell() {
+    let directory = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let bin = directory.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let script = bin.join("review-env-command");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf '%s' \"$HARNESS_REVIEW_DOTENV_TOKEN\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::fs::write(
+        directory.path().join(".env.local"),
+        format!(
+            "HARNESS_REVIEW_DOTENV_TOKEN=dotenv-review-value\nPATH={}\n",
+            serde_json::to_string(&path).unwrap()
+        ),
+    )
+    .unwrap();
+    let result = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "host_fixture", "--nocapture"])
+        .env(HOST_DIR, directory.path())
+        .env("HARNESS_LIFECYCLE_EXEC_MODE", "dotenv")
+        .env_remove("HARNESS_REVIEW_DOTENV_TOKEN")
+        .env_remove("PATH")
+        .current_dir(directory.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("dotenv-result")).unwrap(),
+        "dotenv-review-value",
+        "guard was launched before dotenv environment was loaded"
+    );
 }

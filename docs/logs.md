@@ -34,6 +34,14 @@ RUST_LOG=harness=trace,harness::channels=info cargo run
 
 > __注意：__ 当前日志输出到 `logs/harness_*.jsonl` 文件，`HARNESS_LOG_DIR` 可控制输出目录。
 
+### 进程服务独立日志
+
+生产入口另建 `HARNESS_LOG_DIR/harness_<时间>_<宿主 PID>.processes.jsonl`（目录默认 `logs`），
+以同步整行 JSON 追加记录守护器启动、宿主连接关闭、进程组停止与回收。守护器直接写入该文件，
+避免宿主被强杀时丢失后续回收证据。文件创建权限为 `0600`，不记录 shell 命令、环境变量或输出正文。
+独立日志不受宿主 `RUST_LOG` 过滤影响；库测试默认不创建该文件。
+详细协议与超时影响范围见 [实例级进程守护实现](design/2026-10-29-process-supervisor.md)。
+
 ## 审计事件分类
 
 以下 `info!` 事件构成完整的审计轨迹：
