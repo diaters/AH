@@ -338,10 +338,13 @@ mod tests {
         let stopped = TaskId::new();
         let other = TaskId::new();
         let pending = || std::future::pending::<()>();
-        inflight.register(stopped, runtime.spawn(pending()).abort_handle());
+        let stopped_worker = runtime.spawn(pending());
+        inflight.register(stopped, stopped_worker.abort_handle());
         inflight.register(other, runtime.spawn(pending()).abort_handle());
 
         assert_eq!(inflight.abort_task(stopped), 1);
+        // abort 仅提出取消；关闭屏障必须等待实际 worker 结束。
+        assert!(runtime.block_on(stopped_worker).unwrap_err().is_cancelled());
         assert_eq!(inflight.in_flight(stopped), 0);
         assert_eq!(inflight.in_flight(other), 1);
         assert_eq!(inflight.abort_task(stopped), 0, "second abort is a no-op");
