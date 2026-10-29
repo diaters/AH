@@ -6,8 +6,8 @@
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::{
-    SessionHandle, SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest,
-    SessionSummary, TaskId,
+    SessionHandle, SessionHandleId, SessionInputRequest, SessionOutputEvent, SessionReadRequest,
+    SessionStartRequest, SessionSummary, TaskId,
 };
 
 /// `Debug` bound 让 `OwnedToolContext` 等持有 `Arc<dyn SessionBackend>` 的
@@ -52,4 +52,18 @@ pub trait SessionBackend: std::fmt::Debug + Send + Sync + 'static {
 
     /// 批量停止指定 Task 的所有活动 session，返回已停止的 session id 列表
     fn stop_task_sessions(&self, task_id: TaskId) -> Result<Vec<SessionHandleId>, String>;
+
+    /// 窥视尚未确认的 stdout 事件；调用本身不消费事件。
+    fn poll_output_events(&self) -> Result<Vec<SessionOutputEvent>, String> {
+        Ok(Vec::new())
+    }
+
+    /// 累计确认某会话的事件；确认后不再出现在后续 poll 中。
+    fn ack_output_events(
+        &self,
+        _session_id: SessionHandleId,
+        _through_sequence: u64,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -8,7 +11,11 @@ use tracing::{error, info, warn};
 
 use crate::domain::{ExternalInput, Frontend, FrontendKind};
 
-use super::traits::{Channel, ChannelInboundMessage, ChannelOutboundMessage, OutboundEntry};
+use super::traits::{
+    Channel, ChannelError, ChannelInboundMessage, ChannelOutboundMessage, OutboundEntry,
+};
+
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `ChannelManager::new` 的返回值：管理器、监督任务句柄与前端列表。
 pub type ChannelManagerSpawn = (
@@ -22,6 +29,7 @@ pub struct ChannelManager {
     channels: Vec<Arc<dyn Channel>>,
     outbound_tx: mpsc::UnboundedSender<OutboundEntry>,
     shutdown_tx: broadcast::Sender<()>,
+    closing: Arc<AtomicBool>,
 }
 
 impl ChannelManager {
@@ -34,6 +42,7 @@ impl ChannelManager {
                 channels: vec![],
                 outbound_tx,
                 shutdown_tx,
+                closing: Arc::new(AtomicBool::new(false)),
             },
             vec![],
         )
@@ -59,9 +68,16 @@ impl ChannelManager {
         let supervisor_channels = channels.clone();
         let supervisor_shutdown = shutdown_tx.clone();
         let supervisor_input_tx = external_input_tx;
+        let closing = Arc::new(AtomicBool::new(false));
+        let send_closing = closing.clone();
+        // 先订阅再启动任务，shutdown 不能在首次调度前丢失。
+        let mut send_shutdown = shutdown_tx.subscribe();
 
         let handle = tokio::spawn(async move {
             for channel in &supervisor_channels {
+                if send_closing.load(Ordering::SeqCst) {
+                    break;
+                }
                 let ch = channel.clone();
                 let input_tx = supervisor_input_tx.clone();
                 let mut shutdown_rx = supervisor_shutdown.subscribe();
@@ -136,29 +152,55 @@ impl ChannelManager {
                 });
             }
 
-            let send_channels = supervisor_channels.clone();
-            let mut send_shutdown = supervisor_shutdown.subscribe();
+            let send_channels = supervisor_channels;
             loop {
-                tokio::select! {
+                if send_closing.load(Ordering::SeqCst) {
+                    break;
+                }
+                let entry = tokio::select! {
+                    biased;
                     _ = send_shutdown.recv() => break,
                     msg = outbound_rx.recv() => {
                         let Some(entry) = msg else { break };
-                        if let Some(channel) = send_channels.iter().find(|c| c.name() == entry.channel_name) {
-                            match channel.send(&entry.message).await {
-                                Ok(msg_id) => {
-                                    if let Some(on_sent) = entry.on_sent {
-                                        on_sent(msg_id);
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(event = "ChannelSendFailed", channel = %entry.channel_name, error = %e, "failed to send outbound message");
-                                }
-                            }
-                        } else {
-                            warn!(event = "ChannelNotFound", channel = %entry.channel_name, "no such channel for outbound message");
+                        entry
+                    }
+                };
+                if send_closing.load(Ordering::SeqCst) {
+                    finish_outbound(
+                        entry,
+                        Err("channel manager shutdown before delivery".into()),
+                    );
+                    break;
+                }
+                let result = if let Some(channel) = send_channels
+                    .iter()
+                    .find(|c| c.name() == entry.channel_name)
+                {
+                    tokio::select! {
+                        biased;
+                        _ = send_shutdown.recv() => Err("channel manager shutdown; in-flight delivery unknown".into()),
+                        result = tokio::time::timeout(SEND_TIMEOUT, channel.send(&entry.message)) => match result {
+                            Ok(Ok(message_id)) => Ok(message_id),
+                            Ok(Err(error)) => Err(send_failure(&error)),
+                            Err(_) => Err("channel send timed out; delivery unknown".into()),
                         }
                     }
+                } else {
+                    Err("channel not found for outbound message".into())
+                };
+                if let Err(error) = &result {
+                    error!(event = "ChannelSendFailed", channel = %entry.channel_name,
+                        error_type = "Delivery", error = %error, "failed to send outbound message");
                 }
+                finish_outbound(entry, result);
+            }
+            // close 与 drain 连用：并发发送要么被接收并明确失败，要么同步入队失败。
+            outbound_rx.close();
+            while let Some(entry) = outbound_rx.recv().await {
+                finish_outbound(
+                    entry,
+                    Err("channel manager shutdown before delivery".into()),
+                );
             }
         });
 
@@ -167,6 +209,7 @@ impl ChannelManager {
                 channels,
                 outbound_tx,
                 shutdown_tx,
+                closing,
             },
             handle,
             frontends,
@@ -175,23 +218,68 @@ impl ChannelManager {
 
     /// 同步入队出向消息，立即返回。网络发送在后台执行。
     pub fn send(&self, channel_name: String, message: ChannelOutboundMessage) -> Result<()> {
-        if !self.channels.iter().any(|c| c.name() == channel_name) {
-            anyhow::bail!("channel not found: {channel_name}");
-        }
-        let entry = OutboundEntry {
+        self.enqueue(OutboundEntry {
             channel_name,
             message,
             on_sent: None,
-        };
+            on_result: None,
+        })
+    }
+
+    /// 入队并等待平台实际发送结果回调；同步入队失败时不调用回调。
+    pub fn send_with_result(
+        &self,
+        channel_name: String,
+        message: ChannelOutboundMessage,
+        on_result: impl FnOnce(Result<Option<String>, String>) + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.enqueue(OutboundEntry {
+            channel_name,
+            message,
+            on_sent: None,
+            on_result: Some(Box::new(on_result)),
+        })
+    }
+
+    fn enqueue(&self, entry: OutboundEntry) -> Result<()> {
+        if self.closing.load(Ordering::SeqCst) {
+            anyhow::bail!("channel manager shutdown");
+        }
+        if !self.channels.iter().any(|c| c.name() == entry.channel_name) {
+            anyhow::bail!("channel not found");
+        }
         self.outbound_tx
             .send(entry)
-            .map_err(|_| anyhow::anyhow!("channel manager outbound channel closed"))?;
-        Ok(())
+            .map_err(|_| anyhow::anyhow!("channel manager outbound channel closed"))
     }
 
     /// 通知所有 listen / send 任务退出。
     pub fn shutdown(&self) {
+        self.closing.store(true, Ordering::SeqCst);
         let _ = self.shutdown_tx.send(());
+    }
+}
+
+fn finish_outbound(entry: OutboundEntry, result: Result<Option<String>, String>) {
+    if let Ok(message_id) = &result
+        && let Some(on_sent) = entry.on_sent
+    {
+        on_sent(message_id.clone());
+    }
+    if let Some(on_result) = entry.on_result {
+        on_result(result);
+    }
+}
+
+/// Provider 错误可能包含含 token 的 URL、服务端响应或正文，回执仅暴露稳定分类。
+fn send_failure(error: &ChannelError) -> String {
+    match error {
+        ChannelError::Network(_) => "channel network request failed".into(),
+        ChannelError::Api { code, .. } => format!("channel API error {code}"),
+        ChannelError::Auth => "channel authentication failed".into(),
+        ChannelError::RateLimited => "channel rate limited".into(),
+        ChannelError::NotConfigured => "channel not configured".into(),
+        ChannelError::NotSupported => "channel operation not supported".into(),
     }
 }
 
@@ -308,5 +396,249 @@ mod tests {
             },
         );
         assert!(result.is_err());
+    }
+
+    struct ReceiptChannel {
+        reply: Result<Option<String>, super::super::traits::ChannelError>,
+        entered: Arc<tokio::sync::Notify>,
+        blocked: bool,
+    }
+
+    #[async_trait]
+    impl Channel for ReceiptChannel {
+        fn name(&self) -> &str {
+            "telegram"
+        }
+        async fn send(
+            &self,
+            _: &ChannelOutboundMessage,
+        ) -> Result<Option<String>, super::super::traits::ChannelError> {
+            self.entered.notify_one();
+            if self.blocked {
+                std::future::pending::<()>().await;
+            }
+            match &self.reply {
+                Ok(id) => Ok(id.clone()),
+                Err(_) => Err(super::super::traits::ChannelError::Api {
+                    code: 400,
+                    message: "private-token-and-body".into(),
+                }),
+            }
+        }
+        async fn listen(
+            &self,
+            _: Sender<ChannelInboundMessage>,
+        ) -> Result<(), super::super::traits::ChannelError> {
+            Ok(())
+        }
+    }
+
+    fn receipt_message() -> ChannelOutboundMessage {
+        ChannelOutboundMessage {
+            recipient: "c1".into(),
+            thread_id: None,
+            content: "private-token-and-body".into(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: vec![],
+            message_kind: super::super::traits::MessageKind::Other,
+        }
+    }
+
+    #[tokio::test]
+    async fn send_receipt_reports_platform_result_including_missing_message_id() {
+        for expected in [Some("platform-id".to_string()), None] {
+            let channel = Arc::new(ReceiptChannel {
+                reply: Ok(expected.clone()),
+                entered: Arc::default(),
+                blocked: false,
+            });
+            let (input, _) = unbounded();
+            let (manager, handle, _) = ChannelManager::new(vec![channel], input).unwrap();
+            let (tx, rx) = oneshot::channel();
+            manager
+                .send_with_result("telegram".into(), receipt_message(), move |result| {
+                    let _ = tx.send(result);
+                })
+                .unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), rx)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                Ok(expected)
+            );
+            manager.shutdown();
+            handle.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn send_receipt_reports_failure_without_leaking_provider_body() {
+        let channel = Arc::new(ReceiptChannel {
+            reply: Err(super::super::traits::ChannelError::Auth),
+            entered: Arc::default(),
+            blocked: false,
+        });
+        let (input, _) = unbounded();
+        let (manager, handle, _) = ChannelManager::new(vec![channel], input).unwrap();
+        let (tx, rx) = oneshot::channel();
+        manager
+            .send_with_result("telegram".into(), receipt_message(), move |result| {
+                let _ = tx.send(result);
+            })
+            .unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("API"));
+        assert!(!error.contains("private-token-and-body"));
+        manager.shutdown();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_returns_one_failure_for_every_accepted_message() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let channel = Arc::new(ReceiptChannel {
+            reply: Ok(None),
+            entered: entered.clone(),
+            blocked: true,
+        });
+        let (input, _) = unbounded();
+        let (manager, handle, _) = ChannelManager::new(vec![channel], input).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        for sequence in 0..10 {
+            let tx = tx.clone();
+            manager
+                .send_with_result("telegram".into(), receipt_message(), move |result| {
+                    let _ = tx.send((sequence, result));
+                })
+                .unwrap();
+        }
+        entered.notified().await;
+        manager.shutdown();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(tx);
+        let mut seen = Vec::new();
+        while let Some((sequence, result)) = rx.recv().await {
+            assert!(result.unwrap_err().contains("shutdown"));
+            seen.push(sequence);
+        }
+        seen.sort();
+        assert_eq!(seen, (0..10).collect::<Vec<_>>());
+        assert!(
+            manager
+                .send_with_result("telegram".into(), receipt_message(), |_| panic!(
+                    "not accepted"
+                ))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn receipt_enqueue_errors_do_not_invoke_callback() {
+        let (manager, _) = ChannelManager::empty();
+        assert!(
+            manager
+                .send_with_result("unknown".into(), receipt_message(), |_| panic!(
+                    "not accepted"
+                ))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_before_supervisor_first_poll_returns_queued_failure() {
+        let channel = Arc::new(ReceiptChannel {
+            reply: Ok(None),
+            entered: Arc::default(),
+            blocked: false,
+        });
+        let (input, _) = unbounded();
+        let (manager, handle, _) = ChannelManager::new(vec![channel], input).unwrap();
+        let (tx, rx) = oneshot::channel();
+        manager
+            .send_with_result("telegram".into(), receipt_message(), move |result| {
+                let _ = tx.send(result);
+            })
+            .unwrap();
+        // No yield before shutdown: the supervisor has not subscribed or read the queue yet.
+        manager.shutdown();
+        let result = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.unwrap_err().contains("shutdown"));
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_on_sent_runs_only_for_success_and_unknown_channel_reports_failure() {
+        for success in [true, false] {
+            let channel = Arc::new(ReceiptChannel {
+                reply: if success {
+                    Ok(Some("sent".into()))
+                } else {
+                    Err(ChannelError::Auth)
+                },
+                entered: Arc::default(),
+                blocked: false,
+            });
+            let (input, _) = unbounded();
+            let (manager, handle, _) = ChannelManager::new(vec![channel], input).unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let on_sent_calls = calls.clone();
+            let (tx, rx) = oneshot::channel();
+            manager
+                .outbound_tx
+                .send(OutboundEntry {
+                    channel_name: "telegram".into(),
+                    message: receipt_message(),
+                    on_sent: Some(Box::new(move |_| {
+                        on_sent_calls.fetch_add(1, Ordering::SeqCst);
+                    })),
+                    on_result: Some(Box::new(move |result| {
+                        let _ = tx.send(result);
+                    })),
+                })
+                .unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), rx)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_ok(),
+                success
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), usize::from(success));
+            let (tx, rx) = oneshot::channel();
+            manager
+                .outbound_tx
+                .send(OutboundEntry {
+                    channel_name: "unknown".into(),
+                    message: receipt_message(),
+                    on_sent: None,
+                    on_result: Some(Box::new(move |result| {
+                        let _ = tx.send(result);
+                    })),
+                })
+                .unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), rx)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap_err()
+                    .contains("not found")
+            );
+            manager.shutdown();
+            handle.await.unwrap();
+        }
     }
 }

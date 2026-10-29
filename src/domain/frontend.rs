@@ -257,6 +257,20 @@ pub fn summarize_tool_input(tool_name: &str, tool_input: &serde_json::Value) -> 
                     s.to_string()
                 }
             })
+            .map(|command| {
+                if tool_name == "shell_start" {
+                    let enabled = tool_input
+                        .get("notify_on_output")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    format!(
+                        "{command}；stdout 告警推送：{}",
+                        if enabled { "开启" } else { "关闭" }
+                    )
+                } else {
+                    command
+                }
+            })
             .unwrap_or_default(),
         "channel_send" => {
             let channel = tool_input

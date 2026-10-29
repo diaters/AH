@@ -47,6 +47,9 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 结构化日志、CI、单元测试与集成测试
 - Android aarch64 支持（rustls TLS 后端）
 
+- 持续监控：`shell_start(notify_on_output=true)` 将 stdout 完整行直接推送到任务通道，
+  平台回执送回原 Task；支持有界重试、背压停止与自动唤醒窗口恢复。
+
 ### 待完善
 
 - 父 Agent 审批仍为 MVP 自动通过实现，尚未接入真实 LLM 审查

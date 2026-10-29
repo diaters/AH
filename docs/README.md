@@ -76,6 +76,8 @@
 > 最新：[`design/2026-10-28-harness-hardening-design.md`](design/2026-10-28-harness-hardening-design.md)
 > （授权范围、图片信任边界、无 TUI 模式等加固方案，已实施）。
 
+持续监控实现边界见 [持续监控输出与送达闭环](design/2026-10-29-live-monitor-output.md)。
+
 ## 活跃规格与计划（superpowers/）
 
 新增评审稿：

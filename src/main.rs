@@ -119,6 +119,7 @@ fn main() -> Result<()> {
     info!(
         event = "HarnessStarting",
         version = env!("CARGO_PKG_VERSION"),
+        build_commit = env!("HARNESS_BUILD_COMMIT"),
         headless,
         process_log = %process_log.display(),
         "AI Harness starting"

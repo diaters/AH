@@ -24,6 +24,7 @@ fn request(command: String) -> SessionStartRequest {
         owner_task_id: TaskId::new(),
         owner_agent_id: AgentId::new(),
         notify_on_exit: false,
+        notify_on_output: false,
     }
 }
 
@@ -261,6 +262,35 @@ fn normal_host_drop_reclaims_owned_process_groups() {
 
 fn supervised() -> NativeProcessBackend {
     NativeProcessBackend::supervised(env!("CARGO_BIN_EXE_harness")).unwrap()
+}
+
+#[test]
+fn supervised_stdout_events_remain_available_until_delivery_ack() {
+    let backend = supervised();
+    let mut command = request("printf 'first\\nsecond\\n'; sleep 30".to_string());
+    command.notify_on_output = true;
+    let handle = backend.start_session(command).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let events = loop {
+        let events = backend.poll_output_events().unwrap();
+        if events.len() == 2 || Instant::now() >= deadline {
+            break events;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.content.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(backend.poll_output_events().unwrap(), events);
+    backend.ack_output_events(handle.handle_id, 1).unwrap();
+    assert_eq!(backend.poll_output_events().unwrap()[0].sequence, 2);
+    backend.ack_output_events(handle.handle_id, 2).unwrap();
+    assert!(backend.poll_output_events().unwrap().is_empty());
+    backend.shutdown().unwrap();
 }
 
 #[test]

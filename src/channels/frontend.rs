@@ -59,6 +59,7 @@ impl ChannelFrontend {
             channel_name: self.channel_name.clone(),
             message: msg,
             on_sent,
+            on_result: None,
         };
         if let Err(e) = self.outbound_tx.send(entry) {
             error!(event = "ChannelFrontendSendFailed", error = %e, channel = %self.channel_name);
@@ -346,6 +347,7 @@ impl Frontend for ChannelFrontend {
                                         message_kind: MessageKind::Recall,
                                     },
                                     on_sent: None,
+                                    on_result: None,
                                 };
                                 let _ = outbound_tx.send(recall_entry);
                             }

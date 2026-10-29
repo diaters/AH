@@ -6,11 +6,11 @@ use crate::{
     contracts::Clock,
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
-        AskUserPending, AutoWakeBudget, ContinueTaskMessage, CreateTaskMessage, DispatchHint,
-        DispatchKind, DispatchStrategy, EntryMetadata, EntryRole, InboxDeliveryMessage, InboxItem,
-        OutputContent, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
-        TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, ToolExecutionResultMessage,
-        TrustedImages, UserCommand, UserInputMessage, WaitingReason,
+        AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
+        DispatchStrategy, EntryMetadata, EntryRole, InboxDeliveryMessage, InboxItem, OutputContent,
+        PendingDispatch, ShortTermMemory, SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus,
+        ToolConfirmationResponseMessage, ToolExecutionResultMessage, TrustedImages, UserCommand,
+        UserInputMessage, WaitingReason,
     },
 };
 
@@ -219,10 +219,6 @@ pub(crate) fn user_input_routing_system(
                 waiting_tasks = ?waiting_tasks.iter().map(|(_, t)| (t.id, t.status.clone())).collect::<Vec<_>>(),
                 "routing input to existing Waiting(User) task"
             );
-            // 真实用户输入：清零自动拉起计数
-            commands
-                .entity(*task_entity)
-                .insert(AutoWakeBudget::default());
             TrustedImages::register(&mut commands, *task_entity, &input.content);
             // 立即占用本轮续轮名额；同帧后续输入走 steer，避免覆盖续轮正文。
             if let Ok((_, mut target)) = tasks.get_mut(*task_entity) {
@@ -244,9 +240,6 @@ pub(crate) fn user_input_routing_system(
                 selected_task_id = %task_id,
                 "routing input as steer into active task inbox"
             );
-            commands
-                .entity(task_entity)
-                .insert(AutoWakeBudget::default());
             TrustedImages::register(&mut commands, task_entity, &input.content);
             let mut message = commands.spawn(InboxDeliveryMessage {
                 task_id,

@@ -50,6 +50,8 @@ pub(super) enum Operation {
     ListTask(TaskId),
     AssertOwner(TaskId, SessionHandleId),
     StopTask(TaskId),
+    PollOutput,
+    AckOutput(SessionHandleId, u64),
     Cancel(u64),
 }
 
@@ -614,6 +616,8 @@ fn execute(
         Operation::ListTask(id) => value(backend.list_task_sessions(id)),
         Operation::AssertOwner(task, id) => value(backend.assert_task_owns_session(task, id)),
         Operation::StopTask(id) => value(backend.stop_task_sessions(id)),
+        Operation::PollOutput => value(backend.poll_output_events()),
+        Operation::AckOutput(id, through) => value(backend.ack_output_events(id, through)),
         Operation::Cancel(_) => Err("invalid worker control operation".to_string()),
     }
 }

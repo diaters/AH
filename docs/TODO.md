@@ -115,8 +115,9 @@
 
 - [ ] 按[修正规格](superpowers/specs/2026-10-28-channel-task-and-process-lifecycle-design.md)
   评审并落实单通道单顶层用户任务、同帧创建保护与命令语义；内部子任务、定时输出不占名额。
-- [ ] 修复 backend clone 误杀、`shell_exec` 后台进程遗留，补足正常关闭与强杀后的独立回收。
-- [ ] 评审持续监控输出通知、平台发送回执与限流恢复，验证活跃监控不被会话空闲结束。
+- [x] 修复 backend clone 误杀、`shell_exec` 后台进程遗留，补足正常关闭与强杀后的独立回收（PR #114、#115）。
+- [x] 接通持续监控输出通知、平台发送回执与限流恢复，验证活跃监控不被会话空闲结束。
+- [ ] 推进定时监控 P1：运行账本、通知策略、失败告警与 report_of 健康信息。
 - [ ] 使用真实 API Key 逐个 provider 运行 `steer_after_tool_result_roundtrip_is_accepted`
   与 `steer_mid_tool_loop` / `background_shell_notify` 场景并沉淀结果（用例已就绪，需人工执行）
 - [ ] 独立修正文档索引漂移：`docs/README.md` 应区分规范唯一真相源 `AGENTS.md`

@@ -15,8 +15,8 @@ use crate::{
     domain::SessionBackend,
     domain::{
         SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest,
-        SessionOutputSnapshot, SessionReadRequest, SessionStartRequest, SessionStatus,
-        SessionSummary, TaskId,
+        SessionOutputEvent, SessionOutputSnapshot, SessionReadRequest, SessionStartRequest,
+        SessionStatus, SessionSummary, TaskId,
     },
 };
 
@@ -28,6 +28,71 @@ const MAX_SNAPSHOT_BYTES: usize = 64 * 1024;
 const MAX_RETAINED_FINISHED_SESSIONS: usize = 128;
 /// 进程退出后等待输出读取线程收尾的宽限期；后台孙进程持有管道时不再无限等待。
 const READER_DRAIN_GRACE: Duration = Duration::from_millis(500);
+const MAX_PENDING_EVENT_BYTES: usize = 1024 * 1024;
+const EVENT_ACCOUNTING_BYTES: usize = 256;
+const OVERFLOW_EVENT_RESERVE: usize = 1024;
+const MAX_POLLED_EVENTS: usize = 256;
+
+/// 与快照生命周期分离：结束会话淘汰不能吞掉尚未确认的投递事件。
+#[derive(Debug)]
+struct PendingSessionEvents {
+    task_id: TaskId,
+    next_sequence: u64,
+    events: VecDeque<SessionOutputEvent>,
+    pending_bytes: usize,
+    overflow: bool,
+    stopped: bool,
+}
+
+impl PendingSessionEvents {
+    fn new(task_id: TaskId) -> Self {
+        Self {
+            task_id,
+            next_sequence: 1,
+            events: VecDeque::new(),
+            pending_bytes: 0,
+            overflow: false,
+            stopped: false,
+        }
+    }
+
+    fn push(
+        &mut self,
+        session_id: SessionHandleId,
+        content: String,
+        original_bytes: usize,
+        truncated: bool,
+    ) {
+        if self.overflow || content.is_empty() {
+            return;
+        }
+        let size = content.len().saturating_add(EVENT_ACCOUNTING_BYTES);
+        let overflow = self.pending_bytes.saturating_add(size)
+            > MAX_PENDING_EVENT_BYTES - OVERFLOW_EVENT_RESERVE;
+        let content = if overflow {
+            "监控输出未确认缓冲超过 1 MiB，会话已停止；后续输出未继续采集。".to_string()
+        } else {
+            content
+        };
+        self.pending_bytes += content.len() + EVENT_ACCOUNTING_BYTES;
+        self.events.push_back(SessionOutputEvent {
+            session_id,
+            task_id: self.task_id,
+            sequence: self.next_sequence,
+            content,
+            detected_at: Utc::now(),
+            original_bytes,
+            truncated,
+            overflow,
+        });
+        self.next_sequence += 1;
+        self.overflow = overflow;
+        info!(event = "ShellOutputEventQueued", task_id = %self.task_id, session_id = %session_id,
+            sequence = self.next_sequence - 1, overflow, "stdout monitor event retained until acknowledgement");
+    }
+}
+
+type OutputEventQueues = Arc<Mutex<HashMap<SessionHandleId, PendingSessionEvents>>>;
 
 #[derive(Debug, Clone)]
 struct SessionOutputBuffer {
@@ -46,6 +111,7 @@ enum SessionInteractionState {
 struct SessionRuntimeState {
     combined: SessionOutputBuffer,
     interaction_state: SessionInteractionState,
+    truncated: bool,
 }
 
 impl SessionOutputBuffer {
@@ -64,6 +130,7 @@ impl SessionRuntimeState {
         Self {
             combined: SessionOutputBuffer::empty(),
             interaction_state: SessionInteractionState::Idle,
+            truncated: false,
         }
     }
 }
@@ -74,6 +141,8 @@ pub struct NativeProcessBackend {
     pub processes: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<Child>>>>>,
     pub stdins: Arc<Mutex<HashMap<SessionHandleId, Arc<Mutex<ChildStdin>>>>>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
+    output_events: OutputEventQueues,
+    output_poll_cursor: Arc<Mutex<Option<SessionHandleId>>>,
     lifecycle: Arc<BackendLifecycle>,
     #[cfg(unix)]
     supervisor: Option<Arc<super::supervisor::SupervisorClient>>,
@@ -100,6 +169,8 @@ impl Default for NativeProcessBackend {
             supervisor: None,
             sessions: Arc::default(),
             runtimes: Arc::default(),
+            output_events: Arc::default(),
+            output_poll_cursor: Arc::default(),
             lifecycle: Arc::new(BackendLifecycle {
                 shutdown: Mutex::new(false),
                 processes: Arc::clone(&processes),
@@ -417,6 +488,137 @@ impl SessionBackend for NativeProcessBackend {
 
         self.stop_sessions(self.active_session_ids_for_task(task_id)?)
     }
+
+    fn poll_output_events(&self) -> Result<Vec<SessionOutputEvent>, String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(super::supervisor::Operation::PollOutput, None);
+        }
+        // 只观察已确认消费完的监控队列；普通会话不因事件轮询而生成快照。
+        let empty_ids: Vec<_> = self
+            .output_events
+            .lock()
+            .map_err(|_| "output event map poisoned")?
+            .iter()
+            .filter_map(|(id, queue)| queue.events.is_empty().then_some(*id))
+            .collect();
+        for id in empty_ids {
+            let readers_finished = self
+                .readers
+                .lock()
+                .map_err(|_| "reader map poisoned")?
+                .get(&id)
+                .is_some_and(|readers| readers.iter().all(thread::JoinHandle::is_finished));
+            if readers_finished {
+                self.refresh_session_state(id)?;
+            }
+            if self
+                .get_status(id)
+                .is_ok_and(|handle| is_active(handle.status))
+            {
+                continue;
+            }
+            let mut queues = self
+                .output_events
+                .lock()
+                .map_err(|_| "output event map poisoned")?;
+            if queues.get(&id).is_some_and(|queue| queue.events.is_empty()) {
+                queues.remove(&id);
+            }
+        }
+        let overflowed: Vec<_> = self
+            .output_events
+            .lock()
+            .map_err(|_| "output event map poisoned")?
+            .iter()
+            .filter_map(|(id, queue)| (queue.overflow && !queue.stopped).then_some(*id))
+            .collect();
+        // 不在 reader 或队列锁内等待进程回收，避免自等待和锁反转。
+        let known: Vec<_> = overflowed
+            .iter()
+            .copied()
+            .filter(|id| self.get_status(*id).is_ok())
+            .collect();
+        self.stop_sessions(known)?;
+        for id in overflowed {
+            if let Some(queue) = self
+                .output_events
+                .lock()
+                .map_err(|_| "output event map poisoned")?
+                .get_mut(&id)
+            {
+                queue.stopped = true;
+            }
+        }
+        let queues = self
+            .output_events
+            .lock()
+            .map_err(|_| "output event map poisoned")?;
+        let mut ids: Vec<_> = queues.keys().copied().collect();
+        ids.sort_unstable();
+        let mut cursor = self
+            .output_poll_cursor
+            .lock()
+            .map_err(|_| "output poll cursor poisoned")?;
+        if let Some(last) = *cursor {
+            let start = ids.partition_point(|id| *id <= last);
+            if start < ids.len() {
+                ids.rotate_left(start);
+            }
+        }
+        let mut events = Vec::new();
+        let mut bytes = 0usize;
+        for id in ids {
+            for event in &queues[&id].events {
+                if events.len() == MAX_POLLED_EVENTS
+                    || bytes.saturating_add(event.content.len()) > MAX_SNAPSHOT_BYTES
+                {
+                    return Ok(events);
+                }
+                bytes += event.content.len();
+                events.push(event.clone());
+                *cursor = Some(id);
+            }
+        }
+        Ok(events)
+    }
+
+    fn ack_output_events(
+        &self,
+        session_id: SessionHandleId,
+        through_sequence: u64,
+    ) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(supervisor) = &self.supervisor {
+            return supervisor.call(
+                super::supervisor::Operation::AckOutput(session_id, through_sequence),
+                None,
+            );
+        }
+        let finished = self
+            .get_status(session_id)
+            .map_or(true, |handle| !is_active(handle.status));
+        let mut queues = self
+            .output_events
+            .lock()
+            .map_err(|_| "output event map poisoned")?;
+        if let Some(queue) = queues.get_mut(&session_id) {
+            while queue
+                .events
+                .front()
+                .is_some_and(|event| event.sequence <= through_sequence)
+            {
+                let event = queue.events.pop_front().expect("front was checked");
+                queue.pending_bytes = queue
+                    .pending_bytes
+                    .saturating_sub(event.content.len() + EVENT_ACCOUNTING_BYTES);
+            }
+            if finished && queue.events.is_empty() {
+                queues.remove(&session_id);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl NativeProcessBackend {
@@ -552,9 +754,30 @@ impl NativeProcessBackend {
             .map_err(|_| "runtime map poisoned".to_string())?
             .insert(handle_id, SessionRuntimeState::empty());
 
+        if request.notify_on_output {
+            self.output_events
+                .lock()
+                .map_err(|_| "output event map poisoned")?
+                .insert(handle_id, PendingSessionEvents::new(owner_task_id));
+        }
+
         let readers = [
-            spawn_output_reader(handle_id, stdout, Arc::clone(&self.runtimes), ""),
-            spawn_output_reader(handle_id, stderr, Arc::clone(&self.runtimes), "[stderr] "),
+            spawn_output_reader(
+                handle_id,
+                stdout,
+                Arc::clone(&self.runtimes),
+                "",
+                request
+                    .notify_on_output
+                    .then(|| Arc::clone(&self.output_events)),
+            ),
+            spawn_output_reader(
+                handle_id,
+                stderr,
+                Arc::clone(&self.runtimes),
+                "[stderr] ",
+                None,
+            ),
         ];
         self.readers
             .lock()
@@ -730,9 +953,11 @@ impl NativeProcessBackend {
                 .runtimes
                 .lock()
                 .map_err(|_| "runtime map poisoned".to_string())?;
-            runtimes
-                .get(&handle_id)
-                .map(|runtime| snapshot_from_buffer(&runtime.combined, tail_lines_limit))
+            runtimes.get(&handle_id).map(|runtime| {
+                let mut snapshot = snapshot_from_buffer(&runtime.combined, tail_lines_limit);
+                snapshot.truncated |= runtime.truncated;
+                snapshot
+            })
         };
         if let Some(snapshot) = runtime_snapshot {
             Ok(snapshot)
@@ -869,6 +1094,18 @@ impl NativeProcessBackend {
             handle.finished_at = current.finished_at;
         }
         sessions.insert(handle.handle_id, handle.clone());
+        {
+            let mut queues = self
+                .output_events
+                .lock()
+                .map_err(|_| "output event map poisoned")?;
+            if queues
+                .get(&handle.handle_id)
+                .is_some_and(|queue| queue.events.is_empty())
+            {
+                queues.remove(&handle.handle_id);
+            }
+        }
         let mut finished: Vec<_> = sessions
             .values()
             .filter_map(|h| h.finished_at.map(|at| (at, h.handle_id)))
@@ -1083,27 +1320,129 @@ fn spawn_output_reader(
     stream: Option<impl std::io::Read + Send + 'static>,
     runtimes: Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
     prefix: &'static str,
+    output_events: Option<OutputEventQueues>,
 ) -> Option<thread::JoinHandle<()>> {
     let stream = stream?;
 
     Some(thread::spawn(move || {
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            let Ok(line) = line else {
-                break;
+        let mut reader = BufReader::new(stream);
+        let mut line = BoundedOutputLine::default();
+        loop {
+            let (consumed, complete) = match reader.fill_buf() {
+                Ok([]) => {
+                    if line.original_bytes > 0 {
+                        retain_output_line(
+                            handle_id,
+                            &runtimes,
+                            prefix,
+                            &line,
+                            false,
+                            output_events.as_ref(),
+                        );
+                    }
+                    break;
+                }
+                Ok(bytes) => {
+                    let newline = bytes.iter().position(|byte| *byte == b'\n');
+                    let length = newline.unwrap_or(bytes.len());
+                    line.append(&bytes[..length]);
+                    (length + usize::from(newline.is_some()), newline.is_some())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
             };
-            let mut runtimes = runtimes.lock().expect("runtime map poisoned");
-            let Some(runtime) = runtimes.get_mut(&handle_id) else {
-                break;
-            };
-            append_output(
-                &mut runtime.combined,
-                &format!("{prefix}{line}\n"),
-                MAX_OUTPUT_BYTES,
-            );
-            runtime.interaction_state = SessionInteractionState::Idle;
+            reader.consume(consumed);
+            if complete {
+                if !retain_output_line(
+                    handle_id,
+                    &runtimes,
+                    prefix,
+                    &line,
+                    true,
+                    output_events.as_ref(),
+                ) {
+                    break;
+                }
+                line = BoundedOutputLine::default();
+            }
         }
     }))
+}
+
+/// 分块读取时只保留单行末尾，超长或永不换行的进程不会造成无界分配。
+#[derive(Default)]
+struct BoundedOutputLine {
+    tail: VecDeque<u8>,
+    original_bytes: usize,
+}
+
+impl BoundedOutputLine {
+    fn append(&mut self, bytes: &[u8]) {
+        self.original_bytes = self.original_bytes.saturating_add(bytes.len());
+        let keep = bytes.len().min(MAX_SNAPSHOT_BYTES);
+        let excess = self
+            .tail
+            .len()
+            .saturating_add(keep)
+            .saturating_sub(MAX_SNAPSHOT_BYTES);
+        self.tail.drain(..excess);
+        if bytes.len() > MAX_SNAPSHOT_BYTES {
+            self.tail.clear();
+        }
+        self.tail.extend(&bytes[bytes.len() - keep..]);
+    }
+
+    fn text(&self) -> (String, bool, usize) {
+        let bytes: Vec<_> = self.tail.iter().copied().collect();
+        let bytes = bytes.strip_suffix(b"\r").unwrap_or(&bytes);
+        let original_bytes = self
+            .original_bytes
+            .saturating_sub(usize::from(self.tail.back() == Some(&b'\r')));
+        let text = String::from_utf8_lossy(bytes);
+        let (tail, text_truncated) = tail_bytes(&text, MAX_SNAPSHOT_BYTES);
+        (
+            tail.to_string(),
+            original_bytes > bytes.len() || text_truncated,
+            original_bytes,
+        )
+    }
+}
+
+fn retain_output_line(
+    handle_id: SessionHandleId,
+    runtimes: &Arc<Mutex<HashMap<SessionHandleId, SessionRuntimeState>>>,
+    prefix: &str,
+    line: &BoundedOutputLine,
+    complete: bool,
+    output_events: Option<&OutputEventQueues>,
+) -> bool {
+    let (content, truncated, original_bytes) = line.text();
+    {
+        let Ok(mut runtimes) = runtimes.lock() else {
+            return false;
+        };
+        let Some(runtime) = runtimes.get_mut(&handle_id) else {
+            return false;
+        };
+        append_output(
+            &mut runtime.combined,
+            &format!("{prefix}{content}\n"),
+            MAX_OUTPUT_BYTES,
+        );
+        runtime.interaction_state = SessionInteractionState::Idle;
+        runtime.truncated |= truncated;
+    }
+    if complete && let Some(queues) = output_events {
+        let Ok(mut queues) = queues.lock() else {
+            return false;
+        };
+        let Some(queue) = queues.get_mut(&handle_id) else {
+            return false;
+        };
+        queue.push(handle_id, content, original_bytes, truncated);
+        return !queue.overflow;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1121,7 +1460,274 @@ mod tests {
             owner_task_id: TaskId::new(),
             owner_agent_id: crate::domain::AgentId::new(),
             notify_on_exit: false,
+            notify_on_output: false,
         }
+    }
+
+    #[test]
+    fn output_events_keep_ten_live_lines_until_acknowledged() {
+        let backend = NativeProcessBackend::default();
+        let mut request = exec_request(
+            "i=1; while [ $i -le 10 ]; do echo event-$i; i=$((i+1)); done; sleep 30",
+            None,
+        );
+        request.notify_on_output = true;
+        let task_id = request.owner_task_id;
+        let handle = backend.start_session(request).unwrap();
+        wait_until(|| backend.poll_output_events().unwrap().len() == 10);
+        let events = backend.poll_output_events().unwrap();
+        assert_eq!(events.len(), 10);
+        for (i, event) in events.iter().enumerate() {
+            assert_eq!(event.content, format!("event-{}", i + 1));
+            assert_eq!(event.sequence, i as u64 + 1);
+            assert_eq!(event.task_id, task_id);
+            assert_eq!(event.session_id, handle.handle_id);
+        }
+        assert_eq!(
+            backend.poll_output_events().unwrap(),
+            events,
+            "poll must be non-destructive"
+        );
+        assert_eq!(
+            backend
+                .read_session(SessionReadRequest {
+                    handle_id: handle.handle_id,
+                    tail_lines: 20
+                })
+                .unwrap()
+                .status,
+            SessionStatus::Running
+        );
+        backend.ack_output_events(handle.handle_id, 5).unwrap();
+        let rest = backend.poll_output_events().unwrap();
+        assert_eq!(rest.len(), 5);
+        assert_eq!(rest[0].sequence, 6);
+        backend.ack_output_events(handle.handle_id, 10).unwrap();
+        assert!(backend.poll_output_events().unwrap().is_empty());
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn acknowledged_live_queue_is_released_after_readers_finish_without_another_event() {
+        let backend = NativeProcessBackend::default();
+        let mut request = exec_request("echo once; read reply; sleep 1", None);
+        request.notify_on_output = true;
+        let handle = backend.start_session(request).unwrap();
+        wait_until(|| !backend.poll_output_events().unwrap().is_empty());
+        backend.ack_output_events(handle.handle_id, 1).unwrap();
+        assert!(
+            backend
+                .output_events
+                .lock()
+                .unwrap()
+                .contains_key(&handle.handle_id)
+        );
+        backend
+            .input_session(SessionInputRequest {
+                handle_id: handle.handle_id,
+                input: "finish".into(),
+                append_newline: true,
+            })
+            .unwrap();
+        wait_until(|| {
+            assert!(backend.poll_output_events().unwrap().is_empty());
+            !backend
+                .output_events
+                .lock()
+                .unwrap()
+                .contains_key(&handle.handle_id)
+        });
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn unacknowledged_full_size_event_does_not_starve_other_sessions() {
+        let backend = NativeProcessBackend::default();
+        let mut ids = Vec::new();
+        for character in ['a', 'b'] {
+            let mut request = exec_request(
+                &format!(
+                    "head -c 65536 /dev/zero | tr '\\000' {character}; printf '\\n'; read reply"
+                ),
+                None,
+            );
+            request.notify_on_output = true;
+            let handle = backend.start_session(request).unwrap();
+            ids.push(handle.handle_id);
+        }
+        for id in &ids {
+            wait_until(|| {
+                backend
+                    .read_session(SessionReadRequest {
+                        handle_id: *id,
+                        tail_lines: 1,
+                    })
+                    .unwrap()
+                    .output
+                    .output
+                    .len()
+                    == MAX_SNAPSHOT_BYTES
+            });
+        }
+        let first = backend.poll_output_events().unwrap();
+        let second = backend.poll_output_events().unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_ne!(
+            first[0].session_id, second[0].session_id,
+            "a pending delivery must not hide another session's alert"
+        );
+        assert_eq!(first[0].sequence, 1);
+        assert_eq!(second[0].sequence, 1);
+        assert_eq!(
+            backend.poll_output_events().unwrap(),
+            first,
+            "fair peeks still preserve unacknowledged events"
+        );
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn output_notifications_are_opt_in_and_stderr_is_never_an_event() {
+        let backend = NativeProcessBackend::default();
+        let default = backend
+            .start_session(exec_request("echo private; echo debug >&2; sleep 30", None))
+            .unwrap();
+        let mut request = exec_request("echo diagnostic >&2; printf partial; sleep 30", None);
+        request.notify_on_output = true;
+        let enabled = backend.start_session(request).unwrap();
+        wait_until(|| {
+            backend
+                .read_session(SessionReadRequest {
+                    handle_id: default.handle_id,
+                    tail_lines: 20,
+                })
+                .unwrap()
+                .output
+                .output
+                .contains("private")
+        });
+        wait_until(|| {
+            backend
+                .read_session(SessionReadRequest {
+                    handle_id: enabled.handle_id,
+                    tail_lines: 20,
+                })
+                .unwrap()
+                .output
+                .output
+                .contains("diagnostic")
+        });
+        assert!(
+            backend.poll_output_events().unwrap().is_empty(),
+            "stderr and incomplete stdout cannot notify"
+        );
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn output_event_long_lines_keep_a_bounded_tail_and_report_original_size() {
+        let backend = NativeProcessBackend::default();
+        let mut request = exec_request(
+            "head -c 131072 /dev/zero | tr '\\000' x; printf '\\n'; sleep 30",
+            None,
+        );
+        request.notify_on_output = true;
+        backend.start_session(request).unwrap();
+        wait_until(|| !backend.poll_output_events().unwrap().is_empty());
+        let events = backend.poll_output_events().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].original_bytes, 131072);
+        assert_eq!(events[0].content.len(), MAX_SNAPSHOT_BYTES);
+        assert!(events[0].truncated);
+        assert!(events[0].content.bytes().all(|b| b == b'x'));
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn output_event_overflow_is_visible_and_stops_the_monitored_process() {
+        let backend = NativeProcessBackend::default();
+        let mut request = exec_request(
+            "i=0; while [ $i -lt 30 ]; do head -c 65536 /dev/zero | tr '\\000' x; printf '\\n'; i=$((i+1)); done; sleep 30",
+            None,
+        );
+        request.notify_on_output = true;
+        let handle = backend.start_session(request).unwrap();
+        wait_until(|| {
+            let _ = backend.poll_output_events().unwrap();
+            backend
+                .read_session(SessionReadRequest {
+                    handle_id: handle.handle_id,
+                    tail_lines: 1,
+                })
+                .unwrap()
+                .status
+                == SessionStatus::Stopped
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut overflow = false;
+        while Instant::now() < deadline && !overflow {
+            for event in backend.poll_output_events().unwrap() {
+                overflow |= event.overflow;
+                backend
+                    .ack_output_events(event.session_id, event.sequence)
+                    .unwrap();
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            overflow,
+            "unacknowledged event capacity never produced a visible overflow"
+        );
+        assert_eq!(
+            backend
+                .read_session(SessionReadRequest {
+                    handle_id: handle.handle_id,
+                    tail_lines: 1
+                })
+                .unwrap()
+                .status,
+            SessionStatus::Stopped
+        );
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn output_events_survive_finished_session_record_eviction() {
+        let backend = NativeProcessBackend::default();
+        let mut request = exec_request("printf 'preserved\\n'", None);
+        request.notify_on_output = true;
+        let monitored = backend.exec_blocking(request).unwrap();
+        for _ in 0..MAX_RETAINED_FINISHED_SESSIONS {
+            backend
+                .exec_blocking(exec_request("true", Some(1)))
+                .unwrap();
+        }
+        assert!(
+            backend.get_status(monitored.handle_id).is_err(),
+            "old snapshot should have been evicted"
+        );
+        let events = backend.poll_output_events().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content, "preserved");
+        backend
+            .ack_output_events(monitored.handle_id, events[0].sequence)
+            .unwrap();
+        assert!(backend.poll_output_events().unwrap().is_empty());
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn output_events_handle_invalid_utf8_without_dropping_following_content() {
+        let backend = NativeProcessBackend::default();
+        let mut request = exec_request("printf '\\377\\342\\202\\254\\n'; sleep 30", None);
+        request.notify_on_output = true;
+        backend.start_session(request).unwrap();
+        wait_until(|| !backend.poll_output_events().unwrap().is_empty());
+        let events = backend.poll_output_events().unwrap();
+        assert_eq!(events[0].content, "\u{fffd}€");
+        assert_eq!(events[0].original_bytes, 4);
+        backend.shutdown().unwrap();
     }
 
     #[cfg(unix)]

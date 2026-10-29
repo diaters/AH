@@ -129,9 +129,15 @@ HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `HARNESS_MAX_AUTO_WAKES` | `5` | 无用户输入时，后台通知连续自动拉起任务的轮数上限；超出后只提示用户 |
-| `HARNESS_NOTIFICATION_COALESCE_MS` | `300` | 空闲任务被后台通知唤醒前的合并窗口（毫秒） |
+| `HARNESS_MAX_AUTO_WAKES` | `5` | 滚动窗口内后台通知自动拉起任务的轮数上限；超限合并积压，窗口恢复后自动继续；用户 steer 不消耗或清空额度 |
+| `HARNESS_AUTO_WAKE_WINDOW_SECS` | `10` | 后台自动拉起额度的滚动窗口（秒）；必须大于 0，无效值使用默认值 |
+| `HARNESS_NOTIFICATION_COALESCE_MS` | `300` | 从首条积压通知起计算的固定合并窗口（毫秒），后续通知不延后截止 |
 | `HARNESS_BACKGROUND_POLL_MS` | `500` | 后台任务（shell 会话 / 子任务批次）完成检测的轮询间隔（毫秒） |
+
+Agent 尚未消费的 `shell_output` 监控通知按会话合并为最新结果，保留先前发送失败提示，
+每条摘要最多 2 KiB，最多保留 32 个会话；截断、合并和较早会话淘汰均在上下文中标明。
+此限制仅作用于 Agent 上下文，不裁剪用户 steer 或其他后台任务通知；完整告警经独立通道投递，
+是否送达以发送回执为准。合并保留首条积压时间，持续更新不会延后通知唤醒。
 
 ### 主循环
 

@@ -162,14 +162,15 @@ pub fn register_builtin_tools(
 
     registry.register(ToolDefinition {
         name: "shell_start".to_string(),
-        description: "异步启动长时间运行或可交互的 shell 会话，适用于 server、watcher、daemon 等持续型任务。返回 session_id 供后续读取、输入或停止。会话退出时默认会以 <task-notification> 通知你（无需轮询），即使你已结束本轮回复也会被重新唤醒。".to_string(),
+        description: "异步启动长时间运行或可交互的 shell 会话。返回 session_id 供读取、输入或停止。会话退出时默认通过 <task-notification> 通知。notify_on_output 默认 false；启用后 stdout 的完整行由 Harness 直接发送给用户并通知所属任务，无需重复转发。请只输出筛选后的业务事件，调试信息写 stderr。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "要执行的 shell 命令" },
                     "cwd": { "type": "string", "description": "命令工作目录" },
-                    "notify_on_exit": { "type": "boolean", "description": "会话退出后是否通知（默认 true；常驻服务可设为 false）" }
+                    "notify_on_exit": { "type": "boolean", "description": "会话退出后是否通知（默认 true；常驻服务可设为 false）" },
+                    "notify_on_output": { "type": "boolean", "description": "stdout 完整行直接发给用户并通知任务（默认 false；stderr 不转发，需有任务输出通道）" }
                 },
                 "required": ["command"]
             }),

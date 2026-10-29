@@ -914,6 +914,7 @@ fn shell_input_returns_backend_backed_status() {
             owner_task_id: task_id,
             owner_agent_id: agent_id,
             notify_on_exit: false,
+            notify_on_output: false,
         })
         .expect("start_session should succeed");
 
@@ -1080,6 +1081,7 @@ fn shell_read_backend_returns_latest_snapshot() {
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
             notify_on_exit: false,
+            notify_on_output: false,
         })
         .expect("exec_blocking should succeed");
 
@@ -1487,6 +1489,7 @@ fn shell_input_and_stop_follow_simplified_contract() {
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
             notify_on_exit: false,
+            notify_on_output: false,
         })
         .expect("start_session should succeed");
     let session_id = handle.handle_id.to_string();
@@ -1738,6 +1741,7 @@ fn backend_session_handle_uses_snapshot_output_shape() {
             owner_task_id: harness::domain::TaskId::new(),
             owner_agent_id: harness::domain::AgentId::new(),
             notify_on_exit: false,
+            notify_on_output: false,
         })
         .expect("exec_blocking should succeed");
 
@@ -2280,4 +2284,85 @@ fn failed_task_also_stops_owned_shell_sessions() {
         task_sessions.is_empty(),
         "task's sessions should be stopped after task failure"
     );
+}
+
+#[test]
+fn output_monitor_keeps_background_ownership_when_exit_notification_is_disabled() {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
+    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
+    let (_input_tx, input_rx) = unbounded();
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        executor_registry,
+        input_rx,
+        vec![],
+        harness::channels::ChannelManager::empty().0,
+    );
+
+    app.update();
+
+    let agent_id = spawn_shell_agent(app.world_mut());
+    let (_task_entity, task_id) = spawn_shell_task(app.world_mut(), "shell start");
+
+    let request = AgentExecutionRequest {
+        task_id,
+        agent_id,
+        request_kind: AgentRequestKind::ToolExecution {
+            tool_name: "shell_start".to_string(),
+        },
+        prompt: String::new(),
+        system_prompt: None,
+        tools: vec![],
+        conversation: None,
+        work_item_id: None,
+        model_override: None,
+        turn_generation: None,
+        vision: false,
+        trusted_images: Vec::new(),
+    };
+
+    app.world_mut().spawn(ToolExecutionRequestMessage {
+        request,
+        tool_name: "shell_start".to_string(),
+        tool_input: serde_json::json!({
+            "command": "sleep 30", "notify_on_output": true, "notify_on_exit": false
+        }),
+        pending_confirmation_id: None,
+        tool_call_id: Some("call_shell_start".to_string()),
+        pending_confirmation_options: None,
+        work_item_entity: None,
+        confirmed_once: false,
+    });
+
+    // Check result after first update
+    app.update();
+    let results = {
+        let world = app.world_mut();
+        let mut query = world.query::<&harness::domain::ToolExecutionResultMessage>();
+        query.iter(world).cloned().collect::<Vec<_>>()
+    };
+
+    let job_count = app
+        .world_mut()
+        .query::<&harness::domain::BackgroundJob>()
+        .iter(app.world())
+        .filter(|job| job.owner_task_id == task_id)
+        .count();
+    app.world()
+        .resource::<harness::NativeProcessBackend>()
+        .stop_task_sessions(task_id)
+        .unwrap();
+    assert_eq!(
+        job_count, 1,
+        "live output monitor must keep the task alive independently of exit notifications"
+    );
+    assert!(!results.is_empty(), "shell_start should return immediately");
+    let output_json = results[0]
+        .tool_output
+        .clone()
+        .expect("shell_start should succeed");
+    assert_eq!(output_json["status"], "running");
+    assert!(output_json["session_id"].is_string());
 }

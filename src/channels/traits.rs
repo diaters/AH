@@ -86,12 +86,17 @@ pub struct ChannelOutboundMessage {
     pub message_kind: MessageKind,
 }
 
+/// 平台发送终局回调；Ok(None)同样表示发送成功。
+pub type DeliveryCallback = Box<dyn FnOnce(Result<Option<String>, String>) + Send + Sync>;
+
 /// 出向队列条目，携带发送完成后的回调。
 pub struct OutboundEntry {
     pub channel_name: String,
     pub message: ChannelOutboundMessage,
     /// 发送完成后的回调，传入通道返回的 message_id。
     pub on_sent: Option<Box<dyn FnOnce(Option<String>) + Send + Sync>>,
+    /// 平台发送的真实结果；入队成功不代表送达，关闭和超时也会回送失败。
+    pub on_result: Option<DeliveryCallback>,
 }
 
 #[derive(Clone, Debug, Serialize)]

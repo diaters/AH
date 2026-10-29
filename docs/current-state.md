@@ -120,6 +120,11 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `/finish`、`/clear`、失败时强制停止后台任务；终态任务收到的迟到 LLM 响应被丢弃
 - `update_todos` 进度清单：纯展示数据（ADR-007），TUI 任务面板渲染，IM 仅在进度变化时推送
 
+- 持续输出通知已接通：`notify_on_output` 默认关闭，开启后原始 stdout 告警经通道直接投递，
+  排队与平台回执分开送回原 Task；支持三次退避重试、1 MiB 未确认背压及有界 Agent 摘要。
+- 自动后台唤醒改为默认 10 秒内 5 轮，超限自动恢复；真实后台资源与待投递通知阻止空闲结束。
+- 详细边界见 [持续监控输出与送达闭环](design/2026-10-29-live-monitor-output.md)。
+
 #### 工具与会话
 
 - 工具调用软限制：单轮用户输入内达到 `HARNESS_MAX_TOOL_ITERATIONS` 后返回合成 tool result，让 LLM 总结并询问用户；绝对硬上限（HARD_LIMIT_MULTIPLIER × max_iterations）时强制失败
