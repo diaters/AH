@@ -4,14 +4,16 @@
 //! 避免一次坏写阻断进程启动。
 
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use bevy_ecs::prelude::Resource;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::domain::ScheduleDefinition;
+use crate::domain::{RunOutcome, RunSummary, ScheduleDefinition, ScheduleRunRecord};
+use uuid::Uuid;
 
 /// 当前存储格式版本。
 const STORE_VERSION: u32 = 1;
@@ -27,6 +29,13 @@ pub enum ScheduleStoreError {
     },
     #[error("schedule store serialization failed: {0}")]
     Serialize(#[from] serde_json::Error),
+    #[error("schedule run ledger JSON failed at {path}, line {line}: {source}")]
+    LedgerRecord {
+        path: PathBuf,
+        line: usize,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,6 +65,139 @@ impl ScheduleStore {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn state_dir(&self, id: Uuid) -> PathBuf {
+        self.schedule_dir(id).join("state")
+    }
+
+    fn schedule_dir(&self, id: Uuid) -> PathBuf {
+        self.path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(id.to_string())
+    }
+
+    /// harness 单写者追加账本；先校验已有记录，损坏时保留原文件并返回定位错误。
+    /// 任务按 task_id 去重，未执行触发按时间与结果去重，重试不会重复记账。
+    pub fn append_run(&self, record: &ScheduleRunRecord) -> Result<(), ScheduleStoreError> {
+        let records = self.read_runs(record.schedule_id)?;
+        if records.iter().any(|old| Self::same_run(old, record)) {
+            return Ok(());
+        }
+        let path = self.schedule_dir(record.schedule_id).join("runs.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).map_err(|source| ScheduleStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let mut bytes = serde_json::to_vec(record)?;
+        bytes.push(b'\n');
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(&path)
+            .map_err(|source| ScheduleStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        // 无换行的完整末条也有效；下条追加前补分隔符。
+        let len = file
+            .metadata()
+            .map_err(|source| ScheduleStoreError::Io {
+                path: path.clone(),
+                source,
+            })?
+            .len();
+        if len > 0 {
+            use std::io::{Read, Seek, SeekFrom};
+            file.seek(SeekFrom::End(-1))
+                .map_err(|source| ScheduleStoreError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            let mut last = [0];
+            file.read_exact(&mut last)
+                .map_err(|source| ScheduleStoreError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            if last[0] != b'\n' {
+                bytes.insert(0, b'\n');
+            }
+        }
+        if let Err(source) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
+            // 本进程写失败时回滚尾部；无法回滚则下次读校验显式报错，绝不作为静默成功。
+            let _ = file.set_len(len);
+            return Err(ScheduleStoreError::Io { path, source });
+        }
+        Ok(())
+    }
+
+    fn same_run(a: &ScheduleRunRecord, b: &ScheduleRunRecord) -> bool {
+        match (a.task_id, b.task_id) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => a.fired_at == b.fired_at && a.outcome == b.outcome,
+            _ => false,
+        }
+    }
+
+    fn read_runs(&self, id: Uuid) -> Result<Vec<ScheduleRunRecord>, ScheduleStoreError> {
+        let path = self.schedule_dir(id).join("runs.jsonl");
+        let file = match fs::File::open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(ScheduleStoreError::Io { path, source }),
+        };
+        let mut records = Vec::new();
+        for (line, raw) in BufReader::new(file).lines().enumerate() {
+            let raw = raw.map_err(|source| ScheduleStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            let record: ScheduleRunRecord =
+                serde_json::from_str(&raw).map_err(|source| ScheduleStoreError::LedgerRecord {
+                    path: path.clone(),
+                    line: line + 1,
+                    source,
+                })?;
+            if record.schedule_id != id {
+                return Err(ScheduleStoreError::Io {
+                    path,
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("schedule mismatch at line {}", line + 1),
+                    ),
+                });
+            }
+            if !records.iter().any(|old| Self::same_run(old, &record)) {
+                records.push(record);
+            }
+        }
+        Ok(records)
+    }
+
+    pub fn run_summary(
+        &self,
+        id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<RunSummary, ScheduleStoreError> {
+        let mut summary = RunSummary::default();
+        for record in self
+            .read_runs(id)?
+            .into_iter()
+            .filter(|record| record.fired_at >= since)
+        {
+            summary.total += 1;
+            match record.outcome {
+                RunOutcome::Notified => summary.notified += 1,
+                RunOutcome::Failed => summary.failed += 1,
+                RunOutcome::SkippedOverlap => summary.skipped += 1,
+                RunOutcome::Missed => summary.missed += 1,
+                RunOutcome::Silent => {}
+            }
+        }
+        Ok(summary)
     }
 
     /// 读取全部定义。文件不存在返回空列表；内容损坏时把原文件改名为
@@ -166,6 +308,117 @@ mod tests {
         assert!(store_in(&dir).load().unwrap().is_empty());
     }
 
+    fn run_record(id: Uuid, outcome: RunOutcome, fired_at: DateTime<Utc>) -> ScheduleRunRecord {
+        ScheduleRunRecord {
+            task_id: Some(crate::domain::TaskId::new()),
+            schedule_id: id,
+            fired_at,
+            finished_at: fired_at + chrono::Duration::seconds(1),
+            outcome,
+            error: None,
+            result_summary: "checked".into(),
+            notification_count: u32::from(outcome == RunOutcome::Notified),
+        }
+    }
+
+    #[test]
+    fn run_ledger_persists_outcomes_filters_window_and_keeps_state_directory_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(&dir);
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        for outcome in [
+            RunOutcome::Notified,
+            RunOutcome::Silent,
+            RunOutcome::Failed,
+            RunOutcome::SkippedOverlap,
+            RunOutcome::Missed,
+        ] {
+            store.append_run(&run_record(id, outcome, now)).unwrap();
+        }
+        store
+            .append_run(&run_record(
+                id,
+                RunOutcome::Failed,
+                now - chrono::Duration::days(2),
+            ))
+            .unwrap();
+        let reopened = ScheduleStore::new(store.path());
+        let summary = reopened
+            .run_summary(id, now - chrono::Duration::hours(24))
+            .unwrap();
+        assert_eq!(
+            summary,
+            RunSummary {
+                total: 5,
+                notified: 1,
+                failed: 1,
+                skipped: 1,
+                missed: 1
+            }
+        );
+        assert_eq!(
+            store.state_dir(id),
+            store
+                .path()
+                .parent()
+                .unwrap()
+                .join(id.to_string())
+                .join("state")
+        );
+        assert_eq!(
+            fs::read_to_string(store.schedule_dir(id).join("runs.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            6
+        );
+    }
+
+    #[test]
+    fn run_ledger_retries_are_idempotent_for_task_and_non_task_triggers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(&dir);
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let task_run = run_record(id, RunOutcome::Silent, now);
+        let mut skipped = run_record(id, RunOutcome::SkippedOverlap, now);
+        skipped.task_id = None;
+        for _ in 0..3 {
+            store.append_run(&task_run).unwrap();
+            store.append_run(&skipped).unwrap();
+        }
+        assert_eq!(
+            store
+                .run_summary(id, now - chrono::Duration::seconds(1))
+                .unwrap()
+                .total,
+            2
+        );
+    }
+
+    #[test]
+    fn run_ledger_io_and_corruption_errors_retain_path_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(&dir);
+        let id = Uuid::new_v4();
+        let path = store.schedule_dir(id).join("runs.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not-json\n").unwrap();
+        let error = store.run_summary(id, Utc::now()).unwrap_err().to_string();
+        assert!(
+            error.contains(&path.display().to_string()) && error.contains("line 1"),
+            "{error}"
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        let error = store
+            .append_run(&run_record(id, RunOutcome::Failed, Utc::now()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&path.display().to_string()), "{error}");
+    }
+
     #[test]
     fn save_then_load_roundtrips_cron_and_once() {
         let dir = tempfile::tempdir().unwrap();
@@ -216,5 +469,42 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".corrupt-"))
             .collect();
         assert_eq!(backups.len(), 1);
+    }
+    #[test]
+    fn duplicate_physical_records_and_missing_final_newline_do_not_inflate_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(&dir);
+        let id = Uuid::new_v4();
+        let record = run_record(id, RunOutcome::Silent, Utc::now());
+        let path = store.schedule_dir(id).join("runs.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let line = serde_json::to_string(&record).unwrap();
+        fs::write(&path, format!("{line}\n{line}")).unwrap();
+        store
+            .append_run(&run_record(id, RunOutcome::Failed, Utc::now()))
+            .unwrap();
+        assert_eq!(
+            store
+                .run_summary(id, DateTime::<Utc>::MIN_UTC)
+                .unwrap()
+                .total,
+            2
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 3);
+    }
+
+    #[test]
+    fn corrupt_ledger_is_preserved_and_append_refuses_to_hide_missing_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(&dir);
+        let id = Uuid::new_v4();
+        let record = run_record(id, RunOutcome::Silent, Utc::now());
+        store.append_run(&record).unwrap();
+        let path = store.schedule_dir(id).join("runs.jsonl");
+        let raw = format!("{}{{partial", fs::read_to_string(&path).unwrap());
+        fs::write(&path, &raw).unwrap();
+        assert!(store.append_run(&record).is_err());
+        assert!(store.run_summary(id, DateTime::<Utc>::MIN_UTC).is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), raw);
     }
 }

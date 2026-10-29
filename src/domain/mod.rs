@@ -227,9 +227,9 @@ pub use prompt_template::{render_template, validate_template};
 // schedule
 pub(crate) use schedule::compute_next_trigger;
 pub use schedule::{
-    CATCH_UP_WINDOW, CatchUp, ScheduleDefinition, ScheduleExpr, ScheduleFire, ScheduleHealth,
-    ScheduleParseError, ScheduleSelector, ScheduleSpec, ScheduledRun, catch_up_decision,
-    schedule_kind,
+    CATCH_UP_WINDOW, CatchUp, NotifyPolicy, RunOutcome, RunSummary, ScheduleDefinition,
+    ScheduleExpr, ScheduleFire, ScheduleHealth, ScheduleParseError, ScheduleRunRecord,
+    ScheduleSelector, ScheduleSpec, ScheduledRun, catch_up_decision, schedule_kind,
 };
 
 // signal_trigger

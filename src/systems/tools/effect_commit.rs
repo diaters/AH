@@ -43,6 +43,26 @@ pub fn commit_tool_effects_system(world: &mut World) {
     }
 }
 
+fn validate_report_of(
+    world: &World,
+    id: uuid::Uuid,
+    report_of: Option<uuid::Uuid>,
+) -> Result<(), ToolError> {
+    if let Some(reference) = report_of
+        && (reference == id
+            || !world
+                .resource::<crate::triggers::SchedulerState>()
+                .dynamic_tasks()
+                .iter()
+                .any(|def| def.id == reference))
+    {
+        return Err(ToolError::InvalidInput(
+            "report_of must reference another existing schedule".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// 应用单个声明式效果，返回最终喂给 LLM 的结果值。
 ///
 /// 定时任务写效果经 `update_scheduler_state` 统一入口落账；
@@ -66,9 +86,11 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
             content,
             schedule,
             output_channel,
+            notify,
+            report_of,
         } => {
             // created_at 用 apply 时刻的 Utc::now()——「apply 时刻才知道的真相」原则。
-            let def = ScheduleDefinition::new(
+            let mut def = ScheduleDefinition::new(
                 *id,
                 name.clone(),
                 content.clone(),
@@ -76,6 +98,9 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                 output_channel.clone(),
                 Utc::now(),
             );
+            validate_report_of(world, *id, *report_of)?;
+            def.notify = *notify;
+            def.report_of = *report_of;
             let kind = def.kind();
             let def_name = def.name.clone();
             let mut name_taken = false;
@@ -108,7 +133,24 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
             schedule,
             enabled,
             run_now,
+            notify,
+            report_of,
         } => {
+            let id = world
+                .resource::<crate::triggers::SchedulerState>()
+                .dynamic_tasks()
+                .iter()
+                .find(|def| selector.matches(def))
+                .map(|def| def.id)
+                .ok_or_else(|| {
+                    ToolError::InvalidInput(format!(
+                        "scheduled task not found: {}",
+                        selector.label()
+                    ))
+                })?;
+            if let Some(reference) = report_of {
+                validate_report_of(world, id, *reference)?;
+            }
             let mut updated: Option<ScheduleDefinition> = None;
             update_scheduler_state(world, |state| {
                 if let Some(def) = state
@@ -124,6 +166,12 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                     }
                     if let Some(enabled) = enabled {
                         def.enabled = *enabled;
+                    }
+                    if let Some(notify) = notify {
+                        def.notify = *notify;
+                    }
+                    if let Some(report_of) = report_of {
+                        def.report_of = *report_of;
                     }
                     updated = Some(def.clone());
                 }
@@ -154,6 +202,8 @@ fn apply_effect(world: &mut World, effect: &ToolEffect) -> Result<serde_json::Va
                 "schedule": def.schedule.raw(),
                 "enabled": def.enabled,
                 "run_now": run_now,
+                "notify": def.notify,
+                "report_of": def.report_of,
                 "next_trigger": next_trigger,
             }))
         }

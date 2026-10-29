@@ -85,12 +85,16 @@ fn definitions_survive_restart_and_missed_cron_is_caught_up() {
     let runs: Vec<_> = created.into_iter().chain(tasks).collect();
     assert_eq!(runs.len(), 1, "exactly one catch-up run: {runs:?}");
     assert!(runs[0].0.starts_with("[补跑]"), "content: {}", runs[0].0);
-    assert!(runs[0].0.ends_with("汇报进度"));
-    assert_eq!(runs[0].1, Some(ScheduledRun { schedule_id: id }));
+    assert!(runs[0].0.contains("汇报进度\n\n<schedule-context"));
+    let run = runs[0].1.expect("catch-up keeps its schedule ownership");
+    assert_eq!(run.schedule_id, id);
+    assert!(run.fired_at.is_some());
+    assert!(runs[0].0.contains("trigger=\"catch_up\""));
 
     // 补跑记账也已落盘
     second.update();
     let persisted = store.load().unwrap();
     let last = persisted[0].health.last_fired_at.unwrap();
+    assert_eq!(run.fired_at, Some(last));
     assert!(Utc::now() - last < chrono::Duration::minutes(1));
 }

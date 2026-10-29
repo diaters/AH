@@ -260,17 +260,25 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 文本审批回复按任务的 `approval_channel` 匹配（缺省回退 `origin_channel`），webhook 事件任务也能用 `1`/`2`/`3` 回复审批
 - 动态定时任务以 `ScheduleDefinition` 为唯一账本（`SchedulerState.dynamic_tasks`），带唯一名称、
   启停状态与 `last_fired_at`；设计见
-  [无人值守定时任务与长期监控设计](design/2026-10-28-unattended-scheduled-monitoring-design.md)（P0 已实施）
+  [无人值守定时任务与长期监控设计](design/2026-10-28-unattended-scheduled-monitoring-design.md)（P0、P1 已实施）
 - 持久化：定义变化时由 `schedule_persist_system` 原子写入 `.harness/schedules/schedules.json`，启动时恢复；
   文件损坏时改名为 `.corrupt-<时间戳>` 后按空启动，读取失败时本次会话不启用持久化
 - 补跑：停机期间错过的运行，7 天内只补跑最近一次并向输出通道推送补跑说明，任务内容前标注原定时间；
   cron 由 `schedule_catch_up_startup_system` 在启动时判定，一次性任务在路由时判定，超出 7 天的一次性任务删除并通知
 - 重叠规则：同一定时任务上一次运行（`ScheduledRun` 标记的 Task）未进入终态时，本次触发跳过并记录 `ScheduleSkipped`
 - 暂停的定时任务不被 timer 调度，触发也会跳过；`update_scheduled_task` 的 `run_now` 可手动运行（不受暂停影响）
-- 一次性任务触发时只记 `last_fired_at`（timer 不再调度已触发的一次性任务），运行进入终态后由
+- 一次性任务触发时只记 `last_fired_at`（timer 不再调度已触发的一次性任务），运行进入终态、实际发送回执结束且账本与健康状态持久提交后由
   `once_schedule_completion_system` 删除定义并记录 `DynamicTaskRemoved`；运行未完成就停机时，
   重启后该任务转为暂停并向输出通道提醒（`OnceScheduleInterrupted`），不自动重跑，
   可用 `run_now` 重新运行或删除
+
+- 监控 P1：逐次记录 `Notified` / `Silent` / `Failed` / `SkippedOverlap` / `Missed`，
+  最终回复和 `channel_send` 以平台实际回执计数，待回执或记账的任务树不会因保留期而清理；
+  `reply` 自动回复、`explicit` 仅在 TUI 展示最终回复，运行状态消息不推送到 IM。
+- 连续失败默认 3 次告警一次，后续成功恢复一次；账本和健康提交失败会跨帧重试，
+  不重复计数或发阈值告警。存储损坏显式报错并保留原文件，不把统计读取失败当零次或静默成功。
+- 运行上下文提供独立 `state/` 目录、最近 24 小时统计；`report_of` 注入被观察任务的健康与统计。
+  详细交付契约见 [定时监控 P1](design/2026-10-29-schedule-p1-delivery.md)。
 
 #### 插件系统
 

@@ -137,3 +137,11 @@ debug!(
 - 动作完成用动词过去式或完成态，如 `TaskCreated`
 - 状态变化用 `*Transition`，如 `TaskStatusTransition`
 - 错误事件用失败语义，如 `ToolExecutionFailed`
+
+## 定时监控 P1
+
+- `ScheduleRunRecorded`：运行账本与健康提交完成，字段为 `task_id`、`schedule_id`、
+  `outcome`、`notification_count`；入队成功不会触发此完成事件。
+- `ScheduleAccountingFailed`：账本、健康或过期定义提交失败，附错误上下文，后续帧重试。
+- `ScheduleFailureAlert`：首次达到连续失败阈值，包含 `schedule_id`、`task_id` 与 `consecutive_failures`。
+- `ScheduleRecovered`：告警中的定时任务首次成功，包含 `schedule_id` 与 `task_id`。

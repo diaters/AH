@@ -4,7 +4,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| 状态 | 当前有效（P0 已实施） |
+| 状态 | 当前有效（P0、P1 已实施；P2 及以后为待实施设计） |
 | 创建日期 | 2026-10-28 |
 | 前置变更 | PR #108：同一时刻到期的多个 cron 全部触发 |
 | 实施记录 | P0：`docs/superpowers/plans/2026-10-28-schedule-p0-persistence.md` |
@@ -392,20 +392,22 @@ TaskPermissionGrant（任务级） → agent.overrides → agent.default_permiss
 
 | 系统 | Set | 新增 / 改造 | 职责 |
 |------|-----|-------------|------|
-| `schedule_store_load_system` | `Startup` | 新增 | 加载 `ScheduleStore`，投影到 `SchedulerState`，执行补跑判定 |
-| `trigger_task_routing_system` | `Transform` | 改造 | 暂停 / 重叠判定、发起探针或直接创建任务 |
-| `probe_result_system` | `Transform` | 新增 | 消费 `ProbeResult`，记账或创建任务 |
-| `schedule_run_finalize_system` | `Maintenance` | 新增 | 任务终态时记账、更新 `ScheduleHealth`、触发告警 |
-| `frontend_output_system` | `Output` | 改造 | 按 `ScheduledRun` 过滤最终回复与状态消息 |
-| `commit_tool_effects_system` | — | 改造 | 新增 `ToolEffect::UpdateSchedule` / `DeleteSchedule` |
+| `main` 的启动装配及 `schedule_catch_up_startup_system` | `Startup` | 已实现 | 加载定义，执行补跑与中断的一次性任务判定 |
+| `trigger_task_routing_system` | `Signal` | 已实现 | 暂停 / 重叠判定、生成运行上下文与任务、提交待记账的跳过事件 |
+| `probe_result_system` | 待定 | P2 待实现 | 消费探针结果，记账或创建任务 |
+| `schedule_run_accounting_system` | `Output` | 已实现 | 前端输出后等待平台回执，先写账本，再提交健康与告警状态 |
+| `once_schedule_completion_system` / `schedule_persist_system` | `Output` | 已实现 | 记账完成后清理一次性定义，持久化失败跨帧重试 |
+| `frontend_output_system` | `Output` | 已实现 | 按通知策略过滤，自动回复经真实回执路径派发 |
+| `commit_tool_effects_system` | `Maintenance` | 已实现 | 创建、更新与删除定义，校验 `report_of` 引用 |
 
 ### 10.2 不变量
 
-- __定义单一真源__：`ScheduleStore` 是动态定时任务的唯一真源，`SchedulerState` 与
-  `ScheduledTaskRegistry` 只是投影，只经 `update_scheduler_state` 入口刷新。
-- __账本单点写入__：`RunLedger` 只由 `probe_result_system`、`trigger_task_routing_system`
-  （跳过类记录）与 `schedule_run_finalize_system` 写入，LLM 与探针都不能写。
-- __一次触发一条记录__：每次触发恰好产生一条账本记录，最终结果在终态时补全，便于统计。
+- __定义单一真源__：运行时只有 `SchedulerState.dynamic_tasks` 一份账本，持久化形态为
+  `ScheduleStore`；只经 `update_scheduler_state*` 入口修改与通知 timer。
+- __账本单点写入__：当前由 `schedule_run_accounting_system` 统一提交正常与跳过类记录，
+  存储方法为 `ScheduleStore::append_run`；LLM 只使用独立 `state/` 目录。
+- __一次运行一条记录__：任务以 `task_id` 去重，未执行触发以时间与结果去重；
+  实际发送回执、账本与健康持久提交全部完成后才允许清理。
 
 ### 10.3 发现的冲突与处理
 
@@ -458,7 +460,7 @@ TaskPermissionGrant（任务级） → agent.overrides → agent.default_permiss
 | 阶段 | 内容 | 依赖 |
 |------|------|------|
 | P0 | `ScheduleDefinition` 合并双账本、`ScheduleStore` 持久化、启动恢复、补跑、重叠规则、`update_scheduled_task` | PR #108 |
-| P1 | `RunLedger`、`ScheduledRun`、`NotifyPolicy`、失败告警、`report_of` 健康信息注入 | P0 |
+| P1（已实现） | 运行账本、真实发送回执、通知策略、失败告警恢复、`report_of` 健康上下文；见 [交付契约](2026-10-29-schedule-p1-delivery.md) | P0 |
 | P2 | 预筛探针（`probe_runner`、`ProbeResult` 入口、Confirm 提升） | P1 |
 | P3 | 任务级授权与无人值守拒绝策略（无人值守拒绝已提前实施；`granted_tools` 待做） | P1 |
 | P4 | （`continue` 模式，已推迟，见 §11） | — |

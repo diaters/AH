@@ -52,6 +52,8 @@ pub struct HarnessConfig {
     pub terminal_task_retention_secs: u64,
     /// 顶层多轮会话等待用户输入的空闲上限（秒），超过后自动结束；0 表示关闭
     pub conversation_idle_secs: u64,
+    /// 连续失败达到该次数时首次告警，默认3。
+    pub schedule_failure_alert_threshold: u32,
     /// TUI 主循环在活跃状态下的轮询间隔（毫秒）
     pub active_poll_ms: u64,
     /// TUI 主循环在空闲状态下的轮询间隔（毫秒）
@@ -86,6 +88,13 @@ impl HarnessConfig {
             std::env::var("HARNESS_AGENTS_CONFIG").unwrap_or_else(|_| "agents.toml".to_string());
 
         Ok(Self {
+            schedule_failure_alert_threshold: std::env::var(
+                "HARNESS_SCHEDULE_FAILURE_ALERT_THRESHOLD",
+            )
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(3),
             max_retries: std::env::var("HARNESS_MAX_RETRIES")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -229,6 +238,7 @@ impl Default for HarnessConfig {
             shell_max_buffer_bytes_per_stream: 64 * 1024,
             terminal_task_retention_secs: 3600,
             conversation_idle_secs: 86400,
+            schedule_failure_alert_threshold: 3,
             active_poll_ms: 16,
             idle_poll_ms: 150,
             channels: crate::channels::config::ChannelConfigs::default(),

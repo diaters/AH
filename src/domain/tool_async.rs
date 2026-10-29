@@ -152,6 +152,8 @@ pub enum ToolEffect {
         schedule: ScheduleExpr,
         /// 输出通道（显式指定或从当前任务继承）
         output_channel: Option<ChannelId>,
+        notify: crate::domain::NotifyPolicy,
+        report_of: Option<uuid::Uuid>,
     },
     /// 修改指定的动态定时任务（内容、调度、启停），可选立即手动运行一次。
     ///
@@ -165,6 +167,9 @@ pub enum ToolEffect {
         schedule: Option<ScheduleExpr>,
         /// 启用（恢复）或暂停。
         enabled: Option<bool>,
+        notify: Option<crate::domain::NotifyPolicy>,
+        /// 缺省不改，Some(None) 清除，Some(Some(id)) 替换。
+        report_of: Option<Option<uuid::Uuid>>,
         /// 是否立即手动运行一次（不受暂停影响，仍受重叠规则约束）。
         run_now: bool,
     },

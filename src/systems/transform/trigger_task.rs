@@ -6,7 +6,7 @@
 //! 对 `scheduled:` 前缀的 Timer 触发，从 `SchedulerState` 查找动态定时任务定义
 //! 并生成 `CreateTaskMessage`（见 [`route_scheduled_trigger`]）：暂停与重叠时跳过，
 //! 补跑时在任务内容前标注原定时间并通知用户，触发后记录 `last_fired_at`；
-//! 一次性任务触发后清理，cron 任务保留以便反复触发。
+//! 一次性任务在运行及真实通知回执完成并持久记账后清理，cron 定义保留。
 
 use std::collections::HashSet;
 
@@ -46,16 +46,24 @@ pub fn trigger_task_routing_system(
     mut scheduler_state: ResMut<SchedulerState>,
     watcher: Res<SchedulerStateWatcher>,
     frontends: Option<Res<FrontendRegistry>>,
+    store: Option<Res<crate::infrastructure::schedules::ScheduleStore>>,
     messages: Query<(Entity, &TriggerTaskMessage, Option<&ScheduleFire>)>,
-    runs: Query<(&Task, &ScheduledRun)>,
+    runs: Query<(
+        &Task,
+        &ScheduledRun,
+        Option<&crate::systems::ScheduleRunRecorded>,
+    )>,
+    mut index: Option<ResMut<crate::ecs::EntityIndex>>,
     pending_runs: Query<&ScheduledRun, With<CreateTaskMessage>>,
 ) {
     // 仍在运行的定时任务：未终态的 Task，加上本帧刚生成、尚未变成 Task 的 CreateTaskMessage
     let mut active_runs: HashSet<Uuid> = pending_runs.iter().map(|r| r.schedule_id).collect();
     active_runs.extend(
         runs.iter()
-            .filter(|(task, _)| !task.status().is_terminal())
-            .map(|(_, run)| run.schedule_id),
+            .filter(|(task, _, recorded)| {
+                !task.status().is_terminal() || (store.is_some() && recorded.is_none())
+            })
+            .map(|(_, run, _)| run.schedule_id),
     );
     for (entity, message, fire) in &messages {
         let trigger = &message.trigger;
@@ -110,6 +118,8 @@ pub fn trigger_task_routing_system(
                 &watcher,
                 frontends.as_deref(),
                 &mut active_runs,
+                store.as_deref(),
+                index.as_deref_mut(),
             );
         } else {
             warn!(
@@ -128,6 +138,7 @@ pub fn trigger_task_routing_system(
 ///
 /// `active_runs` 是仍在运行（含本帧刚创建）的定时任务 id 集合，用于重叠判定；
 /// 本次成功触发后把 id 加入其中。
+#[allow(clippy::too_many_arguments)]
 fn route_scheduled_trigger(
     commands: &mut Commands,
     kind: &str,
@@ -136,6 +147,8 @@ fn route_scheduled_trigger(
     watcher: &SchedulerStateWatcher,
     frontends: Option<&FrontendRegistry>,
     active_runs: &mut HashSet<Uuid>,
+    store: Option<&crate::infrastructure::schedules::ScheduleStore>,
+    index: Option<&mut crate::ecs::EntityIndex>,
 ) {
     let Some(def) = scheduler_state.find_by_kind(kind).cloned() else {
         warn!(
@@ -153,6 +166,13 @@ fn route_scheduled_trigger(
         return;
     }
     if active_runs.contains(&def.id) {
+        queue_skipped(
+            commands,
+            &def,
+            now,
+            crate::domain::RunOutcome::SkippedOverlap,
+            None,
+        );
         info!(
             event = "ScheduleSkipped",
             kind = %kind,
@@ -170,22 +190,32 @@ fn route_scheduled_trigger(
             Some(ScheduleFire::CatchUp { missed_at })
         }
         (None, CatchUp::Expired { missed_at }) if def.schedule.is_once() => {
-            remove_definition(scheduler_state, watcher, def.id);
-            info!(
-                event = "ScheduleCatchUpExpired",
-                kind = %kind,
-                missed_at = %missed_at,
-                "one-shot scheduled task expired beyond catch-up window, removed"
-            );
-            notify(
-                frontends,
-                &def,
-                format!(
-                    "定时任务「{}」原定于 {} 运行，已超过补跑期限，未执行并已删除。",
-                    def.name,
-                    format_local(missed_at)
-                ),
-            );
+            if store.is_some() {
+                queue_skipped(
+                    commands,
+                    &def,
+                    missed_at,
+                    crate::domain::RunOutcome::Missed,
+                    Some(def.clone()),
+                );
+                // 阻止 timer 在账本写失败期间反复生成过期触发。
+                update_scheduler_state_with_watcher(scheduler_state, watcher, |state| {
+                    if let Some(def) = state.find_by_kind_mut(kind) {
+                        def.health.last_fired_at = Some(now);
+                    }
+                });
+            } else {
+                remove_definition(scheduler_state, watcher, def.id);
+                notify(
+                    frontends,
+                    &def,
+                    format!(
+                        "定时任务「{}」原定于 {} 运行，已超过补跑期限，未执行并已删除。",
+                        def.name,
+                        format_local(missed_at)
+                    ),
+                );
+            }
             return;
         }
         (fire, _) => fire,
@@ -214,20 +244,51 @@ fn route_scheduled_trigger(
         content_len = content.len(),
         "scheduled task routed to CreateTaskMessage"
     );
-    commands.spawn((
-        CreateTaskMessage {
-            content,
-            origin_channel: None,
-            routing_policy: TaskRoutingPolicy::scheduled_task(
-                def.output_channel.clone(),
-                "scheduled task",
-            ),
-            initiator: None,
-        },
-        ScheduledRun {
-            schedule_id: def.id,
-        },
-    ));
+    let run = ScheduledRun {
+        schedule_id: def.id,
+        fired_at: Some(now),
+        notify: def.notify,
+    };
+    let context = store
+        .map(|store| build_context(&def, fire, now, store, scheduler_state))
+        .transpose();
+    match context {
+        Ok(context) => {
+            if let Some(context) = context {
+                content.push_str(&context);
+            }
+            commands.spawn((
+                CreateTaskMessage {
+                    content,
+                    origin_channel: None,
+                    routing_policy: TaskRoutingPolicy::scheduled_task(
+                        def.output_channel.clone(),
+                        "scheduled task",
+                    ),
+                    initiator: None,
+                },
+                run,
+            ));
+        }
+        Err(error) => {
+            // 可信统计或状态目录不可用时不让 LLM 把缺失证据描述成无变化。
+            let mut task = Task::from_trigger(
+                content,
+                0,
+                TaskRoutingPolicy::scheduled_task(def.output_channel.clone(), "scheduled task"),
+            );
+            task.mark_failed_reason(
+                crate::domain::FailureReason::Unknown,
+                format!("schedule context unavailable: {error}"),
+                now,
+            );
+            let id = task.id;
+            let entity = commands.spawn((task, run)).id();
+            if let Some(index) = index {
+                index.tasks.insert(id, entity);
+            }
+        }
+    }
     active_runs.insert(def.id);
 
     // 一次性任务也只记账不删除：运行进入终态后由 `once_schedule_completion_system` 删除，
@@ -241,6 +302,79 @@ fn route_scheduled_trigger(
             d.health.last_fired_at = Some(now);
         }
     });
+}
+
+fn queue_skipped(
+    commands: &mut Commands,
+    def: &ScheduleDefinition,
+    fired_at: DateTime<Utc>,
+    outcome: crate::domain::RunOutcome,
+    expired: Option<ScheduleDefinition>,
+) {
+    commands.spawn(crate::systems::schedule::PendingScheduleRecord {
+        record: crate::domain::ScheduleRunRecord {
+            task_id: None,
+            schedule_id: def.id,
+            fired_at,
+            finished_at: Utc::now(),
+            outcome,
+            error: None,
+            result_summary: format!("{outcome:?}"),
+            notification_count: 0,
+        },
+        expired,
+    });
+}
+
+fn build_context(
+    def: &ScheduleDefinition,
+    fire: Option<ScheduleFire>,
+    now: DateTime<Utc>,
+    store: &crate::infrastructure::schedules::ScheduleStore,
+    state: &SchedulerState,
+) -> Result<String, String> {
+    let state_dir = store.state_dir(def.id);
+    std::fs::create_dir_all(&state_dir)
+        .map_err(|error| format!("{}: {error}", state_dir.display()))?;
+    let summary = store
+        .run_summary(def.id, now - Duration::hours(24))
+        .map_err(|error| error.to_string())?;
+    let trigger = match fire {
+        Some(ScheduleFire::Manual) => "manual",
+        Some(ScheduleFire::CatchUp { .. }) => "catch_up",
+        None => "scheduled",
+    };
+    let policy = match def.notify {
+        crate::domain::NotifyPolicy::Reply => "reply",
+        crate::domain::NotifyPolicy::Explicit => "explicit",
+    };
+    // 属性值序列化，避免用户名称破坏 harness 上下文边界。
+    let name = serde_json::to_string(&def.name).map_err(|error| error.to_string())?;
+    let mut context = format!(
+        "\n\n<schedule-context name={name} trigger=\"{trigger}\" fired_at=\"{now}\">\nstate_dir: {}\nnotify: {policy}\nrecent_runs: total={} notified={} silent={} failed={} skipped={} missed={}\n",
+        state_dir.display(),
+        summary.total,
+        summary.notified,
+        summary.total - summary.notified - summary.failed - summary.skipped - summary.missed,
+        summary.failed,
+        summary.skipped,
+        summary.missed
+    );
+    if let Some(reference) = def.report_of {
+        let observed = state
+            .dynamic_tasks()
+            .iter()
+            .find(|def| def.id == reference)
+            .ok_or_else(|| format!("report_of schedule missing: {reference}"))?;
+        let summary = store
+            .run_summary(reference, now - Duration::hours(24))
+            .map_err(|error| error.to_string())?;
+        context.push_str(&format!("report_of: {reference}\nreport_state_dir: {}\nlast_success_at: {}\nconsecutive_failures: {}\nalerting: {}\nreport_recent_runs: total={} notified={} failed={} skipped={} missed={}\n",
+            store.state_dir(reference).display(), observed.health.last_success_at.map(|time| time.to_rfc3339()).unwrap_or_else(|| "never".into()), observed.health.consecutive_failures, observed.health.alerting,
+            summary.total, summary.notified, summary.failed, summary.skipped, summary.missed));
+    }
+    context.push_str("</schedule-context>");
+    Ok(context)
 }
 
 fn remove_definition(
@@ -644,13 +778,11 @@ mod tests {
         fire(&mut app, &kind, None);
         app.update();
 
-        assert_eq!(
-            created(&mut app),
-            vec![(
-                "cron job".to_string(),
-                Some(ScheduledRun { schedule_id: id })
-            )]
-        );
+        let runs = created(&mut app);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].0, "cron job");
+        assert_eq!(runs[0].1.unwrap().schedule_id, id);
+        assert!(runs[0].1.unwrap().fired_at.unwrap() >= before);
         let last = definition_of(&app, &kind)
             .unwrap()
             .health
@@ -695,10 +827,7 @@ mod tests {
             3,
             TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
         );
-        let task_entity = app
-            .world_mut()
-            .spawn((task, ScheduledRun { schedule_id: id }))
-            .id();
+        let task_entity = app.world_mut().spawn((task, ScheduledRun::new(id))).id();
 
         fire(&mut app, &kind, None);
         app.update();
@@ -794,5 +923,229 @@ mod tests {
         let notices = texts(&events);
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("未执行"), "notice: {}", notices[0]);
+    }
+
+    #[test]
+    fn dynamic_context_includes_state_path_policy_and_verified_report_health() {
+        use crate::domain::{NotifyPolicy, RunOutcome, ScheduleRunRecord};
+        use crate::infrastructure::schedules::ScheduleStore;
+        let directory = tempfile::tempdir().unwrap();
+        let store = ScheduleStore::new(directory.path().join("schedules.json"));
+        let (mut app, _) = routing_app();
+        app.insert_resource(store.clone());
+        let observed_kind = insert_definition(&mut app, "forum-watch", "cron:*/10 * * * *", None);
+        let observed_id = definition_of(&app, &observed_kind).unwrap().id;
+        {
+            let mut state = app.world_mut().resource_mut::<SchedulerState>();
+            let observed = state.find_by_kind_mut(&observed_kind).unwrap();
+            observed.health.last_success_at = Some(Utc::now() - Duration::hours(1));
+            observed.health.consecutive_failures = 2;
+            observed.health.alerting = true;
+        }
+        store
+            .append_run(&ScheduleRunRecord {
+                task_id: None,
+                schedule_id: observed_id,
+                fired_at: Utc::now() - Duration::minutes(20),
+                finished_at: Utc::now() - Duration::minutes(10),
+                outcome: RunOutcome::Failed,
+                error: Some("observed failure".into()),
+                result_summary: String::new(),
+                notification_count: 0,
+            })
+            .unwrap();
+        let kind = insert_definition(&mut app, "daily report", "cron:0 8 * * *", None);
+        let id = definition_of(&app, &kind).unwrap().id;
+        {
+            let mut state = app.world_mut().resource_mut::<SchedulerState>();
+            let def = state.find_by_kind_mut(&kind).unwrap();
+            def.notify = NotifyPolicy::Explicit;
+            def.report_of = Some(observed_id);
+        }
+        fire(&mut app, &kind, Some(ScheduleFire::Manual));
+        app.update();
+        let runs = created(&mut app);
+        assert_eq!(runs.len(), 1);
+        let content = &runs[0].0;
+        assert!(
+            content.contains("<schedule-context"),
+            "scheduled runs need durable runtime context"
+        );
+        assert!(content.contains("notify: explicit"));
+        assert!(content.contains("trigger=\"manual\""));
+        assert!(content.contains(&store.state_dir(id).display().to_string()));
+        assert!(store.state_dir(id).is_dir());
+        assert!(content.contains(&observed_id.to_string()));
+        assert!(content.contains("consecutive_failures: 2"));
+        assert!(content.contains("alerting: true"));
+        assert!(content.contains("failed=1"));
+        assert_eq!(runs[0].1.unwrap().notify, NotifyPolicy::Explicit);
+    }
+
+    #[test]
+    fn overlap_and_expired_once_are_recorded_without_counting_as_failed_runs() {
+        use crate::domain::RunOutcome;
+        use crate::infrastructure::schedules::ScheduleStore;
+        let directory = tempfile::tempdir().unwrap();
+        let store = ScheduleStore::new(directory.path().join("schedules.json"));
+        let (mut app, _) = routing_app();
+        app.insert_resource(store.clone());
+        app.add_systems(
+            Update,
+            crate::systems::schedule::schedule_run_accounting_system
+                .after(trigger_task_routing_system),
+        );
+        let active_kind = insert_definition(&mut app, "active", "cron:*/10 * * * *", None);
+        let active_id = definition_of(&app, &active_kind).unwrap().id;
+        app.world_mut().spawn((
+            Task::from_trigger(
+                "active",
+                0,
+                TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
+            ),
+            ScheduledRun::new(active_id),
+        ));
+        let at = (Utc::now() - Duration::days(8)).to_rfc3339();
+        let expired_kind = insert_definition(&mut app, "expired", &format!("once:{at}"), None);
+        let expired_id = definition_of(&app, &expired_kind).unwrap().id;
+        fire(&mut app, &active_kind, None);
+        fire(&mut app, &expired_kind, None);
+        app.update();
+        app.update();
+        for (id, expected) in [
+            (active_id, RunOutcome::SkippedOverlap),
+            (expired_id, RunOutcome::Missed),
+        ] {
+            let records =
+                std::fs::read_to_string(store.state_dir(id).parent().unwrap().join("runs.jsonl"))
+                    .unwrap_or_default();
+            let records: Vec<crate::domain::ScheduleRunRecord> = records
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(
+                records.len(),
+                1,
+                "each unexecuted trigger needs a durable ledger result"
+            );
+            assert_eq!(records[0].outcome, expected);
+        }
+        assert_eq!(
+            definition_of(&app, &active_kind)
+                .unwrap()
+                .health
+                .consecutive_failures,
+            0
+        );
+    }
+    #[test]
+    fn corrupt_runtime_statistics_create_failed_run_instead_of_silent_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            crate::infrastructure::schedules::ScheduleStore::new(dir.path().join("schedules.json"));
+        let (mut app, _) = routing_app();
+        app.insert_resource(store.clone());
+        let kind = insert_definition(&mut app, "check", "cron:*/5 * * * *", None);
+        let id = definition_of(&app, &kind).unwrap().id;
+        let ledger = store.state_dir(id).parent().unwrap().join("runs.jsonl");
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        std::fs::write(&ledger, "invalid JSON").unwrap();
+        fire(&mut app, &kind, None);
+        app.update();
+        assert!(
+            created(&mut app).is_empty(),
+            "LLM cannot run on fictitious zero statistics"
+        );
+        let mut query = app.world_mut().query::<(&Task, &ScheduledRun)>();
+        let (task, run) = query.single(app.world()).unwrap();
+        assert!(matches!(
+            task.status(),
+            crate::domain::TaskStatus::Failed(_)
+        ));
+        assert_eq!(run.schedule_id, id);
+        assert!(task.last_error.as_deref().unwrap().contains("line 1"));
+        assert_eq!(std::fs::read_to_string(&ledger).unwrap(), "invalid JSON");
+    }
+
+    #[test]
+    fn expired_once_keeps_definition_until_skipped_ledger_write_can_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            crate::infrastructure::schedules::ScheduleStore::new(dir.path().join("schedules.json"));
+        let (mut app, events) = routing_app();
+        app.insert_resource(store.clone());
+        app.add_systems(
+            Update,
+            crate::systems::schedule_run_accounting_system.after(trigger_task_routing_system),
+        );
+        let at = (Utc::now() - Duration::days(8)).to_rfc3339();
+        let kind = insert_definition(
+            &mut app,
+            "stale",
+            &format!("once:{at}"),
+            Some(tui_channel()),
+        );
+        let id = definition_of(&app, &kind).unwrap().id;
+        let path = store.state_dir(id).parent().unwrap().join("runs.jsonl");
+        std::fs::create_dir_all(&path).unwrap();
+        fire(&mut app, &kind, None);
+        app.update();
+        app.update();
+        assert!(definition_of(&app, &kind).is_some());
+        assert_eq!(
+            texts(&events)
+                .iter()
+                .filter(|text| text.contains("存储失败"))
+                .count(),
+            1
+        );
+        std::fs::remove_dir(&path).unwrap();
+        app.update();
+        app.update();
+        assert!(definition_of(&app, &kind).is_none());
+        assert_eq!(
+            store
+                .run_summary(id, chrono::DateTime::<Utc>::MIN_UTC)
+                .unwrap()
+                .missed,
+            1
+        );
+        assert!(store.load().unwrap().is_empty());
+    }
+    #[test]
+    fn expired_record_retry_does_not_remove_a_rescheduled_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            crate::infrastructure::schedules::ScheduleStore::new(dir.path().join("schedules.json"));
+        let (mut app, _) = routing_app();
+        app.insert_resource(store.clone());
+        app.add_systems(
+            Update,
+            crate::systems::schedule_run_accounting_system.after(trigger_task_routing_system),
+        );
+        let at = (Utc::now() - Duration::days(8)).to_rfc3339();
+        let kind = insert_definition(&mut app, "rescheduled", &format!("once:{at}"), None);
+        let id = definition_of(&app, &kind).unwrap().id;
+        let path = store.state_dir(id).parent().unwrap().join("runs.jsonl");
+        std::fs::create_dir_all(&path).unwrap();
+        fire(&mut app, &kind, None);
+        app.update();
+        let future = format!("once:{}", (Utc::now() + Duration::days(1)).to_rfc3339());
+        crate::triggers::update_scheduler_state(app.world_mut(), |state| {
+            let def = state.find_by_kind_mut(&kind).unwrap();
+            def.schedule = ScheduleExpr::parse(&future).unwrap();
+            def.health.last_fired_at = None;
+        });
+        std::fs::remove_dir(&path).unwrap();
+        app.update();
+        app.update();
+        assert_eq!(definition_of(&app, &kind).unwrap().schedule.raw(), future);
+        assert_eq!(
+            store
+                .run_summary(id, chrono::DateTime::<Utc>::MIN_UTC)
+                .unwrap()
+                .missed,
+            1
+        );
     }
 }
