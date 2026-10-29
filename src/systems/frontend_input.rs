@@ -11,9 +11,16 @@ pub(crate) fn frontend_input_system(
     registry: Res<FrontendRegistry>,
     mut sequence: ResMut<InputSequencer>,
     mut commands: Commands,
+    mut buffered: Option<ResMut<crate::contracts::BufferedIngress>>,
 ) {
-    for frontend in &registry.frontends {
-        for action in frontend.poll_actions() {
+    let buffered = buffered
+        .as_deref_mut()
+        .map(|b| std::mem::take(&mut b.actions))
+        .unwrap_or_default();
+    for actions in
+        std::iter::once(buffered).chain(registry.frontends.iter().map(|f| f.poll_actions()))
+    {
+        for action in actions {
             match action {
                 UserAction::Text { channel, content } => {
                     debug!(

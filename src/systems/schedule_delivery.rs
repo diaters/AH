@@ -17,7 +17,7 @@ struct Receipt {
 #[derive(Resource)]
 pub struct ScheduleDeliveryTracker {
     by_task: HashMap<TaskId, DeliveryCounts>,
-    tx: crossbeam_channel::Sender<Receipt>,
+    tx: crate::contracts::WakeSender<Receipt>,
     rx: crossbeam_channel::Receiver<Receipt>,
 }
 impl Default for ScheduleDeliveryTracker {
@@ -25,12 +25,15 @@ impl Default for ScheduleDeliveryTracker {
         let (tx, rx) = crossbeam_channel::unbounded();
         Self {
             by_task: HashMap::new(),
-            tx,
+            tx: tx.into(),
             rx,
         }
     }
 }
 impl ScheduleDeliveryTracker {
+    pub(crate) fn set_wake(&mut self, wake: crate::contracts::RuntimeWake) {
+        self.tx.set_wake(wake);
+    }
     /// 在入队前登记；同步拒绝须调用 reject，已接受请求由回调完成。
     pub fn begin(&mut self, task_id: TaskId) -> DeliveryCallback {
         self.by_task.entry(task_id).or_default().pending += 1;

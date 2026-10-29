@@ -133,24 +133,35 @@ pub(crate) fn apply_memory_decay(
     entries: &mut Vec<LongTermMemoryEntry>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<LongTermMemoryEntry> {
-    // Phase 1: update decay scores
+    // 旧记录首次只建立基线；回拨不扣分，也不能把基线移回过去。
     for entry in entries.iter_mut() {
-        let age_days = now
-            .signed_duration_since(entry.last_accessed_at.unwrap_or(entry.created_at))
-            .num_days()
-            .unsigned_abs() as f32;
-
-        let base_penalty = (age_days / 30.0).min(0.5);
-        let importance_bonus = match entry.importance {
+        let Some(previous) = entry.decay_updated_at else {
+            entry.decay_updated_at = Some(now);
+            continue;
+        };
+        if now <= previous {
+            continue;
+        }
+        let since = entry
+            .last_accessed_at
+            .map_or(previous, |at| at.max(previous));
+        let seconds = (now - since)
+            .to_std()
+            .map_or(0.0, |duration| duration.as_secs_f64());
+        let importance_discount = match entry.importance {
             MemoryImportance::Low => 0.0,
             MemoryImportance::Medium => 0.05,
             MemoryImportance::High => 0.1,
             MemoryImportance::Critical => 0.2,
         };
-        let reuse_bonus = (entry.reuse_count as f32 * 0.02).min(0.2);
-
-        entry.decay_score =
-            (entry.decay_score - base_penalty + importance_bonus + reuse_bonus).clamp(0.0, 1.0);
+        let reuse_discount = (entry.reuse_count as f64 * 0.02).min(0.2);
+        let rate = 0.5 - importance_discount - reuse_discount;
+        let exact = (entry.decay_score as f64 + entry.decay_remainder
+            - rate * seconds / (30.0 * 86400.0))
+            .clamp(0.0, 1.0);
+        entry.decay_score = exact as f32;
+        entry.decay_remainder = exact - entry.decay_score as f64;
+        entry.decay_updated_at = Some(now.max(since));
     }
 
     // Phase 2: evict low-value entries
@@ -175,11 +186,33 @@ pub(crate) fn apply_memory_decay(
 pub(crate) fn long_term_memory_decay_system(
     mut commands: Commands,
     mut agents: Query<(Entity, &Agent, &mut LongTermMemory)>,
-    service: Res<LongTermMemoryService>,
+    mut service: ResMut<LongTermMemoryService>,
+    clock: Res<crate::contracts::Clock>,
+    mut last_run: Local<Option<chrono::DateTime<chrono::Utc>>>,
+    mut needs_flush: Local<std::collections::HashSet<Entity>>,
 ) {
-    let now = chrono::Utc::now();
+    let now = clock.0;
+    if last_run.is_some_and(|last| now - last < chrono::Duration::minutes(1)) {
+        return;
+    }
+    *last_run = Some(now);
+    needs_flush.retain(|entity| agents.contains(*entity));
     for (entity, _agent, mut memory) in &mut agents {
+        if memory.entries.is_empty() && !needs_flush.contains(&entity) {
+            continue;
+        }
         let evicted = apply_memory_decay(&mut memory.entries, now);
+        if memory.agent_name.is_some() {
+            match service.flush(&memory) {
+                Ok(()) => {
+                    needs_flush.remove(&entity);
+                }
+                Err(error) => {
+                    needs_flush.insert(entity);
+                    tracing::warn!(event = "MemoryDecayPersistFailed", %error, "will retry on next maintenance");
+                }
+            }
+        }
         if !evicted.is_empty() {
             if let Some(name) = &memory.agent_name {
                 service.archive_entries(name, &evicted);
@@ -203,6 +236,57 @@ mod tests {
         ChannelId, EntryMetadata, EntryRole, FrontendKind, LongTermMemoryEntry, MemoryImportance,
         Task, ToolCall,
     };
+
+    #[test]
+    fn legacy_decay_starts_from_existing_score_without_catch_up() {
+        let now = chrono::Utc::now();
+        let mut entry = LongTermMemoryEntry::new("legacy");
+        entry.created_at = now - chrono::Duration::days(90);
+        entry.importance = MemoryImportance::Low;
+        entry.decay_score = 0.8;
+        let mut entries = vec![entry];
+        assert!(apply_memory_decay(&mut entries, now).is_empty());
+        assert_eq!(entries[0].decay_score, 0.8);
+        assert!(apply_memory_decay(&mut entries, now).is_empty());
+        assert_eq!(entries[0].decay_score, 0.8);
+        apply_memory_decay(&mut entries, now + chrono::Duration::days(30));
+        assert!((entries[0].decay_score - 0.3).abs() < 0.000001);
+        let checkpoint = entries.clone();
+        apply_memory_decay(&mut entries, now + chrono::Duration::days(30));
+        assert_eq!(entries, checkpoint);
+    }
+
+    #[test]
+    fn old_json_without_decay_checkpoints_is_compatible() {
+        let mut value = serde_json::to_value(LongTermMemoryEntry::new("old-format")).unwrap();
+        value.as_object_mut().unwrap().remove("decay_updated_at");
+        value.as_object_mut().unwrap().remove("decay_remainder");
+        let mut entries = vec![serde_json::from_value(value).unwrap()];
+        apply_memory_decay(&mut entries, chrono::Utc::now());
+        assert_eq!(entries[0].decay_score, 1.0);
+        assert!(entries[0].decay_updated_at.is_some());
+    }
+
+    #[test]
+    fn decay_depends_on_elapsed_time_not_number_of_updates() {
+        let now = chrono::Utc::now();
+        let mut entry = LongTermMemoryEntry::new("kept");
+        entry.importance = MemoryImportance::Low;
+        let mut sparse = vec![entry.clone()];
+        let mut frequent = vec![entry];
+        apply_memory_decay(&mut sparse, now);
+        apply_memory_decay(&mut frequent, now);
+        for hour in 1..=720 {
+            apply_memory_decay(&mut frequent, now + chrono::Duration::hours(hour));
+        }
+        apply_memory_decay(&mut sparse, now + chrono::Duration::days(30));
+        assert_eq!(frequent[0].decay_score, sparse[0].decay_score);
+        let saved = serde_json::to_string(&frequent).unwrap();
+        let mut restored = serde_json::from_str(&saved).unwrap();
+        apply_memory_decay(&mut restored, now + chrono::Duration::days(31));
+        apply_memory_decay(&mut frequent, now + chrono::Duration::days(31));
+        assert_eq!(restored, frequent);
+    }
 
     #[test]
     fn memory_compression_by_tokens() {
@@ -295,6 +379,8 @@ mod tests {
                 last_accessed_at: Some(now - chrono::Duration::days(30)),
                 reuse_count: 0,
                 decay_score: 0.5,
+                decay_updated_at: None,
+                decay_remainder: 0.0,
                 source: "test".to_string(),
                 confidence: 0.7,
                 source_candidate_id: None,
@@ -305,8 +391,8 @@ mod tests {
 
         let _evicted = apply_memory_decay(&mut memory.entries, now);
 
-        // Critical importance: +0.2 bonus, so decay_score = 0.5 - 0.5 + 0.2 = 0.2
-        // Critical entries are never evicted, so entry remains
+        apply_memory_decay(&mut memory.entries, now + chrono::Duration::days(30));
+        // 首次建立基线，随后按实际经过的 30 天扣分；Critical 不驱逐。
         assert_eq!(memory.entries.len(), 1);
         assert!(memory.entries[0].decay_score < 0.5);
     }

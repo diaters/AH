@@ -124,6 +124,9 @@ fn status_label(status: TaskStatusKind) -> &'static str {
 }
 
 impl Frontend for ChannelFrontend {
+    fn requires_polling(&self) -> bool {
+        false
+    }
     fn kind(&self) -> FrontendKind {
         self.kind.clone()
     }

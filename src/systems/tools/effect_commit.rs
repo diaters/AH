@@ -8,6 +8,7 @@
 //! 需要 `&mut World`。仓内处理「需要整 World 写权限」的既定手法，测试侧
 //! `world.run_system_once(...)` 同样适用。
 
+use crate::contracts::ToolResultSender;
 use bevy_ecs::prelude::*;
 use chrono::Utc;
 use tracing::debug;
@@ -15,7 +16,7 @@ use tracing::debug;
 use crate::contracts::FrontendRegistry;
 use crate::domain::{
     EngineEvent, EventTarget, Task, TaskId, TaskTodoList, TodoItem, TodoStatus, ToolAsyncResult,
-    ToolEffect, ToolEffectPending, ToolError, ToolResultSender, render_todos,
+    ToolEffect, ToolEffectPending, ToolError, render_todos,
 };
 use crate::domain::{
     ScheduleDefinition, ScheduleFire, SignalSource, TaskTrigger, TriggerTaskMessage,

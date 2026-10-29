@@ -98,14 +98,30 @@ pub(crate) fn background_job_monitor_system(
     tasks: Query<&Task>,
     waiting: Query<&WaitingForTasksInfo>,
     mut jobs: Query<(Entity, &mut BackgroundJob, &JobOwner)>,
+    mut demand: Option<ResMut<crate::systems::demand::DemandSchedule>>,
 ) {
-    let interval = chrono::Duration::milliseconds(config.background_poll_ms as i64);
-    if last_poll.is_some_and(|last| clock.0 - last < interval) {
+    let interval = chrono::Duration::milliseconds(
+        config.background_poll_ms.max(1).min(i64::MAX as u64) as i64,
+    );
+    if demand.is_none() && last_poll.is_some_and(|last| clock.0 - last < interval) {
         return;
     }
-    *last_poll = Some(clock.0);
+    let poll_shell = if let Some(schedule) = demand.as_deref_mut() {
+        let has_shell = jobs
+            .iter()
+            .any(|(_, job, _)| matches!(job.source, JobSource::Shell { .. }));
+        has_shell && schedule.background_ready(clock.0, interval)
+    } else {
+        true
+    };
+    if poll_shell || demand.is_none() {
+        *last_poll = Some(clock.0);
+    }
 
     for (job_entity, mut job, owner) in &mut jobs {
+        if !poll_shell && matches!(job.source, JobSource::Shell { .. }) {
+            continue;
+        }
         // wait_tasks 认领：父任务正显式等待该批次中的任务时，结果走 wait_tasks 返回，不再通知
         let should_claim = match &job.source {
             JobSource::SubTaskBatch { task_ids, .. } => {

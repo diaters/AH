@@ -5,12 +5,13 @@
 
 use bevy_ecs::prelude::*;
 use chrono::Utc;
+use harness::contracts::ToolResultSender;
 use uuid::Uuid;
 
 use harness::domain::{
     ScheduleDefinition, ScheduleExpr, ScheduleFire, ScheduleSelector, TaskTrigger, ToolAsyncResult,
-    ToolEffect, ToolEffectPending, ToolError, ToolResultReceiver, ToolResultSender,
-    ToolWorkerPayload, TriggerTaskMessage,
+    ToolEffect, ToolEffectPending, ToolError, ToolResultReceiver, ToolWorkerPayload,
+    TriggerTaskMessage,
 };
 use harness::systems::commit_tool_effects_system;
 use harness::triggers::scheduled_task::{SchedulerState, SchedulerStateWatcher};
@@ -31,7 +32,7 @@ fn world_with_definition() -> (World, String, tokio::sync::watch::Receiver<Sched
     state.dynamic_tasks_mut().push(def);
     world.insert_resource(state);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ToolAsyncResult>();
-    world.insert_resource(ToolResultSender(tx));
+    world.insert_resource(ToolResultSender(tx.into()));
     world.insert_resource(ToolResultReceiver(rx));
     let (watch_tx, watch_rx) = tokio::sync::watch::channel(SchedulerState::default());
     world.insert_resource(SchedulerStateWatcher(Some(watch_tx)));

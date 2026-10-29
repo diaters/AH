@@ -16,7 +16,7 @@ fn harness_world_has_all_resources() {
     let world = setup_bridge_world();
     assert!(world.contains_resource::<harness::contracts::AsyncRuntime>());
     assert!(world.contains_resource::<harness::contracts::Clock>());
-    assert!(world.contains_resource::<harness::domain::ToolResultSender>());
+    assert!(world.contains_resource::<harness::contracts::ToolResultSender>());
     assert!(world.contains_resource::<harness::domain::ToolResultReceiver>());
 }
 
@@ -32,7 +32,7 @@ fn advance_clock_moves_world_now() {
 #[test]
 fn channel_roundtrip() {
     let mut world = setup_bridge_world();
-    let sender = world.resource::<harness::domain::ToolResultSender>();
+    let sender = world.resource::<harness::contracts::ToolResultSender>();
     sender
         .0
         .send(harness::domain::ToolAsyncResult::completed(

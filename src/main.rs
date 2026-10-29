@@ -2,9 +2,9 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -341,7 +341,14 @@ fn main() -> Result<()> {
 
     let total_ticks = if headless {
         let signals = Arc::new(AtomicUsize::new(0));
-        spawn_shutdown_signal_listener(&runtime, input_tx.clone(), signals.clone());
+        spawn_shutdown_signal_listener(
+            &runtime,
+            input_tx.clone(),
+            signals.clone(),
+            app.world()
+                .resource::<harness::contracts::RuntimeWake>()
+                .clone(),
+        );
         run_loop(
             &mut app,
             &mut HeadlessLoop::new(signals, HEADLESS_SHUTDOWN_GRACE),
@@ -358,6 +365,13 @@ fn main() -> Result<()> {
             terminal: ratatui::init(),
             app_state: App::new(action_tx),
             event_rx,
+            terminal_events: TerminalEvents::start(
+                app.world()
+                    .resource::<harness::contracts::RuntimeWake>()
+                    .clone(),
+            ),
+            dirty: true,
+            last_draw: Instant::now() - Duration::from_millis(16),
         };
         run_loop(&mut app, &mut tui)
     };
@@ -385,11 +399,76 @@ impl Drop for ProcessShutdownGuard {
     }
 }
 
+/// 专用输入读取器；退出时最多等待一次 100 ms poll 或队列发送。
+struct TerminalEvents {
+    rx: Receiver<Event>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl TerminalEvents {
+    fn start(wake: harness::contracts::RuntimeWake) -> Self {
+        let (tx, rx) = crossbeam_channel::bounded(512);
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let thread = std::thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                match event::poll(Duration::from_millis(100)) {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(error) => {
+                        warn!(event = "CrosstermPollError", %error, "terminal input poll failed");
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                }
+                let mut input = match event::read() {
+                    Ok(input) => input,
+                    Err(error) => {
+                        warn!(event = "CrosstermReadError", %error, "terminal input read failed");
+                        continue;
+                    }
+                };
+                loop {
+                    match tx.send_timeout(input, Duration::from_millis(100)) {
+                        Ok(()) => {
+                            wake.notify_ui();
+                            break;
+                        }
+                        Err(crossbeam_channel::SendTimeoutError::Timeout(value)) => {
+                            if worker_stop.load(Ordering::Acquire) {
+                                return;
+                            }
+                            input = value;
+                        }
+                        Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => return,
+                    }
+                }
+            }
+        });
+        Self {
+            rx,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+impl Drop for TerminalEvents {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// TUI 运行形态的主循环钩子：读取终端事件、消费引擎事件、渲染界面。
 struct TuiLoop {
     terminal: ratatui::DefaultTerminal,
     app_state: App,
     event_rx: Receiver<EngineEvent>,
+    terminal_events: TerminalEvents,
+    dirty: bool,
+    last_draw: Instant,
 }
 
 impl LoopHooks for TuiLoop {
@@ -409,10 +488,23 @@ impl LoopHooks for TuiLoop {
     }
 
     fn render(&mut self, active: bool) {
-        // 空闲且无新事件时跳过无意义重绘
-        if active && let Err(e) = self.terminal.draw(|frame| self.app_state.render(frame)) {
-            warn!(event = "RenderError", error = %e, "TUI render failed");
+        self.dirty |= active
+            || self
+                .cleanup_deadline()
+                .is_some_and(|at| Instant::now() >= at);
+        if self.dirty && self.last_draw.elapsed() >= Duration::from_millis(16) {
+            if let Err(e) = self.terminal.draw(|frame| self.app_state.render(frame)) {
+                warn!(event = "RenderError", error = %e, "TUI render failed");
+            }
+            self.dirty = false;
+            self.last_draw = Instant::now();
         }
+    }
+    fn next_deadline(&self) -> Option<Instant> {
+        let redraw = self
+            .dirty
+            .then(|| self.last_draw + Duration::from_millis(16));
+        redraw.into_iter().chain(self.cleanup_deadline()).min()
     }
 
     fn should_quit(&self) -> bool {
@@ -433,35 +525,21 @@ impl LoopHooks for TuiLoop {
 }
 
 impl TuiLoop {
+    fn cleanup_deadline(&self) -> Option<Instant> {
+        self.app_state
+            .tasks
+            .iter()
+            .filter(|task| task.parent_id.is_none())
+            .filter_map(|task| task.completed_at.map(|at| at + Duration::from_millis(5001)))
+            .min()
+    }
+
     /// 读取全部待处理的终端事件，返回处理的输入事件数（按键 / 粘贴 / 鼠标）。
     ///
     /// 用非致命方式读取事件，避免 IME 等场景下的错误导致整个程序退出。
     fn poll_terminal_events(&mut self) -> u32 {
         let mut count = 0u32;
-        loop {
-            match event::poll(Duration::ZERO) {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(e) => {
-                    warn!(
-                        event = "CrosstermPollError",
-                        error = %e,
-                        "failed to poll terminal events"
-                    );
-                    break;
-                }
-            }
-            let ev = match event::read() {
-                Ok(ev) => ev,
-                Err(e) => {
-                    warn!(
-                        event = "CrosstermReadError",
-                        error = %e,
-                        "failed to read terminal event, skipping"
-                    );
-                    break;
-                }
-            };
+        for ev in self.terminal_events.rx.try_iter().take(256) {
             match ev {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     self.app_state.handle_key_event(key);
@@ -478,6 +556,9 @@ impl TuiLoop {
                 }
                 Event::Mouse(mouse) => {
                     self.app_state.handle_mouse_event(mouse);
+                    count += 1;
+                }
+                Event::Resize(_, _) => {
                     count += 1;
                 }
                 Event::Paste(text) => {
@@ -504,6 +585,7 @@ fn spawn_shutdown_signal_listener(
     runtime: &tokio::runtime::Runtime,
     input_tx: Sender<ExternalInput>,
     signals: Arc<AtomicUsize>,
+    wake: harness::contracts::RuntimeWake,
 ) {
     runtime.spawn(async move {
         #[cfg(unix)]
@@ -530,6 +612,7 @@ fn spawn_shutdown_signal_listener(
                 return;
             }
             let count = signals.fetch_add(1, Ordering::SeqCst) + 1;
+            wake.notify();
             info!(
                 event = "ShutdownSignalReceived",
                 count, "shutdown signal received"

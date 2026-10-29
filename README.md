@@ -7,6 +7,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 
 ### 已实现
 
+- 按需 ECS 驱动：输入、执行结果和截止时间唤醒；等待期间阻塞，TUI 按可见变化刷新
 - TUI 驱动的本地交互与事件循环
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - Brain 调度、Agent 配置加载与多 Agent 执行链路

@@ -19,6 +19,7 @@
 //!   带 `pending_confirmation_id` 的请求直接跳过（Confirm 路径先行）。权限校验仍由
 //!   调用链上游与 Sync 路径既有逻辑各管各的。
 
+use crate::contracts::ToolResultSender;
 use std::sync::Arc;
 
 use crate::prelude::*;
@@ -33,7 +34,7 @@ use crate::{
         PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants,
         SkillCreationContext, SpaceToolRegistry, Task, TaskInitiator, ToolActionKind,
         ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission, ToolRequestPending,
-        ToolResultSender, ToolWorkerOutput, ToolWorkerPayload, resolve_tool_permission,
+        ToolWorkerOutput, ToolWorkerPayload, resolve_tool_permission,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,

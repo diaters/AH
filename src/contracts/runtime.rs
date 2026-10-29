@@ -19,6 +19,13 @@ pub struct AsyncRuntime(pub Arc<Runtime>);
 #[derive(Resource)]
 pub struct Clock(pub DateTime<Utc>);
 
+/// 阻塞等待取出的一个输入留给原 ingress 消费，保持领域转换只有一个入口。
+#[derive(Resource, Default)]
+pub struct BufferedIngress {
+    pub inputs: std::collections::VecDeque<crate::domain::ExternalInput>,
+    pub actions: Vec<crate::domain::UserAction>,
+}
+
 impl Default for Clock {
     fn default() -> Self {
         Self(Utc::now())

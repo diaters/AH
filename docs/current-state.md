@@ -15,6 +15,11 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 #### 运行时主链路
 
 - 用户输入经过 Frontend、Signal、Task、Dispatch、Execution、Writeback 形成闭环
+- ECS 主循环已按需驱动：外部输入、LLM / 工具结果、回执与截止时间唤醒；跨轮消息连续处理，
+  等用户、LLM 或审批不会保持 16 ms 全图轮询。TUI 输入线程与绘制分离，静止时跳过重绘。
+- 维护扫描按 30 秒期限运行；有 shell 后台任务时保留默认 500 ms 的 supervisor IPC 兼容检查，
+  旧式拉取 Frontend 明确保留 150 ms 兼容检查。运行机制见
+  [按需调度设计](design/2026-10-29-ecs-wakeup-design.md) 与 [管线说明](design/2026-10-30-demand-runtime-pipeline.md)。
 - TUI 已作为当前主要交互入口
 - 无终端运行形态：`--headless` 不初始化 TUI，只驱动运行时（审批经 IM 通道），启动时要求至少配置一个 IM 通道；
   SIGINT / SIGTERM 请求优雅退出，30 秒内未空闲或收到第二个信号时直接退出。TUI 与 headless 共用
@@ -232,7 +237,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - `AgentExperience` 已删除，不再作为独立运行时概念保留
 - `LongTermMemory` 采用 `Core + Relevant` 的受控注入策略，避免全量拼接 prompt
 - 共享知识写入默认仅允许用户显式命令或主控审核链路，不允许普通 Agent 直写
-- 长期记忆已具备基础衰退治理能力，会结合访问时间、重要度与复用次数更新分数
+- 长期记忆按实际经过时间衰退，每 30 天基础扣分 0.5，重要度与复用降低速率；治理检查限频一分钟。
+  `decay_updated_at` 与舍入余量随快照写穿，旧记录首次建立基线不补扣历史，重复计算不再加速遗忘。
 - 长期记忆已实现淘汰机制：`decay_score < 0.1` 且非 `pin` 非 `Critical` 的条目被移除并归档到 `<agent-name>/archive.jsonl`
 - 长期记忆已实现 JSON 文件持久化（`MemoryStore` + `MemoryRepository` + `LongTermMemoryService` 写穿模型）
 - Agent 启动时可从持久层恢复 `LongTermMemory`，子 Agent 贡献吸收后立即落盘
@@ -506,6 +512,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 
 ### Provider 限制
 
+- 当前 BrainLlm 路径应显式启用 Brain；未启用时的请求消费边界存在原有缺陷，
+  可能停留在 Waiting(Agent)，已在 TODO 单列修正任务。本次端到端验证显式启用 Brain。
+
 - `openai`、`anthropic`、`deepseek`、`openai-compatible` 已接入统一执行器
 - 标准 provider 更多依赖底层 `genai` 的默认接入方式，使用时需结合真实环境验证
 
@@ -516,8 +525,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 3. `README.md` — 项目简介
 4. `docs/configuration.md` — 配置说明
 5. `docs/TODO.md` — 待办事项
-6. `docs/wiki/system-pipeline.md` — 系统管线流程与 System 注解
-7. `docs/wiki/llm-context-assembly.md` — LLM 上下文组装机制与例子
+6. `docs/design/2026-10-30-demand-runtime-pipeline.md` — 系统管线流程与 System 注解
+7. `docs/wiki/llm-context-assembly.md` — 本地手册当前缺失，已登记独立补齐任务
 8. `docs/design/2026-06-06-workitem-boundary-design.md` — Task 与 WorkItem 边界
 9. `docs/design/2026-06-06-plan-evaluation-reassessment-design.md` — Plan 收敛与 Evaluation 重定位
 10. `docs/design/2026-07-18-dispatch-architecture-unification-design.md` — 派发架构统一

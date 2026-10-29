@@ -26,6 +26,7 @@
 | 文档 | 状态 | 定位 |
 | --- | --- | --- |
 | `current-state.md` | 唯一真相源 | 当前能力、架构结论、已知限制、后续方向 |
+| [ECS 按需唤醒](design/2026-10-29-ecs-wakeup-design.md) | 当前有效 | 阻塞驱动、截止时间、内部续跑与验证边界 |
 | `async-tool-bridge.md` | 当前有效 | 工具异步桥接机制与架构结论 |
 | `async-tool-bridge-pilot-report.md` | 当前有效 | 异步工具桥接试点验证报告 |
 | `plugin-development.md` | 当前有效 | 插件系统开发参考（Host API 与 hook 点） |
@@ -34,16 +35,16 @@
 | `testing.md` | 当前有效 | 测试使用指南（四层测试模型与运行方式） |
 | `logs.md` | 当前有效 | 结构化日志规范 |
 | `TODO.md` | 动态 | 进行中与待办清单 |
-| `framework-architecture-analysis.md` | 历史背景 | 早期模块布局分析，已被 `current-state.md`、`wiki/system-pipeline.md` 取代 |
-| `analysis/` | 待评审 | 测试套件质量分析（低质测试清单与原因），见下节 |
+| `framework-architecture-analysis.md` | 历史背景 | 早期模块布局分析，已被 `current-state.md` 与 design 中的现行管线说明取代 |
+| `analysis/` | 分析与评审材料 | 性能方案、质量分析与验证记录，见下节 |
 | [定时监控 P1](design/2026-10-29-schedule-p1-delivery.md) | 当前有效 | 运行与通知的持久记账、健康与验证范围 |
 | `design/README.md` | 索引 | `design/` 全量状态表（含每篇有效性） |
 | `superpowers/README.md` | 索引 | `superpowers/` 活跃计划与规格清单 |
-| `wiki/README.md` | 索引 | 系统知识库（pipeline、LLM 上下文组装） |
+| `wiki/` | 本地手册（Git 不追踪） | 仓库内管线依据见 `design/2026-10-30-demand-runtime-pipeline.md` |
 
-## 测试质量分析（analysis/）
+## 分析与评审材料（analysis/）
 
-`docs/analysis/` 存放测试套件质量评估类分析文档（非标准设计仓库，仅承载评审输入）。
+`docs/analysis/` 存放源码分析、方案评审材料与验证记录，不直接作为当前架构设计依据。
 
 | 文档 | 状态 | 定位 |
 | --- | --- | --- |
@@ -93,8 +94,8 @@
 
 | 文档 | 主题 |
 | --- | --- |
-| `wiki/system-pipeline.md` | 系统管线各阶段职责与数据流（权威管线文档） |
-| `wiki/llm-context-assembly.md` | LLM 上下文组装机制 |
+| [按需驱动管线](design/2026-10-30-demand-runtime-pipeline.md) | 仓库内可复现的阶段职责、唤醒与时间策略 |
+| `wiki/llm-context-assembly.md` | 本地手册当前缺失，已登记独立补齐任务 |
 
 ## 归档（archive/）
 
@@ -122,7 +123,7 @@ docs/
 ├── AI-Harness-Data-Flow-Guide.md       # 当前有效
 ├── framework-architecture-analysis.md  # 历史背景
 ├── adr/                       # 架构决策记录（追加不修改）
-├── analysis/                  # 测试质量分析（待评审）
+├── analysis/                  # 分析、评审材料与验证记录
 ├── design/                    # 当前有效设计文档（含状态表）
 ├── superpowers/               # 活跃计划与规格（插件生成）
 ├── wiki/                      # 系统知识库

@@ -31,6 +31,17 @@
 
 ### 高优先级
 
+- [ ] 独立修正 Brain 未启用时的请求消费边界：当前 BrainLlm 派发可创建请求，
+  `brain_decision_system` 却在 `brain = None` / disabled 时直接返回，结果可能无人消费；
+  应明确禁用语义并补齐端到端配置用例，避免依赖无效轮询掩盖等待状态。
+
+- [x] 实施已确认的 [ECS 按需唤醒方案](design/2026-10-29-ecs-wakeup-design.md)：
+  已接入输入、结果、回执、内部续跑与截止时间，解除 ECS 更新与 TUI 刷新的固定频率绑定。
+- [x] 独立修正 `apply_memory_decay` 对系统执行次数的依赖：先评审实际时间衰退与旧记录迁移，
+  已确认并实现时间语义与兼容迁移，补齐重复计算幂等和不同执行频率等价性测试。
+- [x] 修正规范镜像 `CLAUDE.md` 与 `AGENTS.md` 的既存内容差异和多余空行，恢复唯一真相源。
+- [x] 治理 `cancel_monitor_system` 为每个在飞调用扫描全部 Task 的路径，复用 `EntityIndex`；
+  与 ECS 按需唤醒方案中的 owner 定向取消衔接。
 - [ ] 将 `approval_dispatch_system` 的 MVP 自动通过逻辑替换为真实父 Agent LLM 审查
 - [ ] 为审批链路补齐更明确的策略语义：
   `Approved`、`Rejected`、`GrantMode::Once`、`GrantMode::Permanent`
@@ -53,6 +64,11 @@
 - [x] 定时任务审批路由：`schedule_task` 的审批通道验证与 Frontend 注册检查
 
 ### 中优先级
+
+- [ ] 按 ECS 按需唤醒设计补充 release 模式 CPU / P95 / P99 基线测量；
+  当前已验证调度次数下降，尚不把它等同于实测 CPU 降幅。
+- [ ] 评估 supervisor IPC 输出/退出推送，替换仅在后台 shell 存在时登记的兼容轮询。
+- [ ] 独立补齐当前缺失的 `docs/wiki/llm-context-assembly.md`，核对相关索引和真实组装路径。
 
 - [ ] 补齐插件系统的未完整实现链路：
   - [x] 替换 `tool_executor` stub，实现插件 Tool 的真实 Rhai 执行逻辑并补齐测试

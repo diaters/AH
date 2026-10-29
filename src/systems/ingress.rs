@@ -12,9 +12,16 @@ use crate::{
 };
 
 /// 更新统一时钟资源，避免各系统直接读取系统时间。
-pub(crate) fn tick_clock_system(mut clock: ResMut<Clock>) {
+pub(crate) fn tick_clock_system(
+    mut clock: ResMut<Clock>,
+    mut schedule: Option<ResMut<crate::systems::demand::DemandSchedule>>,
+) {
     let old_tick = clock.0;
+    let monotonic = std::time::Instant::now();
     clock.0 = Utc::now();
+    if let Some(schedule) = schedule.as_deref_mut() {
+        schedule.sample_clock(clock.0, monotonic);
+    }
     trace!(
         event = "TickClock",
         old_tick = %old_tick.format("%Y-%m-%d %H:%M:%S%.3f"),
@@ -29,8 +36,13 @@ pub(crate) fn input_ingress_system(
     mut shutdown: ResMut<ShutdownState>,
     mut sequence: ResMut<InputSequencer>,
     mut commands: Commands,
+    mut buffered: Option<ResMut<crate::contracts::BufferedIngress>>,
 ) {
-    while let Ok(input) = receiver.0.try_recv() {
+    let pending = buffered
+        .as_deref_mut()
+        .map(|b| std::mem::take(&mut b.inputs))
+        .unwrap_or_default();
+    for input in pending.into_iter().chain(receiver.0.try_iter().take(256)) {
         match input {
             ExternalInput::TextWithChannel {
                 channel,
@@ -117,14 +129,27 @@ pub(crate) fn input_ingress_system(
 }
 
 /// 监测到达回退时间的任务，并生成重试唤醒 Signal。
-pub(crate) fn retry_wakeup_system(clock: Res<Clock>, mut commands: Commands, tasks: Query<&Task>) {
-    for task in &tasks {
+pub(crate) fn retry_wakeup_system(
+    clock: Res<Clock>,
+    mut commands: Commands,
+    tasks: Query<(Entity, &Task)>,
+    schedule: Option<Res<crate::systems::demand::DemandSchedule>>,
+) {
+    for (entity, task) in &tasks {
         if task.status != TaskStatus::Waiting(WaitingReason::RetryBackoff) {
             continue;
         }
 
         if let Some(next_retry_at) = task.next_retry_at
-            && next_retry_at <= clock.0
+            && schedule
+                .as_deref()
+                .map_or(next_retry_at <= clock.0, |schedule| {
+                    schedule.expired_at(
+                        crate::systems::demand::DeadlineKey::Retry(entity),
+                        next_retry_at,
+                        clock.0,
+                    )
+                })
         {
             debug!(
                 event = "RetryWakeupTriggered",

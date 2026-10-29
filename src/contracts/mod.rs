@@ -4,6 +4,11 @@
 
 mod memory;
 mod runtime;
+mod wake;
 
 pub use memory::MemoryStore;
-pub use runtime::{AsyncRuntime, Clock, FrontendRegistry};
+pub use runtime::{AsyncRuntime, BufferedIngress, Clock, FrontendRegistry};
+pub use wake::{
+    ExecutionResultSender, ModelChainStateUpdateSender, RuntimeDeadlines, RuntimeWake,
+    ToolResultSender, WakeSender,
+};

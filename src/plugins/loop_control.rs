@@ -52,6 +52,7 @@ impl Plugin for LoopControlPlugin {
                     .after(cancel_monitor_system),
                 monitor_output_system
                     .in_set(HarnessSet::Transform)
+                    .after(background_job_monitor_system)
                     .before(inbox_ingest_system),
                 // 后台任务完成检测：先于收件箱写入，使通知同帧入箱
                 background_job_monitor_system

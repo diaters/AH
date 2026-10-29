@@ -38,7 +38,7 @@ pub use tool_calling::tool_calling_orchestrator_system;
 pub use tool_called_hook::on_tool_called_hook_system;
 pub(crate) use tool_calling::{CallingStateInfo, find_calling_state, handle_tool_calls_response};
 pub use tool_returned_hook::on_tool_returned_hook_system;
-pub use waiting::{check_waiting_tasks_system, on_subtask_completed_check_waiting};
+pub use waiting::{WaitingIndex, check_waiting_tasks_system};
 
 use bevy_ecs::change_detection::Mut;
 use bevy_ecs::world::World;

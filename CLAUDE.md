@@ -176,9 +176,6 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，用于�
 - `docs/current-state.md` 只承载能力状态的摘要与索引，详细架构结论应归属 `docs/design/` 或 `docs/wiki/`，避免单一文档无限膨胀。
 - 本原则独立于"简化优先"：文档豁免于简化优先的精简要求（C1 共识），但受本结构治理约束，不以膨胀替代精简。
 
-统一索引入口为 `docs/README.md`。
-
-
 ### 文档同步要求
 
 以下变更必须同步更新相应文档：

@@ -632,19 +632,9 @@ pub struct ModelChainStateUpdate {
 #[derive(Resource)]
 pub struct InputReceiver(pub crossbeam_channel::Receiver<ExternalInput>);
 
-/// 执行结果通道发送端，作为 Resource 注入 World（execution 系统发送）。
-#[derive(Resource)]
-pub struct ExecutionResultSender(pub tokio::sync::mpsc::UnboundedSender<AgentExecutionResult>);
-
 /// 执行结果通道接收端，作为 Resource 注入 World（ingest 系统消费）。
 #[derive(Resource)]
 pub struct ExecutionResultReceiver(pub tokio::sync::mpsc::UnboundedReceiver<AgentExecutionResult>);
-
-/// 模型链状态更新通道发送端，作为 Resource 注入 World。
-#[derive(Resource)]
-pub struct ModelChainStateUpdateSender(
-    pub tokio::sync::mpsc::UnboundedSender<ModelChainStateUpdate>,
-);
 
 /// 模型链状态更新通道接收端，作为 Resource 注入 World。
 #[derive(Resource)]

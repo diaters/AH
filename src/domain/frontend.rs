@@ -385,6 +385,16 @@ pub trait Frontend: Send + Sync + 'static {
 
     /// 拉取待处理的用户动作（ECS 每帧调用）
     fn poll_actions(&self) -> Vec<UserAction>;
+
+    /// 可直接等待的动作队列；主线程从中取出的数据仍交由 frontend_input 转换。
+    fn action_receiver(&self) -> Option<crossbeam_channel::Receiver<UserAction>> {
+        None
+    }
+
+    /// 旧式拉取适配器显式使用兼容轮询；内置通知型前端返回 false。
+    fn requires_polling(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

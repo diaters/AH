@@ -11,12 +11,13 @@
 //! ingest 因挂起实体还在会先落地 sweeper 的 error；worker 的结果迟到时实体已没，
 //! ingest drop + warn，exactly-once 闭合。
 
+use crate::contracts::ToolResultSender;
 use crate::prelude::*;
 use tracing::warn;
 
 use crate::{
     contracts::Clock,
-    domain::{InFlightToolCall, ToolAsyncResult, ToolError, ToolRequestPending, ToolResultSender},
+    domain::{InFlightToolCall, ToolAsyncResult, ToolError, ToolRequestPending},
 };
 
 /// 失联兜底 sweeper：扫在飞标记，超时则发 error 入通道 + claim（摘除 InFlightToolCall）。
@@ -29,12 +30,23 @@ pub fn sweep_inflight_tool_calls(
     clock: Res<Clock>,
     sender: Res<ToolResultSender>,
     query: Query<(Entity, &ToolRequestPending, &InFlightToolCall)>,
+    schedule: Option<Res<crate::systems::demand::DemandSchedule>>,
 ) {
     let now = clock.0;
 
     for (entity, pending, in_flight) in &query {
         let elapsed = now.signed_duration_since(in_flight.started_at);
-        if elapsed <= in_flight.timeout {
+        let deadline = in_flight.started_at + in_flight.timeout + chrono::Duration::milliseconds(1);
+        let expired = schedule
+            .as_deref()
+            .map_or(elapsed > in_flight.timeout, |schedule| {
+                schedule.expired_at(
+                    crate::systems::demand::DeadlineKey::Tool(entity),
+                    deadline,
+                    clock.0,
+                )
+            });
+        if !expired {
             continue;
         }
 

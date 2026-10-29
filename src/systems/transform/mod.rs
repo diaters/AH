@@ -46,8 +46,12 @@ pub fn ingest_execution_results_system(
     mut receiver: ResMut<ExecutionResultReceiver>,
     index: Option<Res<EntityIndex>>,
     generations: Query<&TurnGeneration>,
+    wake: Option<Res<crate::contracts::RuntimeWake>>,
 ) {
-    while let Ok(result) = receiver.0.try_recv() {
+    for _ in 0..256 {
+        let Ok(result) = receiver.0.try_recv() else {
+            break;
+        };
         let current_generation = index
             .as_ref()
             .and_then(|index| index.get_task(&result.task_id))
@@ -70,5 +74,10 @@ pub fn ingest_execution_results_system(
             AgentExecutionResultMessage { result },
             LlmResponseHookPending,
         ));
+    }
+    if !receiver.0.is_empty()
+        && let Some(wake) = wake
+    {
+        wake.notify();
     }
 }

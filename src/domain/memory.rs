@@ -721,6 +721,12 @@ pub struct LongTermMemoryEntry {
     pub last_accessed_at: Option<DateTime<Utc>>,
     pub reuse_count: u32,
     pub decay_score: f32,
+    /// 旧快照无此字段，首次治理只建立时间起点，不追扣历史。
+    #[serde(default)]
+    pub decay_updated_at: Option<DateTime<Utc>>,
+    /// 保留 f32 分数舍入余量，避免高频小步衰退被舍入吞掉。
+    #[serde(default)]
+    pub decay_remainder: f64,
     pub source: String,
     pub confidence: f32,
     #[serde(default)]
@@ -743,6 +749,8 @@ impl LongTermMemoryEntry {
             last_accessed_at: None,
             reuse_count: 0,
             decay_score: 1.0,
+            decay_updated_at: None,
+            decay_remainder: 0.0,
             source: "manual".to_string(),
             confidence: 0.8,
             source_candidate_id: None,

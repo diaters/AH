@@ -11,11 +11,12 @@
 
 use bevy_ecs::prelude::*;
 use chrono::Utc;
+use harness::contracts::ToolResultSender;
 use uuid::Uuid;
 
 use harness::domain::{
     ChannelId, FrontendKind, ScheduleExpr, ToolAsyncResult, ToolEffect, ToolEffectPending,
-    ToolError, ToolResultReceiver, ToolResultSender, ToolWorkerPayload,
+    ToolError, ToolResultReceiver, ToolWorkerPayload,
 };
 use harness::systems::commit_tool_effects_system;
 use harness::triggers::scheduled_task::{SchedulerState, SchedulerStateWatcher};
@@ -64,7 +65,7 @@ fn sample_channel() -> ChannelId {
 fn insert_scheduler_resources(world: &mut World) {
     world.insert_resource(SchedulerState::default());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ToolAsyncResult>();
-    world.insert_resource(ToolResultSender(tx));
+    world.insert_resource(ToolResultSender(tx.into()));
     world.insert_resource(ToolResultReceiver(rx));
 }
 

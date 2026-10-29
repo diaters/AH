@@ -1,3 +1,4 @@
+use crate::contracts::{ExecutionResultSender, ModelChainStateUpdateSender};
 use crate::prelude::*;
 use futures_util::FutureExt as _;
 use tracing::{debug, info, warn};
@@ -5,7 +6,6 @@ use tracing::{debug, info, warn};
 use crate::domain::{AgentExecutionRequestMessage, AgentExecutionResult, AgentRequestKind, Task};
 use crate::{
     contracts::{AsyncRuntime, Clock},
-    domain::{ExecutionResultSender, ModelChainStateUpdateSender},
     llm::ExecutorRegistry,
 };
 
@@ -121,7 +121,7 @@ async fn execute_request_guarded(
     registry: &ExecutorRegistry,
     chain_snapshot: Option<crate::domain::ModelChainState>,
     request: &crate::domain::AgentExecutionRequest,
-    state_sender: tokio::sync::mpsc::UnboundedSender<crate::domain::ModelChainStateUpdate>,
+    state_sender: crate::contracts::WakeSender<crate::domain::ModelChainStateUpdate>,
 ) -> Result<crate::domain::AgentExecutionOutput, crate::domain::ExecutionError> {
     let attempt = async {
         if let Some(mut chain) = chain_snapshot {
@@ -160,7 +160,7 @@ async fn execute_with_fallback_logic(
     registry: &ExecutorRegistry,
     chain_state: &mut crate::domain::ModelChainState,
     mut request: crate::domain::AgentExecutionRequest,
-    state_sender: tokio::sync::mpsc::UnboundedSender<crate::domain::ModelChainStateUpdate>,
+    state_sender: crate::contracts::WakeSender<crate::domain::ModelChainStateUpdate>,
 ) -> Result<crate::domain::AgentExecutionOutput, crate::domain::ExecutionError> {
     let original_index = chain_state.active_index;
 
@@ -236,8 +236,12 @@ async fn execute_with_fallback_logic(
 pub(crate) fn model_chain_state_update_system(
     mut state_rx: ResMut<crate::domain::ModelChainStateUpdateReceiver>,
     mut agents: Query<(&crate::domain::Agent, &mut crate::domain::ModelChainState)>,
+    wake: Option<Res<crate::contracts::RuntimeWake>>,
 ) {
-    while let Ok(update) = state_rx.0.try_recv() {
+    for _ in 0..256 {
+        let Ok(update) = state_rx.0.try_recv() else {
+            break;
+        };
         for (agent, mut state) in &mut agents {
             if agent.id == update.agent_id {
                 state.active_index = update.new_active_index;
@@ -252,6 +256,11 @@ pub(crate) fn model_chain_state_update_system(
                 );
             }
         }
+    }
+    if !state_rx.0.is_empty()
+        && let Some(wake) = wake
+    {
+        wake.notify();
     }
 }
 
@@ -333,7 +342,7 @@ mod tests {
         let mut chain = ModelChainState::new(vec![entry("vision", true), entry("text", false)], 60);
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let result = execute_with_fallback_logic(&registry, &mut chain, request(), tx).await;
+        let result = execute_with_fallback_logic(&registry, &mut chain, request(), tx.into()).await;
 
         assert!(result.is_ok());
         let seen = seen.lock().unwrap();
@@ -356,7 +365,7 @@ mod tests {
         let registry = ExecutorRegistry::from_single_executor(Arc::new(PanickingExecutor), "p");
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let result = execute_request_guarded(&registry, None, &request(), tx).await;
+        let result = execute_request_guarded(&registry, None, &request(), tx.into()).await;
 
         assert!(
             matches!(&result, Err(ExecutionError::Unknown(msg)) if msg.contains("panicked")),
