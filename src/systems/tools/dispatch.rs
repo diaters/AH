@@ -78,6 +78,15 @@ pub fn tool_dispatch_system(
     let runtime_grants = index_clock_loader.5.as_deref();
     let initiators = &index_clock_loader.6;
     for (entity, mut request) in &mut requests {
+        if index
+            .get_task(&request.request.task_id)
+            .and_then(|entity| tasks.get(entity).ok())
+            .is_some_and(|(_, task)| task.status.is_terminal())
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 跳过已经在等待确认的请求
         if request.pending_confirmation_id.is_some() {
             continue;
@@ -544,7 +553,15 @@ pub fn tool_dispatch_system(
                     options: options.clone(),
                     source: ConfirmationSource::User,
                     parent_agent_id: None,
-                    approval_context: None,
+                    approval_context: if tool_name == "shell_start" {
+                        let enabled = request.tool_input.get("notify_on_output").and_then(|value| value.as_bool()).unwrap_or(false);
+                        let target = index.get_task(&request.request.task_id).and_then(|entity| tasks.get(entity).ok())
+                            .and_then(|(_, task)| task.delivery_channel())
+                            .map(|channel| format!("{} / {}{}", channel.frontend.channel_name(), channel.user_id,
+                                channel.thread_id.as_ref().map(|id| format!(" / {id}")).unwrap_or_default()))
+                            .unwrap_or_else(|| "无输出通道，投递将明确失败".into());
+                        Some(format!("stdout 告警推送：{}；目标：{target}。启用后完整 stdout 行由 Harness 直接发送给用户。", if enabled { "开启" } else { "关闭" }))
+                    } else { None },
                 });
 
                 if let Some((_, mut task)) = tasks

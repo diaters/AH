@@ -813,7 +813,7 @@ fn handle_wait_for_tasks(
     }
 }
 
-/// StartSession 分支：启动后台 shell 会话；`notify_on_exit` 时登记后台任务，退出后通知。
+/// StartSession 分支：受管监控保持后台归属，退出通知单独按 notify_on_exit 控制。
 fn handle_start_session<B: SessionBackend>(
     commands: &mut Commands,
     request_entity: Entity,
@@ -823,15 +823,17 @@ fn handle_start_session<B: SessionBackend>(
     session_request: SessionStartRequest,
 ) {
     let notify_on_exit = session_request.notify_on_exit;
+    let notify_on_output = session_request.notify_on_output;
     match backend.start_session(session_request) {
         Ok(handle) => {
-            if notify_on_exit && request.request.work_item_id.is_none() {
+            if (notify_on_exit || notify_on_output) && request.request.work_item_id.is_none() {
                 crate::systems::loop_control::spawn_background_job(
                     commands,
                     task_entity,
                     request.request.task_id,
                     JobSource::Shell {
                         handle_id: handle.handle_id,
+                        notify_on_exit,
                     },
                     chrono::Utc::now(),
                 );

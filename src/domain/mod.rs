@@ -250,9 +250,9 @@ pub use loop_control::{
 
 // session
 pub use session::{
-    SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest, SessionOutputSnapshot,
-    SessionReadRequest, SessionStartRequest, SessionStatus, SessionSummary, ShellExecResult,
-    ShellSessionResult,
+    SessionBackendKind, SessionHandle, SessionHandleId, SessionInputRequest, SessionOutputEvent,
+    SessionOutputSnapshot, SessionReadRequest, SessionStartRequest, SessionStatus, SessionSummary,
+    ShellExecResult, ShellSessionResult,
 };
 
 // session_backend
@@ -344,6 +344,9 @@ pub struct AgentEntry {
 }
 
 // ============ 测试 ============
+
+pub(crate) use message::InputSequencer;
+pub use message::{InputBlocked, InputSequence};
 
 #[cfg(test)]
 mod tests {

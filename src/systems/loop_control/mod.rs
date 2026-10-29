@@ -5,6 +5,7 @@
 mod attachment;
 mod background;
 mod inbox;
+mod monitor;
 mod stop;
 
 pub(crate) use attachment::context_attachment_system;
@@ -13,3 +14,6 @@ pub(crate) use background::{
 };
 pub(crate) use inbox::{inbox_ingest_system, inbox_status_sync_system, inbox_wake_system};
 pub(crate) use stop::{clear_stop_requested_system, stop_task_system};
+
+pub(crate) use monitor::monitor_output_system;
+pub use monitor::{MonitorDeliveries, MonitorDeliveryRecord};

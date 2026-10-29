@@ -19,8 +19,10 @@ use super::{SessionHandleId, TaskId};
 /// Agent loop 控制配置（自动拉起预算、通知合并窗口、后台轮询间隔）。
 #[derive(Debug, Clone, PartialEq, Eq, Resource)]
 pub struct LoopControlConfig {
-    /// 无用户输入时连续自动拉起的轮数上限
+    /// 滚动窗口内后台通知自动拉起的轮数上限
     pub max_auto_wakes: u32,
+    /// 后台自动拉起额度的滚动窗口（秒）
+    pub auto_wake_window_secs: u64,
     /// 空闲任务唤醒的通知合并窗口（毫秒）
     pub notification_coalesce_ms: u64,
     /// 后台 shell 会话状态轮询间隔（毫秒）
@@ -31,6 +33,7 @@ impl Default for LoopControlConfig {
     fn default() -> Self {
         Self {
             max_auto_wakes: 5,
+            auto_wake_window_secs: 10,
             notification_coalesce_ms: 300,
             background_poll_ms: 500,
         }
@@ -100,6 +103,26 @@ pub fn render_inbox_items(items: &[InboxItem]) -> String {
     out
 }
 
+/// 仅限制 Agent 未消费的监控上下文；平台告警独立投递，不受此合并影响。
+const MAX_MONITOR_CONTEXT_SESSIONS: usize = 32;
+const MAX_MONITOR_CONTEXT_BYTES: usize = 2 * 1024;
+const MONITOR_MERGED: &str = "[同会话较早通知已合并；完整告警以独立投递与回执为准]\n";
+const MONITOR_EVICTED: &str = "[较早会话摘要已淘汰；完整告警以独立投递与回执为准]\n";
+const MONITOR_PRIOR_FAILURE: &str = "[先前监控发送失败：";
+
+/// 按 UTF-8 边界保留摘要头部，并把截断事实算入总字节上限。
+fn bounded_monitor_text(text: &str, max_bytes: usize) -> String {
+    const TRUNCATED: &str = "…[摘要已截断]";
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes.saturating_sub(TRUNCATED.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TRUNCATED}", &text[..end])
+}
+
 /// Task 实体上的回合收件箱。
 ///
 /// push 只发生在 `inbox_ingest_system`（单一写入点）；drain 只有两个出口：
@@ -118,7 +141,72 @@ impl TaskInbox {
         self.items.len()
     }
 
-    pub fn push(&mut self, item: InboxItem) {
+    pub fn push(&mut self, mut item: InboxItem) {
+        if let InboxItem::TaskNotification {
+            job_id,
+            source,
+            summary,
+            received_at,
+            ..
+        } = &mut item
+            && source == "shell_output"
+        {
+            let mut context_note = String::new();
+            let existing = self.items.iter().position(|previous| {
+                matches!(previous,
+                InboxItem::TaskNotification { job_id: previous_id, source, .. }
+                    if previous_id == job_id && source == "shell_output")
+            });
+            if let Some(index) = existing
+                && let Some(InboxItem::TaskNotification {
+                    summary: previous_summary,
+                    status: previous_status,
+                    received_at: first_at,
+                    ..
+                }) = self.items.remove(index)
+            {
+                // 只替换尚未消费的同会话上下文，平台消息与交付记录保持独立。
+                *received_at = (*received_at).min(first_at);
+                if previous_summary.starts_with(MONITOR_PRIOR_FAILURE) {
+                    if let Some(failure) = previous_summary.lines().next() {
+                        context_note.push_str(&bounded_monitor_text(failure, 512));
+                        context_note.push('\n');
+                    }
+                } else if previous_status == "failed" || previous_status.starts_with("failed:") {
+                    let reason = bounded_monitor_text(&previous_summary.replace('\n', " "), 512);
+                    context_note.push_str(&format!("{MONITOR_PRIOR_FAILURE}{reason}]\n"));
+                }
+                if previous_summary.contains(MONITOR_EVICTED) {
+                    context_note.push_str(MONITOR_EVICTED);
+                }
+                context_note.push_str(MONITOR_MERGED);
+            }
+            let monitor_count = self
+                .items
+                .iter()
+                .filter(|previous| {
+                    matches!(previous,
+                InboxItem::TaskNotification { source, .. } if source == "shell_output")
+                })
+                .count();
+            if monitor_count >= MAX_MONITOR_CONTEXT_SESSIONS
+                && let Some(index) = self.items.iter().position(|previous| {
+                    matches!(previous,
+                    InboxItem::TaskNotification { source, .. } if source == "shell_output")
+                })
+            {
+                if let Some(previous) = self.items.remove(index) {
+                    *received_at = (*received_at).min(previous.received_at());
+                }
+                if !context_note.contains(MONITOR_EVICTED) {
+                    context_note.push_str(MONITOR_EVICTED);
+                }
+            }
+            let available = MAX_MONITOR_CONTEXT_BYTES.saturating_sub(context_note.len());
+            context_note.push_str(&bounded_monitor_text(summary, available));
+            *summary = context_note;
+            // 最新状态保留在 status；先前发送失败在受限摘要中单独保留。
+        }
         self.items.push_back(item);
     }
 
@@ -131,8 +219,9 @@ impl TaskInbox {
         self.items.iter().any(InboxItem::is_user_steer)
     }
 
-    pub fn last_received_at(&self) -> Option<DateTime<Utc>> {
-        self.items.iter().map(InboxItem::received_at).max()
+    /// 首条积压确定合并截止时间；后续通知不能无限延后唤醒。
+    pub fn first_received_at(&self) -> Option<DateTime<Utc>> {
+        self.items.iter().map(InboxItem::received_at).min()
     }
 }
 
@@ -149,7 +238,7 @@ pub struct TurnGeneration(pub u64);
 
 /// 在飞的任务级 LLM 请求句柄（`/stop` 时中止 provider 侧 HTTP 请求）。
 ///
-/// 由 `agent_execution_system` 登记（仅任务级 `LlmCompletion`），`stop_task_system` 中止并移除；
+/// 由 `agent_execution_system` 登记任务级请求；中止后保留句柄到实际完成，以供关闭屏障检查。
 /// 已结束的句柄在登记新请求时顺带清理。
 #[derive(Debug, Default, Resource)]
 pub struct InflightLlmRequests {
@@ -167,7 +256,7 @@ impl InflightLlmRequests {
 
     /// 中止该任务全部在飞请求，返回实际中止的数量。
     pub fn abort_task(&mut self, task_id: TaskId) -> usize {
-        let Some(handles) = self.by_task.remove(&task_id) else {
+        let Some(handles) = self.by_task.get_mut(&task_id) else {
             return 0;
         };
         let mut aborted = 0;
@@ -201,8 +290,11 @@ pub struct StopRequested;
 /// 后台任务来源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobSource {
-    /// `shell_start(notify_on_exit = true)` 启动的会话
-    Shell { handle_id: SessionHandleId },
+    /// shell_start 的受管后台会话；静默退出也必须保留生命周期归属。
+    Shell {
+        handle_id: SessionHandleId,
+        notify_on_exit: bool,
+    },
     /// `create_tasks` 派出的子任务批次（未被 `wait_tasks` 认领时完成后通知）
     SubTaskBatch {
         batch_id: Uuid,
@@ -246,12 +338,33 @@ impl OwnedJobs {
     }
 }
 
-/// 无用户输入的连续自动拉起轮数，收到真实用户输入时清零。
-#[derive(Debug, Clone, Copy, Default, Component)]
+/// 后台自动拉起的滚动窗口；用户 steer 不占用或清空窗口额度。
+#[derive(Debug, Clone, Default, Component)]
 pub struct AutoWakeBudget {
-    pub consecutive: u32,
-    /// 已就"超出上限"提示过用户，避免重复推送
+    pub recent_wakes: VecDeque<DateTime<Utc>>,
+    /// 每次限流期间只记录一次延期日志。
     pub exhausted_notified: bool,
+}
+
+impl AutoWakeBudget {
+    /// 仅在实际自动唤醒前调用；到期额度会自行释放，不依赖下一次用户输入。
+    pub fn try_record_wake(&mut self, now: DateTime<Utc>, config: &LoopControlConfig) -> bool {
+        let seconds = i64::try_from(config.auto_wake_window_secs.max(1)).unwrap_or(i64::MAX);
+        let window = chrono::Duration::try_seconds(seconds).unwrap_or(chrono::Duration::MAX);
+        while self
+            .recent_wakes
+            .front()
+            .is_some_and(|at| now.signed_duration_since(*at) >= window)
+        {
+            self.recent_wakes.pop_front();
+        }
+        if self.recent_wakes.len() >= config.max_auto_wakes as usize {
+            return false;
+        }
+        self.recent_wakes.push_back(now);
+        self.exhausted_notified = false;
+        true
+    }
 }
 
 /// 任务自然完成但仍有活跃后台任务时暂存的候选结果。
@@ -338,10 +451,12 @@ mod tests {
         let stopped = TaskId::new();
         let other = TaskId::new();
         let pending = || std::future::pending::<()>();
-        inflight.register(stopped, runtime.spawn(pending()).abort_handle());
+        let stopped_handle = runtime.spawn(pending());
+        inflight.register(stopped, stopped_handle.abort_handle());
         inflight.register(other, runtime.spawn(pending()).abort_handle());
 
         assert_eq!(inflight.abort_task(stopped), 1);
+        assert!(runtime.block_on(stopped_handle).unwrap_err().is_cancelled());
         assert_eq!(inflight.in_flight(stopped), 0);
         assert_eq!(inflight.in_flight(other), 1);
         assert_eq!(inflight.abort_task(stopped), 0, "second abort is a no-op");
@@ -430,5 +545,148 @@ mod tests {
             },
         ];
         assert_eq!(render_todos(&items), "✓ done\n▶ doing");
+    }
+
+    fn monitor(
+        job_id: Uuid,
+        status: &str,
+        summary: String,
+        received_at: DateTime<Utc>,
+    ) -> InboxItem {
+        InboxItem::TaskNotification {
+            job_id,
+            source: "shell_output".into(),
+            status: status.into(),
+            summary,
+            received_at,
+        }
+    }
+
+    #[test]
+    fn monitor_context_pressure_is_bounded_without_dropping_steer_or_other_notifications() {
+        let mut inbox = TaskInbox::default();
+        let user_content = "必须保留的用户约束".repeat(512);
+        inbox.push(steer(&user_content));
+        let other = InboxItem::TaskNotification {
+            job_id: Uuid::new_v4(),
+            source: "subtasks".into(),
+            status: "completed".into(),
+            summary: "完整子任务结果".repeat(512),
+            received_at: Utc::now(),
+        };
+        inbox.push(other.clone());
+        let first_monitor_at = Utc::now();
+        for index in 1..=1000 {
+            inbox.push(monitor(
+                Uuid::from_u128(index),
+                "delivered",
+                "中文告警数据".repeat(512),
+                first_monitor_at + chrono::Duration::milliseconds(index as i64),
+            ));
+        }
+        let first_retained_at = inbox
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                InboxItem::TaskNotification {
+                    source,
+                    received_at,
+                    ..
+                } if source == "shell_output" => Some(*received_at),
+                _ => None,
+            })
+            .min()
+            .unwrap();
+        assert_eq!(
+            first_retained_at,
+            first_monitor_at + chrono::Duration::milliseconds(1),
+            "eviction must not allow a continuous stream to postpone the first pending deadline"
+        );
+        let monitors: Vec<_> = inbox
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                InboxItem::TaskNotification {
+                    source, summary, ..
+                } if source == "shell_output" => Some(summary),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            monitors.len() <= 32,
+            "unconsumed monitor sessions must have a fixed context bound: {}",
+            monitors.len()
+        );
+        assert!(
+            monitors
+                .iter()
+                .all(|summary| summary.len() <= 2048 && summary.is_char_boundary(summary.len()))
+        );
+        assert!(
+            monitors
+                .iter()
+                .any(|summary| summary.contains("较早会话摘要已淘汰")),
+            "context loss must be explicit"
+        );
+        assert!(inbox.items.iter().any(
+            |item| matches!(item, InboxItem::UserSteer { content, .. } if content == &user_content)
+        ));
+        assert!(inbox.items.contains(&other));
+    }
+
+    #[test]
+    fn monitor_context_coalesces_same_session_without_forgetting_failure_or_first_deadline() {
+        let mut inbox = TaskInbox::default();
+        let now = Utc::now();
+        let job = Uuid::new_v4();
+        inbox.push(monitor(
+            job,
+            "failed: channel API error 400",
+            "platform-down-reason".into(),
+            now,
+        ));
+        inbox.push(steer("keep user input"));
+        for index in 1..=1000 {
+            inbox.push(monitor(
+                job,
+                "delivered",
+                format!("latest-{index}"),
+                now + chrono::Duration::milliseconds(index),
+            ));
+        }
+        let items: Vec<_> = inbox
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                InboxItem::TaskNotification {
+                    job_id,
+                    source,
+                    status,
+                    summary,
+                    received_at,
+                } if source == "shell_output" => Some((*job_id, status, summary, *received_at)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            items.len(),
+            1,
+            "one unconsumed summary per monitoring session"
+        );
+        let (id, status, summary, at) = items[0];
+        assert_eq!(id, job);
+        assert_eq!(status, "delivered");
+        assert!(summary.contains("latest-1000"));
+        assert!(
+            summary.contains("platform-down-reason"),
+            "a later success cannot erase prior failure evidence"
+        );
+        assert!(summary.contains("同会话较早通知已合并"));
+        assert!(summary.len() <= 2048);
+        assert_eq!(
+            at, now,
+            "coalescing updates cannot postpone the first pending deadline"
+        );
+        assert!(inbox.has_user_steer());
     }
 }

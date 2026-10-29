@@ -115,6 +115,11 @@ impl HarnessConfig {
                         .ok()
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(defaults.max_auto_wakes),
+                    auto_wake_window_secs: std::env::var("HARNESS_AUTO_WAKE_WINDOW_SECS")
+                        .ok()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .filter(|seconds| *seconds > 0)
+                        .unwrap_or(defaults.auto_wake_window_secs),
                     notification_coalesce_ms: std::env::var("HARNESS_NOTIFICATION_COALESCE_MS")
                         .ok()
                         .and_then(|v| v.parse().ok())

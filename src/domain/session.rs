@@ -98,6 +98,22 @@ pub struct SessionStartRequest {
     pub owner_agent_id: AgentId,
     /// 会话退出后是否以 `<task-notification>` 通知所属任务（shell_start 默认 true）
     pub notify_on_exit: bool,
+    /// stdout 完整行作为监控事件发送给所属任务的用户，默认关闭。
+    #[serde(default)]
+    pub notify_on_output: bool,
+}
+
+/// 受管 stdout 事件。直到上层确认投递成功或最终失败前，backend 保留事件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionOutputEvent {
+    pub session_id: SessionHandleId,
+    pub task_id: TaskId,
+    pub sequence: u64,
+    pub content: String,
+    pub detected_at: DateTime<Utc>,
+    pub original_bytes: usize,
+    pub truncated: bool,
+    pub overflow: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

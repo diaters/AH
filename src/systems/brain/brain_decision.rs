@@ -80,6 +80,12 @@ pub fn brain_decision_system(
             continue;
         };
 
+        if task.status.is_terminal() {
+            debug!(event = "StaleBrainDecisionDropped", task_id = %task.id, "dropping late decision for terminal owner");
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         match &result.result {
             Ok(AgentExecutionOutput {
                 content: OutputContent::Text(content),
@@ -675,6 +681,30 @@ mod tests {
             matches!(status, TaskStatus::Waiting(_)),
             "task should remain Waiting when brain is disabled, got {:?}",
             status
+        );
+    }
+    #[test]
+    fn terminal_owner_discards_late_brain_dispatch() {
+        let mut app = make_brain_decision_test_app();
+        let task_id = spawn_brain_awaiting_task(&mut app);
+        let entity = app
+            .world()
+            .resource::<EntityIndex>()
+            .get_task(&task_id)
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Task>(entity)
+            .unwrap()
+            .mark_done("finished", chrono::Utc::now());
+        spawn_persistent_agent(&mut app, "coder");
+        app.world_mut().spawn(make_brain_text_result(
+            task_id,
+            r#"{"agent_name": "coder"}"#,
+        ));
+        app.update();
+        assert!(
+            !app.world().entity(entity).contains::<PendingDispatch>(),
+            "late brain result must not requeue a finished task"
         );
     }
 }

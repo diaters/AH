@@ -285,7 +285,7 @@ fn evaluation_triggered_on_turn_limit() {
 /// 验证多个 Waiting(User) 任务时，用户输入只路由到其中一个。
 /// 接收输入的任务会完成一轮对话后回到 Waiting(User)，但只有它的 STM 会包含新条目。
 #[test]
-fn multiple_waiting_user_tasks_routes_to_one() {
+fn multiple_waiting_user_tasks_reject_ambiguous_routing() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -354,12 +354,8 @@ fn multiple_waiting_user_tasks_routes_to_one() {
 
     assert_eq!(
         tasks_with_input.len(),
-        1,
-        "exactly one task should have received the user input"
-    );
-    assert_eq!(
-        tasks_with_input[0].0.id, task_id_1,
-        "the first Waiting(User) task should receive the input"
+        0,
+        "conflicting conversations must not silently select a task"
     );
 }
 
@@ -424,4 +420,313 @@ fn finish_command_ends_multi_turn_conversation() {
         );
     }
     // 任务可能已被清理，找不到也说明已正常终止
+}
+
+fn conversation_fixture() -> (bevy_app::App, crossbeam_channel::Sender<ExternalInput>) {
+    let runtime = Arc::new(Runtime::new().unwrap());
+    let registry = ExecutorRegistry::from_single_executor(
+        Arc::new(BrainAwareEchoExecutor::new("echo")),
+        "default",
+    );
+    let (tx, rx) = unbounded();
+    let mut app = build_harness_app(
+        test_config(),
+        runtime,
+        registry,
+        rx,
+        vec![],
+        harness::channels::ChannelManager::empty().0,
+    );
+    app.update();
+    spawn_default_agents(&mut app);
+    (app, tx)
+}
+
+fn send_text(tx: &crossbeam_channel::Sender<ExternalInput>, text: &str) {
+    tx.send(ExternalInput::TextWithChannel {
+        sender: None,
+        channel: default_channel(),
+        content: text.to_string(),
+    })
+    .unwrap();
+}
+
+#[test]
+fn ten_inputs_in_one_frame_reserve_one_conversation_and_keep_every_input() {
+    let (mut app, tx) = conversation_fixture();
+    for i in 0..10 {
+        send_text(&tx, &format!("message-{i}"));
+    }
+    app.update();
+    let tasks: Vec<_> = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .cloned()
+        .collect();
+    assert_eq!(
+        tasks.len(),
+        1,
+        "same-frame creation must reserve the channel"
+    );
+    for _ in 0..3 {
+        app.update();
+    }
+    let entity = app
+        .world()
+        .resource::<EntityIndex>()
+        .get_task(&tasks[0].id)
+        .unwrap();
+    let memory = app.world().get::<ShortTermMemory>(entity).unwrap();
+    let history = format!(
+        "{:?} {:?}",
+        memory.entries,
+        app.world().get::<harness::domain::TaskInbox>(entity)
+    );
+    for i in 0..10 {
+        assert!(
+            history.contains(&format!("message-{i}")),
+            "lost message-{i}: {history}"
+        );
+    }
+}
+
+#[test]
+fn btw_does_not_create_a_second_pending_user_task() {
+    let (mut app, tx) = conversation_fixture();
+    send_text(&tx, "original");
+    app.update();
+    send_text(&tx, "/btw another topic");
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(
+        app.world_mut().query::<&Task>().iter(app.world()).count(),
+        1
+    );
+}
+
+#[test]
+fn finish_then_new_input_in_one_frame_opens_a_fresh_task() {
+    let (mut app, tx) = conversation_fixture();
+    send_text(&tx, "original");
+    app.update();
+    let old = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .next()
+        .unwrap()
+        .id;
+    send_text(&tx, "/finish");
+    send_text(&tx, "fresh topic");
+    for _ in 0..6 {
+        app.update();
+    }
+    let tasks: Vec<_> = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .cloned()
+        .collect();
+    assert!(
+        tasks
+            .iter()
+            .find(|task| task.id == old)
+            .unwrap()
+            .status()
+            .is_terminal()
+    );
+    let fresh: Vec<_> = tasks
+        .iter()
+        .filter(|task| !task.status().is_terminal())
+        .collect();
+    assert_eq!(
+        fresh.len(),
+        1,
+        "new message after finish must be retained until cleanup"
+    );
+    assert_ne!(fresh[0].id, old);
+    assert_eq!(fresh[0].content, "fresh topic");
+}
+
+#[test]
+fn text_before_finish_keeps_fifo_command_order() {
+    let (mut app, tx) = conversation_fixture();
+    send_text(&tx, "original");
+    app.update();
+    let old = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .next()
+        .unwrap()
+        .id;
+    send_text(&tx, "steer before finish");
+    send_text(&tx, "/finish");
+    send_text(&tx, "after finish");
+    for _ in 0..8 {
+        app.update();
+    }
+    let old_entity = app
+        .world()
+        .resource::<EntityIndex>()
+        .get_task(&old)
+        .unwrap();
+    let old_history = format!(
+        "{:?} {:?}",
+        app.world()
+            .get::<ShortTermMemory>(old_entity)
+            .map(|m| &m.entries),
+        app.world().get::<harness::domain::TaskInbox>(old_entity)
+    );
+    assert!(
+        !old_history.contains("after finish"),
+        "later text went to old task"
+    );
+    let tasks: Vec<_> = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .filter(|task| !task.status().is_terminal())
+        .cloned()
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].content, "after finish");
+}
+
+#[test]
+fn finished_task_holds_channel_until_pending_worker_acknowledges_cleanup() {
+    use harness::domain::{AgentExecutionRequest, AgentRequestKind, ToolRequestPending};
+    let (mut app, tx) = conversation_fixture();
+    send_text(&tx, "original");
+    app.update();
+    let old = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .next()
+        .unwrap()
+        .id;
+    let pending = app
+        .world_mut()
+        .spawn(ToolRequestPending {
+            tool_call_id: "cleanup-pending".into(),
+            tool_name: "shell_exec".into(),
+            original_request: Arc::new(AgentExecutionRequest {
+                task_id: old,
+                agent_id: harness::domain::AgentId::new(),
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "shell_exec".into(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+                turn_generation: None,
+                vision: false,
+                trusted_images: vec![],
+            }),
+        })
+        .id();
+    send_text(&tx, "/finish");
+    send_text(&tx, "next after cleanup");
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world_mut().query::<&Task>().iter(app.world()).count(),
+        1
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&harness::domain::UserInputMessage>()
+            .iter(app.world())
+            .count(),
+        1,
+        "input must remain queued while only ToolRequestPending survives cancellation"
+    );
+    app.world_mut().entity_mut(pending).despawn();
+    for _ in 0..4 {
+        app.update();
+    }
+    let active: Vec<_> = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .filter(|task| !task.status().is_terminal())
+        .cloned()
+        .collect();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].content, "next after cleanup");
+}
+
+#[test]
+fn clear_holds_channel_until_pending_worker_acknowledges_cleanup() {
+    use harness::domain::{AgentExecutionRequest, AgentRequestKind, ToolRequestPending};
+    let (mut app, tx) = conversation_fixture();
+    send_text(&tx, "original");
+    app.update();
+    let old = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .next()
+        .unwrap()
+        .id;
+    let pending = app
+        .world_mut()
+        .spawn(ToolRequestPending {
+            tool_call_id: "cleanup-pending".into(),
+            tool_name: "shell_exec".into(),
+            original_request: Arc::new(AgentExecutionRequest {
+                task_id: old,
+                agent_id: harness::domain::AgentId::new(),
+                request_kind: AgentRequestKind::ToolExecution {
+                    tool_name: "shell_exec".into(),
+                },
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                conversation: None,
+                work_item_id: None,
+                model_override: None,
+                turn_generation: None,
+                vision: false,
+                trusted_images: vec![],
+            }),
+        })
+        .id();
+    send_text(&tx, "/clear");
+    send_text(&tx, "next after cleanup");
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world_mut().query::<&Task>().iter(app.world()).count(),
+        1
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&harness::domain::UserInputMessage>()
+            .iter(app.world())
+            .count(),
+        1,
+        "input must remain queued while only ToolRequestPending survives cancellation"
+    );
+    app.world_mut().entity_mut(pending).despawn();
+    for _ in 0..4 {
+        app.update();
+    }
+    let active: Vec<_> = app
+        .world_mut()
+        .query::<&Task>()
+        .iter(app.world())
+        .filter(|task| !task.status().is_terminal())
+        .cloned()
+        .collect();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].content, "next after cleanup");
 }

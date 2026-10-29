@@ -76,6 +76,8 @@
 > 最新：[`design/2026-10-28-harness-hardening-design.md`](design/2026-10-28-harness-hardening-design.md)
 > （授权范围、图片信任边界、无 TUI 模式等加固方案，已实施）。
 
+持续监控实现边界见 [持续监控输出与送达闭环](design/2026-10-29-live-monitor-output.md)。
+
 ## 活跃规格与计划（superpowers/）
 
 新增评审稿：
@@ -142,6 +144,8 @@ Channel/Provider 的实际配置接入见 `configuration.md` 与仓库根的 `*.
 - 重大设计决策 → 更新 `design/` 或 `adr/`，并在本索引登记。
 - 文档过期/矛盾/缺失 → 作为独立任务及时修正，不口头跳过。
 - 文档状态流转：活跃 → 完成/取代 → 归档（顶部加 `状态：已归档` 标注）。
+
+单通道回归证据见 [用户任务路由回归](analysis/2026-10-29-channel-routing-regression.md)。
 
 ## 推荐阅读顺序
 

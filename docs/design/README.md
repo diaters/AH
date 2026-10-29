@@ -30,6 +30,8 @@
 | `2026-10-28-conversation-idle-and-approver-binding-design.md` | 当前有效 | 多轮会话空闲自动结束；群聊审批绑定发起人 | 已实施 |
 | `2026-08-24-test-seam-quality-remediation-design.md` | 待评审 | 测试接缝质量修正：从实现耦合回归到可观察端口验证 | 基于低质测试清单证据核对与分批治理（基建先行） |
 
+| `2026-10-29-live-monitor-output.md` | 当前有效 | 持续输出、真实回执、有界重试与窗口唤醒 | 生命周期规格任务 D |
+
 ## 推荐阅读顺序
 
 1. [docs/current-state.md](../current-state.md)

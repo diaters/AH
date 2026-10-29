@@ -26,6 +26,18 @@ const SWEEP_INTERVAL_SECS: i64 = 30;
 /// 沿父链查找根任务的步数上限，防御异常数据形成环。
 const MAX_TASK_DEPTH: usize = 64;
 
+/// 同一任务树的资源统一归属到根；异常父链最多追踪固定层数。
+fn root_task_id(id: TaskId, parents: &HashMap<TaskId, Option<TaskId>>) -> TaskId {
+    let mut current = id;
+    for _ in 0..MAX_TASK_DEPTH {
+        match parents.get(&current).copied().flatten() {
+            Some(parent) if parents.contains_key(&parent) => current = parent,
+            _ => break,
+        }
+    }
+    current
+}
+
 /// 回收保留期已过的终态任务树。
 #[allow(clippy::too_many_arguments)]
 pub fn terminal_task_retention_system(
@@ -36,6 +48,9 @@ pub fn terminal_task_retention_system(
     tasks: Query<&Task>,
     work_items: Query<&WorkItem>,
     dispatched: Option<ResMut<TaskTerminalDispatched>>,
+    pending: Query<&crate::domain::ToolRequestPending>,
+    inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
+    backend: Option<Res<crate::systems::NativeProcessBackend>>,
     mut last_sweep: Local<Option<DateTime<Utc>>>,
 ) {
     let now = clock.0;
@@ -47,17 +62,7 @@ pub fn terminal_task_retention_system(
     let retention = Duration::seconds(settings.0.terminal_task_retention_secs as i64);
     let parents: HashMap<TaskId, Option<TaskId>> =
         tasks.iter().map(|t| (t.id, t.parent_task_id)).collect();
-    let root_of = |id: TaskId| -> TaskId {
-        let mut current = id;
-        for _ in 0..MAX_TASK_DEPTH {
-            match parents.get(&current).copied().flatten() {
-                // 父任务已不存在（如被 /clear）时，当前任务即为根
-                Some(parent) if parents.contains_key(&parent) => current = parent,
-                _ => break,
-            }
-        }
-        current
-    };
+    let root_of = |id| root_task_id(id, &parents);
 
     // 树上任一任务未终态 / 仍在保留期内，或仍有未终态 WorkItem，则整树保留
     let mut busy_roots: HashSet<TaskId> = tasks
@@ -71,6 +76,33 @@ pub fn terminal_task_retention_system(
             .filter(|w| !w.is_terminal() && parents.contains_key(&w.task_id))
             .map(|w| root_of(w.task_id)),
     );
+
+    busy_roots.extend(
+        pending
+            .iter()
+            .map(|request| root_of(request.original_request.task_id)),
+    );
+    if let Some(inflight) = inflight_llm.as_ref() {
+        busy_roots.extend(
+            tasks
+                .iter()
+                .filter(|task| inflight.in_flight(task.id) > 0)
+                .map(|task| root_of(task.id)),
+        );
+    }
+    if let Some(backend) = backend.as_ref() {
+        use crate::domain::SessionBackend;
+        busy_roots.extend(
+            tasks
+                .iter()
+                .filter(|task| {
+                    backend
+                        .list_task_sessions(task.id)
+                        .map_or(true, |sessions| !sessions.is_empty())
+                })
+                .map(|task| root_of(task.id)),
+        );
+    }
 
     let reclaim: Vec<TaskId> = tasks
         .iter()
@@ -99,13 +131,26 @@ pub fn terminal_task_retention_system(
 /// 结束空闲超过阈值的顶层多轮会话，并向会话通道推送提示。
 ///
 /// 只处理等待用户输入（`Waiting(User)` / `Waiting(AskUser)`）的顶层任务；
-/// 等待工具审批的任务（带 `pending_confirmation_id`）由审批流程负责，不在此结束。
+/// 等待工具审批、真实后台会话、在飞执行、积压通知与未完成子任务均不算空闲。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn conversation_idle_system(
     mut commands: Commands,
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
-    tasks: Query<&Task>,
+    tasks: Query<(
+        &Task,
+        Option<&crate::domain::TaskInbox>,
+        Option<&crate::domain::OwnedJobs>,
+    )>,
     mut last_sweep: Local<Option<DateTime<Utc>>>,
+    backend: Option<Res<crate::systems::NativeProcessBackend>>,
+    inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
+    pending: Query<&crate::domain::ToolRequestPending>,
+    queued_tools: Query<&crate::domain::ToolExecutionRequestMessage>,
+    queued_llm: Query<&crate::domain::AgentExecutionRequestMessage>,
+    deliveries: Query<&crate::domain::InboxDeliveryMessage>,
+    work_items: Query<&WorkItem>,
+    monitor_deliveries: Option<Res<crate::systems::MonitorDeliveries>>,
 ) {
     let idle_secs = settings.0.conversation_idle_secs;
     if idle_secs == 0 {
@@ -117,16 +162,75 @@ pub fn conversation_idle_system(
     }
     *last_sweep = Some(now);
 
+    let all_tasks: Vec<_> = tasks.iter().collect();
+    let parents: HashMap<TaskId, Option<TaskId>> = all_tasks
+        .iter()
+        .map(|(task, _, _)| (task.id, task.parent_task_id))
+        .collect();
+    let root_of = |id| root_task_id(id, &parents);
+    let mut busy_roots: HashSet<_> = all_tasks
+        .iter()
+        .filter(|(task, inbox, jobs)| {
+            (task.parent_task_id.is_some() && !task.status.is_terminal())
+                || monitor_deliveries
+                    .as_ref()
+                    .is_some_and(|deliveries| deliveries.has_pending_for_task(task.id))
+                || inbox.is_some_and(|inbox| !inbox.is_empty())
+                || jobs.is_some_and(|jobs| !jobs.jobs().is_empty())
+                || inflight_llm
+                    .as_ref()
+                    .is_some_and(|inflight| inflight.in_flight(task.id) > 0)
+        })
+        .map(|(task, _, _)| root_of(task.id))
+        .collect();
+    busy_roots.extend(
+        pending
+            .iter()
+            .map(|request| root_of(request.original_request.task_id)),
+    );
+    busy_roots.extend(
+        queued_tools
+            .iter()
+            .map(|request| root_of(request.request.task_id)),
+    );
+    busy_roots.extend(
+        queued_llm
+            .iter()
+            .map(|request| root_of(request.request.task_id)),
+    );
+    busy_roots.extend(deliveries.iter().map(|delivery| root_of(delivery.task_id)));
+    busy_roots.extend(
+        work_items
+            .iter()
+            .filter(|work| !work.is_terminal())
+            .map(|work| root_of(work.task_id)),
+    );
+
     let idle = Duration::seconds(idle_secs as i64);
-    for task in tasks.iter().filter(|t| {
-        t.parent_task_id.is_none()
-            && t.pending_confirmation_id.is_none()
+    for task in all_tasks.iter().map(|(task, _, _)| *task).filter(|task| {
+        task.parent_task_id.is_none()
+            && task.origin_channel.is_some()
+            && task.pending_confirmation_id.is_none()
             && matches!(
-                t.status,
+                task.status,
                 TaskStatus::Waiting(WaitingReason::User | WaitingReason::AskUser)
             )
-            && now - t.updated_at >= idle
+            && now - task.updated_at >= idle
+            && !busy_roots.contains(&task.id)
     }) {
+        // 以真实 backend 为准，notify_on_exit=false 的会话可能没有 OwnedJobs。
+        // 查询失败时无法确认已空闲，同样保留任务。
+        if backend.as_ref().is_some_and(|backend| {
+            use crate::domain::SessionBackend;
+            all_tasks.iter().any(|(member, _, _)| {
+                root_of(member.id) == task.id
+                    && backend
+                        .list_task_sessions(member.id)
+                        .map_or(true, |sessions| !sessions.is_empty())
+            })
+        }) {
+            continue;
+        }
         info!(
             event = "ConversationIdleFinished",
             task_id = %task.id,
@@ -368,5 +472,80 @@ mod tests {
         );
 
         assert!(run_idle(&mut world).is_empty());
+    }
+
+    #[test]
+    fn idle_monitor_without_owned_jobs_stays_alive_while_backend_session_runs() {
+        use crate::domain::{AgentId, SessionBackend, SessionStartRequest};
+        let now = Utc::now();
+        let mut world = world_at(now);
+        let root = spawn(
+            &mut world,
+            task(
+                TaskStatus::Waiting(WaitingReason::User),
+                now - Duration::days(2),
+                None,
+            ),
+        );
+        let backend = crate::systems::NativeProcessBackend::default();
+        backend
+            .start_session(SessionStartRequest {
+                command: "exec sleep 60".into(),
+                session_name: None,
+                cwd: None,
+                env: HashMap::new(),
+                timeout_secs: None,
+                tail_lines: 20,
+                owner_task_id: root,
+                owner_agent_id: AgentId::nil(),
+                notify_on_exit: false,
+                notify_on_output: false,
+            })
+            .unwrap();
+        world.insert_resource(backend.clone());
+        let finished = run_idle(&mut world);
+        backend.shutdown().unwrap();
+        assert!(
+            finished.is_empty(),
+            "a live backend session must prevent idle finish even without OwnedJobs"
+        );
+    }
+
+    #[test]
+    fn idle_parent_keeps_pending_inbox_and_unfinished_children() {
+        use crate::domain::{InboxItem, TaskInbox};
+        let now = Utc::now();
+        let mut world = world_at(now);
+        let queued = spawn(
+            &mut world,
+            task(
+                TaskStatus::Waiting(WaitingReason::User),
+                now - Duration::days(2),
+                None,
+            ),
+        );
+        let entity = world.resource::<EntityIndex>().get_task(&queued).unwrap();
+        let mut inbox = TaskInbox::default();
+        inbox.push(InboxItem::TaskNotification {
+            job_id: uuid::Uuid::new_v4(),
+            source: "shell".into(),
+            status: "output".into(),
+            summary: "pending event".into(),
+            received_at: now,
+        });
+        world.entity_mut(entity).insert(inbox);
+        let parent = spawn(
+            &mut world,
+            task(
+                TaskStatus::Waiting(WaitingReason::User),
+                now - Duration::days(2),
+                None,
+            ),
+        );
+        spawn(&mut world, task(TaskStatus::Running, now, Some(parent)));
+        assert!(
+            run_idle(&mut world).is_empty(),
+            "pending notification or unfinished child means the parent remains active"
+        );
     }
 }

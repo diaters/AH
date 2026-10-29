@@ -11,6 +11,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - Brain 调度、Agent 配置加载与多 Agent 执行链路
 - `create_tasks` + `wait_tasks` 驱动的任务分解能力
+- 每个完整聊天通道只保留一个未结束的用户顶层任务，运行中消息引导该任务；
+  `/stop` 保留会话，`/finish` 清理后释放名额；`/btw` 只在空通道创建新主题；内部子任务与输出型定时任务可并行
 - Agent loop 控制：任务运行中的输入以引导式插入（steer）在下一个工具结果边界送达，
   不打断执行；`/stop`（TUI 空输入时 `Esc`）中断当前回合并保留上下文；后台 shell 会话
   退出与子任务批次完成以 `<task-notification>` 通知所属任务，空闲任务自动重新拉起；
@@ -44,6 +46,9 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   发给模型；QQ 移动端逐张发送的图片与下一条文字合并为一条输入
 - 结构化日志、CI、单元测试与集成测试
 - Android aarch64 支持（rustls TLS 后端）
+
+- 持续监控：`shell_start(notify_on_output=true)` 将 stdout 完整行直接推送到任务通道，
+  平台回执送回原 Task；支持有界重试、背压停止与自动唤醒窗口恢复。
 
 ### 待完善
 

@@ -39,13 +39,94 @@ use crate::{
 /// 用户消息转任务 System
 ///
 /// 将用户消息转换为任务实体。定时任务触发的消息携带的 `ScheduledRun` 一并拷到新 Task 上。
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn user_message_to_task_system(
     mut commands: Commands,
     settings: Res<HarnessSettings>,
     mut index: ResMut<EntityIndex>,
-    messages: Query<(Entity, &CreateTaskMessage, Option<&ScheduledRun>)>,
+    messages: Query<(
+        Entity,
+        &CreateTaskMessage,
+        Option<&ScheduledRun>,
+        Option<&crate::domain::InputSequence>,
+    )>,
+    tasks: Query<&Task>,
+    inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
+    pending: Query<&crate::domain::ToolRequestPending>,
+    queued: Query<&crate::domain::ToolExecutionRequestMessage>,
+    queued_llm: Query<&crate::domain::AgentExecutionRequestMessage>,
+    backend: Option<Res<crate::systems::NativeProcessBackend>>,
+    clock: Option<Res<crate::contracts::Clock>>,
 ) {
-    for (entity, message, scheduled_run) in &messages {
+    let known: Vec<_> = tasks.iter().collect();
+    let mut pending: std::collections::HashSet<_> = pending
+        .iter()
+        .map(|p| p.original_request.task_id)
+        .chain(queued.iter().map(|request| request.request.task_id))
+        .chain(
+            queued_llm
+                .iter()
+                .filter(|request| request.request.work_item_id.is_none())
+                .map(|request| request.request.task_id),
+        )
+        .collect();
+    if let Some(inflight) = inflight_llm.as_ref() {
+        pending.extend(
+            known
+                .iter()
+                .filter(|task| inflight.in_flight(task.id) > 0)
+                .map(|task| task.id),
+        );
+    }
+    let mut reserved = std::collections::HashMap::new();
+    let mut messages: Vec<_> = messages.iter().collect();
+    messages.sort_by_key(|(entity, _, _, seq)| seq.map_or(entity.to_bits(), |seq| seq.0));
+    for (entity, message, scheduled_run, sequence) in messages {
+        if let Some(channel) = &message.origin_channel {
+            if super::super::conversation::channel_is_closing(
+                channel,
+                &known,
+                &pending,
+                backend.as_deref(),
+            ) {
+                continue; // 保留创建消息，等旧 worker/会话真实结束。
+            }
+            if let Some(&(task_id, task_entity)) = reserved.get(channel) {
+                tracing::debug!(event = "ConversationDuplicateCreateRedirected", %task_id, ?channel,
+                    "same-frame duplicate creation becomes steer");
+                TrustedImages::register(&mut commands, task_entity, &message.content);
+                let mut delivery = commands.spawn(crate::domain::InboxDeliveryMessage {
+                    task_id,
+                    item: crate::domain::InboxItem::UserSteer {
+                        content: message.content.clone(),
+                        received_at: clock
+                            .as_ref()
+                            .map_or_else(chrono::Utc::now, |clock| clock.0),
+                    },
+                });
+                if let Some(sequence) = sequence {
+                    delivery.insert(*sequence);
+                }
+                commands.entity(entity).despawn();
+                continue;
+            }
+            if known.iter().any(|task| {
+                super::super::conversation::is_user_root(task, channel)
+                    && !task.status.is_terminal()
+            }) {
+                // 插件和命令入口同样回到用户路由，由唯一任务接收正文。
+                let mut input = commands.spawn(crate::domain::UserInputMessage {
+                    content: message.content.clone(),
+                    origin_channel: channel.clone(),
+                    sender: message.initiator.clone(),
+                });
+                if let Some(sequence) = sequence {
+                    input.insert(*sequence);
+                }
+                commands.entity(entity).despawn();
+                continue;
+            }
+        }
         // 创建多轮对话任务（Pending 状态）并附带 ShortTermMemory
         let mut stm = ShortTermMemory::default();
         stm.add_entry(EntryRole::User, &message.content, EntryMetadata::default());
@@ -88,6 +169,11 @@ pub fn user_message_to_task_system(
             "new task spawned from user message"
         );
 
+        if let Some(channel) = &message.origin_channel {
+            tracing::debug!(event = "ConversationSlotReserved", task_id = %task.id, ?channel,
+                "user root reserves the conversation slot");
+        }
+        let task_id = task.id;
         let task_entity = spawn_task(
             &mut commands,
             &mut index,
@@ -104,6 +190,9 @@ pub fn user_message_to_task_system(
                 },
             },
         );
+        if let Some(channel) = &message.origin_channel {
+            reserved.insert(channel.clone(), (task_id, task_entity));
+        }
         if let Some(run) = scheduled_run {
             commands.entity(task_entity).insert(*run);
         }

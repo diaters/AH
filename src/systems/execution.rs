@@ -29,6 +29,18 @@ pub(crate) fn agent_execution_system(
 ) {
     for (entity, message) in &requests {
         let request = message.request.clone();
+        let is_task_turn_request = matches!(
+            request.request_kind,
+            AgentRequestKind::LlmCompletion | AgentRequestKind::BrainDecision
+        ) && request.work_item_id.is_none();
+        if is_task_turn_request
+            && tasks
+                .iter()
+                .any(|task| task.id == request.task_id && task.status.is_terminal())
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
         let registry = executor_registry.clone();
         let sender = result_sender.0.clone();
         let state_sender = state_update_sender.0.clone();
@@ -70,8 +82,6 @@ pub(crate) fn agent_execution_system(
             "submitting execution request to async runtime"
         );
 
-        let is_task_turn_request = request.request_kind == AgentRequestKind::LlmCompletion
-            && request.work_item_id.is_none();
         let task_id = request.task_id;
         let handle = runtime.0.spawn(async move {
             let result =

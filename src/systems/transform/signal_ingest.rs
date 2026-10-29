@@ -22,9 +22,9 @@ pub fn signal_ingest_system(
     mut commands: Commands,
     index: Res<EntityIndex>,
     mut tasks: Query<&mut Task>,
-    signals: Query<(Entity, &Signal)>,
+    signals: Query<(Entity, &Signal, Option<&crate::domain::InputSequence>)>,
 ) {
-    for (entity, signal) in &signals {
+    for (entity, signal, sequence) in &signals {
         match &signal.payload {
             SignalPayload::UserInput(content) => {
                 debug!(
@@ -37,11 +37,14 @@ pub fn signal_ingest_system(
                 );
                 // 用户输入走 UserInputMessage → routing_system 路由，保持确认流程和多轮对话逻辑
                 if let Some(channel) = &signal.origin_channel {
-                    commands.spawn(UserInputMessage {
+                    let mut message = commands.spawn(UserInputMessage {
                         content: content.clone(),
                         origin_channel: channel.clone(),
                         sender: signal.sender.clone(),
                     });
+                    if let Some(sequence) = sequence {
+                        message.insert(*sequence);
+                    }
                 } else {
                     // 无 origin_channel 的用户输入（理论上不应出现），直接创建任务
                     commands.spawn(CreateTaskMessage {

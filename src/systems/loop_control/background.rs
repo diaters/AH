@@ -126,7 +126,10 @@ pub(crate) fn background_job_monitor_system(
         }
 
         let completion = match &job.source {
-            JobSource::Shell { handle_id } => {
+            JobSource::Shell {
+                handle_id,
+                notify_on_exit,
+            } => {
                 let Some(backend) = backend.as_ref() else {
                     continue;
                 };
@@ -143,6 +146,10 @@ pub(crate) fn background_job_monitor_system(
                         SessionStatus::Completed
                         | SessionStatus::ExitedWithError
                         | SessionStatus::FailedToStart => {
+                            if !notify_on_exit {
+                                commands.entity(job_entity).despawn();
+                                continue;
+                            }
                             let status = match summary.exit_code {
                                 Some(code) => format!("exited({code})"),
                                 None => format!("{:?}", summary.status).to_lowercase(),
@@ -221,7 +228,7 @@ pub(crate) fn background_job_cleanup_system(
         }
 
         match &job.source {
-            JobSource::Shell { handle_id } => {
+            JobSource::Shell { handle_id, .. } => {
                 if let Some(backend) = backend.as_ref() {
                     let _ = backend.stop_session(*handle_id);
                 }

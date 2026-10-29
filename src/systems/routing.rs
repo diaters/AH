@@ -6,21 +6,20 @@ use crate::{
     contracts::Clock,
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
-        AskUserPending, AutoWakeBudget, ContinueTaskMessage, CreateTaskMessage, DispatchHint,
-        DispatchKind, DispatchStrategy, EntryMetadata, EntryRole, InboxDeliveryMessage, InboxItem,
-        OutputContent, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
-        TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, ToolExecutionResultMessage,
-        TrustedImages, UserCommand, UserInputMessage, WaitingReason,
+        AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
+        DispatchStrategy, EntryMetadata, EntryRole, InboxDeliveryMessage, InboxItem, OutputContent,
+        PendingDispatch, ShortTermMemory, SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus,
+        ToolConfirmationResponseMessage, ToolExecutionResultMessage, TrustedImages, UserCommand,
+        UserInputMessage, WaitingReason,
     },
 };
 
 /// 判断任务是否处于可接收 steer 的活跃态。
 ///
-/// 仅限同通道的顶层多轮任务；`Waiting(User)`（空闲，走续轮）与 `Waiting(AskUser)`
+/// 仅限同通道的用户顶层任务；`Waiting(User)`（空闲，走续轮）与 `Waiting(AskUser)`
 /// （由 ask_user 分支处理）不在此列，终态任务不接收输入。
 fn is_steerable(task: &crate::domain::Task, channel: &crate::domain::ChannelId) -> bool {
     task.parent_task_id.is_none()
-        && task.multi_turn
         && task.origin_channel.as_ref() == Some(channel)
         && !task.status.is_terminal()
         && !matches!(
@@ -42,14 +41,43 @@ fn parse_confirmation_option(content: &str) -> Option<String> {
 pub(crate) fn user_input_routing_system(
     mut commands: Commands,
     clock: Res<Clock>,
-    user_inputs: Query<(Entity, &UserInputMessage)>,
+    user_inputs: Query<
+        (
+            Entity,
+            &UserInputMessage,
+            Option<&crate::domain::InputSequence>,
+        ),
+        Without<crate::domain::InputBlocked>,
+    >,
     mut tasks: Query<(Entity, &mut Task)>,
     ask_user_pendings: Query<&AskUserPending>,
 ) {
-    for (entity, input) in &user_inputs {
+    let mut inputs: Vec<_> = user_inputs.iter().collect();
+    inputs.sort_by_key(|(entity, _, seq)| seq.map_or(entity.to_bits(), |seq| seq.0));
+    for (entity, input, sequence) in inputs {
         // 命令优先（即使在等待工具确认期间也允许 /finish 等指令）
         if UserCommand::parse(&input.content).is_command() {
             continue; // 跳过，由 command_parse_system 处理
+        }
+
+        let roots: Vec<_> = tasks
+            .iter()
+            .filter(|(_, task)| {
+                super::conversation::is_user_root(task, &input.origin_channel)
+                    && !task.status.is_terminal()
+            })
+            .map(|(_, task)| task.id)
+            .collect();
+        if roots.len() > 1 {
+            tracing::warn!(event = "ConversationSlotConflict", channel = ?input.origin_channel,
+                task_ids = ?roots, "multiple unfinished user roots reject ambiguous input");
+            commands.spawn(SystemOutputMessage {
+                task_id: roots[0],
+                content: "此通道存在多个未结束的用户任务，无法确定输入归属；请先修复冲突任务。"
+                    .to_string(),
+            });
+            commands.entity(entity).despawn();
+            continue;
         }
 
         // 优先处理处于 Waiting(User) 且正在等待工具确认的任务。
@@ -104,13 +132,24 @@ pub(crate) fn user_input_routing_system(
         // ask_user 等待分支：用户回复 ask_user 工具的问题
         // 注意：iter().find().map(|(e, _)| e) 仅提取 Entity，立即释放 Mut<Task> 借用，
         // 否则与下方 tasks.get_mut(task_entity) 同实体冲突会触发 Bevy 运行时 panic。
-        let ask_user_task_entity = tasks
+        let ask_targets: Vec<_> = tasks
             .iter()
-            .find(|(_, t)| {
-                t.status == TaskStatus::Waiting(WaitingReason::AskUser)
-                    && t.origin_channel == Some(input.origin_channel.clone())
+            .filter(|(_, task)| {
+                task.status == TaskStatus::Waiting(WaitingReason::AskUser)
+                    && task.origin_channel.as_ref() == Some(&input.origin_channel)
             })
-            .map(|(e, _)| e);
+            .map(|(entity, task)| (entity, task.id))
+            .collect();
+        if ask_targets.len() > 1 {
+            commands.spawn(SystemOutputMessage {
+                task_id: ask_targets[0].1,
+                content: "当前通道有多个待答问题，无法确定回复归属；请先处理或中断冲突的提问任务。"
+                    .into(),
+            });
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let ask_user_task_entity = ask_targets.first().map(|(entity, _)| *entity);
 
         if let Some(task_entity) = ask_user_task_entity {
             if let Ok(pending) = ask_user_pendings.get(task_entity) {
@@ -155,7 +194,7 @@ pub(crate) fn user_input_routing_system(
             .iter()
             .filter(|(_, t)| {
                 t.status == TaskStatus::Waiting(WaitingReason::User)
-                    && t.origin_channel == Some(input.origin_channel.clone())
+                    && super::conversation::is_user_root(t, &input.origin_channel)
             })
             .map(|(e, t)| (e, t.clone()))
             .collect();
@@ -164,8 +203,7 @@ pub(crate) fn user_input_routing_system(
         // 在下一个工具结果边界（或轮末）送达，不打断当前执行。
         let steer_target = tasks
             .iter()
-            .filter(|(_, t)| is_steerable(t, &input.origin_channel))
-            .max_by_key(|(_, t)| t.updated_at)
+            .find(|(_, t)| is_steerable(t, &input.origin_channel))
             .map(|(e, t)| (e, t.id));
 
         if let Some((task_entity, task)) = waiting_tasks.first() {
@@ -181,16 +219,18 @@ pub(crate) fn user_input_routing_system(
                 waiting_tasks = ?waiting_tasks.iter().map(|(_, t)| (t.id, t.status.clone())).collect::<Vec<_>>(),
                 "routing input to existing Waiting(User) task"
             );
-            // 真实用户输入：清零自动拉起计数
-            commands
-                .entity(*task_entity)
-                .insert(AutoWakeBudget::default());
             TrustedImages::register(&mut commands, *task_entity, &input.content);
-            // 继续现有任务
-            commands.spawn(ContinueTaskMessage {
+            // 立即占用本轮续轮名额；同帧后续输入走 steer，避免覆盖续轮正文。
+            if let Ok((_, mut target)) = tasks.get_mut(*task_entity) {
+                target.mark_ready(clock.0);
+            }
+            let mut message = commands.spawn(ContinueTaskMessage {
                 task_id: task.id,
                 user_input: input.content.clone(),
             });
+            if let Some(sequence) = sequence {
+                message.insert(*sequence);
+            }
         } else if let Some((task_entity, task_id)) = steer_target {
             debug!(
                 event = "RoutingDecision",
@@ -200,21 +240,22 @@ pub(crate) fn user_input_routing_system(
                 selected_task_id = %task_id,
                 "routing input as steer into active task inbox"
             );
-            commands
-                .entity(task_entity)
-                .insert(AutoWakeBudget::default());
             TrustedImages::register(&mut commands, task_entity, &input.content);
-            commands.spawn(InboxDeliveryMessage {
+            let mut message = commands.spawn(InboxDeliveryMessage {
                 task_id,
                 item: InboxItem::UserSteer {
                     content: input.content.clone(),
                     received_at: clock.0,
                 },
             });
+            if let Some(sequence) = sequence {
+                message.insert(*sequence);
+            }
             commands.spawn(SystemOutputMessage {
                 task_id,
-                content: "已收到，将在当前任务的下一步送达（不打断执行；如需开启新话题请用 /btw）"
-                    .to_string(),
+                content:
+                    "已收到，将在当前任务的下一步送达；如需开启新任务，请先用 /finish 结束当前任务"
+                        .to_string(),
             });
         } else {
             debug!(
@@ -226,12 +267,15 @@ pub(crate) fn user_input_routing_system(
                 "no waiting task, creating new task"
             );
             // 创建新任务
-            commands.spawn(CreateTaskMessage {
+            let mut message = commands.spawn(CreateTaskMessage {
                 content: input.content.clone(),
                 origin_channel: Some(input.origin_channel.clone()),
                 routing_policy: TaskRoutingPolicy::conversational(input.origin_channel.clone()),
                 initiator: input.sender.clone(),
             });
+            if let Some(sequence) = sequence {
+                message.insert(*sequence);
+            }
         }
 
         commands.entity(entity).despawn();
@@ -524,26 +568,19 @@ mod tests {
     }
 
     #[test]
-    fn steer_targets_most_recently_updated_active_task() {
+    fn multiple_running_roots_reject_ambiguous_steer() {
         let mut older = make_running_task(telegram_channel());
         older.updated_at = chrono::Utc::now() - chrono::Duration::seconds(60);
         let newer = make_running_task(telegram_channel());
-        let newer_id = newer.id;
         let mut app = run_routing_with(vec![older, newer], telegram_channel());
 
-        let target = app
-            .world_mut()
-            .query::<&crate::domain::InboxDeliveryMessage>()
-            .single(app.world())
-            .unwrap()
-            .task_id;
-        assert_eq!(target, newer_id);
+        assert_eq!(count::<crate::domain::InboxDeliveryMessage>(&mut app), 0);
+        assert_eq!(count::<SystemOutputMessage>(&mut app), 1);
     }
 
     #[test]
-    fn idle_waiting_task_takes_priority_over_steer() {
+    fn idle_and_running_roots_reject_ambiguous_input() {
         let idle = make_waiting_task(telegram_channel());
-        let idle_id = idle.id;
         let running = make_running_task(telegram_channel());
         let mut app = run_routing_with(vec![idle, running], telegram_channel());
 
@@ -553,12 +590,12 @@ mod tests {
             .iter(app.world())
             .map(|m| m.task_id)
             .collect();
-        assert_eq!(continued, vec![idle_id]);
+        assert!(continued.is_empty());
         assert_eq!(count::<crate::domain::InboxDeliveryMessage>(&mut app), 0);
     }
 
     #[test]
-    fn subtask_and_single_turn_and_cross_channel_tasks_are_not_steered() {
+    fn only_matching_user_root_receives_input_even_when_single_turn() {
         let mut subtask = make_running_task(telegram_channel());
         subtask.parent_task_id = Some(crate::domain::TaskId::new());
         let mut single_turn = make_running_task(telegram_channel());
@@ -569,8 +606,8 @@ mod tests {
             telegram_channel(),
         );
 
-        assert_eq!(count::<crate::domain::InboxDeliveryMessage>(&mut app), 0);
-        assert_eq!(count::<CreateTaskMessage>(&mut app), 1);
+        assert_eq!(count::<crate::domain::InboxDeliveryMessage>(&mut app), 1);
+        assert_eq!(count::<CreateTaskMessage>(&mut app), 0);
     }
 
     #[test]
@@ -1155,7 +1192,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_ask_user_tasks_same_channel_picks_first() {
+    fn multiple_ask_user_roots_reject_ambiguous_reply() {
         let mut app = App::new();
         app.add_systems(Update, user_input_routing_system);
         app.insert_resource(Clock::default());
@@ -1163,7 +1200,6 @@ mod tests {
         let agent_id = crate::domain::AgentId::new();
         let (task1, pending1) = make_ask_user_waiting_task(telegram_channel(), agent_id);
         let (task2, pending2) = make_ask_user_waiting_task(telegram_channel(), agent_id);
-        let task1_id = task1.id;
 
         let task1_entity = app.world_mut().spawn(task1).id();
         app.world_mut().entity_mut(task1_entity).insert(pending1);
@@ -1183,10 +1219,37 @@ mod tests {
             .query::<&ToolExecutionResultMessage>()
             .iter(app.world())
             .collect();
-        assert_eq!(results.len(), 1, "only one task should be picked");
-        assert_eq!(
-            results[0].result.task_id, task1_id,
-            "should pick first task"
+        assert!(
+            results.is_empty(),
+            "ambiguous ask_user reply must not pick a task"
         );
+    }
+    #[test]
+    fn child_ask_user_answer_keeps_the_child_tool_correlation() {
+        let mut app = App::new();
+        app.insert_resource(Clock::default());
+        app.add_systems(Update, user_input_routing_system);
+        let root = make_waiting_task(telegram_channel());
+        let root_id = root.id;
+        app.world_mut().spawn(root);
+        let (mut child, pending) =
+            make_ask_user_waiting_task(telegram_channel(), crate::domain::AgentId::new());
+        child.parent_task_id = Some(root_id);
+        let child_id = child.id;
+        app.world_mut().spawn((child, pending));
+        app.world_mut().spawn(UserInputMessage {
+            sender: None,
+            content: "child answer".into(),
+            origin_channel: telegram_channel(),
+        });
+        app.update();
+        let results: Vec<_> = app
+            .world_mut()
+            .query::<&ToolExecutionResultMessage>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].result.task_id, child_id);
+        assert_eq!(count::<ContinueTaskMessage>(&mut app), 0);
     }
 }

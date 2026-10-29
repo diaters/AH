@@ -104,6 +104,15 @@ pub fn async_tool_dispatch_system(
     };
 
     for (entity, request) in &requests {
+        if index
+            .get_task(&request.request.task_id)
+            .and_then(|entity| tasks.get(entity).ok())
+            .is_some_and(|task| task.status.is_terminal())
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 等待确认的请求不归这里管（Confirm 路径先行）
         if request.pending_confirmation_id.is_some() {
             continue;

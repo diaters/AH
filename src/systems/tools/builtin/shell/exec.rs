@@ -111,6 +111,7 @@ impl BuiltinTool for ShellExecTool {
                     )
                 })?,
                 notify_on_exit: false,
+                notify_on_output: false,
             };
 
             // 4. spawn_blocking 包裹同步 exec_with_cancel（内部 try_wait + sleep 循环）

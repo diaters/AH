@@ -677,3 +677,25 @@ mod tests {
         assert_eq!(signal.origin_channel.as_ref().unwrap(), &channel);
     }
 }
+
+/// 外部用户输入的实例内 FIFO 序号，随 Signal、用户消息及创建消息传播。
+#[derive(crate::prelude::Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputSequence(pub u64);
+
+/// 两个用户输入入口共用的实例内序号源，避免各自计数产生重复顺序。
+#[derive(Resource, Default)]
+pub(crate) struct InputSequencer {
+    next: u64,
+}
+
+impl InputSequencer {
+    pub(crate) fn next_sequence(&mut self) -> InputSequence {
+        let sequence = InputSequence(self.next);
+        self.next = self.next.checked_add(1).expect("input sequence exhausted");
+        sequence
+    }
+}
+
+/// 命令或旧会话资源清理屏障之后暂缓处理的输入；原文仍保留在 ECS。
+#[derive(crate::prelude::Component)]
+pub struct InputBlocked;
