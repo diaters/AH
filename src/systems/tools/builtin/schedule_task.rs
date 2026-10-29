@@ -63,9 +63,45 @@ impl BuiltinTool for ScheduleTaskTool {
                 content,
                 schedule,
                 output_channel,
+                notify: parse_notify(&input)?.unwrap_or_default(),
+                report_of: parse_report_of(&input)?.flatten(),
             }))
         })
     }
+}
+
+/// 缺省不修改策略；无效值必须拒绝，不能退回默认。
+pub(crate) fn parse_notify(
+    input: &serde_json::Value,
+) -> Result<Option<crate::domain::NotifyPolicy>, ToolError> {
+    input
+        .get("notify")
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|_| ToolError::InvalidInput("notify must be reply or explicit".into()))
+        })
+        .transpose()
+}
+
+/// 双层 Option 区分不修改与显式清除关联。
+pub(crate) fn parse_report_of(
+    input: &serde_json::Value,
+) -> Result<Option<Option<Uuid>>, ToolError> {
+    input
+        .get("report_of")
+        .map(|value| {
+            if value.is_null() {
+                return Ok(None);
+            }
+            value
+                .as_str()
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .map(Some)
+                .ok_or_else(|| {
+                    ToolError::InvalidInput("report_of must be a schedule UUID or null".into())
+                })
+        })
+        .transpose()
 }
 
 /// 解析调度表达式，并要求一次性触发时间在未来。
@@ -159,6 +195,24 @@ mod tests {
     #[test]
     fn kind_is_async() {
         assert_eq!(ScheduleTaskTool.kind(), ToolActionKind::Async);
+    }
+
+    #[test]
+    fn invalid_notify_or_report_reference_cannot_be_silently_ignored() {
+        for extra in [
+            serde_json::json!({"notify":"quiet"}),
+            serde_json::json!({"report_of":"not-an-id"}),
+        ] {
+            let mut input = serde_json::json!({"content":"check", "schedule":"cron:*/5 * * * *"});
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(matches!(
+                run_async_blocking(input, ctx_with_channel(Some(inherited_channel()))),
+                Err(ToolError::InvalidInput(_))
+            ));
+        }
     }
 
     #[test]

@@ -36,6 +36,7 @@
 | `TODO.md` | 动态 | 进行中与待办清单 |
 | `framework-architecture-analysis.md` | 历史背景 | 早期模块布局分析，已被 `current-state.md`、`wiki/system-pipeline.md` 取代 |
 | `analysis/` | 待评审 | 测试套件质量分析（低质测试清单与原因），见下节 |
+| [定时监控 P1](design/2026-10-29-schedule-p1-delivery.md) | 当前有效 | 运行与通知的持久记账、健康与验证范围 |
 | `design/README.md` | 索引 | `design/` 全量状态表（含每篇有效性） |
 | `superpowers/README.md` | 索引 | `superpowers/` 活跃计划与规格清单 |
 | `wiki/README.md` | 索引 | 系统知识库（pipeline、LLM 上下文组装） |

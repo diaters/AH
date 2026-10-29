@@ -23,13 +23,13 @@
 | `2026-08-16-real-llm-scenario-testing-design.md` | 当前有效 | 真实 LLM 场景测试与分层正确性判断 | 四层测试模型 + AI Judge/人工待审 |
 | `2026-08-17-complexity-governance-design.md` | 当前有效 | 设计质量治理：依赖方向、知识收口、按知识域重组 | 已评审修订，P0–P5 全部实施完成 |
 | `2026-08-26-memory-compression-redesign-design.md` | 当前有效 | 短期记忆压缩重设计：一次全压与结构性收敛 | 配置入口 + 压缩滞后修复，已实施完成 |
-| `2026-10-28-unattended-scheduled-monitoring-design.md` | 当前有效 | 无人值守定时任务与长期监控：持久化与补跑、预筛探针、可信静默、定时任务级授权 | P0 已实施 |
+| `2026-10-28-unattended-scheduled-monitoring-design.md` | 当前有效 | 无人值守定时任务与长期监控：持久化与补跑、预筛探针、可信静默、定时任务级授权 | P0、P1 已实施 |
 | `2026-10-28-loop-steering-and-background-notification-design.md` | 当前有效 | Agent loop：steer、后台通知、`/stop`、进度清单 | 已实施完成 |
 | `2026-10-27-multimodal-image-input-design.md` | 当前有效 | 多模态图片输入：标记晚绑定、`vision` 声明、`view_image`、QQ 纯图片合并 | 已实施完成 |
 | `2026-10-28-harness-hardening-design.md` | 当前有效 | 加固：授权范围、图片信任边界、`--headless` 等 | §2–§8 已实施 |
 | `2026-10-28-conversation-idle-and-approver-binding-design.md` | 当前有效 | 多轮会话空闲自动结束；群聊审批绑定发起人 | 已实施 |
 | `2026-08-24-test-seam-quality-remediation-design.md` | 待评审 | 测试接缝质量修正：从实现耦合回归到可观察端口验证 | 基于低质测试清单证据核对与分批治理（基建先行） |
-
+| [2026-10-29-schedule-p1-delivery.md](2026-10-29-schedule-p1-delivery.md) | 当前有效 | 定时运行账本、真实回执、失败告警恢复与健康上下文 | P1 交付契约 |
 | `2026-10-29-live-monitor-output.md` | 当前有效 | 持续输出、真实回执、有界重试与窗口唤醒 | 生命周期规格任务 D |
 
 ## 推荐阅读顺序

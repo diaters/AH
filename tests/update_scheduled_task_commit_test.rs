@@ -51,7 +51,98 @@ fn update_effect(
         schedule: schedule.map(|s| ScheduleExpr::parse(s).unwrap()),
         enabled,
         run_now,
+        notify: None,
+        report_of: None,
     }
+}
+
+#[test]
+fn invalid_report_target_rejects_the_whole_update_patch() {
+    let (mut world, kind, _rx) = world_with_definition();
+    let own_id = world
+        .resource::<SchedulerState>()
+        .find_by_kind(&kind)
+        .unwrap()
+        .id;
+    for target in [own_id, Uuid::new_v4()] {
+        let mut effect = update_effect(
+            ScheduleSelector::Kind(kind.clone()),
+            Some("must not be saved"),
+            None,
+            None,
+            false,
+        );
+        if let ToolEffect::UpdateSchedule { report_of, .. } = &mut effect {
+            *report_of = Some(Some(target));
+        }
+        assert!(matches!(
+            commit(&mut world, effect),
+            Err(ToolError::InvalidInput(_))
+        ));
+        assert_eq!(
+            world
+                .resource::<SchedulerState>()
+                .find_by_kind(&kind)
+                .unwrap()
+                .content,
+            "old prompt"
+        );
+    }
+}
+
+#[test]
+fn report_reference_can_be_set_then_explicitly_cleared_with_notification_policy() {
+    let (mut world, kind, _rx) = world_with_definition();
+    let source = ScheduleDefinition::new(
+        Uuid::new_v4(),
+        Some("source".into()),
+        "check".into(),
+        ScheduleExpr::parse("cron:*/5 * * * *").unwrap(),
+        None,
+        Utc::now(),
+    );
+    let source_id = source.id;
+    harness::triggers::scheduled_task::update_scheduler_state(&mut world, |state| {
+        state.dynamic_tasks_mut().push(source)
+    });
+    let mut effect = update_effect(
+        ScheduleSelector::Kind(kind.clone()),
+        None,
+        None,
+        None,
+        false,
+    );
+    if let ToolEffect::UpdateSchedule {
+        notify, report_of, ..
+    } = &mut effect
+    {
+        *notify = Some(harness::domain::NotifyPolicy::Explicit);
+        *report_of = Some(Some(source_id));
+    }
+    commit(&mut world, effect).unwrap();
+    let def = world
+        .resource::<SchedulerState>()
+        .find_by_kind(&kind)
+        .unwrap();
+    assert_eq!(def.notify, harness::domain::NotifyPolicy::Explicit);
+    assert_eq!(def.report_of, Some(source_id));
+    let mut effect = update_effect(
+        ScheduleSelector::Kind(kind.clone()),
+        None,
+        None,
+        None,
+        false,
+    );
+    if let ToolEffect::UpdateSchedule { report_of, .. } = &mut effect {
+        *report_of = Some(None);
+    }
+    commit(&mut world, effect).unwrap();
+    let def = world
+        .resource::<SchedulerState>()
+        .find_by_kind(&kind)
+        .unwrap();
+    assert_eq!(def.report_of, None);
+    assert_eq!(def.notify, harness::domain::NotifyPolicy::Explicit);
 }
 
 fn commit(world: &mut World, effect: ToolEffect) -> Result<serde_json::Value, ToolError> {

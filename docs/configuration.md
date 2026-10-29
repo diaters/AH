@@ -535,6 +535,8 @@ prompt_template = "执行每日摘要"
 - `schedule`: `"once:2026-07-07T09:00:00"` 或 `"cron:0 9 * * 1-5"`
 - `output_channel`: 可选， `"tui" | "telegram" | "qq" | "feishu" | "web"`
 - `target`: 可选，指定通道目标 user_id
+- `notify`: 可选，`reply`（默认，自动推送最终回复）或 `explicit`（最终回复仅 TUI 可见，使用 `channel_send` 通知）
+- `report_of`: 可选，被观察定时任务的 UUID（非 kind 或名称），运行时注入其健康与最近 24 小时统计
 
 未指定 `output_channel` 时继承当前任务的 `origin_channel`。
 显式指定 `output_channel` 时必须同时提供 `target`。
@@ -548,9 +550,25 @@ prompt_template = "执行每日摘要"
 
 管理工具：
 
-- `list_scheduled_tasks`：列出定义、启停状态、上次与下次触发时间
-- `update_scheduled_task`：按 `kind` 或 `name` 修改 `content` / `schedule`，`enabled` 暂停或恢复，`run_now` 立即运行一次
+- `list_scheduled_tasks`：列出定义、启停状态、上次与下次触发时间、上次成功、连续失败次数、告警状态及通知策略
+- `update_scheduled_task`：按 `kind` 或 `name` 修改 `content` / `schedule` / `notify` / `report_of`（`null` 清除关联），
+  `enabled` 暂停或恢复，`run_now` 立即运行一次
 - `delete_scheduled_task`：按 `kind` 或 `name` 删除
+
+### 定时监控运行记录与失败告警
+
+`HARNESS_SCHEDULE_FAILURE_ALERT_THRESHOLD` 为连续失败告警阈值，默认 `3`；非正整数或非法值回退为 `3`。
+每次运行失败都会通知，达到阈值后额外告警一次，后续成功时通知恢复一次。
+`explicit` 不关闭失败、补跑与恢复通知，定时任务的状态消息不推送到 IM。
+
+每个任务的业务状态位于 `.harness/schedules/<UUID>/state/`，运行账本位于同级 `runs.jsonl`，
+由 Harness 独占写入。最近 24 小时统计和 `report_of` 健康信息由 Harness 注入运行上下文。
+运行记账等待最终回复及 `channel_send` 的真实发送回执，入队成功不计通知成功；发送失败记为失败。
+写入账本或健康状态失败时保留未完成记账任务并重试，不能提前清理一次性定义或回收任务树。
+
+账本中的坏行或截断记录会带路径和行号报错，保留原文件；修复记录或存储权限后会重试。
+不会通过忽略损坏行或重新创建空账本将缺失历史当成正常运行。
+详见 [定时监控 P1 交付契约](design/2026-10-29-schedule-p1-delivery.md)。
 
 ## 已废弃的旧配置语义
 

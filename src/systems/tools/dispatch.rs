@@ -1025,9 +1025,7 @@ mod tests {
         let (mut world, task_id, agent_id, task_entity) = confirm_world();
         world
             .entity_mut(task_entity)
-            .insert(crate::domain::ScheduledRun {
-                schedule_id: uuid::Uuid::new_v4(),
-            });
+            .insert(crate::domain::ScheduledRun::new(uuid::Uuid::new_v4()));
         world.spawn(shell_exec_request(task_id, agent_id));
 
         let mut schedule = Schedule::default();
@@ -1070,9 +1068,7 @@ mod tests {
         let parent_entity = world
             .spawn((
                 parent,
-                crate::domain::ScheduledRun {
-                    schedule_id: uuid::Uuid::new_v4(),
-                },
+                crate::domain::ScheduledRun::new(uuid::Uuid::new_v4()),
             ))
             .id();
         world

@@ -96,6 +96,19 @@ pub fn schedule_catch_up_startup_system(
                 ));
             }
             CatchUp::Expired { missed_at } => {
+                commands.spawn(PendingScheduleRecord {
+                    record: crate::domain::ScheduleRunRecord {
+                        task_id: None,
+                        schedule_id: def.id,
+                        fired_at: missed_at,
+                        finished_at: now,
+                        outcome: crate::domain::RunOutcome::Missed,
+                        error: None,
+                        result_summary: "outside catch-up window".into(),
+                        notification_count: 0,
+                    },
+                    expired: None,
+                });
                 info!(
                     event = "ScheduleCatchUpExpired",
                     name = %def.name,
@@ -107,12 +120,250 @@ pub fn schedule_catch_up_startup_system(
     }
 }
 
+/// 定时运行的账本与健康状态已经持久提交。
+#[derive(Component)]
+pub struct ScheduleRunRecorded;
+
+/// 未执行触发也经同一重试链路持久化；一次性过期定义在账本落盘后才删除。
+#[derive(Component)]
+pub struct PendingScheduleRecord {
+    pub record: crate::domain::ScheduleRunRecord,
+    pub expired: Option<crate::domain::ScheduleDefinition>,
+}
+
+/// 等待所有输出派发与平台回执后提交账本，再持久提交健康状态；成功后才发布通知。
+#[allow(clippy::too_many_arguments)]
+pub fn schedule_run_accounting_system(
+    mut commands: Commands,
+    runs: Query<(Entity, &Task, &ScheduledRun), Without<ScheduleRunRecorded>>,
+    skipped: Query<(Entity, &PendingScheduleRecord)>,
+    outputs: Query<&crate::domain::UserOutputMessage>,
+    sends: Query<&crate::domain::PendingChannelSend>,
+    mut state: ResMut<SchedulerState>,
+    watcher: Option<Res<SchedulerStateWatcher>>,
+    store: Option<Res<ScheduleStore>>,
+    mut deliveries: Option<ResMut<crate::systems::ScheduleDeliveryTracker>>,
+    settings: Option<Res<crate::systems::HarnessSettings>>,
+    frontends: Option<Res<FrontendRegistry>>,
+    mut storage_alerted: Local<std::collections::HashSet<Entity>>,
+    mut completed_at: Local<
+        std::collections::HashMap<crate::domain::TaskId, chrono::DateTime<Utc>>,
+    >,
+) {
+    use crate::domain::{RunOutcome, ScheduleRunRecord, TaskStatus};
+    if let Some(tracker) = deliveries.as_deref_mut() {
+        tracker.poll_receipts();
+    }
+    for (entity, pending) in &skipped {
+        // 重试期间用户可能已经重新调度；旧的过期事件不能删除新定义。
+        let expired = pending.expired.as_ref().filter(|expired| {
+            state.dynamic_tasks().iter().any(|current| {
+                current.id == expired.id && current.schedule.raw() == expired.schedule.raw()
+            })
+        });
+        if let Some(store) = store.as_deref() {
+            if let Err(error) = store.append_run(&pending.record) {
+                warn!(event = "ScheduleAccountingFailed", schedule_id = %pending.record.schedule_id, %error, "skipped run ledger will retry");
+                if storage_alerted.insert(entity)
+                    && let Some(def) = state
+                        .dynamic_tasks()
+                        .iter()
+                        .find(|def| def.id == pending.record.schedule_id)
+                {
+                    notify(
+                        frontends.as_deref(),
+                        def,
+                        format!("定时任务「{}」运行记录存储失败，将重试：{error}", def.name),
+                    );
+                }
+                continue;
+            }
+            if expired.is_some() {
+                let mut defs = state.dynamic_tasks().to_vec();
+                defs.retain(|def| def.id != pending.record.schedule_id);
+                if let Err(error) = store.save(&defs) {
+                    warn!(event = "ScheduleAccountingFailed", %error, "expired definition removal will retry");
+                    continue;
+                }
+            }
+        }
+        if let Some(def) = expired {
+            let apply =
+                |state: &mut SchedulerState| state.dynamic_tasks_mut().retain(|d| d.id != def.id);
+            if let Some(watcher) = watcher.as_deref() {
+                update_scheduler_state_with_watcher(&mut state, watcher, apply);
+            } else {
+                apply(&mut state);
+            }
+            notify(
+                frontends.as_deref(),
+                def,
+                format!(
+                    "定时任务「{}」原定于 {} 运行，已超过补跑期限，未执行并已删除。",
+                    def.name,
+                    format_local(pending.record.fired_at)
+                ),
+            );
+        }
+        storage_alerted.remove(&entity);
+        commands.entity(entity).despawn();
+    }
+    let threshold = settings
+        .as_deref()
+        .map_or(3, |settings| settings.0.schedule_failure_alert_threshold);
+    for (entity, task, run) in &runs {
+        if !task.status().is_terminal()
+            || outputs.iter().any(|output| output.task_id == task.id)
+            || sends.iter().any(|send| send.task_id == task.id)
+            || deliveries
+                .as_deref()
+                .is_some_and(|tracker| tracker.pending_for(task.id) > 0)
+        {
+            continue;
+        }
+        let delivery_error = deliveries
+            .as_deref()
+            .and_then(|tracker| tracker.failure_for(task.id));
+        let count = deliveries
+            .as_deref()
+            .map_or(0, |tracker| tracker.notified_for(task.id));
+        let failed = !matches!(task.status(), TaskStatus::Done) || delivery_error.is_some();
+        let record = ScheduleRunRecord {
+            task_id: Some(task.id),
+            schedule_id: run.schedule_id,
+            fired_at: run.fired_at.unwrap_or(task.created_at),
+            finished_at: *completed_at.entry(task.id).or_insert_with(Utc::now),
+            outcome: if failed {
+                RunOutcome::Failed
+            } else if count > 0 {
+                RunOutcome::Notified
+            } else {
+                RunOutcome::Silent
+            },
+            error: if failed {
+                Some(
+                    delivery_error
+                        .map(str::to_owned)
+                        .or_else(|| task.last_error.clone())
+                        .unwrap_or_else(|| format!("{:?}", task.status())),
+                )
+            } else {
+                None
+            },
+            result_summary: task.result_summary.chars().take(2048).collect(),
+            notification_count: count,
+        };
+        if let Some(store) = store.as_deref()
+            && let Err(error) = store.append_run(&record)
+        {
+            warn!(event = "ScheduleAccountingFailed", task_id = %task.id, %error, "terminal run ledger will retry");
+            if storage_alerted.insert(entity)
+                && let Some(def) = state
+                    .dynamic_tasks()
+                    .iter()
+                    .find(|def| def.id == run.schedule_id)
+            {
+                notify(
+                    frontends.as_deref(),
+                    def,
+                    format!("定时任务「{}」运行记录存储失败，将重试：{error}", def.name),
+                );
+            }
+            continue;
+        }
+        let mut defs = state.dynamic_tasks().to_vec();
+        let mut notice = None;
+        if let Some(def) = defs.iter_mut().find(|def| def.id == run.schedule_id) {
+            let was_alerting = def.health.alerting;
+            if failed {
+                def.health.consecutive_failures = def.health.consecutive_failures.saturating_add(1);
+                def.health.alerting |= def.health.consecutive_failures >= threshold;
+            } else {
+                def.health.last_success_at = Some(record.finished_at);
+                def.health.consecutive_failures = 0;
+                def.health.alerting = false;
+            }
+            notice = Some((
+                def.clone(),
+                !was_alerting && def.health.alerting,
+                was_alerting && !def.health.alerting,
+            ));
+            if let Some(store) = store.as_deref()
+                && let Err(error) = store.save(&defs)
+            {
+                warn!(event = "ScheduleAccountingFailed", task_id = %task.id, %error, "health commit will retry without incrementing twice");
+                if storage_alerted.insert(entity) {
+                    notify(
+                        frontends.as_deref(),
+                        &notice.as_ref().unwrap().0,
+                        format!("定时任务健康状态存储失败，将重试：{error}"),
+                    );
+                }
+                continue;
+            }
+            let apply = |state: &mut SchedulerState| *state.dynamic_tasks_mut() = defs;
+            if let Some(watcher) = watcher.as_deref() {
+                update_scheduler_state_with_watcher(&mut state, watcher, apply);
+            } else {
+                apply(&mut state);
+            }
+        }
+        if storage_alerted.remove(&entity)
+            && let Some((def, _, _)) = &notice
+        {
+            notify(
+                frontends.as_deref(),
+                def,
+                format!("定时任务「{}」运行记录存储恢复正常。", def.name),
+            );
+        }
+        completed_at.remove(&task.id);
+        commands.entity(entity).insert(ScheduleRunRecorded);
+        if let Some(tracker) = deliveries.as_deref_mut() {
+            tracker.forget(task.id);
+        }
+        info!(event = "ScheduleRunRecorded", task_id = %task.id, schedule_id = %run.schedule_id, outcome = ?record.outcome, notification_count = count, "scheduled run accounting committed");
+        if let Some((def, alert, recovered)) = notice {
+            if failed {
+                notify(
+                    frontends.as_deref(),
+                    &def,
+                    format!(
+                        "定时任务「{}」运行失败：{}",
+                        def.name,
+                        record.error.as_deref().unwrap_or("unknown")
+                    ),
+                );
+            }
+            if alert {
+                info!(event = "ScheduleFailureAlert", schedule_id = %def.id, task_id = %task.id, consecutive_failures = def.health.consecutive_failures, "scheduled task entered alerting state");
+                notify(
+                    frontends.as_deref(),
+                    &def,
+                    format!(
+                        "定时任务「{}」连续失败 {} 次，进入告警状态。",
+                        def.name, def.health.consecutive_failures
+                    ),
+                );
+            }
+            if recovered {
+                info!(event = "ScheduleRecovered", schedule_id = %def.id, task_id = %task.id, "scheduled task recovered");
+                notify(
+                    frontends.as_deref(),
+                    &def,
+                    format!("定时任务「{}」恢复正常。", def.name),
+                );
+            }
+        }
+    }
+}
+
 /// 一次性定时任务的运行进入终态后删除其定义。
 ///
 /// 触发时只记 `last_fired_at`（timer 据此不再调度），定义保留到运行结束：运行失败或进程
 /// 中途停止时定义仍在，重启后由 `schedule_catch_up_startup_system` 转为暂停并提醒。
 pub fn once_schedule_completion_system(
-    runs: Query<(&Task, &ScheduledRun), Changed<Task>>,
+    runs: Query<(&Task, &ScheduledRun), With<ScheduleRunRecorded>>,
     mut state: ResMut<SchedulerState>,
     watcher: Res<SchedulerStateWatcher>,
 ) {
@@ -147,16 +398,22 @@ pub fn once_schedule_completion_system(
 
 /// `SchedulerState` 变化时把动态定时任务定义写入 `ScheduleStore`。
 ///
-/// 未插入 `ScheduleStore`（测试默认）时不落盘。写失败只记 `warn`，内存状态保持不变，
-/// 下一次变化时会再次尝试写入。
-pub fn schedule_persist_system(state: Res<SchedulerState>, store: Option<Res<ScheduleStore>>) {
+/// 未插入 `ScheduleStore`（测试默认）时不落盘。写失败保留重试标记，
+/// 后续帧即使状态未再变化也会重试。
+pub fn schedule_persist_system(
+    state: Res<SchedulerState>,
+    store: Option<Res<ScheduleStore>>,
+    mut retry: Local<bool>,
+) {
     let Some(store) = store else {
         return;
     };
-    if !state.is_changed() {
+    if !state.is_changed() && !*retry {
         return;
     }
+    *retry = false;
     if let Err(e) = store.save(state.dynamic_tasks()) {
+        *retry = true;
         warn!(
             event = "ScheduleStoreSaveFailed",
             path = %store.path().display(),
@@ -357,16 +614,12 @@ mod tests {
             .world_mut()
             .spawn((
                 run_task(crate::domain::TaskStatus::Running),
-                ScheduledRun {
-                    schedule_id: once.id,
-                },
+                ScheduledRun::new(once.id),
             ))
             .id();
         app.world_mut().spawn((
             run_task(crate::domain::TaskStatus::Done),
-            ScheduledRun {
-                schedule_id: cron.id,
-            },
+            ScheduledRun::new(cron.id),
         ));
 
         app.update();
@@ -386,7 +639,267 @@ mod tests {
 
         app.world_mut().get_mut::<Task>(running).unwrap().status =
             crate::domain::TaskStatus::Failed(crate::domain::FailureReason::Unknown);
+        app.world_mut()
+            .entity_mut(running)
+            .insert(ScheduleRunRecorded);
         app.update();
         assert_eq!(ids(&app), vec![cron.id], "once removed after its run fails");
+    }
+
+    fn accounting_app(
+        dir: &tempfile::TempDir,
+        def: ScheduleDefinition,
+    ) -> (
+        App,
+        ScheduleStore,
+        std::sync::Arc<std::sync::Mutex<Vec<crate::domain::EngineEvent>>>,
+    ) {
+        use crate::domain::{EngineEvent, Frontend, FrontendKind, UserAction};
+        use std::sync::{Arc, Mutex};
+        struct RecordingFrontend(Arc<Mutex<Vec<EngineEvent>>>);
+        impl Frontend for RecordingFrontend {
+            fn kind(&self) -> FrontendKind {
+                FrontendKind::Tui
+            }
+            fn push_event(&self, event: EngineEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+            fn poll_actions(&self) -> Vec<UserAction> {
+                Vec::new()
+            }
+        }
+        let (mut app, store) = app_with_store(dir);
+        app.world_mut()
+            .resource_mut::<SchedulerState>()
+            .dynamic_tasks_mut()
+            .push(def);
+        app.insert_resource(crate::systems::HarnessSettings::default_test());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(RecordingFrontend(events.clone()))],
+        });
+        app.add_systems(
+            Update,
+            schedule_run_accounting_system.before(schedule_persist_system),
+        );
+        (app, store, events)
+    }
+
+    fn accounting_task(app: &mut App, schedule_id: uuid::Uuid, failed: bool) -> Entity {
+        let mut task = Task::from_trigger(
+            "scheduled work",
+            0,
+            crate::domain::TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
+        );
+        if failed {
+            task.mark_failed_reason(
+                crate::domain::FailureReason::Unknown,
+                "runtime accounting test failure",
+                Utc::now(),
+            );
+        } else {
+            task.mark_done("successful unchanged run", Utc::now());
+        }
+        app.world_mut()
+            .spawn((task, ScheduledRun::new(schedule_id)))
+            .id()
+    }
+
+    fn ledger_records(
+        store: &ScheduleStore,
+        id: uuid::Uuid,
+    ) -> Vec<crate::domain::ScheduleRunRecord> {
+        let path = store.state_dir(id).parent().unwrap().join("runs.jsonl");
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn accounting_definition() -> ScheduleDefinition {
+        let mut def = definition("accounted-monitor");
+        def.notify = crate::domain::NotifyPolicy::Explicit;
+        def.output_channel = Some(crate::domain::ChannelId {
+            frontend: crate::domain::FrontendKind::Tui,
+            user_id: "accounting".into(),
+            thread_id: None,
+        });
+        def
+    }
+
+    #[test]
+    fn terminal_run_is_written_once_and_updates_success_health() {
+        let directory = tempfile::tempdir().unwrap();
+        let def = accounting_definition();
+        let id = def.id;
+        let (mut app, store, events) = accounting_app(&directory, def);
+        let entity = accounting_task(&mut app, id, false);
+        app.update();
+        app.update();
+        let records = ledger_records(&store, id);
+        assert_eq!(
+            records.len(),
+            1,
+            "terminal records are durable and idempotent across frames"
+        );
+        assert_eq!(records[0].outcome, crate::domain::RunOutcome::Silent);
+        assert_eq!(records[0].notification_count, 0);
+        assert!(app.world().get::<ScheduleRunRecorded>(entity).is_some());
+        assert!(store.load().unwrap()[0].health.last_success_at.is_some());
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "successful explicit runs stay silent"
+        );
+    }
+
+    #[test]
+    fn repeated_failures_alert_once_and_next_success_recovers_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let def = accounting_definition();
+        let id = def.id;
+        let (mut app, store, events) = accounting_app(&directory, def);
+        for _ in 0..4 {
+            accounting_task(&mut app, id, true);
+            app.update();
+        }
+        let health = &store.load().unwrap()[0].health;
+        assert_eq!(health.consecutive_failures, 4);
+        assert!(health.alerting);
+        let texts = || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|event| match event {
+                    crate::domain::EngineEvent::Text { content, .. } => Some(content.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            texts()
+                .iter()
+                .filter(|text| text.contains("连续失败"))
+                .count(),
+            1,
+            "threshold alert is emitted once"
+        );
+        assert_eq!(
+            texts()
+                .iter()
+                .filter(|text| text.contains("运行失败"))
+                .count(),
+            4,
+            "every failed run is visible despite explicit policy"
+        );
+        accounting_task(&mut app, id, false);
+        app.update();
+        app.update();
+        let health = &store.load().unwrap()[0].health;
+        assert_eq!(health.consecutive_failures, 0);
+        assert!(!health.alerting);
+        assert_eq!(
+            texts()
+                .iter()
+                .filter(|text| text.contains("恢复正常"))
+                .count(),
+            1
+        );
+        assert_eq!(ledger_records(&store, id).len(), 5);
+    }
+
+    #[test]
+    fn definition_save_failure_retries_without_duplicate_ledger_or_failure_increment() {
+        let directory = tempfile::tempdir().unwrap();
+        let def = accounting_definition();
+        let id = def.id;
+        let (mut app, store, _) = accounting_app(&directory, def);
+        std::fs::create_dir_all(store.path()).unwrap();
+        let entity = accounting_task(&mut app, id, true);
+        app.update();
+        app.update();
+        assert!(app.world().get::<ScheduleRunRecorded>(entity).is_none());
+        assert_eq!(
+            app.world().resource::<SchedulerState>().dynamic_tasks()[0]
+                .health
+                .consecutive_failures,
+            0
+        );
+        assert_eq!(
+            ledger_records(&store, id).len(),
+            1,
+            "append retry is idempotent before a definition save succeeds"
+        );
+        std::fs::remove_dir(store.path()).unwrap();
+        app.update();
+        app.update();
+        assert!(app.world().get::<ScheduleRunRecorded>(entity).is_some());
+        assert_eq!(store.load().unwrap()[0].health.consecutive_failures, 1);
+        assert_eq!(ledger_records(&store, id).len(), 1);
+    }
+
+    #[test]
+    fn completed_once_definition_waits_for_durable_run_record() {
+        let def = once_definition("record-before-delete");
+        let id = def.id;
+        let mut app = completion_app(vec![def]);
+        let entity = accounting_task(&mut app, id, false);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<SchedulerState>()
+                .dynamic_tasks()
+                .len(),
+            1,
+            "terminal task alone cannot delete a definition before accounting and receipts settle"
+        );
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(ScheduleRunRecorded);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SchedulerState>()
+                .dynamic_tasks()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn ledger_io_failure_keeps_task_pending_then_retries_exactly_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let def = accounting_definition();
+        let id = def.id;
+        let (mut app, store, _) = accounting_app(&directory, def);
+        let ledger = store.state_dir(id).parent().unwrap().join("runs.jsonl");
+        std::fs::create_dir_all(&ledger).unwrap();
+        let entity = accounting_task(&mut app, id, true);
+        app.update();
+        app.update();
+        assert!(app.world().get::<ScheduleRunRecorded>(entity).is_none());
+        assert_eq!(
+            app.world().resource::<SchedulerState>().dynamic_tasks()[0]
+                .health
+                .consecutive_failures,
+            0
+        );
+        std::fs::remove_dir(&ledger).unwrap();
+        app.update();
+        app.update();
+        assert!(app.world().get::<ScheduleRunRecorded>(entity).is_some());
+        assert_eq!(ledger_records(&store, id).len(), 1);
+        assert_eq!(store.load().unwrap()[0].health.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn definition_persistence_retries_even_without_a_new_state_change() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, store) = app_with_store(&directory);
+        std::fs::create_dir_all(store.path()).unwrap();
+        app.update();
+        app.update();
+        std::fs::remove_dir(store.path()).unwrap();
+        app.update();
+        assert!(store.path().is_file());
     }
 }

@@ -13,7 +13,7 @@ use cron::Schedule;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use super::ChannelId;
+use super::{ChannelId, TaskId};
 use crate::prelude::Component;
 
 /// 动态任务调度规格：一次性或 cron 周期。
@@ -139,12 +139,27 @@ impl<'de> Deserialize<'de> for ScheduleExpr {
     }
 }
 
-/// 定时任务运行健康信息（P0 只记录上次触发时间，其余字段随运行账本引入）。
+/// 定时运行的最终回复投递策略；失败告警始终独立于此策略。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyPolicy {
+    #[default]
+    Reply,
+    Explicit,
+}
+
+/// 定时任务运行健康信息，随定义持久化。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleHealth {
     /// 上次触发时间（含补跑与手动运行），补跑判定的起点。
     #[serde(default)]
     pub last_fired_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_success_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub alerting: bool,
 }
 
 /// 动态定时任务定义：由 `schedule_task` 创建，持久化到 `ScheduleStore`。
@@ -157,6 +172,10 @@ pub struct ScheduleDefinition {
     pub content: String,
     pub schedule: ScheduleExpr,
     pub output_channel: Option<ChannelId>,
+    #[serde(default)]
+    pub notify: NotifyPolicy,
+    #[serde(default)]
+    pub report_of: Option<Uuid>,
     /// 暂停时为 `false`：timer 不再调度，触发也会被跳过。
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -181,6 +200,8 @@ impl ScheduleDefinition {
             content,
             schedule,
             output_channel,
+            notify: NotifyPolicy::Reply,
+            report_of: None,
             enabled: true,
             created_at,
             health: ScheduleHealth::default(),
@@ -298,6 +319,52 @@ pub enum ScheduleFire {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct ScheduledRun {
     pub schedule_id: Uuid,
+    /// 路由接受触发的时间；手工构造的运行回退到 Task 创建时间。
+    pub fired_at: Option<DateTime<Utc>>,
+    pub notify: NotifyPolicy,
+}
+
+impl ScheduledRun {
+    pub fn new(schedule_id: Uuid) -> Self {
+        Self {
+            schedule_id,
+            fired_at: None,
+            notify: NotifyPolicy::Reply,
+        }
+    }
+}
+
+/// 一次触发的最终记账结果，跳过和错过不增加失败次数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcome {
+    Notified,
+    Silent,
+    Failed,
+    SkippedOverlap,
+    Missed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleRunRecord {
+    pub task_id: Option<TaskId>,
+    pub schedule_id: Uuid,
+    pub fired_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub outcome: RunOutcome,
+    pub error: Option<String>,
+    pub result_summary: String,
+    pub notification_count: u32,
+}
+
+/// 可信运行统计；total 含无变化的 Silent 运行。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub total: u64,
+    pub notified: u64,
+    pub failed: u64,
+    pub skipped: u64,
+    pub missed: u64,
 }
 
 /// 由定义 id 派生 kind 字符串。

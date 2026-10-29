@@ -52,6 +52,14 @@ pub fn terminal_task_retention_system(
     inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
     backend: Option<Res<crate::systems::NativeProcessBackend>>,
     mut last_sweep: Local<Option<DateTime<Utc>>>,
+    unrecorded_runs: Query<
+        &Task,
+        (
+            With<crate::domain::ScheduledRun>,
+            Without<crate::systems::ScheduleRunRecorded>,
+        ),
+    >,
+    schedule_deliveries: Option<Res<crate::systems::ScheduleDeliveryTracker>>,
 ) {
     let now = clock.0;
     if last_sweep.is_some_and(|last| now - last < Duration::seconds(SWEEP_INTERVAL_SECS)) {
@@ -70,6 +78,15 @@ pub fn terminal_task_retention_system(
         .filter(|t| !t.status.is_terminal() || now - t.updated_at < retention)
         .map(|t| root_of(t.id))
         .collect();
+    busy_roots.extend(unrecorded_runs.iter().map(|task| root_of(task.id)));
+    if let Some(deliveries) = schedule_deliveries.as_ref() {
+        busy_roots.extend(
+            tasks
+                .iter()
+                .filter(|task| deliveries.pending_for(task.id) > 0)
+                .map(|task| root_of(task.id)),
+        );
+    }
     busy_roots.extend(
         work_items
             .iter()
@@ -304,6 +321,7 @@ mod tests {
         world.insert_resource(HarnessSettings(HarnessConfig {
             terminal_task_retention_secs: 3600,
             conversation_idle_secs: 86400,
+            schedule_failure_alert_threshold: 3,
             ..HarnessConfig::default()
         }));
         world.init_resource::<EntityIndex>();
@@ -547,5 +565,45 @@ mod tests {
             run_idle(&mut world).is_empty(),
             "pending notification or unfinished child means the parent remains active"
         );
+    }
+    #[test]
+    fn scheduled_tree_is_retained_until_accounting_and_receipts_complete() {
+        let now = Utc::now();
+        let mut world = world_at(now);
+        world.insert_resource(crate::systems::ScheduleDeliveryTracker::default());
+        let root = spawn(
+            &mut world,
+            task(TaskStatus::Done, now - Duration::hours(2), None),
+        );
+        let child = spawn(
+            &mut world,
+            task(TaskStatus::Done, now - Duration::hours(2), Some(root)),
+        );
+        let entity = world.resource::<EntityIndex>().get_task(&root).unwrap();
+        world
+            .entity_mut(entity)
+            .insert(crate::domain::ScheduledRun::new(uuid::Uuid::new_v4()));
+        run(&mut world);
+        assert!(
+            alive(&world, root) && alive(&world, child),
+            "uncommitted accounting retains the whole tree"
+        );
+        world
+            .entity_mut(entity)
+            .insert(crate::systems::ScheduleRunRecorded);
+        let callback = world
+            .resource_mut::<crate::systems::ScheduleDeliveryTracker>()
+            .begin(root);
+        run(&mut world);
+        assert!(
+            alive(&world, root) && alive(&world, child),
+            "pending platform receipt retains the whole tree"
+        );
+        callback(Ok(None));
+        world
+            .resource_mut::<crate::systems::ScheduleDeliveryTracker>()
+            .poll_receipts();
+        run(&mut world);
+        assert!(!alive(&world, root) && !alive(&world, child));
     }
 }

@@ -12,12 +12,14 @@ pub fn channel_send_dispatch_system(
     mut commands: Commands,
     channel_manager: Res<ChannelManager>,
     pending: Query<(Entity, &PendingChannelSend)>,
-    tasks: Query<&Task>,
+    tasks: Query<(&Task, Option<&crate::domain::ScheduledRun>)>,
+    mut deliveries: Option<ResMut<crate::systems::ScheduleDeliveryTracker>>,
 ) {
     for (entity, send) in &pending {
         // 未指定目标时，回退到任务的路由通道：优先 routing_policy.output_channel
         // （scheduled 任务由 build_routing_policy 注入），其次 origin_channel。
-        let task = tasks.iter().find(|t| t.id == send.task_id);
+        let matched = tasks.iter().find(|(task, _)| task.id == send.task_id);
+        let task = matched.map(|(task, _)| task);
         let channel = task.and_then(|t| t.delivery_channel());
 
         let recipient = match &send.recipient {
@@ -41,18 +43,31 @@ pub fn channel_send_dispatch_system(
         let thread_id = channel.and_then(|c| c.thread_id.clone());
 
         let attachment_count = send.attachments.len();
-        let result = channel_manager.send(
-            send.channel.clone(),
-            ChannelOutboundMessage {
-                recipient: recipient.clone(),
-                thread_id: thread_id.clone(),
-                content: send.content.clone(),
-                parse_mode: None,
-                reply_markup: None,
-                attachments: send.attachments.clone(),
-                message_kind: crate::channels::traits::MessageKind::LLMReply,
-            },
-        );
+        let message = ChannelOutboundMessage {
+            recipient: recipient.clone(),
+            thread_id: thread_id.clone(),
+            content: send.content.clone(),
+            parse_mode: None,
+            reply_markup: None,
+            attachments: send.attachments.clone(),
+            message_kind: crate::channels::traits::MessageKind::LLMReply,
+        };
+        let is_scheduled = matched.is_some_and(|(_, run)| run.is_some());
+        let result = if is_scheduled {
+            if let Some(tracker) = deliveries.as_deref_mut() {
+                let callback = tracker.begin(send.task_id);
+                let result =
+                    channel_manager.send_with_result(send.channel.clone(), message, callback);
+                if let Err(error) = &result {
+                    tracker.reject(send.task_id, error.to_string());
+                }
+                result
+            } else {
+                channel_manager.send(send.channel.clone(), message)
+            }
+        } else {
+            channel_manager.send(send.channel.clone(), message)
+        };
 
         let (output_text, tool_output) = match result {
             Ok(()) => {

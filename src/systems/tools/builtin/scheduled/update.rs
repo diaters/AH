@@ -7,7 +7,9 @@ use crate::domain::{
     BuiltinTool, OwnedToolContext, ScheduleSelector, ToolAction, ToolActionKind, ToolContext,
     ToolEffect, ToolError, ToolFuture, ToolWorkerOutput,
 };
-use crate::systems::tools::builtin::schedule_task::parse_schedule;
+use crate::systems::tools::builtin::schedule_task::{
+    parse_notify, parse_report_of, parse_schedule,
+};
 
 pub struct UpdateScheduledTaskTool;
 
@@ -54,9 +56,17 @@ impl BuiltinTool for UpdateScheduledTaskTool {
                 .get("run_now")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            if content.is_none() && schedule.is_none() && enabled.is_none() && !run_now {
+            let notify = parse_notify(&input)?;
+            let report_of = parse_report_of(&input)?;
+            if content.is_none()
+                && schedule.is_none()
+                && enabled.is_none()
+                && !run_now
+                && notify.is_none()
+                && report_of.is_none()
+            {
                 return Err(ToolError::InvalidInput(
-                    "nothing to update: provide content, schedule, enabled or run_now".to_string(),
+                    "nothing to update: provide content, schedule, enabled, run_now, notify or report_of".to_string(),
                 ));
             }
             Ok(ToolWorkerOutput::Effect(ToolEffect::UpdateSchedule {
@@ -65,6 +75,8 @@ impl BuiltinTool for UpdateScheduledTaskTool {
                 schedule,
                 enabled,
                 run_now,
+                notify,
+                report_of,
             }))
         })
     }
@@ -96,6 +108,7 @@ mod tests {
                 schedule,
                 enabled,
                 run_now,
+                ..
             }) => {
                 assert_eq!(selector, ScheduleSelector::Name("forum-watch".into()));
                 assert_eq!(content.as_deref(), Some("new prompt"));
@@ -125,5 +138,10 @@ mod tests {
             run(serde_json::json!({"name": "x", "content": "  "})),
             Err(ToolError::InvalidInput(_))
         ));
+    }
+
+    #[test]
+    fn explicit_null_report_reference_is_a_valid_clear_patch() {
+        assert!(run(serde_json::json!({"name":"watch", "report_of":null})).is_ok());
     }
 }

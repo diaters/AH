@@ -27,6 +27,8 @@ fn schedule_effect(name: Option<&str>, schedule: &str, channel: Option<ChannelId
         content: "send report".to_string(),
         schedule: ScheduleExpr::parse(schedule).unwrap(),
         output_channel: channel,
+        notify: harness::domain::NotifyPolicy::Reply,
+        report_of: None,
     }
 }
 
@@ -237,6 +239,30 @@ fn commit_schedule_task_rejects_duplicate_name() {
             assert!(msg.contains("forum-watch"), "unexpected message: {msg}");
         }
         other => panic!("expected InvalidInput, got {:?}", other),
+    }
+}
+
+#[test]
+fn creation_rejects_missing_and_self_report_targets_before_modifying_state() {
+    for self_reference in [false, true] {
+        let mut world = World::new();
+        insert_scheduler_resources(&mut world);
+        let (id, mut effect) = cron_effect();
+        if let ToolEffect::ScheduleTask { report_of, .. } = &mut effect {
+            *report_of = Some(if self_reference { id } else { Uuid::new_v4() });
+        }
+        spawn_effect_pending(&mut world, "invalid-report", effect);
+        commit_tool_effects_system(&mut world);
+        assert!(
+            world
+                .resource::<SchedulerState>()
+                .dynamic_tasks()
+                .is_empty()
+        );
+        assert!(matches!(
+            recv_result(&mut world).payload,
+            ToolWorkerPayload::Completed(Err(ToolError::InvalidInput(_)))
+        ));
     }
 }
 

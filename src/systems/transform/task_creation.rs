@@ -328,7 +328,7 @@ mod tests {
                 origin_channel: None,
                 routing_policy: TaskRoutingPolicy::scheduled_task(None, "scheduled task"),
             },
-            ScheduledRun { schedule_id },
+            ScheduledRun::new(schedule_id),
         ));
         app.world_mut().spawn(CreateTaskMessage {
             initiator: None,
@@ -349,7 +349,10 @@ mod tests {
             seen,
             vec![
                 ("plain".to_string(), None),
-                ("scheduled".to_string(), Some(ScheduledRun { schedule_id })),
+                (
+                    "scheduled".to_string(),
+                    Some(ScheduledRun::new(schedule_id))
+                ),
             ]
         );
     }

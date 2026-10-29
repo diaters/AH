@@ -65,7 +65,8 @@ pub(crate) use memory::{
 pub(crate) use memory_hook::{on_ltm_evicted_hook_system, on_ltm_write_hook_system};
 pub(crate) use routing::{continue_task_system, user_input_routing_system};
 pub use schedule::{
-    once_schedule_completion_system, schedule_catch_up_startup_system, schedule_persist_system,
+    ScheduleRunRecorded, once_schedule_completion_system, schedule_catch_up_startup_system,
+    schedule_persist_system, schedule_run_accounting_system,
 };
 pub(crate) use summarization::summarization_dispatch_system;
 pub(crate) use tools::{
@@ -109,3 +110,6 @@ pub enum HarnessSet {
 }
 
 pub use loop_control::{MonitorDeliveries, MonitorDeliveryRecord};
+
+mod schedule_delivery;
+pub use schedule_delivery::ScheduleDeliveryTracker;

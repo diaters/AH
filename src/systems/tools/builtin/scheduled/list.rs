@@ -40,6 +40,11 @@ impl BuiltinTool for ListScheduledTasksTool {
                     "enabled": def.enabled,
                     "created_at": def.created_at.to_rfc3339(),
                     "last_fired_at": def.health.last_fired_at.map(|t| t.to_rfc3339()),
+                    "last_success_at": def.health.last_success_at.map(|t| t.to_rfc3339()),
+                    "consecutive_failures": def.health.consecutive_failures,
+                    "alerting": def.health.alerting,
+                    "notify": def.notify,
+                    "report_of": def.report_of,
                 });
                 if def.enabled
                     && let Some(next) = compute_next_trigger(def.schedule.spec())

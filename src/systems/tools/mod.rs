@@ -417,7 +417,7 @@ pub fn register_builtin_tools(
     // schedule_task tool
     registry.register(ToolDefinition {
         name: "schedule_task".to_string(),
-        description: "安排一个未来由 AI 执行的任务。支持一次性触发（once:ISO时间）或周期性 cron（cron:5字段表达式），结果会发送到指定输出通道。定时任务会持久保存，进程重启后恢复；停机期间错过的运行在 7 天内只补跑最近一次。定时任务独立于当前任务存在，当前任务结束后仍会继续运行，可用 update_scheduled_task 暂停或修改、delete_scheduled_task 删除。".to_string(),
+        description: "安排一个未来由 AI 执行的任务。支持一次性触发（once:ISO时间）或周期性 cron（cron:5字段表达式），notify=reply 自动回复到指定输出通道，explicit 仅在 TUI 显示最终回复（需要通知时调用 channel_send）；失败始终通知。report_of 可关联被观察的定时任务 UUID。定时任务会持久保存，进程重启后恢复；停机期间错过的运行在 7 天内只补跑最近一次。定时任务独立于当前任务存在，当前任务结束后仍会继续运行，可用 update_scheduled_task 暂停或修改、delete_scheduled_task 删除。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -429,6 +429,14 @@ pub fn register_builtin_tools(
                     "name": {
                         "type": "string",
                         "description": "可选，便于管理的唯一名称（如 forum-watch）；缺省取 id 前 8 位，重名会被拒绝"
+                    },
+                    "notify": {
+                        "type": "string", "enum": ["reply", "explicit"],
+                        "description": "reply 自动推送最终回复；explicit 仅在 TUI 显示，调用 channel_send 才通知。失败始终通知"
+                    },
+                    "report_of": {
+                        "type": ["string", "null"],
+                        "description": "被观察定时任务的 UUID，注入其最近24小时统计和健康；null 清除关联"
                     },
                     "schedule": {
                         "type": "string",
@@ -456,7 +464,7 @@ pub fn register_builtin_tools(
     // list_scheduled_tasks tool —— pilot 首个异步工具（list 双账本只读）
     registry.register(ToolDefinition {
         name: "list_scheduled_tasks".to_string(),
-        description: "列出当前空间内的动态定时任务（由 schedule_task 工具创建）。返回每个任务的 kind、name、content、schedule、output_channel、is_once、enabled、created_at、last_fired_at、next_fire_time 等字段；next_fire_time 对 Once 任务显示原始触发时间，对 Cron 任务显示下次触发点，已暂停的任务不返回该字段。".to_string(),
+        description: "列出当前空间内的动态定时任务（由 schedule_task 工具创建）。返回每个任务的 kind、name、content、schedule、output_channel、is_once、enabled、created_at、last_fired_at、last_success_at、consecutive_failures、alerting、notify、report_of、next_fire_time 等字段；next_fire_time 对 Once 任务显示原始触发时间，对 Cron 任务显示下次触发点，已暂停的任务不返回该字段。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -497,7 +505,7 @@ pub fn register_builtin_tools(
     // update_scheduled_task tool —— 修改 / 暂停恢复 / 立即运行（声明式效果 → commit 落账）
     registry.register(ToolDefinition {
         name: "update_scheduled_task".to_string(),
-        description: "修改指定的动态定时任务，按 kind 或 name 定位：可修改 content、schedule，用 enabled 暂停（false）或恢复（true），用 run_now 立即手动运行一次（暂停中也可运行；上一次运行未结束时会被跳过）。至少提供一项修改。".to_string(),
+        description: "修改指定的动态定时任务，按 kind 或 name 定位：可修改 content、schedule、notify（reply/explicit）、report_of（UUID，null 清除），用 enabled 暂停（false）或恢复（true），用 run_now 立即手动运行一次（暂停中也可运行；上一次运行未结束时会被跳过）。至少提供一项修改。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -513,6 +521,14 @@ pub fn register_builtin_tools(
                     "content": {
                         "type": "string",
                         "description": "可选，新的任务提示词"
+                    },
+                    "notify": {
+                        "type": "string", "enum": ["reply", "explicit"],
+                        "description": "reply 自动推送最终回复；explicit 仅在 TUI 显示，调用 channel_send 才通知。失败始终通知"
+                    },
+                    "report_of": {
+                        "type": ["string", "null"],
+                        "description": "被观察定时任务的 UUID，注入其最近24小时统计和健康；null 清除关联"
                     },
                     "schedule": {
                         "type": "string",

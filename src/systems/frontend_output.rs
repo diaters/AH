@@ -29,6 +29,9 @@ pub(crate) fn frontend_output_system(
     >,
     mut last_status: Local<HashMap<TaskId, TaskStatusKind>>,
     mut reported_terminal: Local<HashSet<TaskId>>,
+    scheduled_runs: Query<&crate::domain::ScheduledRun>,
+    channel_manager: Option<Res<crate::channels::ChannelManager>>,
+    mut scheduled_deliveries: Option<ResMut<crate::systems::ScheduleDeliveryTracker>>,
 ) {
     // 用户可见文本输出
     for (entity, output) in &outputs {
@@ -59,8 +62,59 @@ pub(crate) fn frontend_output_system(
             content: output.content.clone(),
             task_id: Some(output.task_id),
         };
-        for frontend in &registry.frontends {
-            frontend.push_event(event.clone());
+        let run = index
+            .get_task(&output.task_id)
+            .and_then(|entity| scheduled_runs.get(entity).ok());
+        if let Some(run) = run {
+            if run.notify == crate::domain::NotifyPolicy::Reply
+                && let Some((_, task)) = index
+                    .get_task(&output.task_id)
+                    .and_then(|entity| all_tasks.get(entity).ok())
+                && let Some(channel) = task.delivery_channel()
+                && let Some(tracker) = scheduled_deliveries.as_deref_mut()
+            {
+                let callback = tracker.begin(output.task_id);
+                if channel.frontend == crate::domain::FrontendKind::Tui {
+                    if registry.has_frontend(crate::domain::FrontendKind::Tui) {
+                        callback(Ok(None));
+                    } else {
+                        callback(Err("TUI frontend unavailable".into()));
+                    }
+                } else if let Some(manager) = channel_manager.as_deref() {
+                    let message = crate::channels::ChannelOutboundMessage {
+                        recipient: channel.user_id.clone(),
+                        thread_id: channel.thread_id.clone(),
+                        content: format!(
+                            "[{}] 助手: {}",
+                            &task.id.to_string()[..8],
+                            output.content
+                        ),
+                        parse_mode: None,
+                        reply_markup: None,
+                        attachments: vec![],
+                        message_kind: crate::channels::MessageKind::LLMReply,
+                    };
+                    if let Err(error) = manager.send_with_result(
+                        channel.frontend.channel_name().into(),
+                        message,
+                        callback,
+                    ) {
+                        tracker.reject(output.task_id, error.to_string());
+                    }
+                } else {
+                    callback(Err("channel manager unavailable".into()));
+                }
+            }
+            // 定时输出保留TUI可见；IM自动推送只在reply策略中经真实回执路径执行。
+            for frontend in &registry.frontends {
+                if frontend.kind() == crate::domain::FrontendKind::Tui {
+                    frontend.push_event(event.clone());
+                }
+            }
+        } else {
+            for frontend in &registry.frontends {
+                frontend.push_event(event.clone());
+            }
         }
         commands.entity(entity).despawn();
     }
@@ -160,8 +214,13 @@ pub(crate) fn frontend_output_system(
         } else {
             last_status.insert(task.id, status);
         }
+        let scheduled = index
+            .get_task(&task.id)
+            .is_some_and(|entity| scheduled_runs.get(entity).is_ok());
         for frontend in &registry.frontends {
-            frontend.push_event(event.clone());
+            if !scheduled || frontend.kind() == crate::domain::FrontendKind::Tui {
+                frontend.push_event(event.clone());
+            }
         }
     }
 
@@ -1161,5 +1220,300 @@ mod tests {
         for (reason, expected) in cases {
             assert_eq!(waiting_reason_to_kind(&reason), expected);
         }
+    }
+    #[test]
+    fn explicit_scheduled_run_keeps_tui_reply_and_hides_im_status_and_reply() {
+        let mut app = App::new();
+        let im = Arc::new(Mutex::new(Vec::new()));
+        let tui = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![
+                Box::new(MockFrontend {
+                    kind: FrontendKind::QQ,
+                    events: im.clone(),
+                }),
+                Box::new(MockFrontend {
+                    kind: FrontendKind::Tui,
+                    events: tui.clone(),
+                }),
+            ],
+        });
+        app.init_resource::<EntityIndex>();
+        app.init_resource::<crate::systems::ScheduleDeliveryTracker>();
+        app.add_systems(Update, frontend_output_system);
+        let channel = ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "schedule-test".into(),
+            thread_id: None,
+        };
+        let mut task = Task::from_user_input("monitor", 3, channel.clone());
+        task.origin_channel = None;
+        task.routing_policy = TaskRoutingPolicy::scheduled_task(Some(channel), "scheduled test");
+        task.mark_done("no change", chrono::Utc::now());
+        let task_id = task.id;
+        let entity = app
+            .world_mut()
+            .spawn((
+                task,
+                crate::domain::ScheduledRun {
+                    schedule_id: Uuid::new_v4(),
+                    fired_at: None,
+                    notify: crate::domain::NotifyPolicy::Explicit,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+        app.world_mut().spawn(UserOutputMessage {
+            task_id,
+            content: "no change".into(),
+        });
+        app.update();
+        assert!(!im.lock().unwrap().iter().any(|event| matches!(
+            event,
+            EngineEvent::Text { .. } | EngineEvent::TaskStatusChanged { .. }
+        )));
+        assert!(tui.lock().unwrap().iter().any(
+            |event| matches!(event, EngineEvent::Text { content, .. } if content == "no change")
+        ));
+        assert_eq!(
+            app.world()
+                .resource::<crate::systems::ScheduleDeliveryTracker>()
+                .notified_for(task_id),
+            0
+        );
+    }
+    /// 覆盖真实 ChannelManager 队列 -> 平台 send -> 回执 -> 账本，不把入队当成功。
+    struct GatedScheduleChannel {
+        gate: Arc<tokio::sync::Semaphore>,
+        started: crossbeam_channel::Sender<crate::channels::ChannelOutboundMessage>,
+        fail: bool,
+    }
+    #[async_trait::async_trait]
+    impl crate::channels::Channel for GatedScheduleChannel {
+        fn name(&self) -> &str {
+            "qq"
+        }
+        async fn send(
+            &self,
+            message: &crate::channels::ChannelOutboundMessage,
+        ) -> Result<Option<String>, crate::channels::ChannelError> {
+            self.started.send(message.clone()).unwrap();
+            self.gate.acquire().await.unwrap().forget();
+            if self.fail {
+                Err(crate::channels::ChannelError::NotConfigured)
+            } else {
+                Ok(Some("platform-id".into()))
+            }
+        }
+        async fn listen(
+            &self,
+            _: crossbeam_channel::Sender<crate::channels::ChannelInboundMessage>,
+        ) -> Result<(), crate::channels::ChannelError> {
+            Ok(())
+        }
+    }
+
+    async fn schedule_receipt_pipeline(fail: bool, explicit_send: bool) {
+        use crate::domain::{
+            NotifyPolicy, RunOutcome, ScheduleDefinition, ScheduleExpr, ScheduledRun,
+        };
+        use crate::infrastructure::schedules::ScheduleStore;
+        use crate::systems::{
+            ScheduleDeliveryTracker, ScheduleRunRecorded, schedule_run_accounting_system,
+        };
+        use crate::triggers::{SchedulerState, SchedulerStateWatcher};
+        let dir = tempfile::tempdir().unwrap();
+        let store = ScheduleStore::new(dir.path().join("schedules.json"));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let (started_tx, started_rx) = crossbeam_channel::unbounded();
+        let channel = Arc::new(GatedScheduleChannel {
+            gate: gate.clone(),
+            started: started_tx,
+            fail,
+        });
+        let (input_tx, _) = crossbeam_channel::unbounded();
+        let (manager, _, _) =
+            crate::channels::ChannelManager::new(vec![channel], input_tx).unwrap();
+        let output_channel = crate::domain::ChannelId {
+            frontend: FrontendKind::QQ,
+            user_id: "group:scheduled".into(),
+            thread_id: Some("topic".into()),
+        };
+        let mut def = ScheduleDefinition::new(
+            Uuid::new_v4(),
+            Some("pipeline".into()),
+            "check".into(),
+            ScheduleExpr::parse("cron:*/5 * * * *").unwrap(),
+            Some(output_channel.clone()),
+            chrono::Utc::now(),
+        );
+        def.notify = if explicit_send {
+            NotifyPolicy::Explicit
+        } else {
+            NotifyPolicy::Reply
+        };
+        let id = def.id;
+        let policy = def.notify;
+        let mut state = SchedulerState::default();
+        state.dynamic_tasks_mut().push(def);
+        let mut app = App::new();
+        app.insert_resource(state);
+        app.insert_resource(SchedulerStateWatcher::default());
+        app.insert_resource(store.clone());
+        app.insert_resource(ScheduleDeliveryTracker::default());
+        app.insert_resource(manager);
+        app.insert_resource(EntityIndex::default());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(MockFrontend {
+                kind: FrontendKind::Tui,
+                events: events.clone(),
+            })],
+        });
+        app.add_systems(
+            Update,
+            (
+                frontend_output_system,
+                crate::systems::channel_send_dispatch_system,
+                schedule_run_accounting_system,
+            )
+                .chain(),
+        );
+        let mut task = Task::from_trigger(
+            "check",
+            0,
+            TaskRoutingPolicy::scheduled_task(Some(output_channel), "scheduled task"),
+        );
+        task.mark_done("done", chrono::Utc::now());
+        let task_id = task.id;
+        let entity = app
+            .world_mut()
+            .spawn((
+                task,
+                ScheduledRun {
+                    schedule_id: id,
+                    fired_at: None,
+                    notify: policy,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+        // explicit 最终回复留在 TUI，只有 channel_send 会产生真实通知。
+        app.world_mut().spawn(UserOutputMessage {
+            task_id,
+            content: "final reply".into(),
+        });
+        if explicit_send {
+            let request_entity = app.world_mut().spawn_empty().id();
+            app.world_mut().spawn(crate::domain::PendingChannelSend {
+                channel: "qq".into(),
+                recipient: None,
+                content: "explicit notification".into(),
+                attachments: vec![],
+                tool_call_id: None,
+                task_id,
+                agent_id: crate::domain::AgentId::nil(),
+                request_entity,
+            });
+        }
+        app.update();
+        let message = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Ok(message) = started_rx.try_recv() {
+                    break message;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(message.recipient, "group:scheduled");
+        assert_eq!(message.thread_id.as_deref(), Some("topic"));
+        if explicit_send {
+            assert_eq!(message.content, "explicit notification");
+        } else {
+            assert!(
+                message
+                    .content
+                    .starts_with(&format!("[{}] 助手: ", &task_id.to_string()[..8]))
+            );
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            app.world()
+                .resource::<ScheduleDeliveryTracker>()
+                .pending_for(task_id),
+            1
+        );
+        assert!(app.world().get::<ScheduleRunRecorded>(entity).is_none());
+        assert_eq!(
+            store
+                .run_summary(id, chrono::DateTime::<chrono::Utc>::MIN_UTC)
+                .unwrap()
+                .total,
+            0,
+            "queue acceptance is never a completed run"
+        );
+        gate.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                app.update();
+                if app.world().get::<ScheduleRunRecorded>(entity).is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let raw = std::fs::read_to_string(store.state_dir(id).parent().unwrap().join("runs.jsonl"))
+            .unwrap();
+        let record: crate::domain::ScheduleRunRecord = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(
+            record.outcome,
+            if fail {
+                RunOutcome::Failed
+            } else {
+                RunOutcome::Notified
+            }
+        );
+        assert_eq!(record.notification_count, u32::from(!fail));
+        assert_eq!(
+            store.load().unwrap()[0].health.consecutive_failures,
+            u32::from(fail)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ScheduleDeliveryTracker>()
+                .pending_for(task_id),
+            0
+        );
+        assert!(
+            started_rx.try_recv().is_err(),
+            "explicit final reply must not enqueue a second notification"
+        );
+        app.world()
+            .resource::<crate::channels::ChannelManager>()
+            .shutdown();
+    }
+
+    #[tokio::test]
+    async fn scheduled_reply_waits_for_real_success_and_failure_receipts() {
+        schedule_receipt_pipeline(false, false).await;
+        schedule_receipt_pipeline(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn scheduled_explicit_channel_send_waits_for_real_receipts() {
+        schedule_receipt_pipeline(false, true).await;
+        schedule_receipt_pipeline(true, true).await;
     }
 }
