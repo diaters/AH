@@ -58,11 +58,13 @@ impl ChannelManager {
         let mut frontends: Vec<Box<dyn Frontend>> = Vec::with_capacity(channels.len());
         for ch in &channels {
             let kind = FrontendKind::from_channel_name(ch.name())?;
-            frontends.push(Box::new(super::ChannelFrontend::new(
-                kind,
-                ch.name().to_string(),
-                outbound_tx.clone(),
-            )) as Box<dyn Frontend>);
+            frontends.push(ch.native_frontend().unwrap_or_else(|| {
+                Box::new(super::ChannelFrontend::new(
+                    kind,
+                    ch.name().to_string(),
+                    outbound_tx.clone(),
+                )) as Box<dyn Frontend>
+            }));
         }
 
         let supervisor_channels = channels.clone();

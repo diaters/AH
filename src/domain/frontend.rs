@@ -11,15 +11,17 @@ pub enum FrontendKind {
     Telegram,
     Web,
     QQ,
+    Client,
 }
 
 impl FrontendKind {
     /// 全部变体，按注册顺序排列。
-    pub const ALL: [FrontendKind; 4] = [
+    pub const ALL: [FrontendKind; 5] = [
         FrontendKind::Tui,
         FrontendKind::Telegram,
         FrontendKind::Web,
         FrontendKind::QQ,
+        FrontendKind::Client,
     ];
 
     /// 通道名（`FrontendKind` 与字符串通道名的唯一权威映射）。
@@ -29,6 +31,7 @@ impl FrontendKind {
             FrontendKind::Telegram => "telegram",
             FrontendKind::Web => "web",
             FrontendKind::QQ => "qq",
+            FrontendKind::Client => "client",
         }
     }
 
@@ -39,6 +42,7 @@ impl FrontendKind {
             "telegram" => Ok(FrontendKind::Telegram),
             "web" => Ok(FrontendKind::Web),
             "qq" => Ok(FrontendKind::QQ),
+            "client" => Ok(FrontendKind::Client),
             _ => Err(format!("unknown channel name: {name}")),
         }
     }

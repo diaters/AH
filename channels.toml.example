@@ -14,3 +14,11 @@ app_id = "your-app-id"
 app_secret = "your-app-secret"
 allowed_users = []
 pairing_enabled = false
+
+# 原生客户端通道（按 docs/client-channel.md 准备证书后取消注释）
+# [client]
+# listen = "0.0.0.0:9443"
+# instance_name = "我的 Harness"
+# tls_cert = ".harness/client/server.pem"
+# tls_key = ".harness/client/server-key.pem"
+# state_path = ".harness/client/state.json"

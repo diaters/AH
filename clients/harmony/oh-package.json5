@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.0.0",
+  "name": "harness-client",
+  "version": "0.1.0",
+  "description": "Harness 原生任务工作台",
+  "dependencies": {},
+  "devDependencies": {}
+}

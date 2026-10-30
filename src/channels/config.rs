@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChannelConfigs {
     #[serde(default)]
+    pub client: Option<super::client::ClientConfig>,
+    #[serde(default)]
     pub telegram: Option<TelegramConfig>,
     #[serde(default)]
     pub qq: Option<QqConfig>,

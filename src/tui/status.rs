@@ -29,6 +29,7 @@ impl StatusPanel {
             FrontendKind::QQ => ("QQ", Color::Magenta),
             FrontendKind::Telegram => ("TG", Color::Blue),
             FrontendKind::Web => ("Web", Color::DarkGray),
+            FrontendKind::Client => ("Client", Color::Cyan),
         }
     }
 
