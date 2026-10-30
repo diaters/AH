@@ -195,6 +195,18 @@ hvigorw --mode module -p product=default -p module=entry@default assembleHap --n
 工程不携带签名凭据，在 DevEco 中配置自己的签名后安装到授权设备。
 未签名产物位于 `entry/build/default/outputs/default/entry-default-unsigned.hap`。
 
+真机签名材料必须匹配 `com.diater.harness`：证书公钥与本机 CSR/私钥一致，
+调试 Profile 的包名、设备绑定和有效期正确。SDK 公共 OpenHarmony 测试签名即使通过
+`verify-app`，也不等于目标手机信任该签名；应使用开发者平台签发的调试证书及 Profile。
+私钥和口令保留本机，部署材料放在工程外或被忽略的 `.harness/` 中，不提交到 Git。
+
+使用匹配签名后的 HAP 安装与启动，所有设备命令指定目标：
+
+```sh
+hdc -t <TARGET> install <SIGNED_HAP>
+hdc -t <TARGET> shell aa start -a EntryAbility -b com.diater.harness
+```
+
 ```sh
 cargo test --lib channels::client
 cargo test --test client_runtime_flow
