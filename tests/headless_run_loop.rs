@@ -1,7 +1,7 @@
 //! 主循环（`run_loop`）与 headless 运行形态测试。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::unbounded;
@@ -108,6 +108,19 @@ impl LoopHooks for Until {
     }
 }
 
+struct UntilObserved(Arc<AtomicBool>, Instant);
+impl LoopHooks for UntilObserved {
+    fn poll(&mut self) -> bool {
+        false
+    }
+    fn should_quit(&self) -> bool {
+        self.0.load(Ordering::SeqCst) || Instant::now() >= self.1
+    }
+    fn next_deadline(&self) -> Option<Instant> {
+        Some(self.1)
+    }
+}
+
 #[test]
 fn ui_notifications_do_not_run_ecs() {
     let (mut app, _input_tx) = app_with_input();
@@ -134,10 +147,12 @@ fn maintenance_output_is_consumed_without_external_input() {
     use harness::domain::{SystemOutputMessage, TaskId};
     use harness::prelude::*;
     #[derive(Resource, Default)]
-    struct Seen(u32);
+    struct Seen(u32, Arc<AtomicBool>);
     fn emit(mut commands: Commands, mut sent: Local<bool>) {
         if !*sent {
             *sent = true;
+            // 模拟繁忙 runner 上超过原 100 ms 观察窗口的首轮处理。
+            std::thread::sleep(Duration::from_millis(120));
             commands.spawn(SystemOutputMessage {
                 task_id: TaskId::nil(),
                 content: "late-output".into(),
@@ -149,6 +164,7 @@ fn maintenance_output_is_consumed_without_external_input() {
             .iter()
             .filter(|message| message.content == "late-output")
             .count() as u32;
+        seen.1.store(seen.0 > 0, Ordering::SeqCst);
     }
     let (mut app, _input_tx) = app_with_input();
     app.init_resource::<Seen>();
@@ -160,9 +176,11 @@ fn maintenance_output_is_consumed_without_external_input() {
         bevy_app::Update,
         observe.in_set(harness::systems::HarnessSet::Ingress),
     );
+    let observed = app.world().resource::<Seen>().1.clone();
     let ticks = run_loop(
         &mut app,
-        &mut Until(Instant::now() + Duration::from_millis(100)),
+        // 完成条件是实际消费输出；deadline 只保护丢唤醒导致的挂起。
+        &mut UntilObserved(observed, Instant::now() + Duration::from_secs(5)),
     );
     assert_eq!(app.world().resource::<Seen>().0, 1);
     assert!(ticks <= 5, "late output failed to settle: {ticks} updates");
@@ -230,7 +248,6 @@ fn delayed_brain_and_llm_results_complete_without_polling() {
         AgentExecutionOutput, AgentExecutionRequest, AgentRequestKind, ChannelId, EngineEvent,
         ExecutorFuture, Frontend, FrontendKind, OutputContent, UserAction,
     };
-    use std::sync::atomic::AtomicBool;
     struct Delayed;
     impl AgentExecutor for Delayed {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
@@ -263,18 +280,6 @@ fn delayed_brain_and_llm_results_complete_without_polling() {
         }
         fn requires_polling(&self) -> bool {
             false
-        }
-    }
-    struct Completion(Arc<AtomicBool>, Instant);
-    impl LoopHooks for Completion {
-        fn poll(&mut self) -> bool {
-            false
-        }
-        fn should_quit(&self) -> bool {
-            self.0.load(Ordering::SeqCst) || Instant::now() >= self.1
-        }
-        fn next_deadline(&self) -> Option<Instant> {
-            Some(self.1)
         }
     }
     let (mut app, input_tx) = app_with_input();
@@ -319,7 +324,7 @@ fn delayed_brain_and_llm_results_complete_without_polling() {
         .unwrap();
     let ticks = run_loop(
         &mut app,
-        &mut Completion(complete.clone(), Instant::now() + Duration::from_secs(5)),
+        &mut UntilObserved(complete.clone(), Instant::now() + Duration::from_secs(5)),
     );
     assert!(
         complete.load(Ordering::SeqCst),
