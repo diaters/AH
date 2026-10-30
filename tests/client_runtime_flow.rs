@@ -47,8 +47,9 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
         ClientConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
             instance_name: "integration test".into(),
-            tls_cert: root.join("tests/fixtures/client-tls/test-cert.pem"),
-            tls_key: root.join("tests/fixtures/client-tls/test-key.pem"),
+            tls_cert: Some(root.join("tests/fixtures/client-tls/test-cert.pem")),
+            tls_key: Some(root.join("tests/fixtures/client-tls/test-key.pem")),
+            advertise: vec![],
             state_path: dir.path().join("client.json"),
             meow: None,
         },

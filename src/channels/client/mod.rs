@@ -3,6 +3,7 @@ mod server;
 mod store;
 #[cfg(test)]
 mod tests;
+mod tls;
 
 use std::{
     net::SocketAddr,
@@ -38,12 +39,25 @@ pub fn run_admin_command() -> anyhow::Result<bool> {
     let config = configs
         .client
         .ok_or_else(|| anyhow::anyhow!("[client] is not configured"))?;
-    let mut store = Store::open(config.state_path)?;
+    let tls = tls::load(&config)?;
+    let mut store = Store::open(config.state_path.clone())?;
     let code = store.issue_pairing(&args[1], chrono::Utc::now().timestamp())?;
-    println!(
-        "instance_id={}\npairing_code={code}\nexpires_in_seconds=300",
-        store.instance_id()
+    let addresses = tls::candidate_addresses(&config);
+    anyhow::ensure!(
+        !addresses.is_empty(),
+        "no reachable address found; set [client] advertise"
     );
+    let link = tls::pairing_link(
+        store.instance_id(),
+        &code,
+        tls.ca_fingerprint.as_deref(),
+        &addresses,
+    );
+    println!("{}", tls::terminal_qr(&link)?);
+    println!(
+        "用 Harness 客户端扫码，或复制下面的配对链接（300 秒内有效，仅可使用一次）：\n\n{link}\n"
+    );
+    println!("addresses={}", addresses.join(","));
     Ok(true)
 }
 
@@ -52,9 +66,15 @@ pub fn run_admin_command() -> anyhow::Result<bool> {
 pub struct ClientConfig {
     pub listen: SocketAddr,
     pub instance_name: String,
-    pub tls_cert: PathBuf,
-    pub tls_key: PathBuf,
+    /// 与 `tls_key` 同时省略时，由实例自管私有 CA 并签发服务端证书。
+    #[serde(default)]
+    pub tls_cert: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_key: Option<PathBuf>,
     pub state_path: PathBuf,
+    /// 客户端可达的主机名或 IP；省略时使用本机网卡地址。用于证书 SAN 与配对链接。
+    #[serde(default)]
+    pub advertise: Vec<String>,
     #[serde(default)]
     pub meow: Option<MeowConfig>,
 }

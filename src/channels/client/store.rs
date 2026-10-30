@@ -69,6 +69,9 @@ pub struct Session {
     pub progress: BTreeMap<String, Value>,
     pub messages: Vec<Value>,
     pub history_truncated: bool,
+    /// 最近一次变更时的实例事件序号，供客户端按最近活动排序。
+    #[serde(default)]
+    pub updated_at: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -461,6 +464,7 @@ impl Store {
                 progress: BTreeMap::new(),
                 messages: vec![],
                 history_truncated: false,
+                updated_at: state.sequence,
             };
             let receipt = CommandReceipt {
                 command_id: id,
@@ -717,6 +721,7 @@ fn append_event(state: &mut State, session_id: Uuid, kind: &str, data: Value) {
         .get_mut(&session_id)
         .expect("validated session");
     session.version += 1;
+    session.updated_at = state.sequence;
     if matches!(kind, "tool_started" | "tool_completed" | "permission_audit") {
         let mut observation = data.clone();
         observation["kind"] = kind.into();

@@ -2,7 +2,66 @@ import { http, webSocket } from '@kit.NetworkKit';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
+
+// 服务端 `--client-pair` 输出的单个配对链接。
+export interface PairingLink { instance: string; code: string; fingerprint: string; addresses: string[]; }
+
+export function parseLink(text: string): PairingLink {
+  const value = text.trim();
+  const prefix = 'harness://pair?';
+  if (!value.startsWith(prefix)) { throw new Error('无法识别配对链接，请复制服务端输出的完整链接'); }
+  const link: PairingLink = { instance: '', code: '', fingerprint: '', addresses: [] };
+  for (const part of value.substring(prefix.length).split('&')) {
+    const index = part.indexOf('=');
+    if (index <= 0) { continue; }
+    const key = part.substring(0, index);
+    const item = decodeURIComponent(part.substring(index + 1));
+    if (key === 'i') { link.instance = item; }
+    else if (key === 'c') { link.code = item; }
+    else if (key === 'f') { link.fingerprint = item.toLowerCase(); }
+    else if (key === 'a' && /^[a-zA-Z0-9.:[\]-]+$/.test(item)) { link.addresses.push(item); }
+  }
+  if (link.instance.length !== 36 || link.code.length === 0 || link.addresses.length === 0) {
+    throw new Error('配对链接不完整，请重新生成');
+  }
+  if (link.fingerprint.length > 0 && !/^[0-9a-f]{64}$/.test(link.fingerprint)) { throw new Error('配对链接中的证书指纹无效'); }
+  return link;
+}
+
+export function sha256Hex(data: Uint8Array): string {
+  const digest = cryptoFramework.createMd('SHA256');
+  digest.updateSync({ data: data });
+  let hex = '';
+  for (const byte of digest.digestSync().data) { hex += byte.toString(16).padStart(2, '0'); }
+  return hex;
+}
+
+// 首次连接时取回实例 CA，只有与配对链接中的指纹一致才写入沙箱并用于后续 TLS 校验。
+// 不同信任根使用不同路径，避免原生 TLS 层复用旧路径对应的证书缓存。
+export async function trustCa(address: string, fingerprint: string, dir: string): Promise<string> {
+  const path = `${dir}/instance-ca-${fingerprint}.pem`;
+  if (fileIo.accessSync(path)) { return path; }
+  const request = http.createHttp();
+  let pem = '';
+  try {
+    const options: http.HttpRequestOptions = { method: http.RequestMethod.GET, usingCache: false, reuseConnections: false,
+      connectTimeout: 4000, readTimeout: 8000, remoteValidation: 'skip', expectDataType: http.HttpDataType.STRING };
+    const response = await request.request(`${address}/v1/ca`, options);
+    if (response.responseCode !== 200) { throw new Error(`HTTP ${response.responseCode}`); }
+    pem = response.result as string;
+  } catch (error) { throw new Error((error as Error).message || '无法获取实例证书'); }
+  finally { request.destroy(); }
+  const body = pem.split('\n').filter((line: string) => !line.startsWith('-----')).join('').trim();
+  let der: Uint8Array;
+  try { der = new util.Base64Helper().decodeSync(body); } catch (_) { throw new Error('实例证书格式错误'); }
+  if (sha256Hex(der) !== fingerprint) { throw new Error('证书指纹不匹配，可能连接到了错误的设备'); }
+  const file = fileIo.openSync(path, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+  try { fileIo.writeSync(file.fd, pem); } finally { fileIo.closeSync(file); }
+  return path;
+}
 
 // 凭证只进入系统 Asset Store；地址、实例 ID 与 CA 文件由应用沙箱保存。
 export class CredentialStore {
@@ -33,13 +92,15 @@ export class Connection {
   caPath: string = '';
   credential: string = '';
   capabilities?: CapabilitiesDto;
+  // 探测多个候选地址时使用较短超时，避免不可达网卡拖慢连接。
+  connectTimeout: number = 10000;
   private socket?: webSocket.WebSocket;
   private generation: number = 0;
 
   configure(address: string, instance: string, caPath: string): void {
     this.close();
     if (!/^https:\/\/[a-zA-Z0-9.:[\]-]+$/.test(address) || instance.length !== 36) {
-      throw new Error('请填写 HTTPS 地址与完整实例 ID');
+      throw new Error('配对信息无效，请重新扫码');
     }
     this.address = address;
     this.instance = instance;
@@ -51,7 +112,7 @@ export class Connection {
     const headers: Record<string, string> = { 'Content-Type': typeof body === 'string' ? 'application/json' : 'application/octet-stream', 'Authorization': `Bearer ${this.credential}` };
     try {
       // 身份、权限和快照必须来自当前连接，不能复用上一次信任配置下的响应。
-      const options: http.HttpRequestOptions = { method: method, header: headers, usingCache: false, reuseConnections: false, connectTimeout: 10000, readTimeout: 30000, expectDataType: type };
+      const options: http.HttpRequestOptions = { method: method, header: headers, usingCache: false, reuseConnections: false, connectTimeout: this.connectTimeout, readTimeout: 30000, expectDataType: type };
       if (typeof body !== 'string' || body.length > 0) { options.extraData = body; }
       if (this.caPath.length > 0) { options.caPath = this.caPath; }
       const response = await request.request(`${this.address}${path}`, options);

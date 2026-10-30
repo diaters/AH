@@ -600,8 +600,9 @@ mod tests {
             super::super::super::ClientConfig {
                 listen: "127.0.0.1:0".parse().unwrap(),
                 instance_name: "test".into(),
-                tls_cert: dir.path().join("unused-cert"),
-                tls_key: dir.path().join("unused-key"),
+                tls_cert: Some(dir.path().join("unused-cert")),
+                tls_key: Some(dir.path().join("unused-key")),
+                advertise: vec![],
                 state_path: dir.path().join("state.json"),
                 meow: Some(config()),
             },

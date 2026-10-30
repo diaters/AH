@@ -3,28 +3,58 @@ import { preferences } from '@kit.ArkData';
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
-import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { Connection, CredentialStore } from '../services/Connection';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import { scanBarcode, scanCore } from '@kit.ScanKit';
+import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
+import { Theme } from '../common/Theme';
+import { InlineSpan, MdBlock, parseMarkdown } from '../common/Markdown';
+
+@Extend(Button) function ghost() {
+  .type(ButtonType.Normal).height(32).fontSize(13).fontColor(Theme.text).backgroundColor(Color.Transparent)
+  .border({ width: 1, color: Theme.line, radius: 16 }).padding({ left: 14, right: 14 })
+}
+@Extend(Button) function primary() {
+  .type(ButtonType.Normal).height(40).fontSize(15).fontColor(Color.White).backgroundColor(Theme.accent)
+  .borderRadius(20).padding({ left: 22, right: 22 })
+}
+@Extend(Button) function icon() {
+  .type(ButtonType.Circle).width(36).height(36).backgroundColor(Color.Transparent)
+}
+@Extend(Column) function card() {
+  .width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Theme.surface)
+  .border({ width: 1, color: Theme.line, radius: 14 })
+}
+@Extend(Text) function caption() {
+  .fontSize(12).fontColor(Theme.secondary)
+}
+@Extend(Text) function heading(size: number) {
+  .fontSize(size).fontColor(Theme.text).fontFamily(Theme.serif).fontWeight(FontWeight.Medium)
+}
 
 @Entry
 @Component
 struct Index {
-  @State address: string = '';
   @State instance: string = '';
-  @State pairingCode: string = '';
-  @State caPem: string = '';
-  @State status: string = '连接你的 Harness 实例';
+  @State fingerprint: string = '';
+  @State addresses: string[] = [];
+  @State preferred: string = '';
+  @State linkText: string = '';
+  @State status: string = '';
   @State sessions: SessionDto[] = [];
   @State selected: string = '';
   @State draft: string = '';
   @State windowWidth: number = 390;
-  @State settings: boolean = true;
+  @State paired: boolean = false;
   @State connected: boolean = false;
   @State busy: boolean = false;
   @State hasPending: boolean = false;
   @State questionDrafts: Record<string, string> = {};
-  @State view: string = 'sessions';
+  @State view: string = 'chat';
+  @State sidebarOpen: boolean = false;
+  @State panelOpen: boolean = false;
+  @State panelTab: string = 'artifacts';
+  @State searching: boolean = false;
   @State automation: AutomationDto = { available: false, schedules: [], timezone: '' };
   @State planName: string = '';
   @State planContent: string = '';
@@ -38,7 +68,6 @@ struct Index {
   @State files: ClientFileDto[] = [];
   @State attachments: string[] = [];
   @State pendingUpload: PendingUploadDto | undefined = undefined;
-  @State workspaceTab: string = 'chat';
   @State devices: DeviceDto[] = [];
   @State diagnostics: DiagnosticsDto | undefined = undefined;
   @State preview: image.PixelMap | undefined = undefined;
@@ -47,6 +76,9 @@ struct Index {
   private conversationScroller: Scroller = new Scroller();
   private editPlanRevision: string = '';
   @StorageLink('harnessForeground') @Watch('lifecycle') foreground: boolean = true;
+  // 沉浸式避让高度（px），由 EntryAbility 按系统状态栏与导航条更新。
+  @StorageProp('safeTop') safeTop: number = 0;
+  @StorageProp('safeBottom') safeBottom: number = 0;
   private connection: Connection = new Connection();
   private storage?: preferences.Preferences;
   private pending?: CommandDto;
@@ -58,32 +90,52 @@ struct Index {
 
   aboutToAppear(): void {
     try {
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    this.storage = preferences.getPreferencesSync(context, { name: 'harness' });
-    this.address = this.storage.getSync('address', '') as string;
-    this.instance = this.storage.getSync('instance', '') as string;
-    this.caPem = this.storage.getSync('ca', '') as string;
-    this.selected = this.storage.getSync('selected', '') as string;
-    this.draft = this.storage.getSync(`draft:${this.selected}`, '') as string;
-    this.attachments = JSON.parse(this.storage.getSync(`attachments:${this.selected}`, '[]') as string) as string[];
-    const upload = this.storage.getSync('pending-upload', '') as string;
-    if (upload) { this.pendingUpload = JSON.parse(upload) as PendingUploadDto; }
-    const saved = this.storage.getSync('pending', '') as string;
-    if (saved.length > 0) {
-      try { this.pending = JSON.parse(saved) as CommandDto; this.hasPending = true; } catch (_) { this.status = '待发送记录损坏，请检查'; }
-    }
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      this.storage = preferences.getPreferencesSync(context, { name: 'harness' });
+      this.loadPairing();
+      this.selected = this.storage.getSync('selected', '') as string;
+      this.draft = this.storage.getSync(`draft:${this.selected}`, '') as string;
+      this.attachments = JSON.parse(this.storage.getSync(`attachments:${this.selected}`, '[]') as string) as string[];
+      const upload = this.storage.getSync('pending-upload', '') as string;
+      if (upload) { this.pendingUpload = JSON.parse(upload) as PendingUploadDto; }
+      const saved = this.storage.getSync('pending', '') as string;
+      if (saved.length > 0) {
+        try { this.pending = JSON.parse(saved) as CommandDto; this.hasPending = true; } catch (_) { this.status = '待发送记录损坏，请检查'; }
+      }
     } catch (_) { this.status = '无法读取本地状态，请检查应用存储'; }
+    if (this.paired) { this.connect(''); }
   }
   aboutToDisappear(): void { this.cancelReconnect(); this.connection.close(); }
+
+  // 配对信息只在配对成功后整体写入；重新配对失败时可回到已保存的连接。
+  private loadPairing(): void {
+    this.instance = this.storage?.getSync('pair.instance', '') as string ?? '';
+    this.fingerprint = this.storage?.getSync('pair.fingerprint', '') as string ?? '';
+    this.preferred = this.storage?.getSync('pair.preferred', '') as string ?? '';
+    try { this.addresses = JSON.parse(this.storage?.getSync('pair.addresses', '[]') as string ?? '[]') as string[]; }
+    catch (_) { this.addresses = []; }
+    this.paired = this.instance.length > 0 && this.addresses.length > 0;
+  }
+  private savedInstance(): string { try { return this.storage?.getSync('pair.instance', '') as string ?? ''; } catch (_) { return ''; } }
+  private top(): number { return this.getUIContext().px2vp(this.safeTop); }
+  private bottom(): number { return this.getUIContext().px2vp(this.safeBottom); }
+  // 侧栏与右侧面板的显隐统一走同一曲线，内嵌布局的宽度变化随之过渡。
+  private setSidebar(open: boolean): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.sidebarOpen = open; });
+  }
+  private setPanel(open: boolean): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.panelOpen = open; });
+  }
+  private wide(): boolean { return this.windowWidth >= Theme.wide; }
   private cancelReconnect(): void { if (this.reconnectTimer >= 0) { clearTimeout(this.reconnectTimer); this.reconnectTimer = -1; } }
   private scheduleReconnect(): void {
-    if (this.settings || !this.foreground || this.reconnectTimer >= 0) { return; }
-    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = -1; this.connect(false); }, this.reconnectDelay);
+    if (!this.paired || !this.foreground || this.reconnectTimer >= 0) { return; }
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = -1; this.connect(''); }, this.reconnectDelay);
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
   }
   private lifecycle(): void {
     if (!this.foreground) { this.cancelReconnect(); this.connection.close(); this.connected = false; }
-    else if (!this.settings && this.instance.length > 0) { this.connect(false); }
+    else if (this.paired) { this.connect(''); }
   }
   private save(key: string, value: string): boolean {
     try {
@@ -93,7 +145,8 @@ struct Index {
   }
   private select(id: string): void {
     this.preview?.release().catch(() => {}); this.preview = undefined;
-    this.selected = id; this.save('selected', id);
+    this.selected = id; this.save('selected', id); this.view = 'chat';
+    if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
     try { this.draft = this.storage?.getSync(`draft:${id}`, '') as string ?? ''; }
     catch (_) { this.status = '无法读取草稿'; this.draft = ''; }
     try { this.attachments = JSON.parse(this.storage?.getSync(`attachments:${id}`, '[]') as string ?? '[]') as string[]; }
@@ -103,6 +156,37 @@ struct Index {
   private tasks(): TaskDto[] { const session = this.current(); return session ? Object.values(session.tasks) : []; }
   private approvals(): ApprovalDto[] { const session = this.current(); return session ? Object.values(session.approvals) : []; }
   private questions(): QuestionDto[] { const session = this.current(); return session ? Object.values(session.questions ?? {}) : []; }
+  private todos(): TodoDto[] {
+    const session = this.current();
+    if (!session) { return []; }
+    let items: TodoDto[] = [];
+    for (const progress of Object.values(session.progress ?? {})) { items = items.concat(progress.items ?? []); }
+    return items;
+  }
+  private sessionFiles(): ClientFileDto[] { return this.files.filter((file: ClientFileDto) => file.session_id === this.selected); }
+  private statusLabel(status: string): string {
+    if (status === 'running') { return '执行中'; }
+    if (status === 'pending') { return '排队中'; }
+    if (status === 'waiting') { return '等待回复'; }
+    if (status === 'done') { return '已完成'; }
+    if (status === 'failed') { return '失败'; }
+    if (status === 'recovery_required') { return '需恢复'; }
+    return status;
+  }
+  private sessionState(session: SessionDto): string {
+    const roots = Object.values(session.tasks).filter((task: TaskDto) => !task.parent_id);
+    if (Object.keys(session.approvals).length + (session.questions ? Object.keys(session.questions).length : 0) > 0) { return '待处理'; }
+    if (roots.some((task: TaskDto) => task.status === 'running' || task.status === 'pending')) { return '执行中'; }
+    if (roots.some((task: TaskDto) => task.status === 'waiting')) { return '等待回复'; }
+    if (roots.length === 0) { return '空闲'; }
+    return this.statusLabel(roots[roots.length - 1].status);
+  }
+  private headerTitle(): string {
+    if (this.view !== 'chat') { return ''; }
+    const session = this.current();
+    return session ? `任务 · ${this.sessionState(session)}` : '新任务';
+  }
+  private unread(): number { return this.notifications.filter((n: NotificationDto) => !n.read_at).length; }
   private questionKey(question: QuestionDto): string { return `answer:${this.selected}:${question.task_id}/${question.question_id}`; }
   private questionDraft(question: QuestionDto): string {
     const key = this.questionKey(question);
@@ -126,46 +210,73 @@ struct Index {
     this.submit(command);
   }
 
-  private async connect(pair: boolean): Promise<void> {
+  private async scan(): Promise<void> {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const options: scanBarcode.ScanOptions = { scanTypes: [scanCore.ScanType.QR_CODE], enableMultiMode: false, enableAlbum: true };
+      const result = await scanBarcode.startScanForResult(context, options);
+      this.linkText = result.originalValue;
+      await this.pairWith(result.originalValue);
+    } catch (_) { this.status = '扫码未完成，可改为粘贴配对链接'; }
+  }
+  private async pairWith(text: string): Promise<void> {
+    let link: PairingLink;
+    try { link = parseLink(text); } catch (error) { this.status = (error as Error).message; return; }
+    this.instance = link.instance; this.fingerprint = link.fingerprint; this.addresses = link.addresses; this.preferred = '';
+    await this.connect(link.code);
+    if (!this.connected) { return; }
+    this.save('pair.instance', link.instance); this.save('pair.fingerprint', link.fingerprint);
+    this.save('pair.addresses', JSON.stringify(link.addresses));
+    this.paired = true; this.linkText = ''; this.sidebarOpen = this.wide();
+  }
+  private unpair(): void {
+    this.cancelReconnect(); this.connection.close(); this.connected = false; this.paired = false; this.status = '';
+  }
+
+  // 依次尝试配对链接中的地址：先按指纹信任实例 CA，再核对实例身份，之后才发送设备凭证。
+  private async connect(code: string): Promise<void> {
     if (this.busy) { return; }
     this.busy = true;
     this.cancelReconnect();
     this.connected = false;
+    this.status = code ? '正在配对…' : '正在连接…';
     try {
-      if (this.hasPending && this.storage?.getSync('pending-instance', '') !== this.instance.trim()) {
+      if (this.hasPending && this.storage?.getSync('pending-instance', '') !== this.instance) {
         throw new Error('另一个实例仍有待发送命令，请先处理或清除本地重试');
       }
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      let caPath = '';
-      if (this.caPem.trim().length > 0) {
-        if (!this.caPem.includes('-----BEGIN CERTIFICATE-----')) { throw new Error('请粘贴 PEM 格式的可信 CA 证书'); }
-        // 不同信任根使用不同路径，避免原生 TLS 层复用旧路径对应的证书缓存。
-        const digest = cryptoFramework.createMd('SHA256');
-        digest.updateSync({ data: new util.TextEncoder().encodeInto(this.caPem) });
-        let caId = '';
-        for (const byte of digest.digestSync().data) { caId += byte.toString(16).padStart(2, '0'); }
-        caPath = `${context.filesDir}/instance-ca-${caId}.pem`;
-        const file = fileIo.openSync(caPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
-        try { fileIo.writeSync(file.fd, this.caPem); } finally { fileIo.closeSync(file); }
+      const ordered = this.addresses.includes(this.preferred) ?
+        [this.preferred].concat(this.addresses.filter((host: string) => host !== this.preferred)) : this.addresses;
+      let chosen = '';
+      const failures: string[] = [];
+      this.connection.connectTimeout = 4000;
+      for (const host of ordered) {
+        const address = `https://${host}`;
+        try {
+          const caPath = this.fingerprint ? await trustCa(address, this.fingerprint, context.filesDir) : '';
+          this.connection.configure(address, this.instance, caPath);
+          await this.connection.checkIdentity();
+          chosen = host;
+          break;
+        } catch (error) { failures.push(`${host} ${(error as Error).message}`); }
       }
-      this.connection.configure(this.address.trim(), this.instance.trim(), caPath);
-      await this.connection.checkIdentity();
-      if (pair) {
-        await this.connection.pair(this.pairingCode.trim(), 'HarmonyOS 工作台');
-        this.pairingCode = '';
+      this.connection.connectTimeout = 10000;
+      if (!chosen) {
+        throw new Error(failures.length > 0 ? `无法连接实例，已尝试 ${failures.length} 个地址：${failures.join('；')}` : '没有可用的实例地址');
+      }
+      if (code) {
+        await this.connection.pair(code, (deviceInfo.marketName || 'HarmonyOS 设备').substring(0, 64));
       } else {
-        this.connection.credential = await new CredentialStore().load(this.instance.trim());
+        this.connection.credential = await new CredentialStore().load(this.instance);
+        if (!this.connection.credential) { throw new Error('本机没有该实例的凭证，请重新配对'); }
         await this.connection.verify();
       }
-      this.save('address', this.address.trim()); this.save('instance', this.instance.trim()); this.save('ca', this.caPem);
+      this.preferred = chosen; this.save('pair.preferred', chosen);
       const snapshot = await this.connection.snapshot();
       if (!this.foreground) { this.connection.close(); return; }
-      this.sessions = snapshot.sessions;
-      this.automation = snapshot.automation ?? { available: false, schedules: [], timezone: '' };
-      this.notifications = snapshot.notifications ?? []; this.notificationsTruncated = snapshot.notifications_truncated ?? false; this.notificationOverflow = snapshot.notification_overflow ?? 0;
-      this.files = snapshot.files ?? [];
-      this.connected = true; this.settings = false;
-      this.status = `已连接 · ${this.connection.capabilities?.instance_name ?? 'Harness'}`;
+      this.applySnapshot(snapshot.sessions, snapshot.automation, snapshot.notifications, snapshot.notifications_truncated, snapshot.notification_overflow, snapshot.files);
+      this.connected = true;
+      this.status = '';
       this.reconnectDelay = 1000;
       await this.connection.subscribe(snapshot.cursor, () => { this.refresh(); }, (text: string) => {
         this.status = text; this.connected = false;
@@ -173,9 +284,17 @@ struct Index {
       });
     } catch (error) {
       this.connection.close(); this.connected = false;
-      this.status = (error as Error).message || '连接失败，请检查地址、证书和凭证';
-      if (!this.status.includes('HTTP 401')) { this.scheduleReconnect(); }
-    } finally { this.busy = false; }
+      this.status = (error as Error).message || '连接失败';
+      if (!code && !this.status.includes('HTTP 401')) { this.scheduleReconnect(); }
+    } finally { this.busy = false; this.connection.connectTimeout = 10000; }
+  }
+  private applySnapshot(sessions: SessionDto[], automation: AutomationDto | undefined, notifications: NotificationDto[] | undefined,
+    truncated: boolean | undefined, overflow: number | undefined, files: ClientFileDto[] | undefined): void {
+    this.sessions = sessions;
+    this.automation = automation ?? { available: false, schedules: [], timezone: '' };
+    this.notifications = notifications ?? []; this.notificationsTruncated = truncated ?? false; this.notificationOverflow = overflow ?? 0;
+    this.files = files ?? [];
+    if (this.selected && !sessions.some((session: SessionDto) => session.id === this.selected)) { this.selected = ''; this.save('selected', ''); }
   }
 
   private async refresh(): Promise<void> {
@@ -185,12 +304,10 @@ struct Index {
       do {
         this.refreshAgain = false;
         const snapshot = await this.connection.snapshot();
-        this.sessions = snapshot.sessions; this.automation = snapshot.automation ?? { available: false, schedules: [], timezone: '' };
-        this.notifications = snapshot.notifications ?? []; this.notificationsTruncated = snapshot.notifications_truncated ?? false; this.notificationOverflow = snapshot.notification_overflow ?? 0;
-        this.files = snapshot.files ?? [];
+        this.applySnapshot(snapshot.sessions, snapshot.automation, snapshot.notifications, snapshot.notifications_truncated, snapshot.notification_overflow, snapshot.files);
         if (this.lastCommandId.length > 0) {
           const receipt = await this.connection.status(this.lastCommandId);
-          if (receipt.status !== 'queued') { this.status = `命令状态：${receipt.status} ${receipt.result_code ?? ''}`; }
+          if (receipt.status === 'rejected') { this.status = `命令被拒绝：${receipt.result_code ?? ''}`; }
         }
       } while (this.refreshAgain);
     } catch (error) { this.status = (error as Error).message; }
@@ -201,11 +318,11 @@ struct Index {
     if (this.busy || !this.connected) { return; }
     this.busy = true;
     this.pending = command; this.hasPending = true;
-    if (!this.save('pending-instance', this.instance.trim()) || !this.save('pending', JSON.stringify(command))) { this.busy = false; return; }
+    if (!this.save('pending-instance', this.instance) || !this.save('pending', JSON.stringify(command))) { this.busy = false; return; }
     try {
       const receipt = await this.connection.command(command);
       this.lastCommandId = command.command_id;
-      this.status = receipt.status === 'queued' ? '输入已入队，尚不代表 Agent 已消费' : `处理状态：${receipt.status}`;
+      this.status = receipt.status === 'rejected' ? `命令被拒绝：${receipt.result_code ?? ''}` : '';
       if (command.operation === 'create_session') { this.select(receipt.session_id); }
       if (command.operation === 'send_text' && receipt.status === 'queued') {
         this.save(`draft:${command.session_id ?? ''}`, '');
@@ -215,7 +332,7 @@ struct Index {
       }
       this.pending = undefined; this.hasPending = false; this.save('pending', '');
       await this.refresh();
-    } catch (error) { this.status = `${(error as Error).message}。保留原命令，可查询状态或重试`; }
+    } catch (error) { this.status = `${(error as Error).message}。已保留原命令，可查询状态或重试`; }
     finally { this.busy = false; }
   }
 
@@ -224,11 +341,21 @@ struct Index {
     try { const receipt = await this.connection.status(this.pending.command_id); this.status = `服务器命令状态：${receipt.status} ${receipt.result_code ?? ''}`; }
     catch (error) { this.status = (error as Error).message; }
   }
-  private send(): void {
-    if ((!this.draft.trim() && this.attachments.length === 0) || this.hasPending) { return; }
-    const command: CommandDto = { operation: 'send_text', command_id: util.generateRandomUUID(), session_id: this.selected, content: this.draft, attachment_ids: this.attachments };
-    this.submit(command);
+  // 新任务在首次发送时才创建会话，标题取自首行内容。
+  private async send(): Promise<void> {
+    if ((!this.draft.trim() && this.attachments.length === 0) || this.hasPending || this.busy) { return; }
+    const text = this.draft;
+    if (!this.current()) {
+      const title = text.trim().split('\n')[0].substring(0, 24) || '新的任务';
+      await this.submit({ operation: 'create_session', command_id: util.generateRandomUUID(), title: title });
+      if (!this.selected) { return; }
+      this.draft = text; this.save('draft:', '');
+    }
+    const command: CommandDto = { operation: 'send_text', command_id: util.generateRandomUUID(), session_id: this.selected, content: text, attachment_ids: this.attachments };
+    await this.submit(command);
+    setTimeout(() => { try { this.conversationScroller.scrollEdge(Edge.Bottom); } catch (_) { } }, 50);
   }
+  private newTask(): void { this.select(''); if (this.panelOpen) { this.setPanel(false); } }
   private attachFile(file: ClientFileDto): void {
     if (this.attachments.includes(file.id)) { return; }
     if (this.attachments.length >= 8) { this.status = '一条消息最多附加 8 个文件'; return; }
@@ -244,7 +371,9 @@ struct Index {
     catch (_) { this.status = '已清除本地重试，缓存文件清理失败；服务器文件未删除'; }
   }
   private async uploadFile(retry: boolean): Promise<void> {
-    if (this.busy || !this.selected) { return; } this.busy = true;
+    if (this.busy) { return; }
+    if (!this.selected) { this.status = '先发送第一条消息创建任务，再添加附件'; return; }
+    this.busy = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       if (!retry) {
@@ -264,12 +393,12 @@ struct Index {
         const cache = fileIo.openSync(local, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
         try { if (fileIo.writeSync(cache.fd, bytes) !== bytes.byteLength) { throw new Error('本地缓存写入不完整'); } }
         finally { fileIo.closeSync(cache); }
-        this.pendingUpload = { instance_id: this.instance.trim(), id: id, session_id: this.selected, name: new fileUri.FileUri(selected[0]).name || 'attachment.bin', local_path: local };
+        this.pendingUpload = { instance_id: this.instance, id: id, session_id: this.selected, name: new fileUri.FileUri(selected[0]).name || 'attachment.bin', local_path: local };
         if (!this.save('pending-upload', JSON.stringify(this.pendingUpload))) { return; }
       }
       const pending = this.pendingUpload;
       if (!pending) { return; }
-      if (pending.instance_id !== this.instance.trim()) { throw new Error('待上传文件属于其他实例，请切回原实例'); }
+      if (pending.instance_id !== this.instance) { throw new Error('待上传文件属于其他实例，请切回原实例'); }
       const source = fileIo.openSync(pending.local_path, fileIo.OpenMode.READ_ONLY);
       let bytes: ArrayBuffer;
       try {
@@ -282,8 +411,8 @@ struct Index {
       if (this.selected === pending.session_id) { this.attachFile(file); }
       this.pendingUpload = undefined; this.save('pending-upload', '');
       fileIo.unlinkSync(pending.local_path);
-      this.status = '文件已上传，点击发送后才交给 Agent'; await this.refresh();
-    } catch (error) { this.status = `${(error as Error).message}。已保留上传缓存，可重试原文件`; }
+      this.status = ''; await this.refresh();
+    } catch (error) { this.status = `${(error as Error).message}。已保留上传缓存，可重试`; }
     finally { this.busy = false; if (!this.connected) { this.scheduleReconnect(); } }
   }
   private async previewFile(file: ClientFileDto): Promise<void> {
@@ -315,53 +444,6 @@ struct Index {
     } catch (error) { this.status = (error as Error).message; }
     finally { this.busy = false; if (!this.connected) { this.scheduleReconnect(); } }
   }
-
-  @Builder private artifactsView() {
-    Scroll() {
-      Column({ space: 12 }) {
-        Text('附件与产物').fontSize(22).fontWeight(FontWeight.Bold)
-        if (this.preview) { Image(this.preview).width('100%').height(260).objectFit(ImageFit.Contain) }
-        Button('选择并上传文件').enabled(this.connected && !this.busy && !this.pendingUpload && this.connection.supports('files.transfer')).onClick(() => { this.uploadFile(false); })
-        if (this.pendingUpload) {
-          Text('上次上传尚未确认。清除本地重试不会删除服务器可能已保存的文件。').fontSize(13)
-          Row({space:8}) {
-            Button('重试上次上传').enabled(this.connected && !this.busy).onClick(() => { this.uploadFile(true); })
-            Button('清除本地上传缓存').enabled(!this.busy).onClick(() => { this.clearUpload(); })
-          }
-        }
-        ForEach(this.files.filter((file: ClientFileDto) => file.session_id === this.selected), (file: ClientFileDto) => {
-          Column({ space: 8 }) {
-            Text(file.name).fontWeight(FontWeight.Bold)
-            Text(`${file.size} 字节 · ${file.source === 'upload' ? '上传附件' : 'Agent 产物'}`).fontSize(12)
-            Text(`SHA-256 ${file.sha256}`).fontSize(11).copyOption(CopyOptions.InApp)
-            Row({ space: 8 }) {
-              if (file.kind === 'image') { Button('预览').enabled(this.connected && !this.busy).onClick(() => { this.previewFile(file); }) }
-              Button('保存文件').enabled(this.connected && !this.busy).onClick(() => { this.downloadFile(file); })
-              Button('附加到消息').enabled(!this.hasPending && !this.busy).onClick(() => { this.attachFile(file); this.workspaceTab = 'chat'; })
-            }
-          }.padding(12).width('100%').alignItems(HorizontalAlign.Start).backgroundColor('#FFFFFF').borderRadius(12)
-        }, (file: ClientFileDto) => file.id)
-      }.width('100%')
-    }.width('100%').layoutWeight(1)
-  }
-  @Builder private executionView() {
-    Scroll() {
-      Column({ space: 10 }) {
-        Text('执行记录（最近 200 条）').fontSize(20).fontWeight(FontWeight.Bold)
-        if (this.current()?.observations_truncated) { Text('更早的执行记录已超出保留范围。') }
-        ForEach(this.current()?.observations ?? [], (item: ObservationDto) => {
-          Column({ space: 6 }) {
-            Text(`${item.agent_name} · ${item.tool_name}`).fontWeight(FontWeight.Bold)
-            Text(item.kind === 'permission_audit' ? `权限：${item.action ?? ''} · ${item.context ?? ''}` : item.kind === 'tool_started' ? '开始调用' : item.success ? '工具返回成功' : '工具返回错误')
-            if (item.input_summary) { Text(item.input_summary).fontSize(12) }
-            if (item.output) { Text(item.output).fontSize(12).copyOption(CopyOptions.InApp) }
-            if (item.truncated) { Text('输出已截断').fontColor('#956600') }
-            if (item.late_result) { Text('任务结束后的返回，不改变任务终态').fontColor('#956600') }
-          }.padding(12).width('100%').alignItems(HorizontalAlign.Start).backgroundColor('#FFFFFF').borderRadius(12)
-        })
-      }.width('100%')
-    }.width('100%').layoutWeight(1)
-  }
   private feedback(request: ApprovalDto): string {
     const key = `approval:${this.selected}:${request.request_id}`;
     if (this.approvalFeedback[key] !== undefined) { return this.approvalFeedback[key]; }
@@ -385,43 +467,14 @@ struct Index {
     catch (error) { this.status = (error as Error).message; }
     finally { this.busy = false; }
   }
-  @Builder private managementView() {
-    Scroll() {
-      Column({ space: 14 }) {
-        Row() {
-          Text('设备与诊断').fontSize(24).fontWeight(FontWeight.Bold).layoutWeight(1)
-          Button('刷新').enabled(this.connected && !this.busy).onClick(() => { this.loadManagement(); })
-        }
-        if (this.diagnostics) {
-          Text(`实例 ${this.diagnostics.instance_id}`).fontSize(13).copyOption(CopyOptions.InApp)
-          Text(`Harness ${this.diagnostics.version} · 存储${this.diagnostics.storage_available ? '可用' : '不可用'}`)
-          Text(`同步游标 ${this.diagnostics.cursor} · 保留 ${this.diagnostics.event_retention} 条事件`).fontSize(13)
-          Text(`${this.diagnostics.sessions} 个会话 · ${this.diagnostics.pending_approvals} 项审批 · ${this.diagnostics.pending_questions} 个问题`)
-          Text(`重启后结果未知的命令：${this.diagnostics.unknown_commands}`).fontSize(13)
-        }
-        Text('当前用户的配对设备').fontSize(20).fontWeight(FontWeight.Bold)
-        Text('撤销当前设备后会断开连接，需要重新配对。').fontSize(13)
-        ForEach(this.devices, (device: DeviceDto) => {
-          Column({space:8}) {
-            Text(device.name).fontWeight(FontWeight.Bold)
-            Text(device.id).fontSize(12).copyOption(CopyOptions.InApp)
-            Text(device.revoked ? '已撤销' : `有效至 ${new Date(device.expires_at * 1000).toLocaleString()}`).fontSize(13)
-            Button('撤销凭证').enabled(this.connected && !this.busy && !device.revoked && this.connection.supports('devices.revoke')).onClick(() => { this.revokeDevice(device); })
-          }.padding(14).width('100%').alignItems(HorizontalAlign.Start).backgroundColor('#FFFFFF').borderRadius(12)
-        }, (device: DeviceDto) => JSON.stringify(device))
-        Text('模型配置、全局 Skills 和共享记忆尚未通过此接口开放。').fontSize(13).fontColor('#526070')
-      }.width('100%').padding(20).constraintSize({ maxWidth: 850 })
-    }.width('100%').layoutWeight(1)
-  }
   private approve(request: ApprovalDto, option: string): void {
     const command: CommandDto = { operation: 'respond_approval', command_id: util.generateRandomUUID(), session_id: this.selected,
       request_id: request.request_id, expected_version: request.version, option_id: option, feedback: this.feedback(request) };
     this.submit(command);
   }
-
   private manageSchedule(action: ScheduleActionDto): void {
-    if (!this.selected && this.sessions.length > 0) { this.select(this.sessions[0].id); }
-    if (!this.selected) { this.status = '请先创建一个会话，用于接收计划运行结果'; return; }
+    if (!this.selected && this.sessions.length > 0) { this.selected = this.sessions[0].id; this.save('selected', this.selected); }
+    if (!this.selected) { this.status = '请先创建一个任务，用于接收计划运行结果'; return; }
     const command: CommandDto = { operation: 'schedule', command_id: util.generateRandomUUID(), session_id: this.selected, action: action };
     this.submit(command);
   }
@@ -429,7 +482,7 @@ struct Index {
     if (value === 'accepted') { return 'MeoW 已接受，设备送达未确认'; }
     if (value === 'sending') { return '正在投递'; }
     if (value === 'unknown') { return '结果未知，可能已发出'; }
-    if (value === 'quota_wait') { return '当天额度已用完，等待下个日界线'; }
+    if (value === 'quota_wait') { return '当天额度已用完'; }
     if (value === 'failed') { return '投递失败'; }
     return '等待投递';
   }
@@ -441,33 +494,6 @@ struct Index {
       await this.refresh();
     } catch (error) { this.status = (error as Error).message; }
     finally { this.busy = false; }
-  }
-  @Builder private inboxView() {
-    Scroll() {
-      Column({ space: 14 }) {
-        Text('收件箱').fontSize(24).fontWeight(FontWeight.Bold)
-        Text(this.connection.capabilities?.meow_enabled ? '重要通知由服务端 MeoW 投递。接受、设备收到和已读分别记录。' : '此用户未配置 MeoW 通知。待审批和问题仍可在会话中处理。').fontColor('#526070')
-        if (this.notificationOverflow > 0) { Text(`通知队列容量不足：${this.notificationOverflow} 条未入队`).fontColor('#B64040') }
-        if (this.notificationsTruncated) { Text('这里只展示最近 200 条通知，较早记录仍保留在服务端。') }
-        ForEach(this.notifications, (notification: NotificationDto) => {
-          Column({ space: 8 }) {
-            Text(notification.title).fontSize(18).fontWeight(FontWeight.Bold)
-            Text(notification.message).fontSize(14)
-            Text(this.notificationState(notification.state)).fontSize(14)
-            if (notification.result_code) { Text(notification.result_code).fontSize(12).fontColor('#526070') }
-            Text(notification.read_at ? '已读' : notification.received_at ? '客户端已确认同步' : '客户端尚未确认').fontSize(12)
-            Row({ space: 8 }) {
-              Button('查看会话').onClick(() => { this.select(notification.session_id); this.view = 'sessions'; })
-              Button('标记已读').enabled(this.connected && !this.busy && !notification.read_at).onClick(() => { this.notificationAction(notification, false); })
-              if (notification.state === 'failed' || notification.state === 'unknown') {
-                Button(notification.state === 'unknown' ? '重试（可能重复）' : '重试').enabled(this.connected && !this.busy).onClick(() => { this.notificationAction(notification, true); })
-              }
-            }
-          }.alignItems(HorizontalAlign.Start).width('100%').padding(16).backgroundColor('#FFFFFF').borderRadius(12)
-        }, (notification: NotificationDto) => JSON.stringify(notification))
-        if (this.notifications.length === 0) { Text('当前没有通知记录') }
-      }.padding(20).width('100%').constraintSize({ maxWidth: 850 })
-    }.width('100%').layoutWeight(1)
   }
   private editPlan(plan: ScheduleDto): void {
     this.editPlanId = plan.id; this.editPlanRevision = plan.revision;
@@ -488,265 +514,602 @@ struct Index {
     const input: ScheduleInputDto = { name: plan.name, content: plan.content, schedule: plan.schedule, enabled: !plan.enabled, notify: plan.notify };
     this.manageSchedule({ kind: 'update', schedule_id: plan.id, expected_revision: plan.revision, input: input });
   }
-
-  @Builder private automationView() {
-    Scroll() {
-      Column({ space: 14 }) {
-        Row({ space: 12 }) {
-          Text('自动化').fontSize(24).fontWeight(FontWeight.Bold).layoutWeight(1)
-          Button('刷新').enabled(this.connected && !this.busy && !this.hasPending).onClick(() => { this.manageSchedule({ kind: 'list' }); })
-        }
-        Text(`时区：${this.automation.timezone || '尚未读取'}`).fontColor('#526070')
-        if (this.automation.stale) { Text('当前显示缓存，请刷新后操作。').fontColor('#956600') }
-        ForEach(this.automation.schedules.concat(this.automation.archived ?? []), (plan: ScheduleDto) => {
-          Column({ space: 8 }) {
-            Text(plan.name).fontSize(20).fontWeight(FontWeight.Bold)
-            Text(plan.archived ? '历史计划，当前定义已移除' : plan.enabled ? '已启用' : '已停用')
-            Text(plan.schedule).copyOption(CopyOptions.InApp)
-            if (plan.next_trigger) { Text(`下次运行：${plan.next_trigger}`).fontSize(13) }
-            Text(plan.content).fontSize(14)
-            if (plan.health.alerting) { Text(`连续失败 ${plan.health.consecutive_failures} 次`).fontColor('#B64040') }
-            Row({ space: 8 }) {
-              if (!plan.archived) {
-                Button('编辑').enabled(!this.busy && !this.hasPending && !this.automation.stale).onClick(() => { this.editPlan(plan); })
-                Button(plan.enabled ? '停用' : '启用').enabled(this.connected && !this.busy && !this.hasPending && !this.automation.stale).onClick(() => { this.togglePlan(plan); })
-                Button('删除').enabled(this.connected && !this.busy && !this.hasPending && !this.automation.stale).onClick(() => {
-                  this.manageSchedule({ kind: 'delete', schedule_id: plan.id, expected_revision: plan.revision });
-                })
-              }
-              Button('记录').enabled(this.connected && !this.busy && !this.hasPending).onClick(() => { this.manageSchedule({ kind: 'history', schedule_id: plan.id }); })
-            }
-          }.alignItems(HorizontalAlign.Start).padding(16).backgroundColor('#FFFFFF').borderRadius(12).width('100%')
-        }, (plan: ScheduleDto) => JSON.stringify(plan))
-        if (this.automation.archive_truncated) { Text('部分计划超出当前归档展示上限。') }
-        if (this.automation.history) {
-          Text('最近运行记录（最多 50 条）').fontSize(20).fontWeight(FontWeight.Bold)
-          ForEach(this.automation.history.records, (run: RunDto) => {
-            Column({ space: 6 }) {
-              Text(run.fired_at).fontSize(13)
-              Text(run.outcome === 'notified' ? '通道已接受，设备接收未确认' : run.outcome)
-              Text(run.result_summary).fontSize(14)
-              if (run.error) { Text(run.error).fontColor('#B64040') }
-            }.alignItems(HorizontalAlign.Start).padding(12).backgroundColor('#FFFFFF').width('100%')
-          })
-          if (this.automation.history.records.length === 0) { Text('还没有运行记录') }
-        }
-        Text(this.editPlanId ? '编辑计划' : '创建计划').fontSize(22).fontWeight(FontWeight.Bold)
-        TextInput({ placeholder: '计划名称', text: this.planName }).onChange((value: string) => { this.planName = value; })
-        TextArea({ placeholder: '每次运行的任务内容', text: this.planContent }).height(100).onChange((value: string) => { this.planContent = value; })
-        TextInput({ placeholder: 'cron:0 8 * * * 或 once:时间', text: this.planExpression }).onChange((value: string) => { this.planExpression = value; })
-        Row({ space: 12 }) {
-          Text('启用'); Toggle({ type: ToggleType.Switch, isOn: this.planEnabled }).onChange((value: boolean) => { this.planEnabled = value; })
-          Button(this.planNotify === 'reply' ? '结果自动回复' : '仅显式通知').onClick(() => { this.planNotify = this.planNotify === 'reply' ? 'explicit' : 'reply'; })
-        }
-        Row({ space: 12 }) {
-          Button('保存计划').enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('schedules.manage')).onClick(() => { this.savePlan(); })
-          Button('新建表单').onClick(() => { this.resetPlan(); })
-        }
-      }.width('100%').padding(20).constraintSize({ maxWidth: 850 })
-    }.width('100%').layoutWeight(1)
+  private openView(view: string): void {
+    this.view = view;
+    if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
+    if (view === 'automation' && this.connection.supports('schedules.manage')) { this.manageSchedule({ kind: 'list' }); }
+    if (view === 'management') { this.loadManagement(); }
   }
 
-  @Builder private settingsView() {
+  // ---------- 配对 ----------
+  @Builder private onboarding() {
     Scroll() {
-      Column({ space: 16 }) {
-        Text('连接你的任务工作台').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#183153')
-        Text('通过局域网或 EasyTier 使用 HTTPS。请先核对服务端实例 ID；自签证书需要可信 CA。').fontColor('#526070')
-        TextInput({ placeholder: 'https://主机名:9443', text: this.address }).onChange((value: string) => { this.address = value; })
-        TextInput({ placeholder: '实例 ID', text: this.instance }).onChange((value: string) => { this.instance = value; })
-        TextInput({ placeholder: '一次性配对码（首次连接）', text: this.pairingCode }).type(InputType.Password).onChange((value: string) => { this.pairingCode = value; })
-        TextArea({ placeholder: '私有 CA 的 PEM 证书（使用系统可信证书时留空）', text: this.caPem }).height(130).onChange((value: string) => { this.caPem = value; })
-        Button('配对并连接').enabled(!this.busy && this.pairingCode.length > 0).onClick(() => { this.connect(true); })
-        Button('使用已保存凭证连接').enabled(!this.busy).onClick(() => { this.connect(false); })
-        Text('凭证保存在系统安全存储中。重要通知需服务端配置；文件通过授权 ID 访问。').fontSize(13).fontColor('#526070')
-      }.padding(24).width('100%').constraintSize({ maxWidth: 620 })
-    }.width('100%').layoutWeight(1)
+      Column({ space: 18 }) {
+        Text('Harness').heading(40)
+        Text('连接你的 Agent 工作台').fontSize(16).fontColor(Theme.secondary)
+        Column({ space: 6 }) {
+          Text('在运行 Harness 的电脑上执行').caption()
+          Text('harness --client-pair <用户名>').fontSize(14).fontFamily('monospace').fontColor(Theme.text)
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor(Theme.surface).borderRadius(8)
+            .border({ width: 1, color: Theme.line, radius: 8 }).copyOption(CopyOptions.LocalDevice)
+          Text('然后扫描终端里的二维码；同一局域网或 EasyTier 内即可连接。').caption()
+        }.alignItems(HorizontalAlign.Start).width('100%').margin({ top: 12 })
+        Button() {
+          Row({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.qrcode')).fontSize(18).fontColor([Color.White])
+            Text('扫码配对').fontSize(15).fontColor(Color.White)
+          }
+        }.primary().width('100%').enabled(!this.busy).onClick(() => { this.scan(); })
+        Row({ space: 10 }) {
+          Divider().color(Theme.line).layoutWeight(1)
+          Text('或粘贴配对链接').caption()
+          Divider().color(Theme.line).layoutWeight(1)
+        }.width('100%')
+        TextArea({ placeholder: 'harness://pair?…', text: this.linkText }).height(88).fontSize(13)
+          .backgroundColor(Theme.surface).border({ width: 1, color: Theme.line, radius: 12 })
+          .onChange((value: string) => { this.linkText = value; })
+        Button('连接').ghost().height(40).border({ width: 1, color: Theme.line, radius: 20 }).width('100%').enabled(!this.busy && this.linkText.trim().length > 0)
+          .onClick(() => { this.pairWith(this.linkText); })
+        if (this.busy) { LoadingProgress().width(28).height(28).color(Theme.accent) }
+        if (this.status) { Text(this.status).fontSize(13).fontColor(Theme.secondary).textAlign(TextAlign.Center) }
+        if (this.savedInstance()) {
+          Button('返回已保存的连接').ghost().enabled(!this.busy).onClick(() => { this.loadPairing(); if (this.paired) { this.connect(''); } })
+        }
+        Text('凭证保存在系统安全存储；实例证书按链接中的指纹校验后才被信任。').caption().textAlign(TextAlign.Center).margin({ top: 12 })
+      }.width('100%').constraintSize({ maxWidth: 440 }).padding({ left: 28, right: 28, top: 80 + this.top(), bottom: 40 + this.bottom() })
+    }.width('100%').height('100%').align(Alignment.Top).backgroundColor(Theme.page)
   }
 
-  // 普通 DTO 的同 ID 对象会整体替换；行键包含版本/可变内容，避免 ForEach 复用旧闭包。
-  @Builder private sessionList() {
-    Column({ space: 12 }) {
+  // ---------- 侧栏 ----------
+  @Builder private navItem(symbol: Resource, label: string, view: string, badge: number) {
+    Row({ space: 14 }) {
+      SymbolGlyph(symbol).fontSize(19).fontColor([this.view === view ? Theme.text : Theme.secondary])
+      Text(label).fontSize(15).fontColor(Theme.text).layoutWeight(1)
+      if (badge > 0) { Text(`${badge}`).fontSize(11).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(8).padding({ left: 6, right: 6, top: 1, bottom: 1 }) }
+    }.width('100%').height(44).padding({ left: 14, right: 14 }).borderRadius(10)
+      .backgroundColor(this.view === view ? Theme.selected : Color.Transparent)
+      .onClick(() => { this.openView(view); })
+  }
+  @Builder private sidebar() {
+    Column() {
       Row() {
-        Text('会话').fontSize(22).fontWeight(FontWeight.Bold).layoutWeight(1)
-        Button('新建').enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('sessions.create')).onClick(() => {
-          const command: CommandDto = { operation: 'create_session', command_id: util.generateRandomUUID(), title: '新的工作' };
-          this.submit(command);
-        })
+        Text('Harness').heading(26).layoutWeight(1)
+        Button() { SymbolGlyph($r('sys.symbol.close_sidebar')).fontSize(20).fontColor([Theme.secondary]) }
+          .icon().onClick(() => { this.setSidebar(false); })
+      }.width('100%').margin({ top: 8, bottom: 20 })
+      Button() {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.plus')).fontSize(16).fontColor([Theme.text])
+          Text('新任务').fontSize(15).fontColor(Theme.text)
+        }
+      }.ghost().height(44).width('100%').border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
+      Column({ space: 4 }) {
+        this.navItem($r('sys.symbol.house'), '工作台', 'chat', this.approvals().length + this.questions().length)
+        this.navItem($r('sys.symbol.clock'), '自动化', 'automation', 0)
+        this.navItem($r('sys.symbol.bell'), '通知', 'inbox', this.unread())
+        this.navItem($r('sys.symbol.gearshape'), '设备与连接', 'management', 0)
+      }.margin({ top: 18 })
+      Divider().color(Theme.line).margin({ top: 18, bottom: 14 })
+      Row() {
+        Text('最近任务').caption().layoutWeight(1)
+        Button() { SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([Theme.secondary]) }
+          .icon().width(28).height(28).onClick(() => { this.searching = !this.searching; if (!this.searching) { this.sessionSearch = ''; } })
+      }.padding({ left: 4 })
+      if (this.searching) {
+        TextInput({ placeholder: '搜索任务与消息', text: this.sessionSearch }).height(36).fontSize(13).margin({ top: 6, bottom: 6 })
+          .backgroundColor(Theme.surface).onChange((value: string) => { this.sessionSearch = value; })
       }
-      TextInput({placeholder: '搜索本地会话历史', text: this.sessionSearch}).onChange((value: string) => { this.sessionSearch = value; })
-      List({ space: 8 }) {
-        ForEach(this.sessions.filter((session: SessionDto) => !this.sessionSearch || session.title.includes(this.sessionSearch) || session.messages.some((message: MessageDto) => message.content.includes(this.sessionSearch))), (session: SessionDto) => {
+      // 普通 DTO 的同 ID 对象会整体替换；行键包含版本，避免 ForEach 复用旧闭包。
+      List({ space: 2 }) {
+        ForEach(this.sessions.filter((session: SessionDto) => !this.sessionSearch || session.title.includes(this.sessionSearch) ||
+          session.messages.some((message: MessageDto) => message.content.includes(this.sessionSearch)))
+          .sort((a: SessionDto, b: SessionDto) => (b.updated_at ?? 0) - (a.updated_at ?? 0)), (session: SessionDto) => {
           ListItem() {
-            Column({ space: 6 }) {
-              Text(session.title).fontWeight(FontWeight.Medium)
-              Text(`${session.messages.length} 条消息 · ${Object.keys(session.tasks).length} 个任务`).fontSize(12).fontColor('#526070')
-            }.width('100%').alignItems(HorizontalAlign.Start).padding(14)
-              .backgroundColor(this.selected === session.id ? '#DDF3ED' : '#FFFFFF').borderRadius(12)
+            Row({ space: 10 }) {
+              Circle().width(7).height(7).fill(this.sessionState(session) === '执行中' || this.sessionState(session) === '待处理' ? Theme.accent : Theme.faint)
+                .margin({ top: 7 })
+              Column({ space: 3 }) {
+                Text(session.title).fontSize(14).fontColor(Theme.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(`${this.sessionState(session)} · ${session.messages.length} 条消息`).caption()
+              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+            }.alignItems(VerticalAlign.Top).width('100%').padding({ left: 10, right: 10, top: 10, bottom: 10 }).borderRadius(10)
+              .backgroundColor(this.selected === session.id && this.view === 'chat' ? Theme.selected : Color.Transparent)
           }.onClick(() => { this.select(session.id); })
         }, (session: SessionDto) => `${session.id}:${session.version}`)
-      }.layoutWeight(1)
-      if (this.sessions.length === 0) { Text('创建会话，开始一项工作').fontColor('#526070') }
-    }.padding(16).height('100%').width(this.windowWidth < 700 ? '100%' : 280)
+      }.layoutWeight(1).scrollBar(BarState.Off).margin({ top: 6 })
+      Row({ space: 8 }) {
+        Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
+        Text(this.connected ? (this.connection.capabilities?.instance_name ?? '已连接') : (this.busy ? '正在连接…' : '未连接'))
+          .caption().layoutWeight(1).maxLines(1)
+        if (!this.connected && !this.busy) {
+          Text('重连').fontSize(12).fontColor(Theme.accent).onClick(() => { this.connect(''); })
+        }
+      }.width('100%').padding({ left: 6, top: 12, bottom: 4 })
+    }.height('100%').width('100%').padding({ left: 16, right: 16, top: 12 + this.top(), bottom: 16 + this.bottom() }).backgroundColor(Theme.sidebar)
   }
 
-  @Builder private detailView() {
-    Column({ space: 12 }) {
-      Text('任务与审批').fontSize(20).fontWeight(FontWeight.Bold)
-      ForEach(this.tasks(), (task: TaskDto) => {
-        Column({ space: 6 }) {
-          Text(task.name).maxLines(3)
-          if (task.parent_id) { Text(`子任务 · 父任务 ${task.parent_id}`).fontSize(12) }
-          Text(task.status).fontSize(13).fontColor('#526070')
-          if (task.result) { Text(task.result).fontSize(13) }
-          Row({ space: 8 }) {
-            if (task.can_stop && this.connection.supports('tasks.stop')) {
-              Button('停止本轮').enabled(this.connected && !this.busy && !this.hasPending).onClick(() => { this.control(task, 'stop_task'); })
-            }
-            if (task.can_finish && this.connection.supports('tasks.finish')) {
-              Button('结束任务').enabled(this.connected && !this.busy && !this.hasPending).onClick(() => { this.control(task, 'finish_task'); })
-            }
-          }
-        }.alignItems(HorizontalAlign.Start).width('100%').padding(12).backgroundColor('#FFFFFF').borderRadius(12)
-      }, (task: TaskDto) => JSON.stringify(task))
-      ForEach(Object.values(this.current()?.progress ?? {}), (progress: ProgressDto) => {
-        Column({space:6}) {
-          if (progress.batch_id) { Text(`子任务批次：${progress.completed ?? 0} / ${progress.total ?? 0}`).fontSize(13) }
-          if (progress.pending !== undefined) { Text(`待消费输入：${progress.pending}`).fontSize(13) }
-          ForEach(progress.items ?? [], (todo: TodoDto) => { Text(`${todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '▶' : '○'} ${todo.content}`).fontSize(14) })
-        }.width('100%').alignItems(HorizontalAlign.Start)
+  // ---------- 对话 ----------
+  @Builder private header() {
+    Row({ space: 4 }) {
+      if (!this.sidebarOpen || !this.wide()) {
+        Button() { SymbolGlyph($r('sys.symbol.open_sidebar')).fontSize(20).fontColor([Theme.secondary]) }
+          .icon().onClick(() => { this.setSidebar(true); })
+      }
+      Text(this.headerTitle()).fontSize(14).fontColor(Theme.secondary).layoutWeight(1).maxLines(1).margin({ left: 4 })
+      if (this.view === 'chat' && this.current()) {
+        Button() {
+          SymbolGlyph($r('sys.symbol.doc_text')).fontSize(19).fontColor([this.panelOpen ? Theme.accent : Theme.secondary])
+        }.icon().onClick(() => { this.setPanel(!this.panelOpen); })
+      }
+    }.width('100%').height(52 + this.top()).padding({ left: 12, right: 12, top: this.top() })
+  }
+  @Builder private message(message: MessageDto) {
+    if (message.role === 'user' || message.role === 'agent') {
+      Row({ space: 14 }) {
+        Stack() {
+          if (message.role === 'user') { SymbolGlyph($r('sys.symbol.person')).fontSize(16).fontColor([Theme.secondary]) }
+          else { Text('H').fontSize(15).fontColor(Color.White).fontFamily(Theme.serif).fontWeight(FontWeight.Medium) }
+        }.width(32).height(32).borderRadius(16).backgroundColor(message.role === 'user' ? Theme.selected : Theme.accent)
+        if (message.role === 'user') {
+          Text(message.content).fontSize(15).lineHeight(26).fontColor(Theme.text)
+            .copyOption(CopyOptions.LocalDevice).layoutWeight(1).margin({ top: 3 })
+        } else {
+          Column({ space: 10 }) {
+            ForEach(parseMarkdown(message.content), (item: MdBlock) => { this.markdownBlock(item) })
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ top: 3 })
+        }
+      }.width('100%').alignItems(VerticalAlign.Top)
+    } else {
+      Text(message.content).caption().width('100%').padding({ left: 46 }).copyOption(CopyOptions.LocalDevice)
+    }
+  }
+  @Builder private richText(spans: InlineSpan[], size: number, color: string) {
+    Text() {
+      ForEach(spans, (span: InlineSpan) => {
+        if (span.code) { Span(span.text).fontFamily('monospace').fontSize(size - 1).fontColor(Theme.text).textBackgroundStyle({ color: Theme.selected, radius: 4 }) }
+        else { Span(span.text).fontWeight(span.bold ? FontWeight.Medium : FontWeight.Normal).fontColor(span.bold ? Theme.text : color) }
       })
-      ForEach(this.approvals(), (request: ApprovalDto) => {
-        Column({ space: 8 }) {
-          Text(`${request.agent_name} 请求 ${request.tool_name}`).fontWeight(FontWeight.Bold)
-          Text(request.input_json ?? '').fontSize(12).copyOption(CopyOptions.InApp)
-          Text(request.context ?? '').fontSize(12)
-          TextArea({placeholder: '审批反馈（可选）', text: this.feedback(request)}).enabled(!request.claimed).onChange((value: string) => { this.editFeedback(request, value); })
-          if (request.claimed) { Text('已有设备提交，等待运行时校验').fontColor('#526070') }
-          ForEach(request.options, (option: ApprovalOptionDto) => {
-            Button(option.label).enabled(!request.claimed && this.connected && !this.busy && !this.hasPending && this.connection.supports('approvals.respond'))
-              .onClick(() => { this.approve(request, option.id); })
-          })
-        }.padding(12).backgroundColor('#FFF4DA').borderRadius(12).width('100%')
-      }, (request: ApprovalDto) => `${request.request_id}:${request.version}:${request.claimed}`)
-      ForEach(this.questions(), (question: QuestionDto) => {
-        Column({ space: 8 }) {
-          Text('等待你的回答').fontWeight(FontWeight.Bold)
-          Text(question.question).copyOption(CopyOptions.InApp)
-          if (question.claimed) { Text('已有设备提交回答，等待运行时处理') }
-          else {
-            TextArea({text: this.questionDraft(question), placeholder: '回答这个问题'})
-              .onChange((value: string) => { this.editAnswer(question, value); })
-            Button('提交回答').enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('questions.answer'))
+    }.fontSize(size).lineHeight(size + 11).fontColor(color).copyOption(CopyOptions.LocalDevice).width('100%')
+  }
+  @Builder private markdownBlock(item: MdBlock) {
+    if (item.kind === 'h') {
+      Text(item.spans.map((span: InlineSpan) => span.text).join('')).heading(item.level <= 2 ? 20 : 17).margin({ top: 6 }).width('100%')
+    } else if (item.kind === 'li') {
+      Row({ space: 8 }) {
+        Text(item.text).fontSize(15).lineHeight(26).fontColor(Theme.secondary).constraintSize({ minWidth: 14 })
+        Column() { this.richText(item.spans, 15, '#4A4840') }.layoutWeight(1)
+      }.width('100%').alignItems(VerticalAlign.Top)
+    } else if (item.kind === 'code' || item.kind === 'table') {
+      Scroll() {
+        Text(item.text).fontSize(13).lineHeight(21).fontFamily('monospace').fontColor('#4A4840').copyOption(CopyOptions.LocalDevice)
+      }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
+        .padding(12).backgroundColor(Theme.surface).border({ width: 1, color: Theme.line, radius: 10 })
+    } else if (item.kind === 'hr') {
+      Divider().color(Theme.line)
+    } else {
+      this.richText(item.spans, 15, '#4A4840')
+    }
+  }
+  @Builder private planStep(todo: TodoDto, index: number, last: boolean) {
+    Row({ space: 16 }) {
+      Column() {
+        Stack() {
+          if (todo.status === 'completed') {
+            Circle().width(24).height(24).fill(Theme.accent)
+            SymbolGlyph($r('sys.symbol.checkmark')).fontSize(12).fontColor([Color.White])
+          } else if (todo.status === 'in_progress') {
+            Circle().width(24).height(24).fill(Theme.surface).stroke(Theme.accent).strokeWidth(1.5)
+            Circle().width(10).height(10).fill(Theme.accent)
+          } else {
+            Circle().width(24).height(24).fill(Theme.surface).stroke(Theme.faint).strokeWidth(1)
+          }
+        }.width(24).height(24)
+        if (!last) { Column().width(1).height(26).backgroundColor(Theme.line).margin({ top: 4 }) }
+      }
+      Text(`${index + 1}`.padStart(2, '0')).fontSize(14).fontColor(Theme.secondary).margin({ top: 3 })
+      Text(todo.content).fontSize(15).fontColor(todo.status === 'pending' ? Theme.secondary : Theme.text)
+        .layoutWeight(1).margin({ top: 2 })
+    }.width('100%').alignItems(VerticalAlign.Top)
+  }
+  @Builder private interactions() {
+    ForEach(this.approvals(), (request: ApprovalDto) => {
+      Column({ space: 10 }) {
+        Row({ space: 8 }) {
+          Circle().width(8).height(8).fill(Theme.warn)
+          Text(`${request.agent_name} 请求使用 ${request.tool_name}`).fontSize(15).fontColor(Theme.text).fontWeight(FontWeight.Medium)
+        }
+        if (request.context) { Text(request.context).fontSize(13).fontColor(Theme.secondary) }
+        if (request.input_json) {
+          Text(request.input_json).fontSize(12).fontFamily('monospace').fontColor('#4A4840').maxLines(8)
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).copyOption(CopyOptions.LocalDevice)
+            .width('100%').padding(10).backgroundColor(Theme.page).borderRadius(8)
+        }
+        if (request.claimed) { Text('已提交，等待运行时校验').caption() }
+        else {
+          TextInput({ placeholder: '附加说明（可选）', text: this.feedback(request) }).height(36).fontSize(13).backgroundColor(Theme.page)
+            .onChange((value: string) => { this.editFeedback(request, value); })
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(request.options, (option: ApprovalOptionDto, index: number) => {
+              Button(option.label).ghost()
+                .fontColor(index === 0 ? Color.White : Theme.text).backgroundColor(index === 0 ? Theme.accent : Color.Transparent)
+                .border({ width: index === 0 ? 0 : 1, color: Theme.line, radius: 16 }).margin({ right: 8, bottom: 8 })
+                .enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('approvals.respond'))
+                .onClick(() => { this.approve(request, option.id); })
+            })
+          }
+        }
+      }.card().backgroundColor(Theme.warnSoft).border({ width: 0, radius: 14 })
+    }, (request: ApprovalDto) => `${request.request_id}:${request.version}:${request.claimed}`)
+    ForEach(this.questions(), (question: QuestionDto) => {
+      Column({ space: 10 }) {
+        Text('Agent 想确认').caption()
+        Text(question.question).fontSize(15).lineHeight(24).fontColor(Theme.text).copyOption(CopyOptions.LocalDevice)
+        if (question.claimed) { Text('已提交回答，等待处理').caption() }
+        else {
+          Row({ space: 8 }) {
+            TextInput({ text: this.questionDraft(question), placeholder: '你的回答' }).height(38).fontSize(14).layoutWeight(1)
+              .backgroundColor(Theme.page).onChange((value: string) => { this.editAnswer(question, value); })
+            Button('回答').primary().height(38)
+              .enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('questions.answer'))
               .onClick(() => { this.answerQuestion(question); })
           }
-        }.width('100%').padding(12).backgroundColor('#EAF1FC').borderRadius(12)
-      }, (question: QuestionDto) => `${question.task_id}/${question.question_id}:${question.claimed}`)
-    }.padding(16).width('100%').alignItems(HorizontalAlign.Start)
+        }
+      }.card()
+    }, (question: QuestionDto) => `${question.task_id}/${question.question_id}:${question.claimed}`)
   }
-
-  @Builder private conversation() {
+  @Builder private taskControls() {
+    ForEach(this.tasks().filter((task: TaskDto) => (task.can_stop ?? false) || (task.can_finish ?? false)), (task: TaskDto) => {
+      Row({ space: 8 }) {
+        Text(`${task.name} · ${this.statusLabel(task.status)}`).caption().layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (task.can_stop && this.connection.supports('tasks.stop')) {
+          Button('停止本轮').ghost().height(28).fontSize(12).enabled(this.connected && !this.busy && !this.hasPending)
+            .onClick(() => { this.control(task, 'stop_task'); })
+        }
+        if (task.can_finish && this.connection.supports('tasks.finish')) {
+          Button('结束任务').ghost().height(28).fontSize(12).enabled(this.connected && !this.busy && !this.hasPending)
+            .onClick(() => { this.control(task, 'finish_task'); })
+        }
+      }.width('100%')
+    }, (task: TaskDto) => JSON.stringify(task))
+  }
+  @Builder private emptyChat() {
     Column({ space: 12 }) {
-      Row() {
-        if (this.windowWidth < 700) { Button('返回').onClick(() => { this.select(''); }) }
-        Text(this.current()?.title ?? '选择会话').fontSize(22).fontWeight(FontWeight.Bold).layoutWeight(1)
-      }
-      Row({ space: 6 }) {
-        Button('对话').onClick(() => { this.workspaceTab = 'chat'; })
-        Button('进度').onClick(() => { this.workspaceTab = 'progress'; })
-        Button('执行').onClick(() => { this.workspaceTab = 'execution'; })
-        Button('产物').onClick(() => { this.workspaceTab = 'artifacts'; })
-      }
-      if (this.approvals().length + this.questions().length > 0) {
-        Text(`待处理：${this.approvals().length} 项审批，${this.questions().length} 个问题`).fontColor('#956600')
-          .onClick(() => { this.workspaceTab = 'progress'; })
-      }
-      if (this.workspaceTab === 'chat') {
+      Text('有什么想交给 Agent 的？').heading(30)
+      Text('描述目标，Agent 会拆解计划、调用工具，并在需要时向你确认。').fontSize(14).fontColor(Theme.secondary)
+    }.alignItems(HorizontalAlign.Start).width('100%').margin({ top: 96 })
+  }
+  @Builder private conversation() {
+    Column() {
+      this.header()
       Scroll(this.conversationScroller) {
-        Column({ space: 12 }) {
-          if (this.current()?.history_truncated) { Text('较早的消息已超出当前保留范围').fontSize(12) }
-          ForEach(this.current()?.messages ?? [], (message: MessageDto) => {
-            Column({ space: 6 }) {
-              Text(message.role === 'agent' ? 'Harness' : message.role === 'user' ? '你' : '系统').fontSize(12).fontColor('#526070')
-              Text(message.content).fontSize(16).copyOption(CopyOptions.InApp)
-            }.width('100%').alignItems(HorizontalAlign.Start).padding(16)
-              .backgroundColor(message.role === 'user' ? '#DDF3ED' : '#FFFFFF').borderRadius(14)
-          })
-
-        }.width('100%')
-      }.layoutWeight(1).width('100%')
-      } else if (this.workspaceTab === 'progress') { Scroll() { this.detailView() }.layoutWeight(1).width('100%') }
-      else if (this.workspaceTab === 'execution') { this.executionView() }
-      else { this.artifactsView() }
+        Column({ space: 26 }) {
+          if (!this.selected || !this.current()) { this.emptyChat() }
+          else {
+            Text(this.current()?.title ?? '').heading(28).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').margin({ top: 4 })
+            if (this.current()?.history_truncated) { Text('更早的消息已超出保留范围').caption() }
+            ForEach(this.current()?.messages ?? [], (message: MessageDto) => { this.message(message) })
+            if (this.todos().length > 0) {
+              Column({ space: 14 }) {
+                Divider().color(Theme.line)
+                Text('执行计划').heading(22).margin({ top: 6, bottom: 4 })
+                ForEach(this.todos(), (todo: TodoDto, index: number) => { this.planStep(todo, index, index === this.todos().length - 1) },
+                  (todo: TodoDto, index: number) => `${index}:${todo.status}:${todo.content}`)
+              }.width('100%').alignItems(HorizontalAlign.Start)
+            }
+            this.interactions()
+            this.taskControls()
+          }
+        }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, top: 8, bottom: 24 })
+      }.layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
+      this.composer()
+    }.width('100%').height('100%')
+  }
+  @Builder private composer() {
+    Column({ space: 8 }) {
+      if (this.hasPending) {
+        Row({ space: 8 }) {
+          Text('有命令结果未确认').fontSize(12).fontColor(Theme.warn).layoutWeight(1)
+          Text('查状态').fontSize(12).fontColor(Theme.accent).enabled(this.connected).onClick(() => { this.queryPending(); })
+          Text('重试').fontSize(12).fontColor(Theme.accent).enabled(this.connected && !this.busy).onClick(() => { if (this.pending) { this.submit(this.pending); } })
+          Text('放弃').fontSize(12).fontColor(Theme.secondary).enabled(!this.busy)
+            .onClick(() => { this.pending = undefined; this.hasPending = false; this.save('pending', ''); })
+        }.width('100%').padding({ left: 16, right: 16 })
+      }
+      if (this.pendingUpload) {
+        Row({ space: 8 }) {
+          Text(`上传未完成：${this.pendingUpload.name}`).fontSize(12).fontColor(Theme.warn).layoutWeight(1).maxLines(1)
+          Text('重试').fontSize(12).fontColor(Theme.accent).onClick(() => { this.uploadFile(true); })
+          Text('清除').fontSize(12).fontColor(Theme.secondary).onClick(() => { this.clearUpload(); })
+        }.width('100%').padding({ left: 16, right: 16 })
+      }
       if (this.attachments.length > 0) {
         Row({ space: 8 }) {
-          Text(`已附加 ${this.attachments.length} 个文件`).fontSize(12).layoutWeight(1)
-          Button('清除附件选择').enabled(!this.busy && !this.hasPending).onClick(() => { this.attachments = []; this.save(`attachments:${this.selected}`, '[]'); })
-        }
+          SymbolGlyph($r('sys.symbol.paperclip')).fontSize(14).fontColor([Theme.secondary])
+          Text(this.attachments.map((id: string) => this.files.find((file: ClientFileDto) => file.id === id)?.name ?? '附件').join('、'))
+            .fontSize(12).fontColor(Theme.secondary).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text('移除').fontSize(12).fontColor(Theme.accent).enabled(!this.busy && !this.hasPending)
+            .onClick(() => { this.attachments = []; this.save(`attachments:${this.selected}`, '[]'); })
+        }.width('100%').padding({ left: 16, right: 16 })
       }
-      Row({ space: 8 }) {
-        TextArea({ placeholder: '输入目标；运行中的输入进入同一任务', text: this.draft }).height(80).layoutWeight(1)
+      if (this.status) { Text(this.status).caption().width('100%').padding({ left: 16, right: 16 }).maxLines(3) }
+      Row({ space: 4 }) {
+        Button() { SymbolGlyph($r('sys.symbol.paperclip')).fontSize(19).fontColor([Theme.secondary]) }
+          .icon().enabled(this.connected && !this.busy && !this.pendingUpload && this.connection.supports('files.transfer'))
+          .onClick(() => { this.uploadFile(false); })
+        TextArea({ placeholder: this.current() ? '继续补充想法 …' : '描述你的目标 …', text: this.draft })
+          .layoutWeight(1).fontSize(15).backgroundColor(Color.Transparent).constraintSize({ minHeight: 40, maxHeight: 160 })
+          .placeholderColor(Theme.faint).padding({ left: 6, right: 6, top: 10, bottom: 10 })
           .onChange((value: string) => { this.draft = value; this.save(`draft:${this.selected}`, value); })
-        Button('发送').enabled(this.connected && !this.busy && !this.hasPending && this.selected.length > 0 && this.connection.supports('sessions.text'))
+        Button() { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(18).fontColor([Color.White]) }
+          .type(ButtonType.Circle).width(40).height(40).backgroundColor(Theme.accent)
+          .enabled(this.connected && !this.busy && !this.hasPending && (this.draft.trim().length > 0 || this.attachments.length > 0) &&
+            this.connection.supports('sessions.text'))
           .onClick(() => { this.send(); })
+      }.width('100%').alignItems(VerticalAlign.Bottom).padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .backgroundColor(Theme.surface).borderRadius(26).border({ width: 1, color: Theme.line })
+        .shadow({ radius: 16, color: '#0F000000', offsetY: 4 })
+    }.width('100%').constraintSize({ maxWidth: Theme.contentMax + 48 }).padding({ left: 24, right: 24, bottom: 18 + this.bottom(), top: 6 })
+  }
+
+  // ---------- 右侧面板：产物与执行记录（远端资源预览留待第二阶段） ----------
+  @Builder private panelTabButton(label: string, tab: string) {
+    Text(label).fontSize(14).fontColor(this.panelTab === tab ? Theme.text : Theme.secondary)
+      .fontWeight(this.panelTab === tab ? FontWeight.Medium : FontWeight.Normal)
+      .padding({ left: 12, right: 12, top: 6, bottom: 6 }).borderRadius(14)
+      .backgroundColor(this.panelTab === tab ? Theme.selected : Color.Transparent)
+      .onClick(() => { this.panelTab = tab; })
+  }
+  @Builder private panel() {
+    Column() {
+      Row({ space: 4 }) {
+        this.panelTabButton(`产物 ${this.sessionFiles().length || ''}`, 'artifacts')
+        this.panelTabButton('执行记录', 'execution')
+        Blank()
+        Button() { SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([Theme.secondary]) }
+          .icon().onClick(() => { this.setPanel(false); })
+      }.width('100%').height(52 + this.top()).padding({ left: 12, right: 8, top: this.top() })
+      Scroll() {
+        Column({ space: 12 }) {
+          if (this.panelTab === 'artifacts') { this.artifacts() } else { this.execution() }
+        }.width('100%').padding({ left: 16, right: 16, bottom: 24 + this.bottom() })
+      }.layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Off)
+    }.width('100%').height('100%').backgroundColor(Theme.surface).border({ width: { left: 1 }, color: Theme.line })
+  }
+  @Builder private artifacts() {
+    if (this.preview) {
+      Stack({ alignContent: Alignment.TopEnd }) {
+        Image(this.preview).width('100%').objectFit(ImageFit.Contain).borderRadius(10)
+        Button() { SymbolGlyph($r('sys.symbol.xmark')).fontSize(14).fontColor([Theme.secondary]) }
+          .icon().width(28).height(28).backgroundColor(Theme.surface).margin(6)
+          .onClick(() => { this.preview?.release().catch(() => {}); this.preview = undefined; })
+      }.width('100%')
+    }
+    ForEach(this.sessionFiles(), (file: ClientFileDto) => {
+      Column({ space: 6 }) {
+        Row({ space: 10 }) {
+          SymbolGlyph(file.kind === 'image' ? $r('sys.symbol.picture') : $r('sys.symbol.doc_text')).fontSize(18).fontColor([Theme.secondary])
+          Text(file.name).fontSize(14).fontColor(Theme.text).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        Text(`${(file.size / 1024).toFixed(1)} KB · ${file.source === 'upload' ? '我上传的' : 'Agent 产物'}`).caption()
+        Row({ space: 14 }) {
+          if (file.kind === 'image') { Text('预览').fontSize(13).fontColor(Theme.accent).enabled(this.connected && !this.busy).onClick(() => { this.previewFile(file); }) }
+          Text('保存').fontSize(13).fontColor(Theme.accent).enabled(this.connected && !this.busy).onClick(() => { this.downloadFile(file); })
+          Text('附加到消息').fontSize(13).fontColor(Theme.accent).enabled(!this.hasPending && !this.busy).onClick(() => { this.attachFile(file); })
+        }.margin({ top: 4 })
+      }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 12 })
+        .border({ width: { bottom: 1 }, color: Theme.line })
+    }, (file: ClientFileDto) => file.id)
+    if (this.sessionFiles().length === 0) { Text('这个任务还没有文件。使用输入框左侧的回形针上传附件。').caption().margin({ top: 12 }) }
+  }
+  @Builder private execution() {
+    if (this.current()?.observations_truncated) { Text('更早的执行记录已超出保留范围').caption() }
+    ForEach((this.current()?.observations ?? []).slice().reverse(), (item: ObservationDto) => {
+      Column({ space: 4 }) {
+        Row({ space: 8 }) {
+          Circle().width(6).height(6).fill(item.kind === 'tool_started' ? Theme.faint : item.kind === 'permission_audit' ? Theme.warn :
+            item.success ? Theme.accent : Theme.danger)
+          Text(`${item.tool_name}`).fontSize(13).fontColor(Theme.text).fontWeight(FontWeight.Medium)
+          Text(item.agent_name).caption()
+        }
+        Text(item.kind === 'permission_audit' ? `权限：${item.action ?? ''} ${item.context ?? ''}` : item.kind === 'tool_started' ? '开始调用' :
+          item.success ? '返回成功' : '返回错误').caption()
+        if (item.input_summary) { Text(item.input_summary).fontSize(12).fontColor('#4A4840').maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis }) }
+        if (item.output) {
+          Text(item.output).fontSize(12).fontFamily('monospace').fontColor('#4A4840').maxLines(10).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .copyOption(CopyOptions.LocalDevice).width('100%').padding(8).backgroundColor(Theme.page).borderRadius(6)
+        }
+        if (item.truncated) { Text('输出已截断').fontSize(11).fontColor(Theme.warn) }
+        if (item.late_result) { Text('任务结束后的返回，不改变任务终态').fontSize(11).fontColor(Theme.warn) }
+      }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 10, bottom: 10 }).border({ width: { bottom: 1 }, color: Theme.line })
+    })
+    if ((this.current()?.observations ?? []).length === 0) { Text('还没有工具调用记录').caption().margin({ top: 12 }) }
+  }
+
+  // ---------- 其他页面 ----------
+  @Builder private otherPage() {
+    Column() {
+      this.header()
+      Scroll() {
+        Column({ space: 16 }) {
+          Text(this.view === 'automation' ? '自动化' : this.view === 'inbox' ? '通知' : '设备与连接').heading(32).width('100%')
+          if (this.view === 'automation') { Text('定时运行的任务，结果回到所选任务中。').fontSize(14).fontColor(Theme.secondary).width('100%') }
+          if (this.view === 'inbox') {
+            Text(this.connection.capabilities?.meow_enabled ? '重要事件由服务端经 MeoW 推送。' : '未配置 MeoW 推送，待办仍会在任务中显示。')
+              .fontSize(14).fontColor(Theme.secondary).width('100%')
+          }
+          if (this.status) { Text(this.status).caption().width('100%') }
+          if (this.view === 'automation') { this.automationBody() }
+          else if (this.view === 'inbox') { this.inboxBody() }
+          else { this.managementBody() }
+        }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, bottom: 32 + this.bottom() })
+      }.layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off)
+    }.width('100%').height('100%')
+  }
+  @Builder private automationBody() {
+    Row() {
+      Text(`时区 ${this.automation.timezone || '—'}`).caption().layoutWeight(1)
+      Button('刷新').ghost().enabled(this.connected && !this.busy && !this.hasPending).onClick(() => { this.manageSchedule({ kind: 'list' }); })
+    }.width('100%')
+    if (this.automation.stale) { Text('当前显示缓存，请刷新后操作').fontSize(12).fontColor(Theme.warn) }
+    ForEach(this.automation.schedules.concat(this.automation.archived ?? []), (plan: ScheduleDto) => {
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          Text(plan.name).fontSize(16).fontColor(Theme.text).fontWeight(FontWeight.Medium).layoutWeight(1)
+          if (!plan.archived) {
+            Toggle({ type: ToggleType.Switch, isOn: plan.enabled }).selectedColor(Theme.accent)
+              .enabled(this.connected && !this.busy && !this.hasPending && !this.automation.stale)
+              .onChange(() => { this.togglePlan(plan); })
+          } else { Text('已归档').caption() }
+        }.width('100%')
+        Text(`${plan.schedule}${plan.next_trigger ? ` · 下次 ${plan.next_trigger}` : ''}`).caption().copyOption(CopyOptions.LocalDevice)
+        Text(plan.content).fontSize(14).fontColor('#4A4840').maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (plan.health.alerting) { Text(`连续失败 ${plan.health.consecutive_failures} 次`).fontSize(12).fontColor(Theme.danger) }
+        Row({ space: 16 }) {
+          if (!plan.archived) {
+            Text('编辑').fontSize(13).fontColor(Theme.accent).enabled(!this.busy && !this.hasPending && !this.automation.stale).onClick(() => { this.editPlan(plan); })
+            Text('删除').fontSize(13).fontColor(Theme.danger).enabled(this.connected && !this.busy && !this.hasPending && !this.automation.stale)
+              .onClick(() => { this.manageSchedule({ kind: 'delete', schedule_id: plan.id, expected_revision: plan.revision }); })
+          }
+          Text('运行记录').fontSize(13).fontColor(Theme.accent).enabled(this.connected && !this.busy && !this.hasPending)
+            .onClick(() => { this.manageSchedule({ kind: 'history', schedule_id: plan.id }); })
+        }.margin({ top: 4 })
+      }.card()
+    }, (plan: ScheduleDto) => JSON.stringify(plan))
+    if (this.automation.schedules.length === 0) { Text('还没有定时任务').caption() }
+    if (this.automation.archive_truncated) { Text('部分计划超出归档展示上限').caption() }
+    if (this.automation.history) {
+      Text('最近运行').heading(20).margin({ top: 8 })
+      ForEach(this.automation.history.records, (run: RunDto) => {
+        Column({ space: 4 }) {
+          Text(`${run.fired_at} · ${run.outcome === 'notified' ? '通道已接受' : run.outcome}`).caption()
+          Text(run.result_summary).fontSize(14).fontColor(Theme.text)
+          if (run.error) { Text(run.error).fontSize(12).fontColor(Theme.danger) }
+        }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 8, bottom: 8 }).border({ width: { bottom: 1 }, color: Theme.line })
+      })
+      if (this.automation.history.records.length === 0) { Text('还没有运行记录').caption() }
+    }
+    Column({ space: 10 }) {
+      Text(this.editPlanId ? '编辑计划' : '新建计划').heading(20)
+      TextInput({ placeholder: '名称', text: this.planName }).backgroundColor(Theme.page).onChange((value: string) => { this.planName = value; })
+      TextArea({ placeholder: '每次运行时交给 Agent 的内容', text: this.planContent }).height(96).backgroundColor(Theme.page)
+        .onChange((value: string) => { this.planContent = value; })
+      TextInput({ placeholder: 'cron:0 8 * * * 或 once:2026-11-01T08:00:00+08:00', text: this.planExpression }).backgroundColor(Theme.page)
+        .onChange((value: string) => { this.planExpression = value; })
+      Row({ space: 12 }) {
+        Text('启用').fontSize(14).fontColor(Theme.text)
+        Toggle({ type: ToggleType.Switch, isOn: this.planEnabled }).selectedColor(Theme.accent).onChange((value: boolean) => { this.planEnabled = value; })
+        Blank()
+        Text(this.planNotify === 'reply' ? '结果自动回复' : '仅显式通知').fontSize(13).fontColor(Theme.accent)
+          .onClick(() => { this.planNotify = this.planNotify === 'reply' ? 'explicit' : 'reply'; })
+      }.width('100%')
+      Row({ space: 10 }) {
+        Button('保存').primary().enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('schedules.manage'))
+          .onClick(() => { this.savePlan(); })
+        if (this.editPlanId) { Button('取消').ghost().height(40).onClick(() => { this.resetPlan(); }) }
       }
-    }.padding(16).height('100%').layoutWeight(1)
+    }.card().margin({ top: 8 })
+  }
+  @Builder private inboxBody() {
+    if (this.notificationOverflow > 0) { Text(`通知队列容量不足：${this.notificationOverflow} 条未入队`).fontSize(12).fontColor(Theme.danger) }
+    if (this.notificationsTruncated) { Text('仅显示最近 200 条').caption() }
+    ForEach(this.notifications, (notification: NotificationDto) => {
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          if (!notification.read_at) { Circle().width(7).height(7).fill(Theme.accent) }
+          Text(notification.title).fontSize(15).fontColor(Theme.text).fontWeight(FontWeight.Medium).layoutWeight(1)
+        }.width('100%')
+        Text(notification.message).fontSize(14).fontColor('#4A4840')
+        Text(`${this.notificationState(notification.state)}${notification.result_code ? ` · ${notification.result_code}` : ''}`).caption()
+        Row({ space: 16 }) {
+          Text('查看任务').fontSize(13).fontColor(Theme.accent).onClick(() => { this.select(notification.session_id); })
+          if (!notification.read_at) {
+            Text('标记已读').fontSize(13).fontColor(Theme.accent).enabled(this.connected && !this.busy).onClick(() => { this.notificationAction(notification, false); })
+          }
+          if (notification.state === 'failed' || notification.state === 'unknown') {
+            Text(notification.state === 'unknown' ? '重试（可能重复）' : '重试').fontSize(13).fontColor(Theme.accent)
+              .enabled(this.connected && !this.busy).onClick(() => { this.notificationAction(notification, true); })
+          }
+        }.margin({ top: 2 })
+      }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 12 }).border({ width: { bottom: 1 }, color: Theme.line })
+    }, (notification: NotificationDto) => JSON.stringify(notification))
+    if (this.notifications.length === 0) { Text('暂无通知').caption() }
+  }
+  @Builder private managementBody() {
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
+        Text(this.connected ? `已连接 ${this.connection.capabilities?.instance_name ?? ''}` : '未连接').fontSize(15).fontColor(Theme.text).layoutWeight(1)
+      }
+      Text(`地址 ${this.preferred || '—'}${this.addresses.length > 1 ? `（共 ${this.addresses.length} 个候选）` : ''}`).caption()
+      Text(this.fingerprint ? `实例证书指纹 ${this.fingerprint.substring(0, 16)}…` : '使用系统信任的证书').caption()
+      Row({ space: 10 }) {
+        Button('重新连接').ghost().enabled(!this.busy).onClick(() => { this.connect(''); })
+        Button('重新配对').ghost().enabled(!this.busy).onClick(() => { this.unpair(); })
+      }.margin({ top: 6 })
+    }.card()
+    if (this.diagnostics) {
+      Column({ space: 6 }) {
+        Text('诊断').heading(18)
+        Text(`Harness ${this.diagnostics.version} · 存储${this.diagnostics.storage_available ? '可用' : '不可用'}`).fontSize(14).fontColor(Theme.text)
+        Text(`${this.diagnostics.sessions} 个任务 · ${this.diagnostics.pending_approvals} 项审批 · ${this.diagnostics.pending_questions} 个问题`).caption()
+        Text(`同步游标 ${this.diagnostics.cursor} · 保留 ${this.diagnostics.event_retention} 条事件 · 重启后未知命令 ${this.diagnostics.unknown_commands}`).caption()
+        Text(`实例 ${this.diagnostics.instance_id}`).caption().copyOption(CopyOptions.LocalDevice)
+      }.card()
+    }
+    Text('已配对设备').heading(18).margin({ top: 8 })
+    ForEach(this.devices, (device: DeviceDto) => {
+      Row({ space: 10 }) {
+        Column({ space: 3 }) {
+          Text(device.name).fontSize(15).fontColor(Theme.text)
+          Text(device.revoked ? '已撤销' : `有效至 ${new Date(device.expires_at * 1000).toLocaleDateString()}`).caption()
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        if (!device.revoked) {
+          Text('撤销').fontSize(13).fontColor(Theme.danger)
+            .enabled(this.connected && !this.busy && this.connection.supports('devices.revoke')).onClick(() => { this.revokeDevice(device); })
+        }
+      }.width('100%').padding({ top: 10, bottom: 10 }).border({ width: { bottom: 1 }, color: Theme.line })
+    }, (device: DeviceDto) => JSON.stringify(device))
+    Text('撤销当前设备会断开连接，需要重新配对。模型配置、全局 Skills 与共享记忆暂未通过客户端开放。').caption().margin({ top: 8 })
+  }
+
+  @Builder private main() {
+    Stack() {
+      Row() {
+        Column() {
+          if (this.view === 'chat') { this.conversation() } else { this.otherPage() }
+        }.layoutWeight(1).height('100%')
+        if (this.panelOpen && this.view === 'chat' && this.current() && this.wide()) { Column() { this.panel() }.width(380).height('100%').clip(true)
+          .transition(TransitionEffect.move(TransitionEdge.END).combine(TransitionEffect.OPACITY)) }
+      }.width('100%').height('100%').backgroundColor(Theme.page)
+      if (this.panelOpen && this.view === 'chat' && this.current() && !this.wide()) { Column() { this.panel() }.width('100%').height('100%')
+        .transition(TransitionEffect.move(TransitionEdge.END)) }
+      if (this.sidebarOpen && !this.wide()) {
+        Column().width('100%').height('100%').backgroundColor('#33000000').onClick(() => { this.setSidebar(false); })
+          .transition(TransitionEffect.OPACITY)
+      }
+    }.width('100%').height('100%')
   }
 
   build() {
     Column() {
-      Row({ space: 12 }) {
-        Text('Harness').fontSize(24).fontWeight(FontWeight.Bold).fontColor('#183153').layoutWeight(1)
-        if (!this.settings) {
-          Button('重连').enabled(!this.busy).onClick(() => { this.connect(false); })
-          Button('设置').onClick(() => { this.cancelReconnect(); this.connection.close(); this.connected = false; this.settings = true; })
-        }
-      }.padding(16).width('100%')
-      if (!this.settings) {
-        Row({ space: 12 }) {
-          Button('会话').onClick(() => { this.view = 'sessions'; })
-          Button('自动化').enabled(this.connection.supports('schedules.manage')).onClick(() => { this.view = 'automation'; this.manageSchedule({ kind: 'list' }); })
-          Button('收件箱').onClick(() => { this.view = 'inbox'; })
-          Button('管理').enabled(this.connection.supports('devices.list')).onClick(() => { this.view = 'management'; this.loadManagement(); })
-        }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
-      }
-      Text(this.status).fontSize(13).fontColor('#526070').width('100%').padding({ left: 16, right: 16, bottom: 12 })
-      if (this.hasPending) {
-        Column({ space: 6 }) {
-          Text('存在待发送或结果未知的命令。清除本地记录不会撤销服务器操作。').fontSize(12)
-          Row({ space: 6 }) {
-            Button('查状态').enabled(this.connected).onClick(() => { this.queryPending(); })
-            Button('重试').enabled(this.connected && !this.busy).onClick(() => { if (this.pending) { this.submit(this.pending); } })
-            Button('清除本地重试').enabled(!this.busy).onClick(() => { this.pending = undefined; this.hasPending = false; this.save('pending', ''); })
-          }
-        }.padding(8)
-      }
-      if (this.settings) { this.settingsView() }
-      else if (this.view === 'automation') { this.automationView() }
-      else if (this.view === 'inbox') { this.inboxView() }
-      else if (this.view === 'management') { this.managementView() }
+      if (!this.paired) { this.onboarding() }
       else {
-        Row() {
-          if (this.windowWidth >= 700 || this.selected.length === 0) { this.sessionList() }
-          if (this.windowWidth >= 700 || this.selected.length > 0) { this.conversation() }
-          if (this.windowWidth >= 1100) { Scroll() { this.detailView() }.width(320).height('100%') }
-        }.layoutWeight(1).width('100%').alignItems(VerticalAlign.Top)
+        SideBarContainer(this.wide() ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
+          this.sidebar()
+          this.main()
+        }.showSideBar(this.sidebarOpen).showControlButton(false).autoHide(false)
+          .sideBarWidth(this.wide() ? 272 : 300).minSideBarWidth(this.wide() ? 272 : 300).maxSideBarWidth(this.wide() ? 272 : 300)
+          .divider({ strokeWidth: 1, color: Theme.line })
+          .onChange((value: boolean) => { this.sidebarOpen = value; })
       }
-    }.height('100%').width('100%').backgroundColor('#F5F7FA')
+    }.height('100%').width('100%').backgroundColor(Theme.page)
       .onAreaChange((_old, area) => {
         const width = Number(area.width);
         if (width === this.windowWidth) { return; }
-        if (!this.settings && this.view === 'sessions' && this.workspaceTab === 'chat' && this.selected) {
-          try {
-            const y = this.conversationScroller.currentOffset().yOffset;
-            const session = this.selected;
-            this.windowWidth = width;
-            setTimeout(() => {
-              if (this.selected === session && this.workspaceTab === 'chat' && this.view === 'sessions') {
-                try { this.conversationScroller.scrollTo({ xOffset: 0, yOffset: y }); } catch (_) { }
-              }
-            }, 0);
-          } catch (_) { this.windowWidth = width; }
-        } else { this.windowWidth = width; }
+        const wasWide = this.wide();
+        this.windowWidth = width;
+        // 跨越断点时按新形态重置侧栏：平板默认展开，手机默认收起。
+        if (wasWide !== this.wide()) { this.sidebarOpen = this.wide(); }
       })
   }
 }

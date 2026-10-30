@@ -15,6 +15,7 @@ export interface SessionDto {
   tasks: Record<string, TaskDto>; approvals: Record<string, ApprovalDto>; history_truncated: boolean;
   questions: Record<string, QuestionDto>;
   observations: ObservationDto[]; observations_truncated: boolean; progress: Record<string, ProgressDto>;
+  updated_at?: number;
 }
 export interface ScheduleInputDto { name: string; content: string; schedule: string; enabled: boolean; notify: string; }
 export interface ScheduleHealthDto { consecutive_failures: number; alerting: boolean; last_fired_at?: string; }
