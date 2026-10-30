@@ -3,6 +3,7 @@ import { preferences } from '@kit.ArkData';
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { Connection, CredentialStore } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
 
@@ -138,7 +139,12 @@ struct Index {
       let caPath = '';
       if (this.caPem.trim().length > 0) {
         if (!this.caPem.includes('-----BEGIN CERTIFICATE-----')) { throw new Error('请粘贴 PEM 格式的可信 CA 证书'); }
-        caPath = `${context.filesDir}/instance-ca.pem`;
+        // 不同信任根使用不同路径，避免原生 TLS 层复用旧路径对应的证书缓存。
+        const digest = cryptoFramework.createMd('SHA256');
+        digest.updateSync({ data: new util.TextEncoder().encodeInto(this.caPem) });
+        let caId = '';
+        for (const byte of digest.digestSync().data) { caId += byte.toString(16).padStart(2, '0'); }
+        caPath = `${context.filesDir}/instance-ca-${caId}.pem`;
         const file = fileIo.openSync(caPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
         try { fileIo.writeSync(file.fd, this.caPem); } finally { fileIo.closeSync(file); }
       }
