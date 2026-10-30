@@ -171,10 +171,13 @@ pub(crate) fn inbox_wake_system(
             auto_wakes,
             "waking idle task with inbox items"
         );
-        commands.spawn(ContinueTaskMessage {
+        let mut message = commands.spawn(ContinueTaskMessage {
             task_id: task.id,
             user_input,
         });
+        if !has_steer {
+            message.insert(crate::domain::BackgroundReportTurn);
+        }
     }
 }
 

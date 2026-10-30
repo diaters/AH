@@ -141,7 +141,7 @@ pub fn register_builtin_tools(
     // Shell tools
     registry.register(ToolDefinition {
         name: "shell_exec".to_string(),
-        description: "同步执行一次性 shell 命令并等待结果，适合 build、test、lint、文件操作等短任务。长时间运行或需要交互的命令请使用 shell_start。".to_string(),
+        description: "执行一次性 shell 命令并等待结果，适合 build、test、lint、文件操作。返回 command_succeeded、exit_code、timed_out；工具返回不代表命令成功。命令结束或超时会清理同组后台后代，nohup 和 & 不能让它们持续运行。长期监控、服务或耗时观察请用 shell_start，并以前台方式运行；不要改用外部服务管理器规避 Harness 生命周期，除非用户明确要求独立部署。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -162,7 +162,7 @@ pub fn register_builtin_tools(
 
     registry.register(ToolDefinition {
         name: "shell_start".to_string(),
-        description: "异步启动长时间运行或可交互的 shell 会话。返回 session_id 供读取、输入或停止。会话退出时默认通过 <task-notification> 通知。notify_on_output 默认 false；启用后 stdout 的完整行由 Harness 直接发送给用户并通知所属任务，无需重复转发。请只输出筛选后的业务事件，调试信息写 stderr。".to_string(),
+        description: "启动受管的长期或交互 shell 会话，命令以前台方式运行，不加 nohup、& 或自守护。返回 session_id 供读取、输入或停止，Harness 退出时清理进程。持续监控且需要告警时设置 notify_on_output=true：stdout 完整非空行经 Harness 直接发送到任务输出通道并回传发送结果，无需另建定时任务读文件或让 Agent 重复转发。stdout 只写可直接发送的告警/恢复信息并及时 flush，诊断写 stderr；默认不转发输出，退出默认通知。先确认目标系统与采样接口；明确十进制 MB/s 或二进制 MiB/s、接口范围与收发口径。速率按实际单调时间差计算，不能把固定 sleep 时长当采样间隔。先用可控输入分别验证采样、阈值和恢复，再验证会话存活与采样健康；测试要覆盖实际投递回执，打印告警不等于通知成功。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",

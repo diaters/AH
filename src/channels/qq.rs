@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -333,6 +334,8 @@ pub struct QqChannel {
     pending_approval_msg_ids: Arc<RwLock<HashMap<String, String>>>,
     /// 待合并的纯图片消息：等同一发送者的下一条常规消息到达后合并
     pending_images: Arc<RwLock<PendingImages>>,
+    /// 平台明确报告不支持 typing 后，本实例不再重复探测；网络等暂时错误不缓存。
+    typing_unsupported: AtomicBool,
 }
 
 impl QqChannel {
@@ -354,6 +357,7 @@ impl QqChannel {
             pending_approvals: Arc::new(RwLock::new(HashMap::new())),
             pending_feedback: Arc::new(RwLock::new(HashMap::new())),
             pending_images: Arc::new(RwLock::new(PendingImages::default())),
+            typing_unsupported: AtomicBool::new(false),
             pending_approval_msg_ids: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -1085,7 +1089,6 @@ impl QqChannel {
     ///
     /// 仅 C2C 场景有效。群聊场景调用此方法静默跳过。
     pub async fn send_typing(&self, recipient: &str) -> Result<(), ChannelError> {
-        let token = self.get_token().await?;
         let (scope, id) = Self::resolve_recipient(recipient);
         // typing 仅支持 C2C (scope="users")，群聊静默跳过
         if scope != "users" {
@@ -1096,6 +1099,10 @@ impl QqChannel {
             );
             return Ok(());
         }
+        if self.typing_unsupported.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let token = self.get_token().await?;
         let url = format!("{}/v2/{scope}/{id}/typing", self.api_base);
         let resp = self
             .client
@@ -1106,6 +1113,21 @@ impl QqChannel {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND
+                && serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .is_some_and(|body| {
+                        body.get("code").and_then(|v| v.as_i64()) == Some(11001)
+                            && body.get("err_code").and_then(|v| v.as_i64()) == Some(40011002)
+                    })
+            {
+                self.typing_unsupported.store(true, Ordering::Relaxed);
+                tracing::debug!(
+                    event = "QqTypingUnsupported",
+                    "typing is unavailable; skipping future typing requests for this channel instance"
+                );
+                return Ok(());
+            }
             return Err(ChannelError::Api {
                 code: status.as_u16() as i32,
                 message: text,
@@ -2827,6 +2849,35 @@ mod tests {
         let ch = QqChannel::new(make_config()).with_api_base(mock_server.uri());
         ch.set_token_for_test("fake_token").await;
         ch.send_typing("user:USER123").await.expect("send_typing");
+    }
+
+    #[tokio::test]
+    async fn send_typing_caches_only_explicit_unsupported_responses() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for (status, body, cached) in [
+            (404, json!({"code": 11001, "err_code": 40011002}), true),
+            (
+                404,
+                json!({"code": 12345, "message": "recipient not found"}),
+                false,
+            ),
+            (503, json!({"message": "temporarily unavailable"}), false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v2/users/USER123/typing"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .expect(if cached { 1 } else { 2 })
+                .mount(&server)
+                .await;
+            let channel = QqChannel::new(make_config()).with_api_base(server.uri());
+            channel.set_token_for_test("test-token").await;
+            for _ in 0..2 {
+                assert_eq!(channel.send_typing("user:USER123").await.is_ok(), cached);
+            }
+        }
     }
 
     #[tokio::test]

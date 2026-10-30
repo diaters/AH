@@ -218,7 +218,7 @@ pub fn brain_decision_system(
                 }
             },
             Ok(AgentExecutionOutput {
-                content: OutputContent::ToolCalls(_),
+                content: OutputContent::ToolCalls(_) | OutputContent::ToolCallsWithText { .. },
                 ..
             }) => {
                 // Tool calls 由 llm_response_system 处理，跳过

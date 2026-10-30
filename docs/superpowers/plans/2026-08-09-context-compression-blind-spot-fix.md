@@ -1,5 +1,8 @@
 # 上下文压缩盲区修复 实施计划
 
+> __历史计划__：其中从展示元数据恢复工具协议的步骤已废止，请勿重新实施。
+> 当前恢复契约见[工具循环反馈与受管监控修正](../../design/2026-10-30-monitor-feedback-fixes.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 修正 STM token 估算盲区，让工具密集型任务的压缩机制正常生效；从 `EntryMetadata.tool_calls` 还原结构化消息，实现 prompt cache 跨轮次命中。

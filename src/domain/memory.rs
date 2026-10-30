@@ -1,7 +1,8 @@
 use crate::prelude::{Component, Resource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tiktoken_rs::cl100k_base;
+use std::sync::OnceLock;
+use tiktoken_rs::{CoreBPE, cl100k_base};
 use tracing::debug;
 
 /// 标记刚写入长期记忆、尚未触发 `on_long_term_memory_write` 观察 hook 的 Agent entity。
@@ -67,6 +68,102 @@ mod tests {
     fn estimate_tokens_returns_positive() {
         let tokens = estimate_tokens("Hello, world!");
         assert!(tokens > 0);
+    }
+
+    #[test]
+    fn protocol_history_retains_rounds_and_closes_interrupted_calls() {
+        use crate::domain::{
+            AgentExecutionOutput, AgentExecutionResult, AgentId, AgentRequestKind,
+            ConversationMessage, LlmToolCall, OutputContent, TaskId,
+        };
+        let mut stm = ShortTermMemory::default();
+        let mut result = AgentExecutionResult {
+            task_id: TaskId::nil(),
+            agent_id: AgentId::nil(),
+            request_kind: AgentRequestKind::LlmCompletion,
+            result: Ok(AgentExecutionOutput {
+                content: OutputContent::ToolCalls(vec![LlmToolCall {
+                    id: "list-1".into(),
+                    name: "shell_list".into(),
+                    arguments: "{}".into(),
+                }]),
+                reasoning_content: Some("reason-1".into()),
+            }),
+            prompt: "goal".into(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+            work_item_id: None,
+            conversation: None,
+            turn_generation: None,
+        };
+        stm.protocol.remember_response(&result);
+        stm.protocol.record_tool_result("list-1", "[]".into());
+        result.conversation = stm.protocol.restore();
+        result.result.as_mut().unwrap().content = OutputContent::ToolCalls(vec![LlmToolCall {
+            id: "input-2".into(),
+            name: "shell_input".into(),
+            arguments: serde_json::json!({"input": "private".repeat(1500)}).to_string(),
+        }]);
+        stm.protocol.remember_response(&result);
+        stm.add_entry(
+            EntryRole::User,
+            "stop and inspect",
+            EntryMetadata::default(),
+        );
+        stm.recalculate_tokens();
+        assert!(
+            stm.estimated_tokens > 1000,
+            "runtime tool inputs must count towards compression without being exported"
+        );
+        let restored = stm.protocol.restore().unwrap();
+        assert_eq!(restored.len(), 6);
+        assert!(
+            matches!(&restored[1], ConversationMessage::Assistant { tool_calls, reasoning_content, .. }
+            if tool_calls[0].arguments == "{}" && reasoning_content.as_deref() == Some("reason-1"))
+        );
+        assert!(
+            matches!(&restored[4], ConversationMessage::Tool { tool_call_id, content }
+            if tool_call_id == "input-2" && content.contains("interrupted"))
+        );
+        assert!(matches!(
+            restored.last(),
+            Some(ConversationMessage::User { .. })
+        ));
+        assert!(
+            !serde_json::to_string(&stm.entries)
+                .unwrap()
+                .contains("private")
+        );
+
+        // 压缩清空缓存；迟到的旧工具循环响应不能把已压缩历史带回来。
+        stm.add_entry(EntryRole::Assistant, "status", EntryMetadata::default());
+        stm.add_entry(EntryRole::User, "next", EntryMetadata::default());
+        assert!(stm.drain_compressible_groups() > 0);
+        assert!(
+            stm.estimated_tokens < 1000,
+            "compressed protocol no longer contributes tokens"
+        );
+        stm.protocol.remember_response(&result);
+        assert!(stm.protocol.restore().is_none());
+        result.conversation = None;
+        stm.protocol.remember_response(&result);
+        assert!(stm.protocol.restore().is_some());
+    }
+
+    #[test]
+    fn warm_token_estimation_does_not_rebuild_the_tokenizer() {
+        estimate_tokens("warm up");
+        let started = std::time::Instant::now();
+        for _ in 0..76 {
+            assert!(estimate_tokens("监控恢复后的工具历史与告警消息") > 0);
+        }
+        eprintln!("warm token estimation: 76 calls in {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "warm history estimation blocked for {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
@@ -365,9 +462,12 @@ mod tests {
 
 /// 估算文本的 token 数
 pub fn estimate_tokens(text: &str) -> u32 {
-    cl100k_base()
+    static TOKENIZER: OnceLock<Option<CoreBPE>> = OnceLock::new();
+    TOKENIZER
+        .get_or_init(|| cl100k_base().ok())
+        .as_ref()
         .map(|enc| enc.encode_with_special_tokens(text).len() as u32)
-        .unwrap_or_else(|_| (text.len() / 4) as u32) // fallback: 4 chars ≈ 1 token
+        .unwrap_or_else(|| (text.len() / 4) as u32) // fallback: 4 chars ≈ 1 token
 }
 
 /// 将 STM entries 按配对组切分。
@@ -515,6 +615,8 @@ pub struct ToolCall {
 /// 短期记忆（绑定 Task）
 #[derive(Component, Default, Clone)]
 pub struct ShortTermMemory {
+    /// 仅运行时使用的协议历史，绝不参与记忆导出或持久化。
+    pub protocol: RuntimeConversation,
     /// 完整对话条目
     pub entries: Vec<MemoryEntry>,
     /// 摘要前缀（压缩后的旧内容）
@@ -586,6 +688,9 @@ impl ShortTermMemory {
         metadata: EntryMetadata,
     ) {
         let content = content.into();
+        if role == EntryRole::User {
+            self.protocol.push_user(&content);
+        }
         let mut tokens_added = estimate_tokens(&content);
         for tc in &metadata.tool_calls {
             tokens_added += estimate_tokens(&tc.input);
@@ -594,6 +699,7 @@ impl ShortTermMemory {
         self.estimated_tokens += tokens_added;
         let entry = MemoryEntry::new(role, content.clone()).with_metadata(metadata);
         self.entries.push(entry);
+        self.estimated_tokens = self.estimated_tokens.max(self.protocol.estimated_tokens);
         debug!(
             event = "StmEntryAdded",
             role = ?role,
@@ -620,7 +726,7 @@ impl ShortTermMemory {
                 total += estimate_tokens(&tc.output);
             }
         }
-        self.estimated_tokens = total;
+        self.estimated_tokens = total.max(self.protocol.estimated_tokens);
         debug!(
             event = "StmTokensRecalculated",
             old_tokens = old_tokens,
@@ -641,9 +747,126 @@ impl ShortTermMemory {
         let count: usize = groups.iter().map(|g| g.len()).sum();
         if count > 0 {
             self.entries.drain(0..count);
+            self.protocol.invalidate();
         }
         self.recalculate_tokens();
         count
+    }
+}
+
+/// 展示用 STM 无法表达多轮工具协议；保留实际请求/响应，压缩后回退到文本上下文。
+/// 此类型不实现 Serialize，避免原始工具输入进入导出与长期记忆。
+#[derive(Default, Clone)]
+pub struct RuntimeConversation {
+    messages: Option<Vec<super::ConversationMessage>>,
+    invalidated: bool,
+    estimated_tokens: u32,
+}
+
+impl RuntimeConversation {
+    pub fn remember_response(&mut self, result: &super::AgentExecutionResult) {
+        let Ok(output) = &result.result else {
+            return;
+        };
+        if result.conversation.is_some() && self.invalidated {
+            return; // 在飞工具循环仍持有压缩前的历史，不重新引入已压缩内容。
+        }
+        self.invalidated = false;
+        let mut messages = result.conversation.clone().unwrap_or_else(|| {
+            vec![super::ConversationMessage::User {
+                content: result.prompt.clone(),
+            }]
+        });
+        let calls = match &output.content {
+            super::OutputContent::Text(_) => vec![],
+            super::OutputContent::ToolCalls(calls)
+            | super::OutputContent::ToolCallsWithText { calls, .. } => calls.clone(),
+        };
+        messages.push(super::ConversationMessage::Assistant {
+            content: output.content.text().map(str::to_owned),
+            tool_calls: calls,
+            reasoning_content: output.reasoning_content.clone(),
+        });
+        self.estimated_tokens = messages.iter().fold(0u32, |total, message| {
+            total.saturating_add(message.estimated_tokens())
+        });
+        self.messages = Some(messages);
+    }
+
+    pub fn record_tool_result(&mut self, id: &str, content: String) {
+        use super::ConversationMessage;
+        let Some(messages) = self.messages.as_mut() else {
+            return;
+        };
+        let Some(anchor) = messages
+            .iter()
+            .rposition(|m| matches!(m, ConversationMessage::Assistant { .. }))
+        else {
+            return;
+        };
+        let expected = matches!(&messages[anchor], ConversationMessage::Assistant { tool_calls, .. }
+            if tool_calls.iter().any(|call| call.id == id));
+        if expected && !messages[anchor + 1..].iter().any(|m|
+            matches!(m, ConversationMessage::Tool { tool_call_id, .. } if tool_call_id == id)) {
+            self.estimated_tokens = self.estimated_tokens.saturating_add(estimate_tokens(&content));
+            messages.push(ConversationMessage::Tool { tool_call_id: id.to_owned(), content });
+        }
+    }
+
+    fn close_pending(messages: &mut Vec<super::ConversationMessage>) {
+        use super::ConversationMessage;
+        let Some(anchor) = messages
+            .iter()
+            .rposition(|m| matches!(m, ConversationMessage::Assistant { .. }))
+        else {
+            return;
+        };
+        let ConversationMessage::Assistant { tool_calls, .. } = &messages[anchor] else {
+            return;
+        };
+        let missing: Vec<_> = tool_calls
+            .iter()
+            .filter(|call| {
+                !messages[anchor + 1..].iter().any(|m|
+            matches!(m, ConversationMessage::Tool { tool_call_id, .. } if tool_call_id == &call.id))
+            })
+            .map(|call| call.id.clone())
+            .collect();
+        for tool_call_id in missing {
+            messages.push(ConversationMessage::Tool { tool_call_id,
+                content: "[interrupted] Tool result unavailable; execution outcome is unknown. Check actual state before repeating.".into() });
+        }
+    }
+
+    fn push_user(&mut self, content: &str) {
+        if let Some(messages) = self.messages.as_mut() {
+            let previous_len = messages.len();
+            Self::close_pending(messages);
+            messages.push(super::ConversationMessage::User {
+                content: content.to_owned(),
+            });
+            for message in &messages[previous_len..] {
+                self.estimated_tokens = self
+                    .estimated_tokens
+                    .saturating_add(message.estimated_tokens());
+            }
+        }
+    }
+
+    pub fn restore(&self) -> Option<Vec<super::ConversationMessage>> {
+        let mut messages = self.messages.clone()?;
+        Self::close_pending(&mut messages);
+        Some(messages)
+    }
+
+    pub fn estimated_tokens(&self) -> u32 {
+        self.estimated_tokens
+    }
+
+    fn invalidate(&mut self) {
+        self.messages = None;
+        self.invalidated = true;
+        self.estimated_tokens = 0;
     }
 }
 

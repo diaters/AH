@@ -172,7 +172,24 @@ impl AgentExecutor for GenaiExecutor {
             {
                 Ok(result) => result.map_err(|error| {
                     debug!(error = %error, "genai API error");
-                    classify_genai_error(error)
+                    let classified = classify_genai_error(error);
+                    if matches!(classified, ExecutionError::InvalidRequest(_)) {
+                        let shape: Vec<_> = request.conversation.iter().flatten().map(|message| match message {
+                            ConversationMessage::System { .. } => "system".to_owned(),
+                            ConversationMessage::User { .. } => "user".to_owned(),
+                            ConversationMessage::Tool { .. } => "tool".to_owned(),
+                            ConversationMessage::Assistant { tool_calls, reasoning_content, .. } => {
+                                let object_args = tool_calls.iter().filter(|call|
+                                    serde_json::from_str::<serde_json::Value>(&call.arguments).is_ok_and(|v| v.is_object())).count();
+                                format!("assistant(calls={},object_args={},reasoning={})", tool_calls.len(), object_args, reasoning_content.is_some())
+                            }
+                        }).collect();
+                        warn!(event = "LlmRequestRejected", task_id = %request.task_id,
+                            agent_id = %request.agent_id, model = %model,
+                            turn_generation = ?request.turn_generation, conversation_shape = ?shape,
+                            "provider rejected request; shape excludes message content and tool arguments");
+                    }
+                    classified
                 })?,
                 Err(_) => {
                     warn!(
@@ -191,13 +208,16 @@ impl AgentExecutor for GenaiExecutor {
             };
 
             let duration_ms = start.elapsed().as_millis();
+            let response_len: usize = response.content.texts().iter().map(|text| text.len()).sum();
+            let tool_call_count = response.content.tool_calls().len();
             debug!(
                 event = "LlmRequestCompleted",
                 task_id = %request.task_id,
                 agent_id = %request.agent_id,
                 model = %model,
                 duration_ms = duration_ms,
-                response_len = response.first_text().map(|c| c.len()).unwrap_or(0),
+                response_len,
+                tool_call_count,
                 "genai request completed"
             );
 
@@ -207,10 +227,11 @@ impl AgentExecutor for GenaiExecutor {
                 agent_id = %request.agent_id,
                 model = %model,
                 duration_ms = duration_ms,
-                response_len = response.first_text().map(|c| c.len()).unwrap_or(0),
+                response_len,
+                tool_call_count,
                 "LLM 调用完成：{}ms，响应 {} 字符",
                 duration_ms,
-                response.first_text().map(|c| c.len()).unwrap_or(0)
+                response_len
             );
 
             parse_response(&request.task_id, response)
@@ -336,6 +357,8 @@ fn parse_response(
 ) -> Result<AgentExecutionOutput, ExecutionError> {
     let reasoning_content = response.reasoning_content.clone();
     let tool_calls: Vec<&ToolCall> = response.content.tool_calls();
+    let texts = response.content.texts();
+    let text = (!texts.is_empty()).then(|| texts.join("\n"));
 
     if !tool_calls.is_empty() {
         let parsed_calls: Vec<LlmToolCall> = tool_calls
@@ -364,12 +387,18 @@ fn parse_response(
         );
 
         return Ok(AgentExecutionOutput {
-            content: OutputContent::ToolCalls(parsed_calls),
+            content: match text.filter(|text| !text.trim().is_empty()) {
+                Some(text) => OutputContent::ToolCallsWithText {
+                    text,
+                    calls: parsed_calls,
+                },
+                None => OutputContent::ToolCalls(parsed_calls),
+            },
             reasoning_content,
         });
     }
 
-    let content = response.first_text().map(|s| s.to_string());
+    let content = text;
 
     match &content {
         Some(c) => {
@@ -415,6 +444,7 @@ fn classify_genai_error(error: genai::Error) -> ExecutionError {
 /// 将 HTTP 状态码映射为稳定的 ExecutionError 分类。
 fn classify_http_status(status: reqwest_013::StatusCode, message: String) -> ExecutionError {
     match status.as_u16() {
+        400 | 422 => ExecutionError::InvalidRequest(message),
         401 => ExecutionError::Authentication(message), // 不降级
         402 => ExecutionError::QuotaExhausted(message), // 降级
         403 => ExecutionError::Authentication(message), // 不降级
@@ -771,6 +801,39 @@ mod tests {
     // ---- parse_response ----
 
     #[test]
+    fn parse_response_preserves_text_alongside_tool_calls() {
+        let text = "正在检查采样结果，随后启动受管监控。";
+        let mut content = MessageContent::from(vec![ToolCall {
+            call_id: "monitor-probe".to_string(),
+            fn_name: "shell_exec".to_string(),
+            fn_arguments: serde_json::json!({"command": "echo sample"}),
+            thought_signatures: None,
+        }]);
+        content.prepend(ContentPart::Text(text.to_string()));
+        content.push(ContentPart::Text("采样单位为 B/s。".into()));
+        let output = parse_response(
+            &crate::domain::TaskId::new(),
+            make_response(content, Some("private reasoning".to_string())),
+        )
+        .unwrap();
+
+        assert_eq!(
+            output.content.text(),
+            Some(format!("{text}\n采样单位为 B/s。").as_str())
+        );
+        assert!(
+            matches!(&output.content, OutputContent::ToolCallsWithText { calls, .. }
+            if calls.len() == 1 && calls[0].id == "monitor-probe"
+                && calls[0].name == "shell_exec"
+                && calls[0].arguments == r#"{"command":"echo sample"}"#)
+        );
+        assert_eq!(
+            output.reasoning_content.as_deref(),
+            Some("private reasoning")
+        );
+    }
+
+    #[test]
     fn parse_response_returns_text_output() {
         let response = make_response(ChatMessage::assistant("answer").content, None);
         let output = parse_response(&crate::domain::TaskId::new(), response).unwrap();
@@ -888,5 +951,16 @@ mod tests {
         let error = web_model_call_error(reqwest_013::StatusCode::INTERNAL_SERVER_ERROR);
         let classified = classify_genai_error(error);
         assert!(matches!(classified, ExecutionError::Unknown(_)));
+    }
+
+    #[test]
+    fn invalid_request_is_not_retried_or_fallen_back() {
+        for status in [400, 422] {
+            let classified = classify_genai_error(web_model_call_error(
+                reqwest_013::StatusCode::from_u16(status).unwrap(),
+            ));
+            assert!(!classified.is_retryable(), "{status}: {classified:?}");
+            assert!(!classified.is_fallback_eligible());
+        }
     }
 }

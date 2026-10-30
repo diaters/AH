@@ -686,6 +686,7 @@ fn prompt_includes_conversation_history() {
                 summary_prefix: None,
                 estimated_tokens: 100,
                 last_cached_tokens: None,
+                protocol: Default::default(),
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
@@ -948,6 +949,7 @@ fn second_dispatch_prompt_includes_correct_history() {
                 summary_prefix: None,
                 estimated_tokens: 100,
                 last_cached_tokens: None,
+                protocol: Default::default(),
             },
         ))
         .id();

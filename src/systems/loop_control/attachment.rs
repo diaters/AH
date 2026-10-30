@@ -48,6 +48,7 @@ fn append_user_text(request: &mut AgentExecutionRequest, text: &str) {
 
 #[allow(clippy::type_complexity)]
 pub(crate) fn context_attachment_system(
+    mut commands: Commands,
     index: Res<EntityIndex>,
     mut requests: Query<&mut AgentExecutionRequestMessage>,
     mut tasks: Query<(
@@ -89,6 +90,11 @@ pub(crate) fn context_attachment_system(
         if let Some(mut inbox) = inbox
             && !inbox.is_empty()
         {
+            if inbox.has_user_steer() {
+                commands
+                    .entity(task_entity)
+                    .remove::<crate::domain::BackgroundReportTurn>();
+            }
             let items = inbox.drain_all();
             let text = render_inbox_items(&items);
             append_user_text(request, &text);

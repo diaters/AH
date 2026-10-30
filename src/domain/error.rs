@@ -9,6 +9,8 @@ use thiserror::Error;
 /// 执行错误
 #[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExecutionError {
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
     #[error("request timed out: {0}")]
     Timeout(String),
     #[error("rate limited: {message}")]
@@ -61,7 +63,9 @@ impl ExecutionError {
             Self::Authentication(_) => FailureReason::Authentication,
             Self::QuotaExhausted(_) => FailureReason::QuotaExhausted,
             Self::UserCancelled(_) => FailureReason::UserCancelled,
-            Self::Transport(_) | Self::EmptyResponse => FailureReason::AgentError,
+            Self::Transport(_) | Self::InvalidRequest(_) | Self::EmptyResponse => {
+                FailureReason::AgentError
+            }
             Self::Unknown(_) => FailureReason::Unknown,
         }
     }
@@ -74,6 +78,7 @@ impl ExecutionError {
             | Self::QuotaExhausted(message)
             | Self::Transport(message)
             | Self::UserCancelled(message)
+            | Self::InvalidRequest(message)
             | Self::Unknown(message) => message,
             Self::RateLimited { message, .. } => message,
             Self::EmptyResponse => "empty response from model",

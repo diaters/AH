@@ -706,7 +706,9 @@ pub(crate) fn handle_skill_update_llm_response(
 ) -> bool {
     match &result.result {
         Ok(crate::domain::AgentExecutionOutput {
-            content: crate::domain::OutputContent::ToolCalls(_),
+            content:
+                crate::domain::OutputContent::ToolCalls(_)
+                | crate::domain::OutputContent::ToolCallsWithText { .. },
             ..
         }) => {
             // 放行给 tool calling loop 处理 tool calls

@@ -137,6 +137,7 @@ pub struct PendingScheduleRecord {
 pub fn schedule_run_accounting_system(
     mut commands: Commands,
     runs: Query<(Entity, &Task, &ScheduledRun), Without<ScheduleRunRecorded>>,
+    execution_failures: Query<&crate::domain::ScheduledRunFailure>,
     skipped: Query<(Entity, &PendingScheduleRecord)>,
     outputs: Query<&crate::domain::UserOutputMessage>,
     sends: Query<&crate::domain::PendingChannelSend>,
@@ -243,10 +244,13 @@ pub fn schedule_run_accounting_system(
         let delivery_error = deliveries
             .as_deref()
             .and_then(|tracker| tracker.failure_for(task.id));
+        let execution_error = execution_failures.get(entity).ok().map(|e| e.0.as_str());
         let count = deliveries
             .as_deref()
             .map_or(0, |tracker| tracker.notified_for(task.id));
-        let failed = !matches!(task.status(), TaskStatus::Done) || delivery_error.is_some();
+        let failed = !matches!(task.status(), TaskStatus::Done)
+            || delivery_error.is_some()
+            || execution_error.is_some();
         let record = ScheduleRunRecord {
             task_id: Some(task.id),
             schedule_id: run.schedule_id,
@@ -262,6 +266,7 @@ pub fn schedule_run_accounting_system(
             error: if failed {
                 Some(
                     delivery_error
+                        .or(execution_error)
                         .map(str::to_owned)
                         .or_else(|| task.last_error.clone())
                         .unwrap_or_else(|| format!("{:?}", task.status())),
@@ -791,6 +796,56 @@ mod tests {
             events.lock().unwrap().is_empty(),
             "successful explicit runs stay silent"
         );
+    }
+
+    #[test]
+    fn denied_scheduled_action_cannot_be_accounted_as_silent_success() {
+        use crate::domain::{
+            AgentExecutionResult, AgentId, AgentRequestKind, ExecutionError, ShortTermMemory,
+            ToolError, ToolExecutionResultMessage,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let def = accounting_definition();
+        let id = def.id;
+        let (mut app, store, _) = accounting_app(&directory, def);
+        app.init_resource::<crate::contracts::Clock>();
+        app.insert_resource(crate::systems::HarnessSettings::default_test());
+        app.add_systems(
+            Update,
+            crate::systems::tools::tool_result_system.before(schedule_run_accounting_system),
+        );
+        let entity = accounting_task(&mut app, id, false);
+        let task_id = app.world().get::<Task>(entity).unwrap().id;
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(ShortTermMemory::default());
+        app.world_mut().spawn(ToolExecutionResultMessage {
+            result: AgentExecutionResult {
+                task_id,
+                agent_id: AgentId::nil(),
+                request_kind: AgentRequestKind::LlmCompletion,
+                result: Err(ExecutionError::Unknown(String::new())),
+                prompt: String::new(),
+                system_prompt: None,
+                tools: vec![],
+                reasoning_content: None,
+                work_item_id: None,
+                conversation: None,
+                turn_generation: None,
+            },
+            tool_name: "shell_exec".into(),
+            tool_output: Err(ToolError::PermissionDenied("unattended".into())),
+            tool_call_id: None,
+            processed: false,
+            original_tool_output: None,
+        });
+        app.update();
+        let records = ledger_records(&store, id);
+        assert_eq!(records[0].outcome, crate::domain::RunOutcome::Failed);
+        assert!(records[0].error.as_ref().unwrap().contains("shell_exec"));
+        let defs = store.load().unwrap();
+        assert_eq!(defs[0].health.consecutive_failures, 1);
+        assert!(defs[0].health.last_success_at.is_none());
     }
 
     #[test]

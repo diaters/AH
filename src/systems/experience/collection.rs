@@ -6,8 +6,8 @@ use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, ConversationMessage,
     DispatchHint, DispatchKind, DispatchStrategy, EntryRole, ExperienceCollectionCompletedMessage,
     ExperienceCollectionRequestMessage, ExperienceConsolidationRequestMessage,
-    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, LlmToolCall,
-    OutputContent, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskExperiencePolicy,
+    ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, OutputContent,
+    PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskExperiencePolicy,
     TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::ecs::EntityIndex;
@@ -167,38 +167,19 @@ fn build_experience_collection_conversation(
                     });
                 }
                 EntryRole::Assistant => {
-                    // 保留 tool_calls 信息，让 collector 能看到操作步骤
-                    let tool_calls: Vec<LlmToolCall> = entry
-                        .metadata
-                        .tool_calls
-                        .iter()
-                        .enumerate()
-                        .map(|(i, tc)| LlmToolCall {
-                            id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                            name: tc.tool_name.clone(),
-                            arguments: tc.input.clone(),
-                        })
-                        .collect();
-
+                    // 净化材料只使用展示文本，不从丢失入参和轮次的元数据伪造协议。
+                    let mut content = entry.content.clone();
+                    if !entry.metadata.tool_calls.is_empty() {
+                        content.push('\n');
+                        content.push_str(&crate::domain::render_tool_calls_summary(
+                            &entry.metadata.tool_calls,
+                        ));
+                    }
                     messages.push(ConversationMessage::Assistant {
-                        content: Some(entry.content.clone()),
-                        tool_calls,
+                        content: Some(content),
+                        tool_calls: vec![],
                         reasoning_content: None,
                     });
-
-                    // 追加工具结果（截断至 500 字符避免上下文膨胀）
-                    for (i, tc) in entry.metadata.tool_calls.iter().enumerate() {
-                        let truncated_output = if tc.output.chars().count() > 500 {
-                            let truncated: String = tc.output.chars().take(500).collect();
-                            format!("{}...[truncated]", truncated)
-                        } else {
-                            tc.output.clone()
-                        };
-                        messages.push(ConversationMessage::Tool {
-                            tool_call_id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                            content: truncated_output,
-                        });
-                    }
                 }
                 EntryRole::Summary => {
                     messages.push(ConversationMessage::System {
@@ -367,7 +348,7 @@ pub(crate) fn handle_experience_collection_llm_response(
 ) -> bool {
     match &result.result {
         Ok(AgentExecutionOutput {
-            content: OutputContent::ToolCalls(_),
+            content: OutputContent::ToolCalls(_) | OutputContent::ToolCallsWithText { .. },
             ..
         }) => {
             // 放行给 tool calling loop 处理 tool calls
@@ -426,6 +407,36 @@ pub(crate) fn handle_experience_collection_llm_response(
 #[cfg(test)]
 mod tests {
     use crate::domain::{ExperienceCandidate, ExperienceCandidateStatus, ExperienceStore, TaskId};
+
+    #[test]
+    fn collector_uses_textual_tool_evidence_without_fabricating_protocol() {
+        use crate::domain::{ChannelId, ConversationMessage, FrontendKind, ShortTermMemory, Task};
+        let task = Task::from_user_input(
+            "goal",
+            0,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "local".into(),
+                thread_id: None,
+            },
+        );
+        let mut stm = ShortTermMemory::default();
+        stm.record_tool_call(
+            Some("list".into()),
+            "shell_list".into(),
+            String::new(),
+            "[]".into(),
+            chrono::Utc::now(),
+        );
+        let messages = super::build_experience_collection_conversation(&task, Some(&stm));
+        assert!(messages.iter().any(|m| matches!(m, ConversationMessage::Assistant { content: Some(content), tool_calls, .. }
+            if content.contains("shell_list") && content.contains("[]") && tool_calls.is_empty())));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, ConversationMessage::Tool { .. }))
+        );
+    }
 
     #[test]
     fn experience_collection_completion_aggregates_child_candidates() {

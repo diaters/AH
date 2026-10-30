@@ -78,7 +78,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 向后兼容：现有 `model` 字段和环境变量配置继续工作
 - genai 适配层错误分类覆盖非流式 `exec_chat` 路径：HTTP 状态码从
   `webc::Error::ResponseFailedStatus` 中提取，401/403 → `Authentication`（不重试不降级）、
-  429 → `RateLimited`（可重试可降级）、402 → `QuotaExhausted`（降级）
+  429 → `RateLimited`（可重试可降级）、402 → `QuotaExhausted`（降级）；
+  400 / 422 → `InvalidRequest`（不重试不降级）。重试信号携带退避计数和 deadline，
+  生产端去重、消费端再次验证，拒绝将 Running / 终态或其他退避轮次重新派发。
 
 #### 测试分层（真实 LLM 场景测试）
 
@@ -113,6 +115,9 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
 - 引导式插入（steer）：同通道存在活跃的用户顶层任务时，用户输入投递到该任务的 `TaskInbox`，
   在下一个工具结果边界追加到对话尾部（同步写入 `ToolCallingState` 与 STM），不再新建任务；
   轮末仍有积压时自动续一轮；TUI 任务行显示排队数量；`/btw` 在当前会话结束后用于开启新话题
+- steer 接收回执显示真实等待状态及在飞工具运行时长，下一次请求优先回应补充；
+  模型文字与工具调用可并存，文字即时输出并保留在 Assistant 历史中，不触发完成。
+  详见 [工具循环反馈与受管监控修正](design/2026-10-30-monitor-feedback-fixes.md)。
 - 请求期上下文注入管道：`context_attachment_system` 在 `Execution` 首位统一处理任务级
   `LlmCompletion` 请求，负责回合代次打标、收件箱送达与新一轮进度清单回填
 - `/stop` 中断（TUI 空输入时 `Esc`）：中止在飞 LLM 请求并递增 `TurnGeneration` 兜底作废结果，取消在飞异步工具，
@@ -122,11 +127,16 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `wait_tasks` 显式等待时认领、不重复通知；空闲任务被自动拉起，连续自动拉起受
   `HARNESS_MAX_AUTO_WAKES` 约束
 - 终态约束：任务自然完成时若仍有后台任务或未送达通知，进入 `Waiting(BackgroundJobs)` 暂存候选结果；
-  `/finish`、`/clear`、失败时强制停止后台任务；终态任务收到的迟到 LLM 响应被丢弃
+  `/finish`、`/clear`、任务失败时强制停止后台任务；终态任务收到的迟到 LLM 响应被丢弃。
+  仅后台通知触发的汇报轮次失败且仍有受管作业时，保留作业、记录错误并明确提示，允许查询或结束。
+- 恢复对话使用仅驻留运行时的真实协议历史，保留参数、轮次与推理字段；压缩或旧记忆回退到文本。
+  展示记忆不存原始工具输入，不从工具结果伪造 arguments；tokenizer 进程内复用，预算按整组一次裁剪。
 - `update_todos` 进度清单：纯展示数据（ADR-007），TUI 任务面板渲染，IM 仅在进度变化时推送
 
 - 持续输出通知已接通：`notify_on_output` 默认关闭，开启后原始 stdout 告警经通道直接投递，
   排队与平台回执分开送回原 Task；支持三次退避重试、1 MiB 未确认背压及有界 Agent 摘要。
+- shell 工具指引区分一次性执行与受管长期会话；`shell_exec.command_succeeded` 表示命令成功，
+  非零退出、信号终止或超时保留结构化输出并产生 `ShellCommandFailed` 日志。
 - 自动后台唤醒改为默认 10 秒内 5 轮，超限自动恢复；真实后台资源与待投递通知阻止空闲结束。
 - 详细边界见 [持续监控输出与送达闭环](design/2026-10-29-live-monitor-output.md)。
 
@@ -283,6 +293,8 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   `reply` 自动回复、`explicit` 仅在 TUI 展示最终回复，运行状态消息不推送到 IM。
 - 连续失败默认 3 次告警一次，后续成功恢复一次；账本和健康提交失败会跨帧重试，
   不重复计数或发阈值告警。存储损坏显式报错并保留原文件，不把统计读取失败当零次或静默成功。
+- 定时运行中的权限拒绝保留结构化失败证据，最终文字不能将其记为正常 `Silent`；
+  更新失败次数并保留上次成功时间，不通过放宽工具权限修复执行失败。
 - 运行上下文提供独立 `state/` 目录、最近 24 小时统计；`report_of` 注入被观察任务的健康与统计。
   详细交付契约见 [定时监控 P1](design/2026-10-29-schedule-p1-delivery.md)。
 

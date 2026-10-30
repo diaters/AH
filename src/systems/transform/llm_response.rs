@@ -75,6 +75,7 @@ pub fn llm_response_system(
         Option<&ChatSession>,
     )>,
     owned_jobs: Query<&OwnedJobs>,
+    background_reports: Query<&crate::domain::BackgroundReportTurn>,
     inboxes: Query<&TaskInbox>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
@@ -215,7 +216,8 @@ pub fn llm_response_system(
                 && matches!(
                     &result.result,
                     Ok(AgentExecutionOutput {
-                        content: OutputContent::ToolCalls(_),
+                        content: OutputContent::ToolCalls(_)
+                            | OutputContent::ToolCallsWithText { .. },
                         ..
                     })
                 );
@@ -224,7 +226,7 @@ pub fn llm_response_system(
             }
         }
 
-        for (task_entity, mut task, short_term, chat_session) in &mut tasks {
+        for (task_entity, mut task, mut short_term, chat_session) in &mut tasks {
             if task.id != result.task_id {
                 continue;
             }
@@ -255,6 +257,12 @@ pub fn llm_response_system(
                 break;
             }
 
+            if result.request_kind == AgentRequestKind::LlmCompletion
+                && result.work_item_id.is_none()
+                && let Some(stm) = short_term.as_mut()
+            {
+                stm.protocol.remember_response(result);
+            }
             match &result.result {
                 Ok(AgentExecutionOutput {
                     content: OutputContent::Text(content),
@@ -279,7 +287,7 @@ pub fn llm_response_system(
                     let stm_tokens_before =
                         short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
 
-                    if let Some(mut stm) = short_term {
+                    if let Some(stm) = short_term.as_mut() {
                         stm.add_entry(EntryRole::Assistant, content, EntryMetadata::default());
                     }
                     let stm_tokens_after =
@@ -381,10 +389,29 @@ pub fn llm_response_system(
                     }
                 }
                 Ok(AgentExecutionOutput {
-                    content: OutputContent::ToolCalls(calls),
+                    content:
+                        OutputContent::ToolCalls(calls) | OutputContent::ToolCallsWithText { calls, .. },
                     reasoning_content,
                     ..
                 }) => {
+                    // 进度文字与工具属于同一次响应：输出文字，但不走纯文字的完成/等待用户分支。
+                    // Brain 和 WorkItem 的内部输出不作为原任务的用户反馈。
+                    if result.request_kind == AgentRequestKind::LlmCompletion
+                        && result.work_item_id.is_none()
+                        && let Some(text) =
+                            result.result.as_ref().ok().and_then(|o| o.content.text())
+                        && !text.trim().is_empty()
+                    {
+                        if let Some(stm) = short_term.as_mut() {
+                            stm.add_entry(EntryRole::Assistant, text, EntryMetadata::default());
+                        }
+                        if !(task.parent_task_id.is_some() && chat_session.is_some()) {
+                            commands.spawn(UserOutputMessage {
+                                task_id: task.id,
+                                content: text.to_string(),
+                            });
+                        }
+                    }
                     // 工具调用循环编排在 tools/tool_calling.rs（知识域归位）
                     crate::systems::tools::handle_tool_calls_response(
                         &mut commands,
@@ -430,6 +457,26 @@ pub fn llm_response_system(
                     );
                     task.schedule_retry(error, clock.0);
                 }
+                Err(error)
+                    if background_reports.contains(task_entity)
+                        && owned_jobs
+                            .get(task_entity)
+                            .is_ok_and(|jobs| !jobs.jobs().is_empty()) =>
+                {
+                    if let Some(info) =
+                        find_calling_state(&state_info, task.id, result.work_item_id)
+                    {
+                        commands.entity(info.entity).despawn();
+                    }
+                    task.last_error = Some(error.message().to_owned());
+                    task.mark_waiting(WaitingReason::BackgroundJobs, clock.0);
+                    warn!(event = "BackgroundReportFailed", task_id = %task.id, error = %error,
+                        "report failed; task-owned background jobs remain active");
+                    commands.spawn(UserOutputMessage {
+                        task_id: task.id,
+                        content: format!("后台汇报失败：{}。本任务的后台作业仍在运行，可继续查询、补充要求或使用 /finish 结束。", error.message()),
+                    });
+                }
                 Err(error) => {
                     // Clean up ToolCallingState before marking task failed.
                     // 按 (task_id, work_item_id) 严格匹配。
@@ -472,6 +519,9 @@ pub fn llm_response_system(
                 }
             }
 
+            if let Some(stm) = short_term.as_mut() {
+                stm.estimated_tokens = stm.estimated_tokens.max(stm.protocol.estimated_tokens());
+            }
             break;
         }
 
@@ -482,6 +532,101 @@ pub fn llm_response_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_tool_progress_respects_internal_chat_visibility() {
+        use crate::domain::{
+            AgentExecutionResult, AgentId, ChannelId, FrontendKind, LlmToolCall, TaskId,
+        };
+
+        for internal_chat in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<Clock>();
+            app.init_resource::<MemoryConfig>();
+            app.init_resource::<crate::domain::TaskEvaluationConfig>();
+            app.init_resource::<ExperienceStore>();
+            app.insert_resource(HarnessSettings::default_test());
+            app.init_resource::<EntityIndex>();
+            app.add_systems(Update, llm_response_system);
+            let mut task = Task::from_user_input(
+                "monitor",
+                3,
+                ChannelId {
+                    frontend: FrontendKind::Tui,
+                    user_id: "test".into(),
+                    thread_id: None,
+                },
+            );
+            if internal_chat {
+                task.parent_task_id = Some(TaskId::new());
+            }
+            task.mark_running(chrono::Utc::now());
+            let task_id = task.id;
+            let entity = app
+                .world_mut()
+                .spawn((task, ShortTermMemory::default()))
+                .id();
+            if internal_chat {
+                app.world_mut().entity_mut(entity).insert(ChatSession {
+                    child_agent_name: "internal-reviewer".into(),
+                    parent_tool_call_id: "parent-call".into(),
+                    current_batch_id: uuid::Uuid::new_v4(),
+                });
+            }
+            app.world_mut()
+                .resource_mut::<EntityIndex>()
+                .tasks
+                .insert(task_id, entity);
+            app.world_mut().spawn(AgentExecutionResultMessage {
+                result: AgentExecutionResult {
+                    task_id,
+                    agent_id: AgentId::nil(),
+                    request_kind: AgentRequestKind::LlmCompletion,
+                    result: Ok(AgentExecutionOutput {
+                        content: OutputContent::ToolCallsWithText {
+                            text: "progress".into(),
+                            calls: vec![LlmToolCall {
+                                id: "call".into(),
+                                name: "update_todos".into(),
+                                arguments: r#"{"todos":[]}"#.into(),
+                            }],
+                        },
+                        reasoning_content: Some("private".into()),
+                    }),
+                    prompt: "monitor".into(),
+                    system_prompt: None,
+                    tools: vec![],
+                    reasoning_content: None,
+                    work_item_id: None,
+                    conversation: None,
+                    turn_generation: None,
+                },
+            });
+            app.update();
+            let outputs = app
+                .world_mut()
+                .query::<&UserOutputMessage>()
+                .iter(app.world())
+                .count();
+            assert_eq!(
+                outputs,
+                usize::from(!internal_chat),
+                "internal agent progress must stay with the parent"
+            );
+            assert_eq!(
+                app.world().get::<Task>(entity).unwrap().status(),
+                &TaskStatus::Waiting(WaitingReason::ToolExecution)
+            );
+            let state = app
+                .world_mut()
+                .query::<&ToolCallingState>()
+                .single(app.world())
+                .unwrap();
+            assert!(
+                matches!(state.conversation.last(), Some(crate::domain::ConversationMessage::Assistant { content: Some(text), tool_calls, .. }) if text == "progress" && tool_calls.len() == 1)
+            );
+        }
+    }
 
     #[test]
     fn test_extract_result_summary_basic() {

@@ -458,7 +458,7 @@ pub(crate) fn handle_skill_creation_llm_response(
 ) -> bool {
     match &result.result {
         Ok(AgentExecutionOutput {
-            content: OutputContent::ToolCalls(_),
+            content: OutputContent::ToolCalls(_) | OutputContent::ToolCallsWithText { .. },
             ..
         }) => {
             // 放行给 tool calling loop 处理 tool calls
