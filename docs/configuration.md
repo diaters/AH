@@ -386,7 +386,7 @@ system_prompt = "You are a helper." # 系统提示
 ### 配置文件格式
 
 配置文件为 TOML 格式，支持 Telegram、QQ 和可选的 `[client]` 原生通道。
-原生通道的 TLS、一次性配对、凭证撤销、配置字段与恢复边界见 [客户端使用说明](client-channel.md)。
+原生通道的 TLS、配对、设备撤销、MeoW 用户映射、额度时区与恢复边界见 [客户端使用说明](client-channel.md)。
 现有 IM 配置示例：
 
 ```toml

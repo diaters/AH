@@ -21,7 +21,7 @@ use crate::domain::{
 };
 
 pub use server::ClientServer;
-pub use store::Store;
+pub use store::{MeowConfig, Store};
 
 /// 离线本机管理：运行实例持有独占锁，拒绝与服务并发改写身份库。
 pub fn run_admin_command() -> anyhow::Result<bool> {
@@ -55,6 +55,8 @@ pub struct ClientConfig {
     pub tls_cert: PathBuf,
     pub tls_key: PathBuf,
     pub state_path: PathBuf,
+    #[serde(default)]
+    pub meow: Option<MeowConfig>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -113,6 +115,49 @@ impl Client {
             return Ok(());
         };
         let (kind, data) = match event {
+            EngineEvent::ToolCallCompleted {
+                task_id,
+                call_id,
+                agent_name,
+                tool_name,
+                success,
+                output,
+                truncated,
+                late_result,
+                ..
+            } => (
+                "tool_completed",
+                json!({"task_id":task_id,"call_id":call_id,"agent_name":agent_name,"tool_name":tool_name,"success":success,"output":output,"truncated":truncated,"late_result":late_result}),
+            ),
+            EngineEvent::AutomationSnapshot { snapshot, .. } => ("automation", snapshot.clone()),
+            EngineEvent::TaskInteractionChanged {
+                task_id,
+                revision,
+                question_id,
+                can_stop,
+                can_finish,
+                ..
+            } => (
+                "task_interaction",
+                json!({"task_id":task_id,"revision":revision,"question_id":question_id,"can_stop":can_stop,"can_finish":can_finish}),
+            ),
+            EngineEvent::QuestionPresented {
+                task_id,
+                question_id,
+                question,
+                ..
+            } => (
+                "question",
+                json!({"task_id":task_id,"question_id":question_id,"question":question,"claimed":false}),
+            ),
+            EngineEvent::CommandResult {
+                command_id,
+                outcome,
+                ..
+            } => (
+                "command_result",
+                json!({"command_id":command_id,"status":if outcome.is_ok(){"processed"}else{"rejected"},"result_code":outcome.as_ref().err()}),
+            ),
             EngineEvent::Text {
                 role,
                 content,
@@ -151,6 +196,28 @@ impl Client {
                 json!({
                 "task_id":task_id, "agent_name":agent_name, "tool_name":tool_name, "input_summary":tool_input_summary }),
             ),
+
+            EngineEvent::PermissionAudit {
+                agent_id,
+                agent_name,
+                tool_name,
+                action,
+                source,
+                context,
+                ..
+            } => (
+                "permission_audit",
+                json!({"agent_id":agent_id,"agent_name":agent_name,"tool_name":tool_name,"action":action,"source":source,"context":context}),
+            ),
+            EngineEvent::BatchProgress {
+                batch_id,
+                completed,
+                total,
+                ..
+            } => (
+                "batch_progress",
+                json!({"batch_id":batch_id,"completed":completed,"total":total}),
+            ),
             EngineEvent::TodoUpdated { task_id, items, .. } => {
                 ("todos", json!({"task_id":task_id, "items":items}))
             }
@@ -160,7 +227,7 @@ impl Client {
             EngineEvent::TaskCleared { task_id, .. } => {
                 ("task_cleared", json!({"task_id":task_id}))
             }
-            // 审批先保留真实请求，用能力协商明确当前不能远程处理。
+            // 保留原始审批请求与选项；回包继续经过运行时权限校验。
             EngineEvent::ApprovalRequest {
                 request_id,
                 agent_name,
@@ -196,7 +263,13 @@ impl Client {
                 continue;
             };
             if seen.insert((channel.user_id.clone(), session_id)) {
-                store.append(&channel.user_id, session_id, kind, data.clone())?;
+                store.append_with_notification(
+                    &channel.user_id,
+                    session_id,
+                    kind,
+                    data.clone(),
+                    self.config.meow.as_ref(),
+                )?;
             }
         }
         self.wake();
@@ -232,7 +305,7 @@ impl Channel for Client {
 
     async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError> {
         // 附件必须走后续的授权文件协议，禁止暴露服务器任意路径。
-        if !message.attachments.is_empty() || message.reply_markup.is_some() {
+        if message.reply_markup.is_some() {
             return Err(ChannelError::NotSupported);
         }
         let session_id = message
@@ -240,21 +313,36 @@ impl Channel for Client {
             .as_deref()
             .and_then(|id| id.parse().ok())
             .ok_or(ChannelError::NotConfigured)?;
+        if message.attachments.len() > 8 {
+            return Err(ChannelError::NotSupported);
+        }
+        {
+            let mut store = self.store.lock().expect("client state mutex poisoned");
+            for attachment in &message.attachments {
+                store
+                    .import_attachment(&message.recipient, session_id, &attachment.target)
+                    .map_err(|error| ChannelError::Api {
+                        code: 500,
+                        message: error.to_string(),
+                    })?;
+            }
+        }
         self.store
             .lock()
             .expect("client state mutex poisoned")
-            .append(
+            .append_with_notification(
                 &message.recipient,
                 session_id,
                 "text",
-                json!({"role":"system","content":message.content}),
+                json!({"role":"system","content":message.content,"background_notification":true}),
+                self.config.meow.as_ref(),
             )
             .map_err(|error| ChannelError::Api {
                 code: 500,
                 message: error.to_string(),
             })?;
         self.wake();
-        // 只持久化，不谎称设备已收到；该能力尚不注册到 channel_send。
+        // 回执表示本实例持久化，不表示 MeoW 或设备已接收。
         Ok(None)
     }
 
@@ -264,5 +352,9 @@ impl Channel for Client {
     ) -> Result<(), ChannelError> {
         // HTTPS 服务持有统一 ExternalInput 发送端，无额外监听/桥接线程。
         Ok(())
+    }
+    fn supported_attachment_kinds(&self) -> Vec<crate::domain::AttachmentKind> {
+        use crate::domain::AttachmentKind::*;
+        vec![Image, Document, Video, Audio, Voice]
     }
 }

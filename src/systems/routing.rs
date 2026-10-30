@@ -37,6 +37,42 @@ fn parse_confirmation_option(content: &str) -> Option<String> {
     }
 }
 
+pub(crate) fn complete_ask_user(
+    commands: &mut Commands,
+    task_entity: Entity,
+    task: &mut Task,
+    pending: &AskUserPending,
+    answer: &str,
+    clock: &Clock,
+) {
+    commands.spawn(ToolExecutionResultMessage {
+        result: AgentExecutionResult {
+            task_id: task.id,
+            agent_id: pending.agent_id,
+            request_kind: AgentRequestKind::LlmCompletion,
+            result: Ok(AgentExecutionOutput {
+                content: OutputContent::Text("ask_user completed".into()),
+                reasoning_content: None,
+            }),
+            prompt: String::new(),
+            system_prompt: None,
+            tools: vec![],
+            reasoning_content: None,
+            work_item_id: None,
+            conversation: None,
+            turn_generation: None,
+        },
+        tool_name: "ask_user".into(),
+        tool_output: Ok(serde_json::json!({"answer":answer})),
+        tool_call_id: Some(pending.tool_call_id.clone()),
+        processed: false,
+        original_tool_output: None,
+    });
+    commands.entity(task_entity).remove::<AskUserPending>();
+    TrustedImages::register(commands, task_entity, answer);
+    task.mark_waiting(WaitingReason::ToolExecution, clock.0);
+}
+
 /// 用户输入路由系统：判断是创建新任务还是继续现有任务
 pub(crate) fn user_input_routing_system(
     mut commands: Commands,
@@ -76,6 +112,22 @@ pub(crate) fn user_input_routing_system(
                 task_id: roots[0],
                 content: "此通道存在多个未结束的用户任务，无法确定输入归属；请先修复冲突任务。"
                     .to_string(),
+            });
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        if input.origin_channel.frontend == crate::domain::FrontendKind::Client
+            && let Some((_, task)) = tasks.iter().find(|(_, task)| {
+                task.origin_channel.as_ref() == Some(&input.origin_channel)
+                    && !task.status.is_terminal()
+                    && (task.pending_confirmation_id.is_some()
+                        || task.status == TaskStatus::Waiting(WaitingReason::AskUser))
+            })
+        {
+            commands.spawn(SystemOutputMessage {
+                task_id: task.id,
+                content: "请通过对应的审批或问答卡片提交，普通消息不会处理时效请求。".into(),
             });
             commands.entity(entity).despawn();
             continue;
@@ -157,33 +209,14 @@ pub(crate) fn user_input_routing_system(
                 // 通过 get_mut 在单次借用内完成读 task.id 与写 task.status，
                 // 避免 iter().find() 残留的 Mut<Task> 与 get_mut() 冲突。
                 if let Ok((_, mut task)) = tasks.get_mut(task_entity) {
-                    commands.spawn(ToolExecutionResultMessage {
-                        result: AgentExecutionResult {
-                            task_id: task.id,
-                            agent_id: pending.agent_id,
-                            request_kind: AgentRequestKind::LlmCompletion,
-                            result: Ok(AgentExecutionOutput {
-                                content: OutputContent::Text("ask_user completed".to_string()),
-                                reasoning_content: None,
-                            }),
-                            prompt: String::new(),
-                            system_prompt: None,
-                            tools: vec![],
-                            reasoning_content: None,
-                            work_item_id: None,
-                            conversation: None,
-                            turn_generation: None,
-                        },
-                        tool_name: "ask_user".to_string(),
-                        tool_output: Ok(serde_json::json!({"answer": input.content})),
-                        tool_call_id: Some(pending.tool_call_id.clone()),
-                        processed: false,
-                        original_tool_output: None,
-                    });
-                    commands.entity(task_entity).remove::<AskUserPending>();
-                    TrustedImages::register(&mut commands, task_entity, &input.content);
-                    // 恢复 task 状态为 Waiting(ToolExecution)，让 LLM loop 续跑
-                    task.mark_waiting(WaitingReason::ToolExecution, clock.0);
+                    complete_ask_user(
+                        &mut commands,
+                        task_entity,
+                        &mut task,
+                        pending,
+                        &input.content,
+                        &clock,
+                    );
                 }
             }
             commands.entity(entity).despawn();

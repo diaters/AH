@@ -21,6 +21,30 @@ pub struct FrontendPlugin;
 
 impl Plugin for FrontendPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<crate::systems::ScheduleSubscriptions>();
+        app.add_systems(
+            Update,
+            (
+                crate::systems::client_schedule_request_system.in_set(HarnessSet::Transform),
+                crate::systems::client_schedule_snapshot_system
+                    .in_set(HarnessSet::Output)
+                    .after(schedule_persist_system)
+                    .after(once_schedule_completion_system),
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
+                crate::systems::interaction_request_system
+                    .in_set(HarnessSet::Transform)
+                    .after(crate::systems::conversation_input_order_system)
+                    .before(command_parse_system)
+                    .before(user_input_routing_system),
+                crate::systems::interaction_state_system
+                    .in_set(HarnessSet::Output)
+                    .after(frontend_output_system),
+            ),
+        );
         app.init_resource::<crate::domain::InputSequencer>();
         app.init_resource::<crate::systems::ScheduleDeliveryTracker>();
         app.add_systems(

@@ -12,6 +12,14 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::ClientError;
+#[path = "files.rs"]
+mod files;
+#[path = "notifications.rs"]
+mod notifications;
+pub use files::ClientFile;
+pub(super) use files::MAX_FILE_BYTES;
+pub use notifications::MeowConfig;
+pub(super) use notifications::notification_worker;
 
 pub const EVENT_RETENTION: usize = 2048;
 const COMMAND_LIMIT: usize = 10_000;
@@ -51,6 +59,14 @@ pub struct Session {
     pub version: u64,
     pub tasks: BTreeMap<String, Value>,
     pub approvals: BTreeMap<Uuid, Value>,
+    #[serde(default)]
+    pub questions: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub observations: Vec<Value>,
+    #[serde(default)]
+    pub observations_truncated: bool,
+    #[serde(default)]
+    pub progress: BTreeMap<String, Value>,
     pub messages: Vec<Value>,
     pub history_truncated: bool,
 }
@@ -60,6 +76,8 @@ pub struct CommandReceipt {
     pub command_id: Uuid,
     /// 只表示进入统一输入队列，不表示 Agent 已消费或任务执行成功。
     pub status: String,
+    #[serde(default)]
+    pub result_code: Option<String>,
     pub session_id: Uuid,
     pub(super) payload_hash: String,
     pub(super) user_id: String,
@@ -75,6 +93,16 @@ struct State {
     sessions: BTreeMap<Uuid, Session>,
     events: Vec<ClientEvent>,
     commands: BTreeMap<Uuid, CommandReceipt>,
+    #[serde(default)]
+    automation: BTreeMap<String, Value>,
+    #[serde(default)]
+    notifications: Vec<notifications::Notification>,
+    #[serde(default)]
+    notification_quota: BTreeMap<String, u32>,
+    #[serde(default)]
+    notification_overflow: BTreeMap<String, u64>,
+    #[serde(default)]
+    files: BTreeMap<Uuid, ClientFile>,
 }
 
 pub struct Store {
@@ -147,6 +175,11 @@ impl Store {
                 sessions: BTreeMap::new(),
                 events: vec![],
                 commands: BTreeMap::new(),
+                automation: BTreeMap::new(),
+                notifications: vec![],
+                notification_quota: BTreeMap::new(),
+                notification_overflow: BTreeMap::new(),
+                files: BTreeMap::new(),
             },
             Err(e) => return Err(e.into()),
         };
@@ -161,10 +194,22 @@ impl Store {
         }
         for session in state.sessions.values_mut() {
             session.approvals.clear();
+            session.questions.clear();
             for task in session.tasks.values_mut() {
                 if !matches!(task["status"].as_str(), Some("done" | "failed")) {
                     task["status"] = "recovery_required".into();
+                    task["can_stop"] = false.into();
+                    task["can_finish"] = false.into();
                 }
+            }
+        }
+        for view in state.automation.values_mut() {
+            view["stale"] = true.into();
+        }
+        for notification in &mut state.notifications {
+            if notification.state == "sending" {
+                notification.state = "unknown".into();
+                notification.result_code = Some("interrupted_while_sending".into());
             }
         }
         let store = Self {
@@ -218,6 +263,22 @@ impl Store {
         Ok(result)
     }
 
+    pub(super) fn diagnostics(&self, user: &str) -> Value {
+        let sessions: Vec<_> = self
+            .state
+            .sessions
+            .values()
+            .filter(|s| s.user_id == user)
+            .collect();
+        serde_json::json!({"instance_id":self.instance_id(),"version":env!("CARGO_PKG_VERSION"),"protocol_version":1,
+            "storage_available":!self.failed,"cursor":self.state.sequence,"event_retention":EVENT_RETENTION,
+            "sessions":sessions.len(),"pending_approvals":sessions.iter().map(|s|s.approvals.len()).sum::<usize>(),
+            "pending_questions":sessions.iter().map(|s|s.questions.len()).sum::<usize>(),
+            "unknown_commands":self.state.commands.values().filter(|r|r.user_id==user&&r.status=="unknown_after_restart").count(),
+            "files":self.state.files.values().filter(|f|f.user_id==user).count(),
+            "notification_overflow":self.state.notification_overflow.get(user).copied().unwrap_or(0),
+            "task_restart_recovery":false})
+    }
     pub fn instance_id(&self) -> Uuid {
         self.state.instance_id
     }
@@ -318,7 +379,12 @@ impl Store {
 
     pub fn snapshot(&self, user: &str) -> Value {
         serde_json::json!({ "cursor": self.state.sequence, "instance_id": self.state.instance_id,
-            "sessions": self.state.sessions.values().filter(|s| s.user_id == user).collect::<Vec<_>>() })
+            "sessions": self.state.sessions.values().filter(|s| s.user_id == user).collect::<Vec<_>>(),
+            "automation":self.state.automation.get(user).cloned().unwrap_or(serde_json::json!({"available":false,"schedules":[],"stale":true})),
+            "notifications":self.state.notifications.iter().rev().filter(|n|n.user_id==user).take(200).map(|n|n.public()).collect::<Vec<_>>(),
+            "notifications_truncated":self.state.notifications.iter().filter(|n|n.user_id==user).count()>200,
+            "notification_overflow":self.state.notification_overflow.get(user).copied().unwrap_or(0),
+            "files":self.state.files.values().filter(|f|f.user_id==user).collect::<Vec<_>>() })
     }
 
     pub fn events(&self, user: &str, after: u64) -> Result<Value, ClientError> {
@@ -367,7 +433,7 @@ impl Store {
             .filter(|r| r.user_id == user)
             .ok_or(ClientError::NotFound)?;
         Ok(
-            serde_json::json!({"command_id":id,"session_id":receipt.session_id,"status":receipt.status}),
+            serde_json::json!({"command_id":id,"session_id":receipt.session_id,"status":receipt.status,"result_code":receipt.result_code}),
         )
     }
 
@@ -389,12 +455,17 @@ impl Store {
                 version: 0,
                 tasks: BTreeMap::new(),
                 approvals: BTreeMap::new(),
+                questions: BTreeMap::new(),
+                observations: vec![],
+                observations_truncated: false,
+                progress: BTreeMap::new(),
                 messages: vec![],
                 history_truncated: false,
             };
             let receipt = CommandReceipt {
                 command_id: id,
                 status: "processed".into(),
+                result_code: None,
                 session_id: session.id,
                 payload_hash: hash(payload),
                 user_id: user.into(),
@@ -422,6 +493,7 @@ impl Store {
                 command_id: id,
                 session_id,
                 status: "queued".into(),
+                result_code: None,
                 payload_hash: hash(payload),
                 user_id: user.into(),
             };
@@ -443,6 +515,98 @@ impl Store {
                 .get_mut(&id)
                 .ok_or(ClientError::NotFound)?
                 .status = "runtime_unavailable".into();
+            Ok(())
+        })
+    }
+
+    pub(super) fn accept_command(
+        &mut self,
+        user: &str,
+        id: Uuid,
+        session_id: Uuid,
+        payload: &str,
+    ) -> Result<(), ClientError> {
+        self.session(user, session_id)?;
+        self.change(|state| {
+            if state.commands.len() >= COMMAND_LIMIT {
+                return Err(ClientError::Capacity);
+            }
+            state.commands.insert(
+                id,
+                CommandReceipt {
+                    command_id: id,
+                    session_id,
+                    status: "queued".into(),
+                    result_code: None,
+                    payload_hash: hash(payload),
+                    user_id: user.into(),
+                },
+            );
+            Ok(())
+        })
+    }
+
+    pub(super) fn accept_interaction(
+        &mut self,
+        user: &str,
+        id: Uuid,
+        session_id: Uuid,
+        interaction: &crate::domain::TaskInteraction,
+        payload: &str,
+    ) -> Result<(), ClientError> {
+        use crate::domain::TaskInteraction;
+        let session = self.session(user, session_id)?;
+        match interaction {
+            TaskInteraction::Stop {
+                task_id,
+                expected_revision,
+            }
+            | TaskInteraction::Finish {
+                task_id,
+                expected_revision,
+            } => {
+                let task = session
+                    .tasks
+                    .get(&task_id.to_string())
+                    .ok_or(ClientError::NotFound)?;
+                let operation = if matches!(interaction, TaskInteraction::Stop { .. }) {
+                    "can_stop"
+                } else {
+                    "can_finish"
+                };
+                if task["revision"].as_str() != Some(expected_revision)
+                    || task[operation].as_bool() != Some(true)
+                {
+                    return Err(ClientError::Conflict(
+                        "task changed or operation unavailable",
+                    ));
+                }
+            }
+            TaskInteraction::Answer {
+                task_id,
+                question_id,
+                answer,
+            } => {
+                let question = session
+                    .questions
+                    .get(&format!("{task_id}/{question_id}"))
+                    .ok_or(ClientError::NotFound)?;
+                if question["claimed"].as_bool() == Some(true) {
+                    return Err(ClientError::Conflict("question already claimed"));
+                }
+                if answer.trim().is_empty() || answer.len() > 32 * 1024 {
+                    return Err(ClientError::Invalid("invalid answer"));
+                }
+            }
+        }
+        self.change(|state| {
+            if state.commands.len() >= COMMAND_LIMIT { return Err(ClientError::Capacity); }
+            state.commands.insert(id,CommandReceipt {command_id:id,session_id,status:"queued".into(),result_code:None,
+                payload_hash:hash(payload),user_id:user.into()});
+            if let TaskInteraction::Answer {task_id,question_id,answer} = interaction {
+                state.sessions.get_mut(&session_id).unwrap().questions.get_mut(&format!("{task_id}/{question_id}")).unwrap()["claimed"] = true.into();
+                append_event(state,session_id,"text",serde_json::json!({"role":"user","content":answer,"command_id":id,"question_id":question_id}));
+            }
             Ok(())
         })
     }
@@ -487,6 +651,7 @@ impl Store {
                 command_id: id,
                 session_id,
                 status: "queued".into(),
+                result_code: None,
                 payload_hash: hash(payload),
                 user_id: user.into(),
             };
@@ -516,9 +681,23 @@ impl Store {
         kind: &str,
         data: Value,
     ) -> Result<(), ClientError> {
+        self.append_with_notification(user, session_id, kind, data, None)
+    }
+
+    pub(super) fn append_with_notification(
+        &mut self,
+        user: &str,
+        session_id: Uuid,
+        kind: &str,
+        data: Value,
+        config: Option<&MeowConfig>,
+    ) -> Result<(), ClientError> {
         self.session(user, session_id)?;
         self.change(|state| {
-            append_event(state, session_id, kind, data);
+            append_event(state, session_id, kind, data.clone());
+            if let Some(config) = config {
+                notifications::enqueue(state, user, session_id, kind, &data, config);
+            }
             Ok(())
         })
     }
@@ -538,13 +717,112 @@ fn append_event(state: &mut State, session_id: Uuid, kind: &str, data: Value) {
         .get_mut(&session_id)
         .expect("validated session");
     session.version += 1;
-    if kind == "task_status" {
+    if matches!(kind, "tool_started" | "tool_completed" | "permission_audit") {
+        let mut observation = data.clone();
+        observation["kind"] = kind.into();
+        session.observations.push(observation);
+        if session.observations.len() > 200 {
+            session.observations.remove(0);
+            session.observations_truncated = true;
+        }
+    } else if matches!(kind, "todos" | "inbox" | "batch_progress") {
+        if let Some(id) = data["task_id"]
+            .as_str()
+            .or_else(|| data["batch_id"].as_str())
+        {
+            session
+                .progress
+                .insert(format!("{kind}/{id}"), data.clone());
+        }
+    } else if kind == "automation" {
+        let mut snapshot = data.clone();
+        snapshot["stale"] = false.into();
+        let active: std::collections::HashSet<_> = snapshot["schedules"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["id"].as_str().map(String::from))
+            .collect();
+        let mut archived = std::collections::BTreeMap::new();
+        if let Some(previous) = state.automation.get(&session.user_id) {
+            for def in previous["archived"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(previous["schedules"].as_array().into_iter().flatten())
+            {
+                if let Some(id) = def["id"].as_str().filter(|id| !active.contains(*id)) {
+                    let mut def = def.clone();
+                    def["archived"] = true.into();
+                    def["enabled"] = false.into();
+                    def["next_trigger"] = Value::Null;
+                    archived.insert(id.to_string(), def);
+                }
+            }
+        }
+        snapshot["archive_truncated"] = (archived.len() > 256).into();
+        snapshot["archived"] =
+            serde_json::json!(archived.into_values().take(256).collect::<Vec<_>>());
+        if snapshot.get("history").is_none()
+            && let Some(history) = state
+                .automation
+                .get(&session.user_id)
+                .and_then(|v| v.get("history"))
+        {
+            snapshot["history"] = history.clone();
+        }
+        state.automation.insert(session.user_id.clone(), snapshot);
+    } else if kind == "command_result" {
+        if let Some(id) = data["command_id"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok())
+            && let Some(receipt) = state.commands.get_mut(&id).filter(|r| {
+                r.session_id == session_id && r.user_id == session.user_id && r.status == "queued"
+            })
+        {
+            receipt.status = data["status"].as_str().unwrap_or("rejected").into();
+            receipt.result_code = data["result_code"].as_str().map(String::from);
+        }
+    } else if kind == "task_interaction" {
         if let Some(id) = data["task_id"].as_str() {
-            session.tasks.insert(id.into(), data.clone());
+            if let Some(task) = session.tasks.get_mut(id) {
+                for key in ["revision", "can_stop", "can_finish"] {
+                    task[key] = data[key].clone();
+                }
+            }
+            session.questions.retain(|_, q| {
+                q["task_id"].as_str() != Some(id) || q["question_id"] == data["question_id"]
+            });
+        }
+    } else if kind == "question" {
+        if let (Some(task), Some(id)) = (data["task_id"].as_str(), data["question_id"].as_str()) {
+            session
+                .questions
+                .insert(format!("{task}/{id}"), data.clone());
+        }
+    } else if kind == "task_status" {
+        if let Some(id) = data["task_id"].as_str() {
+            let mut next = data.clone();
+            if let Some(previous) = session.tasks.get(id) {
+                for key in ["revision", "can_stop", "can_finish"] {
+                    next[key] = previous[key].clone();
+                }
+            }
+            if matches!(data["status"].as_str(), Some("done" | "failed")) {
+                next["can_stop"] = false.into();
+                next["can_finish"] = false.into();
+            }
+            session.tasks.insert(id.into(), next);
         }
     } else if kind == "task_cleared" {
         if let Some(id) = data["task_id"].as_str() {
             session.tasks.remove(id);
+            session
+                .questions
+                .retain(|_, q| q["task_id"].as_str() != Some(id));
+            session
+                .progress
+                .retain(|_, p| p["task_id"].as_str() != Some(id));
         }
     } else if kind == "text" {
         session.messages.push(data.clone());

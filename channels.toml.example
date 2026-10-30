@@ -22,3 +22,10 @@ pairing_enabled = false
 # tls_cert = ".harness/client/server.pem"
 # tls_key = ".harness/client/server-key.pem"
 # state_path = ".harness/client/state.json"
+
+# 可选：服务端自动通知；用户 ID 与 --client-pair 的用户一致，昵称不放入客户端。
+# [client.meow]
+# daily_limit = 3000
+# utc_offset_minutes = 480
+# [client.meow.recipients]
+# alice = "${HARNESS_MEOW_RECIPIENT}"

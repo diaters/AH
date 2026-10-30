@@ -595,6 +595,11 @@ impl App {
     /// 处理引擎事件，更新 TUI 状态
     pub fn handle_engine_event(&mut self, event: EngineEvent) {
         match event {
+            EngineEvent::ToolCallCompleted { .. } => {}
+            EngineEvent::AutomationSnapshot { .. } => {}
+            EngineEvent::TaskInteractionChanged { .. }
+            | EngineEvent::QuestionPresented { .. }
+            | EngineEvent::CommandResult { .. } => {}
             EngineEvent::Text { role, content, .. } => {
                 let msg = match role {
                     MessageRole::User => ChatMessage::User(content),

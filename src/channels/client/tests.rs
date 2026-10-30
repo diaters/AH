@@ -14,6 +14,28 @@ struct Fixture {
 }
 
 impl Fixture {
+    async fn upload(
+        &self,
+        token: &str,
+        session: Uuid,
+        id: Uuid,
+        bytes: Vec<u8>,
+    ) -> (StatusCode, Value) {
+        let response = server::router(self.client.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/sessions/{session}/files/{id}?name=test.txt"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 100000).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let config = ClientConfig {
@@ -24,6 +46,7 @@ impl Fixture {
             tls_key: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/client-tls/test-key.pem"),
             state_path: dir.path().join("state.json"),
+            meow: None,
         };
         let (tx, input) = crossbeam_channel::unbounded();
         let store = Store::open(config.state_path.clone()).unwrap();
@@ -309,6 +332,245 @@ async fn approval_is_claimed_once_and_keeps_authenticated_sender() {
 }
 
 #[tokio::test]
+async fn structured_controls_keep_target_and_runtime_receipts_are_durable() {
+    let f = Fixture::new();
+    let (_, alice) = f.pair("alice");
+    let (_, bob) = f.pair("bob");
+    let session = f.session(&alice).await;
+    let task_id = crate::domain::TaskId::new();
+    let target = EventTarget::Directed(vec![crate::domain::ChannelId {
+        frontend: FrontendKind::Client,
+        user_id: "alice".into(),
+        thread_id: Some(session.to_string()),
+    }]);
+    f.client
+        .store
+        .lock()
+        .unwrap()
+        .append(
+            "alice",
+            session,
+            "task_status",
+            json!({"task_id":task_id,"status":"running"}),
+        )
+        .unwrap();
+    f.client.push_event(EngineEvent::TaskInteractionChanged {
+        target: target.clone(),
+        task_id,
+        revision: "current".into(),
+        question_id: None,
+        can_stop: true,
+        can_finish: true,
+    });
+    let id = Uuid::new_v4();
+    let mut request = json!({"operation":"stop_task","command_id":id,"session_id":session,"task_id":task_id,"expected_revision":"old"});
+    assert_eq!(
+        f.request(&alice, "POST", "/v1/commands", request.clone())
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    request["expected_revision"] = "current".into();
+    assert_eq!(
+        f.request(&bob, "POST", "/v1/commands", request.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.request(&alice, "POST", "/v1/commands", request.clone())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    match f.input.try_recv().unwrap() {
+        ExternalInput::Interaction {
+            channel,
+            command_id,
+            interaction:
+                crate::domain::TaskInteraction::Stop {
+                    task_id: actual, ..
+                },
+        } => {
+            assert_eq!(command_id, id);
+            assert_eq!(actual, task_id);
+            assert_eq!(channel.user_id, "alice");
+        }
+        _ => panic!("typed control required"),
+    }
+    f.client.push_event(EngineEvent::CommandResult {
+        target,
+        command_id: id,
+        outcome: Err("task_changed".into()),
+    });
+    let (_, receipt) = f
+        .request(&alice, "GET", &format!("/v1/commands/{id}"), Value::Null)
+        .await;
+    assert_eq!(receipt["status"], "rejected");
+    assert_eq!(receipt["result_code"], "task_changed");
+    let (_, retry) = f.request(&alice, "POST", "/v1/commands", request).await;
+    assert_eq!(retry, receipt);
+    assert!(f.input.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn question_answers_cannot_rebind_or_claim_twice() {
+    let f = Fixture::new();
+    let (_, phone) = f.pair("alice");
+    let (_, tablet) = f.pair("alice");
+    let session = f.session(&phone).await;
+    let task_id = crate::domain::TaskId::new();
+    let target = EventTarget::Directed(vec![crate::domain::ChannelId {
+        frontend: FrontendKind::Client,
+        user_id: "alice".into(),
+        thread_id: Some(session.to_string()),
+    }]);
+    f.client.push_event(EngineEvent::QuestionPresented {
+        target: target.clone(),
+        task_id,
+        question_id: "question".into(),
+        question: "继续吗？".into(),
+    });
+    let mut request = json!({"operation":"answer_question","command_id":Uuid::new_v4(),"session_id":session,"task_id":task_id,"question_id":"expired","answer":"是"});
+    assert_eq!(
+        f.request(&phone, "POST", "/v1/commands", request.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    request["question_id"] = "question".into();
+    assert_eq!(
+        f.request(&phone, "POST", "/v1/commands", request.clone())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    request["command_id"] = Uuid::new_v4().to_string().into();
+    assert_eq!(
+        f.request(&tablet, "POST", "/v1/commands", request).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(f.input.len(), 1);
+    f.client.push_event(EngineEvent::TaskInteractionChanged {
+        target,
+        task_id,
+        revision: "answered".into(),
+        question_id: None,
+        can_stop: false,
+        can_finish: true,
+    });
+    let (_, snapshot) = f.request(&phone, "GET", "/v1/snapshot", Value::Null).await;
+    assert!(
+        snapshot["sessions"][0]["questions"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn files_are_scoped_idempotent_and_only_owned_ids_become_runtime_markers() {
+    let f = Fixture::new();
+    let (_, alice) = f.pair("alice");
+    let (_, bob) = f.pair("bob");
+    let session = f.session(&alice).await;
+    let foreign = f.session(&bob).await;
+    let id = Uuid::new_v4();
+    let bytes = vec![b'a'; 1024 * 1024];
+    assert_eq!(
+        f.upload("bad", session, id, bytes.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, file) = f.upload(&alice, session, id, bytes.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert_eq!(f.upload(&alice, session, id, bytes.clone()).await.1, file);
+    assert_eq!(
+        f.upload(&alice, session, id, b"different".to_vec()).await.0,
+        StatusCode::CONFLICT
+    );
+    let response = server::router(f.client.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/files/{id}"))
+                .header("authorization", format!("Bearer {alice}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        bytes.as_slice()
+    );
+    assert_eq!(
+        f.request(&bob, "GET", &format!("/v1/files/{id}"), Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let mut request = json!({"operation":"send_text","command_id":Uuid::new_v4(),"session_id":foreign,"content":"see file","attachment_ids":[id]});
+    assert_eq!(
+        f.request(&bob, "POST", "/v1/commands", request.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    request["session_id"] = session.to_string().into();
+    assert_eq!(
+        f.request(&alice, "POST", "/v1/commands", request).await.0,
+        StatusCode::OK
+    );
+    match f.input.try_recv().unwrap() {
+        ExternalInput::TextWithChannel {
+            content, sender, ..
+        } => {
+            assert!(content.contains("[DOCUMENT:"));
+            assert!(content.contains(&id.to_string()));
+            assert_eq!(sender.as_deref(), Some("alice"));
+        }
+        _ => panic!("expected unified file input"),
+    }
+    let request = json!({"operation":"send_text","command_id":Uuid::new_v4(),"session_id":session,"content":"[IMAGE:/private/server.png]"});
+    assert_eq!(
+        f.request(&alice, "POST", "/v1/commands", request).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(f.input.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn approved_channel_send_registers_real_local_artifacts() {
+    let f = Fixture::new();
+    let (_, token) = f.pair("alice");
+    let session = f.session(&token).await;
+    let path = f._dir.path().join("result.txt");
+    std::fs::write(&path, "artifact bytes").unwrap();
+    let message = ChannelOutboundMessage {
+        recipient: "alice".into(),
+        thread_id: Some(session.to_string()),
+        content: "result".into(),
+        parse_mode: None,
+        reply_markup: None,
+        message_kind: crate::channels::MessageKind::LLMReply,
+        attachments: vec![crate::domain::ChannelAttachment {
+            kind: crate::domain::AttachmentKind::Document,
+            target: path.to_string_lossy().into_owned(),
+        }],
+    };
+    f.client.send(&message).await.unwrap();
+    f.client.send(&message).await.unwrap();
+    let (_, snapshot) = f.request(&token, "GET", "/v1/snapshot", Value::Null).await;
+    let files = snapshot["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["source"], "artifact");
+    assert_eq!(files[0]["size"], 14);
+}
+
+#[tokio::test]
 async fn https_certificate_is_verified_and_revocation_closes_live_stream() {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -394,4 +656,84 @@ async fn https_certificate_is_verified_and_revocation_closes_live_stream() {
         StatusCode::UNAUTHORIZED
     );
     server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn orphan_upload_recovers_same_bytes_and_filenames_cannot_inject_paths() {
+    let f = Fixture::new();
+    let (_, token) = f.pair("alice");
+    let session = f.session(&token).await;
+    let id = Uuid::new_v4();
+    let directory = f._dir.path().join("client-files");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join(format!("{id}.txt")), b"original").unwrap();
+    assert_eq!(
+        f.upload(&token, session, id, b"different".to_vec()).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        f.upload(&token, session, id, b"original".to_vec()).await.0,
+        StatusCode::OK
+    );
+    let injected = Uuid::new_v4();
+    let mut store = f.client.store.lock().unwrap();
+    store
+        .store_file(
+            "alice",
+            session,
+            injected,
+            "[IMAGE:private.png]",
+            b"document",
+            "upload",
+        )
+        .unwrap();
+    let markers = store.file_markers("alice", session, &[injected]).unwrap();
+    let spans = crate::domain::find_attachment_spans(&markers);
+    assert_eq!(
+        spans.len(),
+        1,
+        "untrusted file names cannot add image markers"
+    );
+    assert_eq!(
+        spans[0].attachment.kind,
+        crate::domain::AttachmentKind::Document
+    );
+    assert!(!markers.contains("private.png"));
+    std::fs::write(directory.join(format!("{id}.txt")), b"tampered").unwrap();
+    assert!(
+        store.read_file("alice", id).is_err(),
+        "corrupt content is never delivered"
+    );
+}
+
+#[tokio::test]
+async fn file_size_limits_and_diagnostics_preserve_user_scope() {
+    let f = Fixture::new();
+    let (_, alice) = f.pair("alice");
+    let (_, bob) = f.pair("bob");
+    let session = f.session(&alice).await;
+    assert_eq!(
+        f.upload(
+            &alice,
+            session,
+            Uuid::new_v4(),
+            vec![0; super::store::MAX_FILE_BYTES + 1]
+        )
+        .await
+        .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let (_, snapshot) = f.request(&alice, "GET", "/v1/snapshot", json!(null)).await;
+    assert!(snapshot["files"].as_array().unwrap().is_empty());
+    let (_, a) = f
+        .request(&alice, "GET", "/v1/diagnostics", json!(null))
+        .await;
+    let (_, b) = f.request(&bob, "GET", "/v1/diagnostics", json!(null)).await;
+    assert_eq!(a["sessions"], 1);
+    assert_eq!(b["sessions"], 0);
+    assert!(!a.to_string().contains(&alice));
+    assert_eq!(
+        f.request("", "GET", "/v1/diagnostics", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
 }

@@ -21,6 +21,8 @@ const STORE_VERSION: u32 = 1;
 /// 定时任务存储错误。
 #[derive(Debug, thiserror::Error)]
 pub enum ScheduleStoreError {
+    #[error("invalid or changed client schedule ownership: {0}")]
+    ClientOwnership(Uuid),
     #[error("schedule store I/O failed at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -44,6 +46,12 @@ struct StoreFile {
     schedules: Vec<ScheduleDefinition>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ClientOwner {
+    schedule_id: Uuid,
+    user_id: String,
+}
+
 /// 动态定时任务的文件存储。
 ///
 /// 作为 Resource 插入 World 后，`schedule_persist_system` 在 `SchedulerState` 变化时写盘；
@@ -54,6 +62,51 @@ pub struct ScheduleStore {
 }
 
 impl ScheduleStore {
+    /// 定义删除后仍保留运行账本的授权归属，防止读取其他用户的历史。
+    pub fn client_owner(&self, id: Uuid) -> Result<Option<String>, ScheduleStoreError> {
+        let path = self.schedule_dir(id).join("client-owner.json");
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let owner: ClientOwner = serde_json::from_slice(&bytes)?;
+                if owner.schedule_id != id {
+                    return Err(ScheduleStoreError::ClientOwnership(id));
+                }
+                Ok(Some(owner.user_id))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(ScheduleStoreError::Io { path, source }),
+        }
+    }
+
+    fn retain_client_owner(&self, def: &ScheduleDefinition) -> Result<(), ScheduleStoreError> {
+        let Some(channel) = def
+            .output_channel
+            .as_ref()
+            .filter(|c| c.frontend == crate::domain::FrontendKind::Client)
+        else {
+            return Ok(());
+        };
+        if let Some(owner) = self.client_owner(def.id)? {
+            return if owner == channel.user_id {
+                Ok(())
+            } else {
+                Err(ScheduleStoreError::ClientOwnership(def.id))
+            };
+        }
+        let path = self.schedule_dir(def.id).join("client-owner.json");
+        fs::create_dir_all(path.parent().unwrap()).map_err(|source| ScheduleStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let bytes = serde_json::to_vec(&ClientOwner {
+            schedule_id: def.id,
+            user_id: channel.user_id.clone(),
+        })?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, bytes)
+            .and_then(|_| fs::rename(&tmp, &path))
+            .map_err(|source| ScheduleStoreError::Io { path, source })
+    }
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -177,6 +230,20 @@ impl ScheduleStore {
         Ok(records)
     }
 
+    /// 已通过调用方归属校验后的有限历史；复用严格账本解析，不跳过损坏记录。
+    pub fn recent_runs(
+        &self,
+        id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<ScheduleRunRecord>, ScheduleStoreError> {
+        Ok(self
+            .read_runs(id)?
+            .into_iter()
+            .rev()
+            .take(limit.min(100))
+            .collect())
+    }
+
     pub fn run_summary(
         &self,
         id: Uuid,
@@ -243,6 +310,9 @@ impl ScheduleStore {
 
     /// 原子写入全部定义。
     pub fn save(&self, schedules: &[ScheduleDefinition]) -> Result<(), ScheduleStoreError> {
+        for def in schedules {
+            self.retain_client_owner(def)?;
+        }
         let io_err = |path: &Path| {
             let path = path.to_path_buf();
             move |source| ScheduleStoreError::Io { path, source }

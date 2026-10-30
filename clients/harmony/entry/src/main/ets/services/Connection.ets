@@ -2,7 +2,7 @@ import { http, webSocket } from '@kit.NetworkKit';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { CapabilitiesDto, CommandDto, EventBatchDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
+import { CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
 
 // 凭证只进入系统 Asset Store；地址、实例 ID 与 CA 文件由应用沙箱保存。
 export class CredentialStore {
@@ -46,23 +46,30 @@ export class Connection {
     this.caPath = caPath;
   }
 
-  private async request(path: string, method: http.RequestMethod, body: string = ''): Promise<string> {
+  private async fetch(path: string, method: http.RequestMethod, body: string | ArrayBuffer = '', type: http.HttpDataType = http.HttpDataType.STRING): Promise<http.HttpResponse> {
     const request = http.createHttp();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.credential}` };
+    const headers: Record<string, string> = { 'Content-Type': typeof body === 'string' ? 'application/json' : 'application/octet-stream', 'Authorization': `Bearer ${this.credential}` };
     try {
-      const options: http.HttpRequestOptions = {
-        method: method, header: headers, connectTimeout: 10000, readTimeout: 15000,
-        expectDataType: http.HttpDataType.STRING
-      };
-      if (body.length > 0) { options.extraData = body; }
+      const options: http.HttpRequestOptions = { method: method, header: headers, connectTimeout: 10000, readTimeout: 30000, expectDataType: type };
+      if (typeof body !== 'string' || body.length > 0) { options.extraData = body; }
       if (this.caPath.length > 0) { options.caPath = this.caPath; }
       const response = await request.request(`${this.address}${path}`, options);
       if (response.responseCode < 200 || response.responseCode >= 300) {
-        throw new Error(`HTTP ${response.responseCode}：${response.result as string}`);
+        throw new Error(`HTTP ${response.responseCode}：${typeof response.result === 'string' ? response.result : '请求失败'}`);
       }
-      return response.result as string;
+      return response;
     } catch (error) { throw new Error((error as Error).message || 'HTTPS 请求失败'); }
     finally { request.destroy(); }
+  }
+  private async request(path: string, method: http.RequestMethod, body: string = ''): Promise<string> {
+    return (await this.fetch(path, method, body)).result as string;
+  }
+  async upload(session: string, id: string, name: string, bytes: ArrayBuffer): Promise<ClientFileDto> {
+    const response = await this.fetch(`/v1/sessions/${session}/files/${id}?name=${encodeURIComponent(name)}`, http.RequestMethod.PUT, bytes);
+    return JSON.parse(response.result as string) as ClientFileDto;
+  }
+  async download(id: string): Promise<ArrayBuffer> {
+    return (await this.fetch(`/v1/files/${id}`, http.RequestMethod.GET, '', http.HttpDataType.ARRAY_BUFFER)).result as ArrayBuffer;
   }
 
   async pair(code: string, deviceName: string): Promise<void> {
@@ -98,6 +105,23 @@ export class Connection {
   async status(id: string): Promise<ReceiptDto> {
     return JSON.parse(await this.request(`/v1/commands/${id}`, http.RequestMethod.GET)) as ReceiptDto;
   }
+  async devices(): Promise<DevicesDto> {
+    return JSON.parse(await this.request('/v1/devices', http.RequestMethod.GET)) as DevicesDto;
+  }
+  async revokeDevice(id: string): Promise<void> {
+    await this.request(`/v1/devices/${id}`, http.RequestMethod.DELETE);
+  }
+  async diagnostics(): Promise<DiagnosticsDto> {
+    return JSON.parse(await this.request('/v1/diagnostics', http.RequestMethod.GET)) as DiagnosticsDto;
+  }
+  async acknowledgeNotification(id: string, read: boolean): Promise<void> {
+    const body: Record<string, boolean> = { 'read': read };
+    await this.request(`/v1/notifications/${id}/ack`, http.RequestMethod.POST, JSON.stringify(body));
+  }
+  async retryNotification(id: string, allowUnknown: boolean): Promise<void> {
+    const body: Record<string, boolean> = { 'allow_unknown': allowUnknown };
+    await this.request(`/v1/notifications/${id}/retry`, http.RequestMethod.POST, JSON.stringify(body));
+  }
   supports(operation: string): boolean { return this.capabilities?.operations.includes(operation) ?? false; }
 
   async subscribe(cursor: number, onChange: () => void, onError: (text: string) => void): Promise<void> {
@@ -110,7 +134,7 @@ export class Connection {
       if (generation !== this.generation || error || typeof value !== 'string') { return; }
       try {
         const batch = JSON.parse(value) as EventBatchDto;
-        if (batch.error) { onError(batch.error); } else { onChange(); }
+        if (batch.error) { this.close(); onError(batch.error); } else { onChange(); }
       } catch (_) { onError('同步数据格式错误'); }
     });
     socket.on('error', () => { if (generation === this.generation) { onError('连接中断，请重连补齐状态'); } });

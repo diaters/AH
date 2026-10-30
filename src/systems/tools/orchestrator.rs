@@ -2158,6 +2158,17 @@ fn handle_ask_user(
         return;
     };
 
+    let question_event = EngineEvent::QuestionPresented {
+        target: EventTarget::Directed(vec![channel.clone()]),
+        task_id,
+        question_id: tool_call_id.clone(),
+        question: question.clone(),
+    };
+    for frontend in frontend_registry.frontends.iter().filter(|frontend| {
+        channel.frontend == FrontendKind::Client && frontend.kind() == FrontendKind::Client
+    }) {
+        frontend.push_event(question_event.clone());
+    }
     // 3. 通过 EngineEvent::Text 把问题推送到 output_channel
     let event = EngineEvent::Text {
         target: EventTarget::Directed(vec![channel]),
@@ -2866,6 +2877,48 @@ mod tests {
         // 同时验证 task 状态也切了（不变量：先 insert 再切 status）
         let task = world.query::<&Task>().get(&world, task_entity).unwrap();
         assert_eq!(task.status, TaskStatus::Waiting(WaitingReason::AskUser));
+    }
+
+    #[test]
+    fn native_ask_user_keeps_original_request_id_and_target() {
+        let mut world = World::new();
+        init_ask_user_world(&mut world);
+        let channel = ChannelId {
+            frontend: FrontendKind::Client,
+            user_id: "alice".into(),
+            thread_id: Some("session".into()),
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(MockFrontend {
+                kind: FrontendKind::Client,
+                events: events.clone(),
+            })],
+        });
+        let task = make_ask_user_task(channel.clone());
+        let task_id = task.id;
+        world.spawn(task);
+        let agent_id = crate::domain::AgentId::new();
+        world.spawn(ask_user_test_agent(agent_id));
+        world.spawn(make_ask_user_request(task_id, agent_id));
+        let mut schedule = Schedule::default();
+        schedule.add_systems(ask_user_test_system);
+        schedule.run(&mut world);
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2, "native card plus conversation text");
+        let EngineEvent::QuestionPresented {
+            target,
+            task_id: id,
+            question_id,
+            question,
+        } = &captured[0]
+        else {
+            panic!("missing structured question")
+        };
+        assert_eq!(*id, task_id);
+        assert_eq!(question_id, "call-1");
+        assert_eq!(question, "what is your name?");
+        assert!(matches!(target,EventTarget::Directed(channels) if channels==&vec![channel]));
     }
 
     /// ask_user 无 output_channel：返回错误，task 不切 Waiting，request 不 despawn

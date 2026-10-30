@@ -50,6 +50,7 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
             tls_cert: root.join("tests/fixtures/client-tls/test-cert.pem"),
             tls_key: root.join("tests/fixtures/client-tls/test-key.pem"),
             state_path: dir.path().join("client.json"),
+            meow: None,
         },
         store,
         tx.clone(),
@@ -92,6 +93,10 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
         frontends,
         manager,
     );
+    let schedule_store = harness::infrastructure::schedules::ScheduleStore::new(
+        dir.path().join("schedules/schedules.json"),
+    );
+    app.insert_resource(schedule_store.clone());
     app.update();
     for (name, tags) in [
         ("brain", vec!["brain"]),
@@ -139,7 +144,7 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
     });
     assert_eq!(receipt["status"], "queued");
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    let snapshot = loop {
         app.update();
         let snapshot: Value = runtime.block_on(async {
             http.get(format!("{url}/v1/snapshot"))
@@ -159,11 +164,154 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
             .iter()
             .any(|m| m["role"] == "agent" && m["content"] == "client runtime reply")
         {
-            break;
+            break snapshot;
         }
         assert!(Instant::now() < deadline, "no runtime reply: {snapshot}");
         std::thread::sleep(Duration::from_millis(5));
+    };
+    let task = snapshot["sessions"][0]["tasks"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|t| t["can_finish"] == true)
+        .unwrap();
+    let command_id = Uuid::new_v4();
+    let finish = json!({"operation":"finish_task","command_id":command_id,"session_id":session,
+        "task_id":task["task_id"],"expected_revision":task["revision"]});
+    let response = runtime
+        .block_on(
+            http.post(format!("{url}/v1/commands"))
+                .bearer_auth(&token)
+                .json(&finish)
+                .send(),
+        )
+        .unwrap();
+    assert!(response.status().is_success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.update();
+        let receipt: Value = runtime.block_on(async {
+            http.get(format!("{url}/v1/commands/{command_id}"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap()
+        });
+        if receipt["status"] == "processed" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "control was not processed: {receipt}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
     }
+    let mut stale = finish;
+    stale["command_id"] = Uuid::new_v4().to_string().into();
+    let response = runtime
+        .block_on(
+            http.post(format!("{url}/v1/commands"))
+                .bearer_auth(&token)
+                .json(&stale)
+                .send(),
+        )
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::CONFLICT,
+        "old snapshot cannot control ended task"
+    );
+
+    // 同一 HTTPS 入口驱动真实调度器修改与磁盘落账，非直接调用管理函数。
+    let schedule_id = Uuid::new_v4();
+    let create = json!({"operation":"schedule","command_id":schedule_id,"session_id":session,
+        "action":{"kind":"create","input":{"name":"client-owned","content":"check later","schedule":"cron:0 8 * * *","enabled":true,"notify":"reply"}}});
+    let response = runtime
+        .block_on(
+            http.post(format!("{url}/v1/commands"))
+                .bearer_auth(&token)
+                .json(&create)
+                .send(),
+        )
+        .unwrap();
+    assert!(response.status().is_success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let schedule = loop {
+        app.update();
+        let snapshot: Value = runtime.block_on(async {
+            http.get(format!("{url}/v1/snapshot"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap()
+        });
+        if let Some(plan) = snapshot["automation"]["schedules"]
+            .as_array()
+            .and_then(|plans| plans.iter().find(|p| p["id"] == schedule_id.to_string()))
+        {
+            break plan.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no schedule snapshot: {snapshot}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(schedule_store.path().is_file());
+    let mut input = create["action"]["input"].clone();
+    input["enabled"] = false.into();
+    let update_id = Uuid::new_v4();
+    let update = json!({"operation":"schedule","command_id":update_id,"session_id":session,"action":{"kind":"update","schedule_id":schedule_id,"expected_revision":schedule["revision"],"input":input}});
+    assert!(
+        runtime
+            .block_on(
+                http.post(format!("{url}/v1/commands"))
+                    .bearer_auth(&token)
+                    .json(&update)
+                    .send()
+            )
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.update();
+        let receipt: Value = runtime.block_on(async {
+            http.get(format!("{url}/v1/commands/{update_id}"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap()
+        });
+        if receipt["status"] == "processed" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "schedule update not processed: {receipt}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let disk: Value =
+        serde_json::from_slice(&std::fs::read(schedule_store.path()).unwrap()).unwrap();
+    let def = disk["schedules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == schedule_id.to_string())
+        .unwrap();
+    assert_eq!(def["enabled"], false);
+    assert_eq!(def["output_channel"]["user_id"], "alice");
     app.world().resource::<ChannelManager>().shutdown();
     runtime.block_on(channel_task).unwrap();
     runtime.block_on(server.shutdown()).unwrap();
