@@ -15,13 +15,11 @@ use crate::ecs::EntityIndex;
 ///
 /// 将 Signal 转换为对应的 Message。
 ///
-/// 对于 `RetryWakeup` Signal，在 spawn `RetryReadyMessage` 之前清除 `task.next_retry_at`，
-/// 防止 `retry_wakeup_system` 在下一帧再次触发（因为 `retry_wakeup_system` 和本系统
-/// 在同一 `HarnessSet::Signal` 集合中运行，执行顺序不确定）。
+/// 重试保留退避凭证直到状态转换，转换端再次校验，拒绝重复和迟到消息。
 pub fn signal_ingest_system(
     mut commands: Commands,
     index: Res<EntityIndex>,
-    mut tasks: Query<&mut Task>,
+    tasks: Query<&Task>,
     signals: Query<(Entity, &Signal, Option<&crate::domain::InputSequence>)>,
 ) {
     for (entity, signal, sequence) in &signals {
@@ -55,13 +53,25 @@ pub fn signal_ingest_system(
                     });
                 }
             }
-            SignalPayload::RetryWakeup(task_id) => {
-                // 立即清除 next_retry_at，防止 retry_wakeup_system 在下一帧再次触发
-                // （因为 retry_wakeup_system 和本系统在同一集合中运行，顺序不确定）
-                if let Some(task_entity) = index.get_task(task_id)
-                    && let Ok(mut task) = tasks.get_mut(task_entity)
+            SignalPayload::RetryWakeup {
+                task_id,
+                retry_count,
+                retry_at,
+            } => {
+                if !index
+                    .get_task(task_id)
+                    .and_then(|e| tasks.get(e).ok())
+                    .is_some_and(|task| {
+                        task.status
+                            == crate::domain::TaskStatus::Waiting(
+                                crate::domain::WaitingReason::RetryBackoff,
+                            )
+                            && task.retry_count == *retry_count
+                            && task.next_retry_at == Some(*retry_at)
+                    })
                 {
-                    task.next_retry_at = None;
+                    commands.entity(entity).despawn();
+                    continue;
                 }
                 debug!(
                     event = "SignalIngested",
@@ -70,7 +80,11 @@ pub fn signal_ingest_system(
                     task_id = %task_id,
                     "signal converted to RetryReadyMessage"
                 );
-                commands.spawn(RetryReadyMessage { task_id: *task_id });
+                commands.spawn(RetryReadyMessage {
+                    task_id: *task_id,
+                    retry_count: *retry_count,
+                    retry_at: *retry_at,
+                });
             }
             SignalPayload::SystemWakeup => {
                 debug!(

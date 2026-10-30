@@ -224,8 +224,9 @@ fn e2e_ask_user_full_flow() {
                         if tc.id.as_deref() != Some(&tool_call_id) || tc.tool_name != "ask_user" {
                             return false;
                         }
-                        // tool_result_system 把 tool_output 序列化后写入 ToolCall.input 字段
-                        serde_json::from_str::<serde_json::Value>(&tc.input)
+                        // 展示记忆只保存结果；原始入参仅驻留运行时协议历史。
+                        assert!(tc.input.is_empty());
+                        serde_json::from_str::<serde_json::Value>(&tc.output)
                             .ok()
                             .map(|v| {
                                 v.get("answer")

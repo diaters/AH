@@ -201,7 +201,7 @@ async fn tool_call_roundtrip_parses_llm_tool_call() {
         .expect("携带工具的请求应成功");
 
     match output.content {
-        OutputContent::ToolCalls(calls) => {
+        OutputContent::ToolCalls(calls) | OutputContent::ToolCallsWithText { calls, .. } => {
             let call = calls
                 .iter()
                 .find(|c| c.name == "get_weather")
@@ -247,7 +247,7 @@ async fn sanitized_tool_name_roundtrip_preserves_namespace() {
         .expect("携带命名空间工具的请求应成功");
 
     match output.content {
-        OutputContent::ToolCalls(calls) => {
+        OutputContent::ToolCalls(calls) | OutputContent::ToolCallsWithText { calls, .. } => {
             let call = calls
                 .iter()
                 .find(|c| c.name == "demo:echo")
@@ -352,7 +352,7 @@ async fn steer_after_tool_result_roundtrip_is_accepted() {
         .expect("tool 结果后追加 user 文本的请求应被 provider 接受");
     match output.content {
         OutputContent::Text(text) => assert!(!text.trim().is_empty(), "响应文本不应为空"),
-        OutputContent::ToolCalls(calls) => {
+        OutputContent::ToolCalls(calls) | OutputContent::ToolCallsWithText { calls, .. } => {
             assert!(!calls.is_empty(), "工具调用响应也是合法往返")
         }
     }

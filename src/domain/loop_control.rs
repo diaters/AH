@@ -16,6 +16,10 @@ use crate::prelude::{Component, Entity, Resource};
 
 use super::{SessionHandleId, TaskId};
 
+/// 纯后台通知触发的汇报轮次；附于续轮消息及当前 Task，不进入持久化。
+#[derive(Component, Debug, Clone, Copy)]
+pub struct BackgroundReportTurn;
+
 /// Agent loop 控制配置（自动拉起预算、通知合并窗口、后台轮询间隔）。
 #[derive(Debug, Clone, PartialEq, Eq, Resource)]
 pub struct LoopControlConfig {
@@ -95,7 +99,7 @@ pub fn render_inbox_items(items: &[InboxItem]) -> String {
     let mut out = String::new();
     if items.iter().any(InboxItem::is_user_steer) {
         out.push_str(
-            "[以下是用户在你执行过程中追加的输入，请结合当前进度调整后续行动，不要丢弃已完成的工作]\n",
+            "[以下是用户在你执行过程中追加的输入。请先用简短文字回应补充或追问，再结合当前进度继续行动；文字可以与工具调用同时返回。不要丢弃已完成的工作，也不要把本次回应当成结束原任务。]\n",
         );
     }
     let blocks: Vec<String> = items.iter().map(InboxItem::render).collect();

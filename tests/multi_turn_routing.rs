@@ -236,6 +236,7 @@ fn evaluation_triggered_on_turn_limit() {
         estimated_tokens: 100,
         summary_prefix: None,
         last_cached_tokens: None,
+        protocol: Default::default(),
     };
     // 第一轮
     stm.add_entry(

@@ -144,6 +144,9 @@ pub struct SessionSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShellExecResult {
+    /// 命令正常完成且退出码为 0；接口返回成功不等于命令成功。
+    #[serde(default)]
+    pub command_succeeded: bool,
     pub status: SessionStatus,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
@@ -203,6 +206,9 @@ impl ShellExecResult {
     /// 从内部句柄构造阻塞执行的对外结果。
     pub fn from_handle(handle: &SessionHandle) -> Self {
         Self {
+            command_succeeded: handle.status == SessionStatus::Completed
+                && handle.exit_code == Some(0)
+                && !handle.timed_out,
             status: handle.status,
             exit_code: handle.exit_code,
             timed_out: handle.timed_out,

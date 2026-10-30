@@ -32,6 +32,26 @@ cargo test --all-features
 cargo test --test real_llm_scenarios
 ```
 
+流量监控日志的确定性回归（不访问真实 QQ、不下载公网流量、不依赖本机网卡）：
+
+```bash
+cargo test --lib parse_response
+cargo test --lib shell_command_outcome_distinguishes_return_exit_and_timeout
+cargo test --test monitor_feedback_flow
+```
+
+`monitor_feedback_flow` 使用临时采样文件、真实 shell 进程和生产 ECS / ChannelManager：
+检查工具执行中的进度文字与用户追问、低流量静默、超阈值告警及恢复、平台发送回执、
+36 轮工具协议恢复、汇报返回 400 后会话持续存活、后续状态查询沿用原 Task 和 `/finish` 清理。
+测试通道回执仅证明程序投递链路；真实 QQ 平台验收仍需独立执行。
+
+恢复和运行记账回归还覆盖：`protocol_history_retains_rounds_and_closes_interrupted_calls`、
+`due_backoff_emits_only_one_wakeup_across_frames`、
+`late_retry_cannot_redispatch_an_already_running_task`、
+`denied_scheduled_action_cannot_be_accounted_as_silent_success`。
+性能回归先预热 tokenizer，再检查 76 次短文本估算小于 3 秒，以捕获原先约 13.6 秒的同步阻塞。
+协议历史回归还检查原始工具入参不进入记忆导出，但仍计入压缩阈值，压缩后释放对应成本。
+
 ## Layer 1：冒烟测试（真实 API 连通性）
 
 最小化验证 genai 适配层连通性与往返正确性，每个 provider 一组测试，

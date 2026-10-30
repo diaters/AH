@@ -22,7 +22,12 @@ pub fn tool_result_system(
     mut commands: Commands,
     clock: Res<Clock>,
     mut results: Query<(Entity, &mut ToolExecutionResultMessage)>,
-    mut tasks: Query<(Entity, &Task, Option<&mut ShortTermMemory>)>,
+    mut tasks: Query<(
+        Entity,
+        &Task,
+        Option<&mut ShortTermMemory>,
+        Option<&crate::domain::ScheduledRun>,
+    )>,
     calling_states: Query<&ToolCallingState>,
     _settings: Res<HarnessSettings>,
 ) {
@@ -33,11 +38,22 @@ pub fn tool_result_system(
 
         // 查找对应的 Task 及其 ShortTermMemory
         let mut found_task = false;
-        for (task_entity, task, short_term_memory) in &mut tasks {
+        for (task_entity, task, mut short_term_memory, scheduled_run) in &mut tasks {
             if task.id != result.result.task_id {
                 continue;
             }
             found_task = true;
+
+            if result.result.work_item_id.is_none()
+                && let Some(stm) = short_term_memory.as_mut()
+                && let Some(id) = result.tool_call_id.as_deref()
+            {
+                let content = match &result.tool_output {
+                    Ok(output) => serde_json::to_string(output).unwrap_or_default(),
+                    Err(error) => format!("Error: {error}"),
+                };
+                stm.protocol.record_tool_result(id, content);
+            }
 
             match &result.tool_output {
                 Ok(output) => {
@@ -48,7 +64,7 @@ pub fn tool_result_system(
                         tool_name = %result.tool_name,
                         task_id = %task.id,
                         agent_id = %result.result.agent_id,
-                        success = true,
+                        tool_returned = true,
                         output = %output_str,
                         output_len = output_str.len(),
                         "tool execution completed"
@@ -78,27 +94,41 @@ pub fn tool_result_system(
                     // Only persist tool_output here.
                     // The original tool_input payload is intentionally not written into STM,
                     // which avoids leaking raw shell_input request text into memory.
-                    if let Some(mut stm) = short_term_memory {
+                    if let Some(stm) = short_term_memory.as_mut() {
                         stm.record_tool_call(
                             result.tool_call_id.clone(),
                             result.tool_name.clone(),
-                            serde_json::to_string(output).unwrap_or_default(),
+                            String::new(),
                             output_str,
                             clock.0,
                         );
                     }
                 }
                 Err(e) => {
+                    if scheduled_run.is_some()
+                        && result.result.work_item_id.is_none()
+                        && matches!(e, crate::domain::ToolError::PermissionDenied(_))
+                    {
+                        commands
+                            .entity(task_entity)
+                            .insert(crate::domain::ScheduledRunFailure(format!(
+                                "{}: {e}",
+                                result.tool_name
+                            )));
+                    }
                     warn!(
                         event = "ToolExecutionFailed",
                         tool_name = %result.tool_name,
                         task_id = %task.id,
                         agent_id = %result.result.agent_id,
-                        success = false,
+                        tool_returned = false,
                         error = %e,
                         "tool execution failed"
                     );
                 }
+            }
+            if let Some(stm) = short_term_memory.as_mut() {
+                stm.estimated_tokens = stm.estimated_tokens.max(stm.protocol.estimated_tokens());
             }
             break;
         }

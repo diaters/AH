@@ -131,13 +131,19 @@ pub(crate) fn handle_tool_calls_response(
     // 按 (task_id, work_item_id) 严格匹配：避免误复用同 Task 下
     // 其他 WorkItem 残留的 State（如 collector 残留被 skill-updater 误用）。
     let existing = find_calling_state(state_info, task.id, result.work_item_id);
+    let assistant_text = result
+        .result
+        .as_ref()
+        .ok()
+        .and_then(|output| output.content.text())
+        .map(str::to_string);
 
     if let Some(info) = existing {
         let new_iteration = info.iteration + 1;
         // Despawn old state and create updated one
         let mut new_conversation = info.conversation.clone();
         new_conversation.push(ConversationMessage::Assistant {
-            content: None,
+            content: assistant_text.clone(),
             tool_calls: calls.to_vec(),
             reasoning_content: reasoning_content.clone(),
         });
@@ -255,7 +261,7 @@ pub(crate) fn handle_tool_calls_response(
             // 结构化路径：使用已有的 conversation（从 STM 还原），追加本轮 Assistant
             let mut conv = result.conversation.clone().unwrap();
             conv.push(ConversationMessage::Assistant {
-                content: None,
+                content: assistant_text.clone(),
                 tool_calls: calls.to_vec(),
                 reasoning_content: reasoning_content.clone(),
             });
@@ -272,7 +278,7 @@ pub(crate) fn handle_tool_calls_response(
                 content: result.prompt.clone(),
             });
             conversation.push(ConversationMessage::Assistant {
-                content: None,
+                content: assistant_text.clone(),
                 tool_calls: calls.to_vec(),
                 reasoning_content: reasoning_content.clone(),
             });

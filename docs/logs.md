@@ -106,6 +106,18 @@ debug!(
 | Agent 相关 | `agent_id`、`agent_name` |
 | 错误 | `error`、`error_type` |
 
+### 工具返回与 shell 命令结果
+
+- `ToolExecuted.tool_returned=true` 仅表示工具正常返回结构化结果；
+  `ToolExecutionFailed.tool_returned=false` 表示工具接口失败，不使用含混的 `success` 字段。
+- shell 执行层独立记录 `ShellCommandCompleted` / `ShellCommandFailed`，包含
+  `command_succeeded`、`exit_code`、`timed_out`、Task / Agent ID。
+  非零退出、信号终止或超时记录 WARN；原始输出保留在工具结果的 DEBUG 日志中。
+- `LlmRequestCompleted` 同时记录文字长度和 `tool_call_count`；文字长度为零但有工具调用
+  是正常工具响应，不能据此判定模型空响应。
+- QQ typing 明确返回“不支持的调用”时记录 `QqTypingUnsupported` 并在当前通道实例内缓存；
+  网络失败、普通 404 和服务暂不可用不触发能力缓存。
+
 ### 审计消息要求
 
 `info!` 级别的日志用于审计场景，除必需字段外还应包含：
@@ -139,6 +151,11 @@ debug!(
 - 错误事件用失败语义，如 `ToolExecutionFailed`
 
 ## 定时监控 P1
+
+- `BackgroundReportFailed`：自动通知汇报失败，但原任务受管作业仍存活；包含任务和错误，
+  不代表脚本停止，后续仍可查询或显式结束。
+- `LlmRequestRejected`：400 / 422 参数错误的脱敏协议形状（角色、工具数量、JSON object 数、
+  推理字段存在性及回合代次）；不输出此诊断对应的原始工具参数，不对相同请求自动重试。
 
 - `ScheduleRunRecorded`：运行账本与健康提交完成，字段为 `task_id`、`schedule_id`、
   `outcome`、`notification_count`；入队成功不会触发此完成事件。

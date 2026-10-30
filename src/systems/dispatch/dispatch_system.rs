@@ -21,10 +21,10 @@ use crate::{
     domain::{
         Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
         AgentSpawnRequestMessage, AwaitingBrainDecision, ConversationMessage, DispatchHint,
-        DispatchKind, DispatchStrategy, EntryRole, ExecutionError, LlmToolCall, LongTermMemory,
+        DispatchKind, DispatchStrategy, ExecutionError, LongTermMemory,
         MessageDispatchedHookPending, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
         TaskInjectedSkill, TaskStatus, ToolPermission, WaitingReason, WorkItem,
-        WorkItemLifecycleHookPending, WorkItemType, estimate_tokens,
+        WorkItemLifecycleHookPending, WorkItemType,
     },
     ecs::EntityIndex,
     infrastructure::skills::{
@@ -36,154 +36,32 @@ use crate::{
 use super::prompt_builder::build_prompt_with_context;
 use crate::systems::brain::{build_brain_execution_request, find_brain_agent};
 
-/// 从 STM 还原结构化对话消息序列。
-///
-/// 当 STM 含非空 `metadata.tool_calls` 的 Assistant 条目时，返回 `Some(Vec<ConversationMessage>)`；
-/// 否则返回 `None`（走纯文本路径）。
+/// 仅恢复运行时实际协议。展示/压缩记忆走文本提示，不伪造工具参数与轮次。
 fn build_structured_conversation(stm: &ShortTermMemory) -> Option<Vec<ConversationMessage>> {
-    let has_tool_calls = stm
-        .entries
-        .iter()
-        .any(|e| !e.metadata.tool_calls.is_empty());
-    if !has_tool_calls {
-        return None;
-    }
-
-    let mut messages = Vec::new();
-
-    // summary_prefix → User 消息
-    if let Some(summary) = &stm.summary_prefix {
-        messages.push(ConversationMessage::User {
-            content: format!("[Previous context summary]\n{}", summary),
-        });
-    }
-
-    for entry in &stm.entries {
-        match entry.role {
-            EntryRole::User => {
-                messages.push(ConversationMessage::User {
-                    content: entry.content.clone(),
-                });
-            }
-            EntryRole::Assistant => {
-                let tool_calls: Vec<LlmToolCall> = entry
-                    .metadata
-                    .tool_calls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, tc)| LlmToolCall {
-                        id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                        name: tc.tool_name.clone(),
-                        arguments: tc.input.clone(),
-                    })
-                    .collect();
-
-                messages.push(ConversationMessage::Assistant {
-                    content: if entry.content.is_empty() {
-                        None
-                    } else {
-                        Some(entry.content.clone())
-                    },
-                    tool_calls,
-                    reasoning_content: None,
-                });
-
-                // 追加 Tool 消息
-                for (i, tc) in entry.metadata.tool_calls.iter().enumerate() {
-                    messages.push(ConversationMessage::Tool {
-                        tool_call_id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                        content: tc.output.clone(),
-                    });
-                }
-            }
-            EntryRole::Summary => {
-                messages.push(ConversationMessage::User {
-                    content: format!("[System note] {}", entry.content),
-                });
-            }
-            EntryRole::Archive => {
-                // 跳过
-            }
-        }
-    }
-
-    Some(messages)
+    stm.protocol.restore()
 }
 
-/// 按模型窗口预算裁剪 `ConversationMessage` 序列。
-///
-/// 以配对组为最小移除单位，从最早的消息开始移除，直到总量在预算内。
-/// 配对组定义与 `memory_compression_system` 一致：
-/// - `Assistant { tool_calls: non-empty }` + 后续 `Tool` 消息为一个配对组
-/// - 其他消息各自成组
+/// 一次计算成本，按 Assistant/tool 配对组整体裁剪，避免悬空工具结果。
 fn truncate_conversation_by_budget(messages: &mut Vec<ConversationMessage>, budget_tokens: u32) {
-    let total_tokens: u32 = messages
+    let costs: Vec<u64> = messages
         .iter()
-        .map(|msg| match msg {
-            ConversationMessage::System { content } | ConversationMessage::User { content } => {
-                estimate_tokens(content)
-            }
-            ConversationMessage::Assistant {
-                content,
-                tool_calls,
-                ..
-            } => {
-                let mut t = content.as_deref().map(estimate_tokens).unwrap_or(0);
-                for tc in tool_calls {
-                    t += estimate_tokens(&tc.arguments);
-                }
-                t
-            }
-            ConversationMessage::Tool { content, .. } => estimate_tokens(content),
-        })
-        .sum();
-
-    if total_tokens <= budget_tokens {
-        return;
-    }
-
-    // 识别配对组边界：Assistant(tool_calls non-empty) 是配对组锚点
-    // 简化实现：从最前面逐条移除，但保证不出现 Tool 无父 Assistant 的悬空引用
-    while !messages.is_empty() {
-        let current_tokens: u32 = messages
-            .iter()
-            .map(|msg| match msg {
-                ConversationMessage::System { content } | ConversationMessage::User { content } => {
-                    estimate_tokens(content)
-                }
-                ConversationMessage::Assistant {
-                    content,
-                    tool_calls,
-                    ..
-                } => {
-                    let mut t = content.as_deref().map(estimate_tokens).unwrap_or(0);
-                    for tc in tool_calls {
-                        t += estimate_tokens(&tc.arguments);
-                    }
-                    t
-                }
-                ConversationMessage::Tool { content, .. } => estimate_tokens(content),
-            })
-            .sum();
-
-        if current_tokens <= budget_tokens {
-            break;
-        }
-
-        // 移除第一条消息；如果是 Assistant(tool_calls)，同时移除后续 Tool 消息
-        let first_is_tool_call_anchor = matches!(
-            &messages[0],
-            ConversationMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()
-        );
-        messages.remove(0);
-
-        if first_is_tool_call_anchor {
-            // 移除后续连续的 Tool 消息（配对组整体移除）
-            while matches!(messages.first(), Some(ConversationMessage::Tool { .. })) {
-                messages.remove(0);
+        .map(|message| u64::from(message.estimated_tokens()))
+        .collect();
+    let mut total: u64 = costs.iter().sum();
+    let mut end = 0;
+    while end < messages.len() && total > u64::from(budget_tokens) {
+        let anchor = matches!(&messages[end], ConversationMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty());
+        total -= costs[end];
+        end += 1;
+        if anchor {
+            while end < messages.len() && matches!(&messages[end], ConversationMessage::Tool { .. })
+            {
+                total -= costs[end];
+                end += 1;
             }
         }
     }
+    messages.drain(..end);
 }
 
 /// 构建 DirectDelegate 注入的 skill 列表：
@@ -635,24 +513,38 @@ mod tests {
         stm.add_entry(EntryRole::User, "next question", EntryMetadata::default());
         stm.add_entry(EntryRole::Assistant, "answer", EntryMetadata::default());
 
-        let conversation = build_structured_conversation(&stm);
         assert!(
-            conversation.is_some(),
-            "should return Some when tool_calls exist"
+            build_structured_conversation(&stm).is_none(),
+            "display metadata is lossy and must never be replayed as tool protocol"
         );
+    }
 
-        let messages = conversation.unwrap();
-        // User → Assistant(tool_calls) → Tool → User → Assistant
-        assert!(matches!(messages[0], ConversationMessage::User { .. }));
-        assert!(
-            matches!(&messages[1], ConversationMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())
-        );
-        assert!(
-            matches!(&messages[2], ConversationMessage::Tool { tool_call_id, .. } if tool_call_id == "call_1")
-        );
-        assert!(matches!(messages[3], ConversationMessage::User { .. }));
-        assert!(
-            matches!(&messages[4], ConversationMessage::Assistant { tool_calls, .. } if tool_calls.is_empty())
+    #[test]
+    fn budget_truncation_counts_reasoning_and_removes_whole_tool_groups() {
+        let mut messages = vec![
+            ConversationMessage::Assistant {
+                content: None,
+                reasoning_content: Some("long reasoning ".repeat(100)),
+                tool_calls: vec![crate::domain::LlmToolCall {
+                    id: "list".into(),
+                    name: "shell_list".into(),
+                    arguments: "{}".into(),
+                }],
+            },
+            ConversationMessage::Tool {
+                tool_call_id: "list".into(),
+                content: "[]".into(),
+            },
+            ConversationMessage::User {
+                content: "now".into(),
+            },
+        ];
+        truncate_conversation_by_budget(&mut messages, crate::domain::estimate_tokens("now"));
+        assert_eq!(
+            messages,
+            vec![ConversationMessage::User {
+                content: "now".into()
+            }]
         );
     }
 

@@ -134,7 +134,15 @@ pub(crate) fn retry_wakeup_system(
     mut commands: Commands,
     tasks: Query<(Entity, &Task)>,
     schedule: Option<Res<crate::systems::demand::DemandSchedule>>,
+    mut emitted: Local<std::collections::HashMap<Entity, (u32, chrono::DateTime<Utc>)>>,
 ) {
+    emitted.retain(|entity, ticket| {
+        tasks.get(*entity).is_ok_and(|(_, task)| {
+            task.status == TaskStatus::Waiting(WaitingReason::RetryBackoff)
+                && Some(ticket.1) == task.next_retry_at
+                && ticket.0 == task.retry_count
+        })
+    });
     for (entity, task) in &tasks {
         if task.status != TaskStatus::Waiting(WaitingReason::RetryBackoff) {
             continue;
@@ -151,6 +159,11 @@ pub(crate) fn retry_wakeup_system(
                     )
                 })
         {
+            if emitted.insert(entity, (task.retry_count, next_retry_at))
+                == Some((task.retry_count, next_retry_at))
+            {
+                continue;
+            }
             debug!(
                 event = "RetryWakeupTriggered",
                 task_id = %task.id,
@@ -161,7 +174,45 @@ pub(crate) fn retry_wakeup_system(
                 last_error = ?task.last_error,
                 "retry backoff elapsed, waking up task"
             );
-            commands.spawn(Signal::retry_wakeup(task.id));
+            commands.spawn(Signal::retry_wakeup(
+                task.id,
+                task.retry_count,
+                next_retry_at,
+            ));
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn due_backoff_emits_only_one_wakeup_across_frames() {
+        let mut app = App::new();
+        let now = Utc::now();
+        app.insert_resource(Clock(now));
+        app.add_systems(Update, retry_wakeup_system);
+        let mut task = Task::from_user_input(
+            "monitor",
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "local".into(),
+                thread_id: None,
+            },
+        );
+        task.schedule_retry(
+            &crate::domain::ExecutionError::Transport("reset".into()),
+            now - chrono::Duration::seconds(5),
+        );
+        app.world_mut().spawn(task);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            app.world_mut().query::<&Signal>().iter(app.world()).count(),
+            1
+        );
     }
 }

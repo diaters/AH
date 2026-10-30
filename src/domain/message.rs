@@ -45,7 +45,11 @@ pub enum WaitingReason {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SignalPayload {
     UserInput(String),
-    RetryWakeup(TaskId),
+    RetryWakeup {
+        task_id: TaskId,
+        retry_count: u32,
+        retry_at: chrono::DateTime<chrono::Utc>,
+    },
     SystemWakeup,
     Webhook {
         kind: String,
@@ -98,10 +102,18 @@ impl Signal {
     }
 
     /// 构造重试唤醒信号。
-    pub fn retry_wakeup(task_id: TaskId) -> Self {
+    pub fn retry_wakeup(
+        task_id: TaskId,
+        retry_count: u32,
+        retry_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         Self {
             source: SignalSource("retry".to_string()),
-            payload: SignalPayload::RetryWakeup(task_id),
+            payload: SignalPayload::RetryWakeup {
+                task_id,
+                retry_count,
+                retry_at,
+            },
             origin_channel: None,
             sender: None,
         }
@@ -186,6 +198,8 @@ pub struct UserInputMessage {
 #[derive(Debug, Clone, Component)]
 pub struct RetryReadyMessage {
     pub task_id: TaskId,
+    pub retry_count: u32,
+    pub retry_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// 事件触发任务消息

@@ -648,7 +648,8 @@ pub(crate) fn handle_profile_generation_llm_response(
     let pg_ctx = profile_contexts.get(work_item_entity).ok();
     match &result.result {
         Ok(AgentExecutionOutput {
-            content: OutputContent::ToolCalls(calls),
+            content:
+                OutputContent::ToolCalls(calls) | OutputContent::ToolCallsWithText { calls, .. },
             ..
         }) => {
             // 互斥检测 + 非相关工具检测

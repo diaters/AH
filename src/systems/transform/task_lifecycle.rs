@@ -51,6 +51,14 @@ pub fn retry_ready_system(
         if let Some(task_entity) = index.get_task(&message.task_id)
             && let Ok((mut task, awaiting_brain)) = tasks.get_mut(task_entity)
         {
+            if task.status != TaskStatus::Waiting(WaitingReason::RetryBackoff)
+                || task.retry_count != message.retry_count
+                || task.next_retry_at != Some(message.retry_at)
+                || message.retry_at > clock.0
+            {
+                commands.entity(entity).despawn();
+                continue;
+            }
             debug!(
                 event = "RetryReady",
                 task_id = %task.id,
@@ -1311,6 +1319,109 @@ mod tests {
         app
     }
 
+    #[test]
+    fn late_retry_cannot_redispatch_an_already_running_task() {
+        let mut app = make_retry_test_app();
+        let mut task = Task::from_user_input(
+            "monitor",
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "local".into(),
+                thread_id: None,
+            },
+        );
+        task.mark_running(app.world().resource::<Clock>().0);
+        let task_id = task.id;
+        let entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+        let task = app.world().get::<Task>(entity).unwrap();
+        let retry_count = task.retry_count;
+        let retry_at = app.world().resource::<Clock>().0;
+        app.world_mut().resource_mut::<Clock>().0 = retry_at;
+        app.world_mut().spawn(RetryReadyMessage {
+            task_id,
+            retry_count,
+            retry_at,
+        });
+        app.update();
+        assert_eq!(
+            app.world().get::<Task>(entity).unwrap().status(),
+            &TaskStatus::Running
+        );
+        assert!(app.world().get::<PendingDispatch>(entity).is_none());
+    }
+
+    #[test]
+    fn retry_ticket_is_consumed_once_and_cannot_consume_a_new_backoff() {
+        let mut app = make_retry_test_app();
+        let now = app.world().resource::<Clock>().0;
+        let mut task = Task::from_user_input(
+            "monitor",
+            3,
+            crate::domain::ChannelId {
+                frontend: crate::domain::FrontendKind::Tui,
+                user_id: "local".into(),
+                thread_id: None,
+            },
+        );
+        let error = crate::domain::ExecutionError::Transport("reset".into());
+        task.schedule_retry(&error, now - chrono::Duration::seconds(10));
+        let old = RetryReadyMessage {
+            task_id: task.id,
+            retry_count: task.retry_count,
+            retry_at: task.next_retry_at.unwrap(),
+        };
+        let entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(old.task_id, entity);
+        app.world_mut().spawn(old.clone());
+        app.world_mut().spawn(old.clone());
+        app.update();
+        assert_eq!(
+            app.world().get::<Task>(entity).unwrap().status(),
+            &TaskStatus::Ready
+        );
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<PendingDispatch>();
+        app.world_mut()
+            .get_mut::<Task>(entity)
+            .unwrap()
+            .schedule_retry(&error, now);
+        let next = app.world().get::<Task>(entity).unwrap().next_retry_at;
+        app.world_mut().spawn(old);
+        app.update();
+        let task = app.world().get::<Task>(entity).unwrap();
+        assert_eq!(
+            task.status(),
+            &TaskStatus::Waiting(WaitingReason::RetryBackoff)
+        );
+        assert_eq!(task.next_retry_at, next);
+        assert!(app.world().get::<PendingDispatch>(entity).is_none());
+        let ticket = RetryReadyMessage {
+            task_id: task.id,
+            retry_count: task.retry_count,
+            retry_at: next.unwrap(),
+        };
+        app.world_mut()
+            .get_mut::<Task>(entity)
+            .unwrap()
+            .mark_done("finished", now);
+        app.world_mut().resource_mut::<Clock>().0 = ticket.retry_at;
+        app.world_mut().spawn(ticket);
+        app.update();
+        assert_eq!(
+            app.world().get::<Task>(entity).unwrap().status(),
+            &TaskStatus::Done
+        );
+    }
+
     /// 在 app world 中 spawn 一个 Persistent Agent，返回其 AgentId。
     fn spawn_agent_for_retry(app: &mut App, name: &str) -> crate::domain::AgentId {
         use crate::domain::{
@@ -1392,7 +1503,15 @@ mod tests {
             .tasks
             .insert(task_id, task_entity);
 
-        app.world_mut().spawn(RetryReadyMessage { task_id });
+        let task = app.world().get::<Task>(task_entity).unwrap();
+        let retry_count = task.retry_count;
+        let retry_at = task.next_retry_at.unwrap();
+        app.world_mut().resource_mut::<Clock>().0 = retry_at;
+        app.world_mut().spawn(RetryReadyMessage {
+            task_id,
+            retry_count,
+            retry_at,
+        });
         app.update();
 
         let pending = app
@@ -1442,7 +1561,15 @@ mod tests {
             .tasks
             .insert(task_id, task_entity);
 
-        app.world_mut().spawn(RetryReadyMessage { task_id });
+        let task = app.world().get::<Task>(task_entity).unwrap();
+        let retry_count = task.retry_count;
+        let retry_at = task.next_retry_at.unwrap();
+        app.world_mut().resource_mut::<Clock>().0 = retry_at;
+        app.world_mut().spawn(RetryReadyMessage {
+            task_id,
+            retry_count,
+            retry_at,
+        });
         app.update();
 
         let pending = app

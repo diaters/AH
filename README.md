@@ -18,13 +18,16 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   不打断执行；`/stop`（TUI 空输入时 `Esc`）中断当前回合并保留上下文；后台 shell 会话
   退出与子任务批次完成以 `<task-notification>` 通知所属任务，空闲任务自动重新拉起；
   `update_todos` 进度清单在 TUI / IM 展示
+- 模型文字可与工具调用同时返回：即时输出进度并保留对话上下文，不提前结束任务；
+  steer 回执展示真实任务等待状态、在飞工具及运行时长
 - `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
 - Summarization 与 Evaluation 收敛到 `WorkItem` 闭环
 - 工具权限、审批 UI、顺序确认与工具执行链路
 - 群聊审批绑定任务发起人（可配置 `approvers` 代审）；多轮会话空闲超时自动结束
 - 精简后的 shell 工具集：
   `shell_exec`、`shell_start`、`shell_read`、`shell_list`、`shell_input`、`shell_stop`；
-  一次性 exec 返回前清理同组后台后代，运行中的 exec 与会话都登记真实 Task / Agent 归属；
+  一次性 exec 返回前清理同组后台后代，`command_succeeded` 独立标识命令成功；
+  运行中的 exec 与会话都登记真实 Task / Agent 归属；
   Unix 生产入口由独立守护器实际启动命令，宿主正常退出或异常死亡后按实例回收受管进程组
 - 记忆治理：ShortTermMemory、LongTermMemory、SharedKnowledgeBase 三层收敛，
   支持衰退淘汰与 JSON 文件持久化
@@ -51,6 +54,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 
 - 持续监控：`shell_start(notify_on_output=true)` 将 stdout 完整行直接推送到任务通道，
   平台回执送回原 Task；支持有界重试、背压停止与自动唤醒窗口恢复。
+- 后台汇报与监控生命周期分开处理：仅汇报失败且仍有受管作业时保留作业并明确提示；
+  对话恢复保留真实工具协议，重复或迟到重试不会重新派发在飞任务。
 
 ### 待完善
 

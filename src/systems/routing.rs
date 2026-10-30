@@ -7,10 +7,10 @@ use crate::{
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
         AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
-        DispatchStrategy, EntryMetadata, EntryRole, InboxDeliveryMessage, InboxItem, OutputContent,
-        PendingDispatch, ShortTermMemory, SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus,
-        ToolConfirmationResponseMessage, ToolExecutionResultMessage, TrustedImages, UserCommand,
-        UserInputMessage, WaitingReason,
+        DispatchStrategy, EntryMetadata, EntryRole, InFlightToolCall, InboxDeliveryMessage,
+        InboxItem, OutputContent, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
+        TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, ToolExecutionResultMessage,
+        ToolRequestPending, TrustedImages, UserCommand, UserInputMessage, WaitingReason,
     },
 };
 
@@ -51,6 +51,7 @@ pub(crate) fn user_input_routing_system(
     >,
     mut tasks: Query<(Entity, &mut Task)>,
     ask_user_pendings: Query<&AskUserPending>,
+    in_flight_tools: Query<(&ToolRequestPending, &InFlightToolCall)>,
 ) {
     let mut inputs: Vec<_> = user_inputs.iter().collect();
     inputs.sort_by_key(|(entity, _, seq)| seq.map_or(entity.to_bits(), |seq| seq.0));
@@ -204,7 +205,7 @@ pub(crate) fn user_input_routing_system(
         let steer_target = tasks
             .iter()
             .find(|(_, t)| is_steerable(t, &input.origin_channel))
-            .map(|(e, t)| (e, t.id));
+            .map(|(e, t)| (e, t.clone()));
 
         if let Some((task_entity, task)) = waiting_tasks.first() {
             debug!(
@@ -231,7 +232,8 @@ pub(crate) fn user_input_routing_system(
             if let Some(sequence) = sequence {
                 message.insert(*sequence);
             }
-        } else if let Some((task_entity, task_id)) = steer_target {
+        } else if let Some((task_entity, task)) = steer_target {
+            let task_id = task.id;
             debug!(
                 event = "RoutingDecision",
                 decision = "steer_active_task",
@@ -251,11 +253,40 @@ pub(crate) fn user_input_routing_system(
             if let Some(sequence) = sequence {
                 message.insert(*sequence);
             }
+            let mut tools: Vec<_> = in_flight_tools
+                .iter()
+                .filter(|(pending, _)| pending.original_request.task_id == task_id)
+                .map(|(pending, flight)| {
+                    let elapsed = (clock.0 - flight.started_at).num_seconds().max(0);
+                    format!("{}（已运行 {elapsed} 秒）", pending.tool_name)
+                })
+                .collect();
+            tools.sort();
+            let status = if !tools.is_empty() {
+                let extra = tools.len().saturating_sub(3);
+                tools.truncate(3);
+                let mut text = format!("正在执行 {}", tools.join("、"));
+                if extra > 0 {
+                    text.push_str(&format!("，另有 {extra} 个工具"));
+                }
+                text
+            } else {
+                match task.status() {
+                    TaskStatus::Running => "任务正在运行".to_string(),
+                    TaskStatus::Waiting(WaitingReason::ToolExecution) => {
+                        "正在等待工具结果".to_string()
+                    }
+                    TaskStatus::Waiting(WaitingReason::BackgroundJobs) => {
+                        "后台工作仍在运行".to_string()
+                    }
+                    _ => "正在等待任务继续处理".to_string(),
+                }
+            };
             commands.spawn(SystemOutputMessage {
                 task_id,
-                content:
-                    "已收到，将在当前任务的下一步送达；如需开启新任务，请先用 /finish 结束当前任务"
-                        .to_string(),
+                content: format!(
+                    "已收到补充。当前{status}；将在下一次工具结果或模型响应返回后优先处理，继续原任务。"
+                ),
             });
         } else {
             debug!(
@@ -287,16 +318,24 @@ pub(crate) fn continue_task_system(
     mut commands: Commands,
     clock: Res<Clock>,
     index: ResMut<EntityIndex>,
-    continue_messages: Query<(Entity, &ContinueTaskMessage)>,
+    continue_messages: Query<(
+        Entity,
+        &ContinueTaskMessage,
+        Option<&crate::domain::BackgroundReportTurn>,
+    )>,
     agents: Query<&Agent>,
     mut tasks: Query<(Entity, &mut Task, Option<&mut ShortTermMemory>)>,
 ) {
-    for (entity, msg) in &continue_messages {
+    for (entity, msg, background_report) in &continue_messages {
         // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
         if let Some((task_entity, mut task, short_term)) = index
             .get_task(&msg.task_id)
             .and_then(|e| tasks.get_mut(e).ok())
         {
+            if task.status.is_terminal() {
+                commands.entity(entity).despawn();
+                continue;
+            }
             let stm_entries_before = short_term.as_ref().map(|s| s.entries.len()).unwrap_or(0);
             let stm_tokens_before = short_term.as_ref().map(|s| s.estimated_tokens).unwrap_or(0);
 
@@ -304,7 +343,16 @@ pub(crate) fn continue_task_system(
             let prev_content = task.content.clone();
             let prev_delegate = task.delegate;
             task.mark_ready(clock.0);
-            task.content = msg.user_input.clone();
+            if background_report.is_some() {
+                commands
+                    .entity(task_entity)
+                    .insert(crate::domain::BackgroundReportTurn);
+            } else {
+                commands
+                    .entity(task_entity)
+                    .remove::<crate::domain::BackgroundReportTurn>();
+                task.content = msg.user_input.clone();
+            }
 
             // 追加用户输入到 ShortTermMemory
             if let Some(mut stm) = short_term {

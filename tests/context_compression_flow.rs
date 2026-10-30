@@ -3,7 +3,7 @@
 //! 验证：
 //! 1. 工具密集型任务下 estimated_tokens 反映 tool_calls 消耗，压缩能及时触发
 //! 2. 压缩触发后配对组完整性（含 tool_calls 的 Assistant 条目不被拆散）
-//! 3. 结构化还原路径：从 STM 的 tool_calls 还原 ConversationMessage
+//! 3. 旧展示记忆与摘要不能被伪造为工具协议；实际恢复见 monitor_feedback_flow
 //! 4. First iteration 读 request.conversation（结构化路径生效）
 //! 5. 空 conversation 不影响 WorkItem 派发路径
 
@@ -103,187 +103,25 @@ fn compression_preserves_tool_call_group() {
     assert_eq!(entry.metadata.tool_calls[0].tool_name, "shell_exec");
 }
 
-// ── 3. 结构化还原路径测试 ──────────────────────────────────────
-
-/// 从 STM 还原 ConversationMessage 序列的测试
-/// （对应 dispatch_system.rs 中的 build_structured_conversation 逻辑）
-#[test]
-fn structured_conversation_reconstruction() {
-    let mut stm = ShortTermMemory::default();
-    stm.add_entry(EntryRole::User, "list files", EntryMetadata::default());
-
-    let mut metadata = EntryMetadata::default();
-    metadata.tool_calls.push(ToolCall {
-        id: Some("call_1".to_string()),
-        tool_name: "shell_exec".to_string(),
-        input: "ls".to_string(),
-        output: "file1.txt\nfile2.txt".to_string(),
-        timestamp: chrono::Utc::now(),
-    });
-    stm.add_entry(EntryRole::Assistant, "done", metadata);
-
-    stm.add_entry(EntryRole::User, "next question", EntryMetadata::default());
-    stm.add_entry(EntryRole::Assistant, "answer", EntryMetadata::default());
-
-    // 手动还原（模拟 build_structured_conversation 逻辑）
-    let has_tool_calls = stm
-        .entries
-        .iter()
-        .any(|e| !e.metadata.tool_calls.is_empty());
-    assert!(has_tool_calls, "STM should have entries with tool_calls");
-
-    let mut messages = Vec::new();
-    for entry in &stm.entries {
-        match entry.role {
-            EntryRole::User => {
-                messages.push(ConversationMessage::User {
-                    content: entry.content.clone(),
-                });
-            }
-            EntryRole::Assistant => {
-                let tool_calls: Vec<_> = entry
-                    .metadata
-                    .tool_calls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, tc)| harness::domain::LlmToolCall {
-                        id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                        name: tc.tool_name.clone(),
-                        arguments: tc.input.clone(),
-                    })
-                    .collect();
-
-                messages.push(ConversationMessage::Assistant {
-                    content: if entry.content.is_empty() {
-                        None
-                    } else {
-                        Some(entry.content.clone())
-                    },
-                    tool_calls,
-                    reasoning_content: None,
-                });
-
-                for (i, tc) in entry.metadata.tool_calls.iter().enumerate() {
-                    messages.push(ConversationMessage::Tool {
-                        tool_call_id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                        content: tc.output.clone(),
-                    });
-                }
-            }
-            EntryRole::Summary => {
-                messages.push(ConversationMessage::User {
-                    content: format!("[System note] {}", entry.content),
-                });
-            }
-            EntryRole::Archive => {}
-        }
-    }
-
-    // User → Assistant(tool_calls) → Tool → User → Assistant
-    assert_eq!(messages.len(), 5, "should produce 5 messages");
-    assert!(matches!(messages[0], ConversationMessage::User { .. }));
-    assert!(
-        matches!(&messages[1], ConversationMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()),
-        "second message should be Assistant with tool_calls"
-    );
-    assert!(
-        matches!(&messages[2], ConversationMessage::Tool { tool_call_id, .. } if tool_call_id == "call_1"),
-        "third message should be Tool with call_1"
-    );
-    assert!(matches!(messages[3], ConversationMessage::User { .. }));
-    assert!(
-        matches!(&messages[4], ConversationMessage::Assistant { tool_calls, .. } if tool_calls.is_empty()),
-        "fifth message should be Assistant without tool_calls"
-    );
-}
+// ── 3. 旧展示记忆不伪造工具协议 ───────────────────────────────
 
 #[test]
-fn structured_conversation_no_tool_calls_returns_none() {
-    // 验证：不含 tool_calls 的 STM 不走结构化路径
-    let mut stm = ShortTermMemory::default();
-    stm.add_entry(EntryRole::User, "hello", EntryMetadata::default());
-    stm.add_entry(EntryRole::Assistant, "hi", EntryMetadata::default());
-
-    let has_tool_calls = stm
-        .entries
-        .iter()
-        .any(|e| !e.metadata.tool_calls.is_empty());
-    assert!(
-        !has_tool_calls,
-        "STM without tool_calls should not trigger structured path"
-    );
-}
-
-#[test]
-fn structured_conversation_summary_prefix_renders_as_user() {
-    // 验证：summary_prefix 在结构化路径中渲染为 User 消息
+fn display_metadata_and_summary_do_not_become_tool_protocol() {
     let mut stm = ShortTermMemory {
-        summary_prefix: Some("Previous conversation summary".to_string()),
+        summary_prefix: Some("Previous conversation summary".into()),
         ..Default::default()
     };
-    stm.add_entry(EntryRole::User, "question", EntryMetadata::default());
-
-    let mut metadata = EntryMetadata::default();
-    metadata.tool_calls.push(ToolCall {
-        id: Some("call_1".to_string()),
-        tool_name: "shell_exec".to_string(),
-        input: "ls".to_string(),
-        output: "files".to_string(),
-        timestamp: chrono::Utc::now(),
-    });
-    stm.add_entry(EntryRole::Assistant, "done", metadata);
-
-    // 模拟还原
-    let mut messages = Vec::new();
-    if let Some(summary) = &stm.summary_prefix {
-        messages.push(ConversationMessage::User {
-            content: format!("[Previous context summary]\n{}", summary),
-        });
-    }
-    for entry in &stm.entries {
-        match entry.role {
-            EntryRole::User => {
-                messages.push(ConversationMessage::User {
-                    content: entry.content.clone(),
-                });
-            }
-            EntryRole::Assistant => {
-                let tool_calls: Vec<_> = entry
-                    .metadata
-                    .tool_calls
-                    .iter()
-                    .enumerate()
-                    .map(|(i, tc)| harness::domain::LlmToolCall {
-                        id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                        name: tc.tool_name.clone(),
-                        arguments: tc.input.clone(),
-                    })
-                    .collect();
-                messages.push(ConversationMessage::Assistant {
-                    content: if entry.content.is_empty() {
-                        None
-                    } else {
-                        Some(entry.content.clone())
-                    },
-                    tool_calls,
-                    reasoning_content: None,
-                });
-                for (i, tc) in entry.metadata.tool_calls.iter().enumerate() {
-                    messages.push(ConversationMessage::Tool {
-                        tool_call_id: tc.id.clone().unwrap_or_else(|| format!("tc_{}", i)),
-                        content: tc.output.clone(),
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // summary_prefix → User → Assistant(tool_calls) → Tool
-    assert_eq!(messages.len(), 4);
+    stm.add_entry(EntryRole::User, "list files", EntryMetadata::default());
+    stm.record_tool_call(
+        Some("call_1".into()),
+        "shell_list".into(),
+        "[]".into(),
+        "[]".into(),
+        chrono::Utc::now(),
+    );
     assert!(
-        matches!(&messages[0], ConversationMessage::User { content } if content.contains("Previous context summary")),
-        "first message should be summary prefix as User"
+        stm.protocol.restore().is_none(),
+        "lossy metadata must fall back to textual context, even if tool IDs exist"
     );
 }
 

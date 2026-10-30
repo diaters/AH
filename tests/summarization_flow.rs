@@ -184,6 +184,7 @@ fn task_completion_does_not_trigger_summarization() {
                 summary_prefix: None,
                 estimated_tokens: 100,
                 last_cached_tokens: None,
+                protocol: Default::default(),
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
@@ -256,6 +257,7 @@ fn multi_turn_task_does_not_trigger_summarization_mid_conversation() {
             summary_prefix: None,
             estimated_tokens: 100,
             last_cached_tokens: None,
+            protocol: Default::default(),
         },
     ));
 
@@ -306,6 +308,7 @@ fn summarization_preserves_terminal_task_status() {
                 summary_prefix: None,
                 estimated_tokens: 50,
                 last_cached_tokens: None,
+                protocol: Default::default(),
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
@@ -388,6 +391,7 @@ fn execution_populates_memory_but_does_not_trigger_summarization() {
                 summary_prefix: None,
                 estimated_tokens: 50,
                 last_cached_tokens: None,
+                protocol: Default::default(),
             },
             PendingDispatch {
                 kind: DispatchKind::Task,

@@ -220,6 +220,10 @@ __default_permission 回退规则：__
 - 若显式设置 `default_permission`，对未在 overrides 中列出的工具使用该值
 - 若未设置 `default_permission`（结构默认 Confirm），对未在 overrides 中列出的工具回退到 `ToolDefinition.default_permission`（工具注册时声明的默认值）
 
+`update_todos` 仅修改展示清单，工具自身默认 `Allow`。若 Agent 显式使用
+`default_permission = "Confirm"`，仍会要求审批；可在该 Agent 的 `[agent.tools]` 中设置
+`update_todos = "Allow"` 以允许进度更新。框架不会绕过显式 `Confirm` / `Deny`，示例配置已展示此覆盖项。
+
 __示例：__
 
 ```toml

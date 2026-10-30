@@ -43,13 +43,31 @@ pub enum OutputContent {
     Text(String),
     /// LLM 请求了一次或多次 Tool 调用
     ToolCalls(Vec<LlmToolCall>),
+    /// LLM 同时返回用户文字和 Tool 调用；文字是进度反馈，不是最终结果。
+    ToolCallsWithText {
+        text: String,
+        calls: Vec<LlmToolCall>,
+    },
+}
+
+impl OutputContent {
+    /// 用户文字，不包含 provider 推理；混合响应仍须走工具调用状态流转。
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) | Self::ToolCallsWithText { text, .. } => Some(text),
+            Self::ToolCalls(_) => None,
+        }
+    }
 }
 
 impl std::fmt::Display for AgentExecutionOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.content {
             OutputContent::Text(s) => write!(f, "{}", s),
-            OutputContent::ToolCalls(calls) => {
+            OutputContent::ToolCalls(calls) | OutputContent::ToolCallsWithText { calls, .. } => {
+                if let Some(text) = self.content.text() {
+                    writeln!(f, "{text}")?;
+                }
                 let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
                 write!(f, "tool_calls: [{}]", names.join(", "))
             }
@@ -76,6 +94,38 @@ pub enum ConversationMessage {
         tool_call_id: String,
         content: String,
     },
+}
+
+impl ConversationMessage {
+    /// 内容成本包含仅驻留运行时的工具参数与推理；供压缩阈值及派发预算共用。
+    pub fn estimated_tokens(&self) -> u32 {
+        use super::estimate_tokens;
+        match self {
+            Self::System { content } | Self::User { content } | Self::Tool { content, .. } => {
+                estimate_tokens(content)
+            }
+            Self::Assistant {
+                content,
+                tool_calls,
+                reasoning_content,
+            } => {
+                let mut tokens = content
+                    .as_deref()
+                    .map(estimate_tokens)
+                    .unwrap_or(0)
+                    .saturating_add(
+                        reasoning_content
+                            .as_deref()
+                            .map(estimate_tokens)
+                            .unwrap_or(0),
+                    );
+                for call in tool_calls {
+                    tokens = tokens.saturating_add(estimate_tokens(&call.arguments));
+                }
+                tokens
+            }
+        }
+    }
 }
 
 /// Agent 执行请求

@@ -26,6 +26,7 @@ fallback_cooldown_secs = 120
 shell_exec = "Confirm"
 shell_start = "Confirm"
 channel_send = "Confirm"
+update_todos = "Allow"  # 仅更新展示清单，不执行工作
 
 [[agent]]
 name = "brain"

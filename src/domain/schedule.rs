@@ -334,6 +334,10 @@ impl ScheduledRun {
     }
 }
 
+/// 本轮无人值守执行被权限边界阻断，不能由模型最终文字覆盖为成功。
+#[derive(Debug, Clone, Component)]
+pub struct ScheduledRunFailure(pub String);
+
 /// 一次触发的最终记账结果，跳过和错过不增加失败次数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

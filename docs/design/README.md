@@ -21,7 +21,7 @@
 | `2026-07-13-agent-profile-llm-generation-design.md` | 当前有效 | Agent 元信息 LLM 生成与动态更新 | 孵化时 LLM 生成 profile，经验积累后评估更新 |
 | `2026-07-18-dispatch-architecture-unification-design.md` | 当前有效 | 派发架构统一 | 单一 `PendingDispatch` 入口，治理 9 个腐化点 |
 | `2026-07-26-ecs-relation-modeling-design.md` | 当前有效 | 实体关系改用 ECS 原生建模（EntityIndex + ChildOf） | 消灭 55+ 线性扫描 |
-| `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效（部分被取代） | 上下文压缩盲区修复 | 工具结果入 STM、配对组粒度压缩；对话级选择已被 08-26 取代 |
+| `2026-08-09-context-compression-blind-spot-fix.md` | 当前有效（部分被取代） | 上下文压缩盲区修复 | 配对组压缩；选择见 08-26，协议恢复见 10-30 |
 | `2026-08-16-real-llm-scenario-testing-design.md` | 当前有效 | 真实 LLM 场景测试与分层正确性判断 | 四层测试模型 + AI Judge/人工待审 |
 | `2026-08-17-complexity-governance-design.md` | 当前有效 | 设计质量治理：依赖方向、知识收口、按知识域重组 | 已评审修订，P0–P5 全部实施完成 |
 | `2026-08-26-memory-compression-redesign-design.md` | 当前有效 | 短期记忆压缩重设计：一次全压与结构性收敛 | 配置入口 + 压缩滞后修复，已实施完成 |
@@ -33,6 +33,7 @@
 | `2026-08-24-test-seam-quality-remediation-design.md` | 待评审 | 测试接缝质量修正：从实现耦合回归到可观察端口验证 | 基于低质测试清单证据核对与分批治理（基建先行） |
 | [2026-10-29-schedule-p1-delivery.md](2026-10-29-schedule-p1-delivery.md) | 当前有效 | 定时运行账本、真实回执、失败告警恢复与健康上下文 | P1 交付契约 |
 | `2026-10-29-live-monitor-output.md` | 当前有效 | 持续输出、真实回执、有界重试与窗口唤醒 | 生命周期规格任务 D |
+| [2026-10-30-monitor-feedback-fixes.md](2026-10-30-monitor-feedback-fixes.md) | 当前有效 | 混合响应、steer 状态反馈、shell 结果语义与受管监控指引 | 以流量监控日志为通用回归场景 |
 
 ## 推荐阅读顺序
 
