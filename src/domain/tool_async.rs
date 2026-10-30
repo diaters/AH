@@ -1,7 +1,7 @@
 //! 异步工具桥的领域类型。
 //!
 //! 本模块承担异步工具桥的全部「领域契约」定义：
-//! - 通道消息：`ToolWorkerPayload` / `ToolAsyncResult` / `ToolResultSender` / `ToolResultReceiver`
+//! - 通道消息：`ToolWorkerPayload` / `ToolAsyncResult` / `ToolResultReceiver`（发送端归属 contracts）
 //! - 挂起实体与在飞标记：`ToolRequestPending` / `InFlightToolCall`
 //! - 声明式写效果：`ToolEffect` / `ToolEffectPending`
 //! - Owned 上下文与调度快照：`OwnedToolContext` / `SchedulerStateSnapshot`
@@ -75,10 +75,6 @@ impl ToolAsyncResult {
         }
     }
 }
-
-/// worker → ECS 通道的发送端，作为 Resource 注入 World。
-#[derive(Resource)]
-pub struct ToolResultSender(pub mpsc::UnboundedSender<ToolAsyncResult>);
 
 /// worker → ECS 通道的接收端，作为 Resource 注入 World。
 ///

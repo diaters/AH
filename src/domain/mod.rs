@@ -204,13 +204,13 @@ pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ClearTaskMessage,
-    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver, ExecutionResultSender,
+    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver,
     ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, InputReceiver,
     LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
-    ModelChainStateUpdate, ModelChainStateUpdateReceiver, ModelChainStateUpdateSender, OutputKind,
-    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
-    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
-    Signal, SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
+    ModelChainStateUpdate, ModelChainStateUpdateReceiver, OutputKind, OutputMessage,
+    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
+    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
+    SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
     SkillUpdateRequestMessage, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
@@ -286,7 +286,7 @@ pub use tool_runtime::ToolCallingState;
 // tool_async
 pub use tool_async::{
     InFlightToolCall, OwnedToolContext, SchedulerStateSnapshot, ToolAsyncResult, ToolEffect,
-    ToolEffectPending, ToolRequestPending, ToolResultReceiver, ToolResultSender, ToolWorkerPayload,
+    ToolEffectPending, ToolRequestPending, ToolResultReceiver, ToolWorkerPayload,
 };
 
 // work_item

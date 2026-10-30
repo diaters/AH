@@ -556,7 +556,7 @@ fn e2e_sweeper_error_first_worker_late_success_dropped() {
 
     // 5. 把 late Ok 塞回通道，再跑 ingest：挂起实体已 despawn，late Ok 走 drop 路径
     world
-        .resource::<harness::domain::ToolResultSender>()
+        .resource::<harness::contracts::ToolResultSender>()
         .0
         .send(late_ok)
         .unwrap();
@@ -677,7 +677,7 @@ fn e2e_backpressure_experiment_1000_buffered_results() {
 
     // 持有 receiver 不跑 ingest；直接向 sender 塞 1000 条
     let sender = world
-        .resource::<harness::domain::ToolResultSender>()
+        .resource::<harness::contracts::ToolResultSender>()
         .0
         .clone();
     let n = 1000usize;

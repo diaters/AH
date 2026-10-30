@@ -446,6 +446,10 @@ fn tool_call_is_recorded_to_short_term_memory() {
         ))
         .id();
     let task_id = app.world().get::<Task>(task_entity).unwrap().id;
+    app.world_mut()
+        .resource_mut::<harness::ecs::EntityIndex>()
+        .tasks
+        .insert(task_id, task_entity);
 
     // 注册测试工具
     create_test_tool_registry(app.world_mut());

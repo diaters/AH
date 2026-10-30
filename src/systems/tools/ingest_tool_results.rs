@@ -26,8 +26,12 @@ pub fn ingest_tool_results_system(
     mut commands: Commands,
     mut receiver: ResMut<ToolResultReceiver>,
     pending: Query<(Entity, &ToolRequestPending)>,
+    wake: Option<Res<crate::contracts::RuntimeWake>>,
 ) {
-    while let Ok(result) = receiver.0.try_recv() {
+    for _ in 0..256 {
+        let Ok(result) = receiver.0.try_recv() else {
+            break;
+        };
         match result.payload {
             ToolWorkerPayload::Completed(output) => {
                 let Some((entity, pending)) = pending
@@ -63,6 +67,11 @@ pub fn ingest_tool_results_system(
                 });
             }
         }
+    }
+    if !receiver.0.is_empty()
+        && let Some(wake) = wake
+    {
+        wake.notify();
     }
 }
 

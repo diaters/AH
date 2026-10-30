@@ -28,6 +28,7 @@ use crate::domain::{InFlightToolCall, StopRequested, Task, ToolRequestPending};
 /// 父任务带 `StopRequested`（用户 `/stop` 中断当前回合）同样触发取消。
 pub fn cancel_monitor_system(
     mut commands: Commands,
+    index: Res<crate::ecs::EntityIndex>,
     tasks: Query<(&Task, Has<StopRequested>)>,
     pending_inflight: Query<(Entity, &ToolRequestPending, &InFlightToolCall)>,
 ) {
@@ -35,9 +36,9 @@ pub fn cancel_monitor_system(
         let task_id = pending.original_request.task_id;
 
         // 查父任务：找不到（已 despawn）或已终态 → 取消
-        let should_cancel = tasks
-            .iter()
-            .find(|(t, _)| t.id == task_id)
+        let should_cancel = index
+            .get_task(&task_id)
+            .and_then(|entity| tasks.get(entity).ok())
             .map(|(t, stop_requested)| t.status.is_terminal() || stop_requested)
             .unwrap_or(true);
 

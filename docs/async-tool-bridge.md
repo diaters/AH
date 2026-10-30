@@ -6,6 +6,10 @@
 > 实施依据见 `docs/archive/superpowers/plans/2026-07-25-async-tool-bridge.md`（已归档）；
 > pilot 验收数据见 `docs/async-tool-bridge-pilot-report.md`。
 
+发送端 `ExecutionResultSender`、`ModelChainStateUpdateSender`、`ToolResultSender` 现归属
+`harness::contracts`，内部通过 `WakeSender` 保证成功入队后唤醒主循环；接收端与领域 payload
+仍在 `domain`。批次接收最多 256 条，剩余数据自动登记续跑，结果仍由 ingest 单点落地。
+
 ## 1. 定位与背景
 
 异步工具桥是工具执行的统一运行时：所有 `BuiltinTool::kind() == Async` 的工具请求

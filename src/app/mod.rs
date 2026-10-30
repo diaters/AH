@@ -34,6 +34,7 @@ pub fn build_harness_app(
     frontends: Vec<Box<dyn Frontend>>,
     channel_manager: crate::channels::ChannelManager,
 ) -> App {
+    let wake = crate::contracts::RuntimeWake::default();
     let (result_tx, result_rx) = mpsc::unbounded_channel();
     let (state_tx, state_rx) = mpsc::unbounded_channel();
     // 异步工具桥通道：dispatch 持 sender 投 worker，ingest 持 receiver 落地。
@@ -47,12 +48,20 @@ pub fn build_harness_app(
     app.insert_resource(FrontendRegistry { frontends });
     app.insert_resource(AsyncRuntime(runtime));
     app.insert_resource(executor_registry);
-    app.insert_resource(crate::domain::ExecutionResultSender(result_tx));
+    app.insert_resource(crate::contracts::ExecutionResultSender(
+        crate::contracts::WakeSender::new(result_tx, wake.clone()),
+    ));
     app.insert_resource(crate::domain::ExecutionResultReceiver(result_rx));
-    app.insert_resource(crate::domain::ModelChainStateUpdateSender(state_tx));
+    app.insert_resource(crate::contracts::ModelChainStateUpdateSender(
+        crate::contracts::WakeSender::new(state_tx, wake.clone()),
+    ));
     app.insert_resource(crate::domain::ModelChainStateUpdateReceiver(state_rx));
-    app.insert_resource(crate::domain::ToolResultSender(tool_result_tx));
+    app.insert_resource(crate::contracts::ToolResultSender(
+        crate::contracts::WakeSender::new(tool_result_tx, wake.clone()),
+    ));
     app.insert_resource(crate::domain::ToolResultReceiver(tool_result_rx));
+    app.insert_resource(wake.clone());
+    app.init_resource::<crate::contracts::BufferedIngress>();
     app.insert_resource(TriggersConfigPath(config.triggers_config_path.clone()));
     // 记忆压缩配置：由 HarnessConfig（env 配置源）投影注入，
     // TaskRuntimePlugin::init_resource::<MemoryConfig>() 保留为默认兜底。
@@ -117,6 +126,12 @@ pub fn build_harness_app(
 
     // 注册 PluginGroup
     app.add_plugins(DefaultRuntimePluginGroup);
+    app.world_mut()
+        .resource_mut::<crate::systems::ScheduleDeliveryTracker>()
+        .set_wake(wake.clone());
+    app.world_mut()
+        .resource_mut::<crate::systems::MonitorDeliveries>()
+        .set_wake(wake);
 
     // agent_factory_system 在 HarnessSet::Maintenance 中运行，
     // agent_termination_system 和 experience_collection_cleanup_system
@@ -152,6 +167,7 @@ pub fn build_harness_app(
             .in_set(HarnessSet::Maintenance),
     );
 
+    crate::systems::demand::install_demand_drive(&mut app);
     app
 }
 

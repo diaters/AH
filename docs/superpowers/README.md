@@ -122,6 +122,9 @@
 2026-08-14 归档（对应功能随 `feat/skill-creation-command` 分支合入，见
 [`docs/design/2026-08-10-skill-creation-command-design.md`](../design/2026-08-10-skill-creation-command-design.md)）。
 
+本次已归档：[ECS 按需唤醒实施记录](../archive/superpowers/plans/2026-10-29-ecs-wakeup.md)
+（2026-10-30，验证范围与后续测量边界见记录）。
+
 ## 生命周期规则
 
 - 计划执行完毕或规格被代码实现后，应在 __7 天内__ 移动到 `docs/archive/superpowers/`

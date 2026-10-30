@@ -15,6 +15,7 @@
 //! - 跑 system 一律 `world.run_system_once(...)`（既有先例：
 //!   `src/systems/experience/approval.rs:349`）。
 
+use harness::contracts::ToolResultSender;
 use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
@@ -25,7 +26,7 @@ use tokio::sync::mpsc;
 use harness::contracts::{AsyncRuntime, Clock};
 use harness::domain::{
     BuiltinTool, OwnedToolContext, ToolAction, ToolActionKind, ToolAsyncResult, ToolContext,
-    ToolError, ToolFuture, ToolResultReceiver, ToolResultSender, ToolWorkerOutput,
+    ToolError, ToolFuture, ToolResultReceiver, ToolWorkerOutput,
 };
 use harness::ecs::EntityIndex;
 
@@ -41,7 +42,7 @@ pub fn setup_bridge_world() -> World {
     world.insert_resource(Clock(Utc::now()));
 
     let (tx, rx) = mpsc::unbounded_channel::<ToolAsyncResult>();
-    world.insert_resource(ToolResultSender(tx));
+    world.insert_resource(ToolResultSender(tx.into()));
     world.insert_resource(ToolResultReceiver(rx));
 
     // EntityIndex：阶段 2 起 async_tool_dispatch_system 依赖 O(1) UUID 解析

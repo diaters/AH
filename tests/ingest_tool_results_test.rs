@@ -44,7 +44,7 @@ fn ingest_lands_completed_result_and_despawns_pending() {
     let mut world = setup_bridge_world();
     let e = spawn_pending(&mut world, "call-i1");
 
-    let sender = world.resource::<harness::domain::ToolResultSender>();
+    let sender = world.resource::<harness::contracts::ToolResultSender>();
     sender
         .0
         .send(ToolAsyncResult::completed(
@@ -73,7 +73,7 @@ fn ingest_lands_error_result_with_tool_error_type() {
     let mut world = setup_bridge_world();
     spawn_pending(&mut world, "call-i2");
 
-    let sender = world.resource::<harness::domain::ToolResultSender>();
+    let sender = world.resource::<harness::contracts::ToolResultSender>();
     sender
         .0
         .send(ToolAsyncResult::completed(
@@ -100,7 +100,7 @@ fn ingest_lands_error_result_with_tool_error_type() {
 fn ingest_drops_late_duplicate_when_pending_gone() {
     let mut world = setup_bridge_world();
     // 不 spawn pending（模拟 sweeper claim 后 ingest 已落地、despawn，worker 晚到的结果）
-    let sender = world.resource::<harness::domain::ToolResultSender>();
+    let sender = world.resource::<harness::contracts::ToolResultSender>();
     sender
         .0
         .send(ToolAsyncResult::completed(
@@ -122,7 +122,7 @@ fn ingest_routes_effect_to_pending_entity_without_landing_result() {
     let mut world = setup_bridge_world();
     let e = spawn_pending(&mut world, "call-i3");
 
-    let sender = world.resource::<harness::domain::ToolResultSender>();
+    let sender = world.resource::<harness::contracts::ToolResultSender>();
     sender
         .0
         .send(ToolAsyncResult::effect(

@@ -68,7 +68,7 @@ pub struct MonitorDeliveryRecord {
 #[derive(Resource)]
 pub struct MonitorDeliveries {
     pending: BTreeMap<DeliveryKey, PendingDelivery>,
-    receipt_tx: crossbeam_channel::Sender<DeliveryReceipt>,
+    receipt_tx: crate::contracts::WakeSender<DeliveryReceipt>,
     receipt_rx: crossbeam_channel::Receiver<DeliveryReceipt>,
     records: VecDeque<MonitorDeliveryRecord>,
     last_poll: Option<DateTime<Utc>>,
@@ -79,7 +79,7 @@ impl Default for MonitorDeliveries {
         let (receipt_tx, receipt_rx) = crossbeam_channel::unbounded();
         Self {
             pending: BTreeMap::new(),
-            receipt_tx,
+            receipt_tx: receipt_tx.into(),
             receipt_rx,
             records: VecDeque::new(),
             last_poll: None,
@@ -88,6 +88,21 @@ impl Default for MonitorDeliveries {
 }
 
 impl MonitorDeliveries {
+    pub(crate) fn set_wake(&mut self, wake: crate::contracts::RuntimeWake) {
+        self.receipt_tx.set_wake(wake);
+    }
+    pub(crate) fn next_deadline(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.pending
+            .values()
+            .filter_map(|delivery| match delivery.state {
+                DeliveryState::Collecting => Some(delivery.collect_until),
+                DeliveryState::RetryAt(at) => Some(at),
+                _ => None,
+            })
+            .filter(|at| *at > now)
+            .min()
+    }
+
     /// 最近的运行期投递结果；进程重启后不恢复。
     pub fn recent_records(&self) -> impl Iterator<Item = &MonitorDeliveryRecord> {
         self.records.iter()
@@ -217,6 +232,8 @@ pub(crate) fn monitor_output_system(
     index: Res<EntityIndex>,
     tasks: Query<&Task>,
     mut deliveries: ResMut<MonitorDeliveries>,
+    demand: Option<Res<crate::systems::demand::DemandSchedule>>,
+    mut removed_jobs: RemovedComponents<crate::domain::BackgroundJob>,
 ) {
     let now = clock.0;
     deliveries.receive(now);
@@ -225,10 +242,17 @@ pub(crate) fn monitor_output_system(
             .get_task(&id)
             .and_then(|entity| tasks.get(entity).ok())
     };
-    let should_poll = deliveries.last_poll.is_none_or(|last| {
-        now - last
-            >= chrono::Duration::milliseconds(config.background_poll_ms.min(i64::MAX as u64) as i64)
-    });
+    let jobs_finished = removed_jobs.read().count() > 0;
+    let should_poll = jobs_finished
+        || demand.as_deref().is_some_and(|schedule| {
+            schedule.is_due(crate::systems::demand::DeadlineKey::Background)
+        })
+        || deliveries.last_poll.is_none_or(|last| {
+            now - last
+                >= chrono::Duration::milliseconds(
+                    config.background_poll_ms.min(i64::MAX as u64) as i64
+                )
+        });
     if should_poll {
         deliveries.last_poll = Some(now);
         match backend.poll_output_events() {

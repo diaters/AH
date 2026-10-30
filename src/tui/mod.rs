@@ -29,6 +29,12 @@ impl TuiFrontend {
 }
 
 impl Frontend for TuiFrontend {
+    fn action_receiver(&self) -> Option<Receiver<UserAction>> {
+        Some(self.action_rx.clone())
+    }
+    fn requires_polling(&self) -> bool {
+        false
+    }
     fn kind(&self) -> FrontendKind {
         FrontendKind::Tui
     }

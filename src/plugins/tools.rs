@@ -9,9 +9,9 @@ use crate::{
     systems::{
         HarnessSet, NativeProcessBackend, async_tool_dispatch_system, cancel_monitor_system,
         channel_send_dispatch_system, check_waiting_tasks_system, commit_tool_effects_system,
-        ingest_tool_results_system, on_subtask_completed_check_waiting, on_tool_called_hook_system,
-        on_tool_returned_hook_system, register_builtin_tools, sweep_inflight_tool_calls,
-        tool_dispatch_system, tool_result_system,
+        ingest_tool_results_system, on_tool_called_hook_system, on_tool_returned_hook_system,
+        register_builtin_tools, sweep_inflight_tool_calls, tool_dispatch_system,
+        tool_result_system,
     },
 };
 
@@ -31,6 +31,8 @@ impl Plugin for ToolRuntimePlugin {
         app.insert_resource(ExperienceStore::default());
         app.insert_resource(PendingExperienceHooks::default());
         app.insert_resource(NativeProcessBackend::default());
+
+        app.init_resource::<crate::systems::tools::WaitingIndex>();
 
         // 注册 Tool 相关系统
         app.add_systems(
@@ -73,9 +75,7 @@ impl Plugin for ToolRuntimePlugin {
                 // 等待任务检查
                 check_waiting_tasks_system
                     .in_set(HarnessSet::Transform)
-                    .after(tool_result_system),
-                on_subtask_completed_check_waiting
-                    .in_set(HarnessSet::Transform)
+                    .after(tool_result_system)
                     .after(crate::systems::sub_task_completion_system),
                 // channel_send 工具出向消息派发 companion 系统
                 channel_send_dispatch_system

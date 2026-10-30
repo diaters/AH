@@ -143,11 +143,16 @@ Agent 尚未消费的 `shell_output` 监控通知按会话合并为最新结果�
 
 TUI 与 `--headless` 共用同一主循环（`harness::app::run_loop`）。`--headless` 不注册 TUI 前端，
 启动时要求至少配置一个 IM 通道。
+主循环按输入、执行结果、发送回执和截止时间阻塞等待；等待任务不会维持固定频率更新。
+维护周期为 30 秒，旧式拉取前端的兼容检查为 150 ms；后台 shell 检查继续使用
+`HARNESS_BACKGROUND_POLL_MS`。TUI 输入由独立线程读取，绘制最大约每 16 ms 一次且要求存在可见变化。
+
+以下两个旧参数保留兼容读取，显式设置时记录 `DeprecatedPollingConfig`，不再影响 ECS 驱动。
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `HARNESS_ACTIVE_POLL_MS` | `16` | 有任务或事件时主循环的轮询间隔（毫秒） |
-| `HARNESS_IDLE_POLL_MS` | `150` | 完全空闲时主循环的轮询间隔（毫秒） |
+| `HARNESS_ACTIVE_POLL_MS` | `16` | 已废弃，仅保留兼容字段，设置不生效 |
+| `HARNESS_IDLE_POLL_MS` | `150` | 已废弃，仅保留兼容字段，设置不生效 |
 
 ### 记忆压缩
 

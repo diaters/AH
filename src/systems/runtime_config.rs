@@ -54,9 +54,9 @@ pub struct HarnessConfig {
     pub conversation_idle_secs: u64,
     /// 连续失败达到该次数时首次告警，默认3。
     pub schedule_failure_alert_threshold: u32,
-    /// TUI 主循环在活跃状态下的轮询间隔（毫秒）
+    /// 已废弃的兼容字段；按需驱动不使用该值。
     pub active_poll_ms: u64,
-    /// TUI 主循环在空闲状态下的轮询间隔（毫秒）
+    /// 已废弃的兼容字段；按需驱动不使用该值。
     pub idle_poll_ms: u64,
     pub channels: crate::channels::config::ChannelConfigs,
     /// IM 通道配置文件路径（用于 Telegram /bind 回写）
@@ -69,6 +69,15 @@ pub struct HarnessConfig {
 
 impl HarnessConfig {
     pub fn from_env() -> Result<Self> {
+        for name in ["HARNESS_ACTIVE_POLL_MS", "HARNESS_IDLE_POLL_MS"] {
+            if std::env::var_os(name).is_some() {
+                tracing::warn!(
+                    event = "DeprecatedPollingConfig",
+                    variable = name,
+                    "polling setting is ignored; runtime now waits for input, results and deadlines"
+                );
+            }
+        }
         let llm = LlmProviderConfig::from_env("gpt-4.1-mini")?;
 
         let brain =

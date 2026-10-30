@@ -10,6 +10,8 @@
 
 | 文件 | 状态 | 作用 | 备注 |
 |------|------|------|------|
+| [ECS 按需唤醒](2026-10-29-ecs-wakeup-design.md) | 当前有效 | 唤醒、内部续跑、截止时间与 TUI 解耦 | 已实施，验证范围见正文 |
+| [按需驱动管线](2026-10-30-demand-runtime-pipeline.md) | 当前有效 | 阶段、唤醒、期限与记忆时间公式 | 对应实际实现 |
 | `im-channel-adapters.md` | 当前有效 | Telegram/QQ/飞书通道抽象与 ECS 集成 | 已实现 Telegram 与 QQ 入向、出向-主动与出向-自动 |
 | `2026-06-06-workitem-boundary-design.md` | 当前有效 | 定义 `Task`、`WorkItem` 与控制状态边界 | 当前架构收敛的核心依据 |
 | `2026-06-06-plan-evaluation-reassessment-design.md` | 当前有效 | 定义 `Plan` 收敛与 `Evaluation` 重新定位 | 与 WorkItem 边界文档配套阅读 |

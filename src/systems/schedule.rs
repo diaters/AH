@@ -5,6 +5,7 @@
 //! 入口的修改（创建、删除、修改、触发记账）都会被检测到并落盘，无需逐个调用点处理；
 //! 晚于本系统发生的修改在下一帧写入。
 
+use crate::systems::demand::{DeadlineKey, DemandSchedule};
 use chrono::Utc;
 use tracing::{info, warn};
 
@@ -146,6 +147,7 @@ pub fn schedule_run_accounting_system(
     settings: Option<Res<crate::systems::HarnessSettings>>,
     frontends: Option<Res<FrontendRegistry>>,
     mut storage_alerted: Local<std::collections::HashSet<Entity>>,
+    mut schedule: Option<ResMut<DemandSchedule>>,
     mut completed_at: Local<
         std::collections::HashMap<crate::domain::TaskId, chrono::DateTime<Utc>>,
     >,
@@ -155,6 +157,10 @@ pub fn schedule_run_accounting_system(
         tracker.poll_receipts();
     }
     for (entity, pending) in &skipped {
+        let retry_key = DeadlineKey::Accounting(entity);
+        if schedule.as_deref().is_some_and(|s| s.blocked(retry_key)) {
+            continue;
+        }
         // 重试期间用户可能已经重新调度；旧的过期事件不能删除新定义。
         let expired = pending.expired.as_ref().filter(|expired| {
             state.dynamic_tasks().iter().any(|current| {
@@ -164,6 +170,9 @@ pub fn schedule_run_accounting_system(
         if let Some(store) = store.as_deref() {
             if let Err(error) = store.append_run(&pending.record) {
                 warn!(event = "ScheduleAccountingFailed", schedule_id = %pending.record.schedule_id, %error, "skipped run ledger will retry");
+                if let Some(schedule) = schedule.as_deref_mut() {
+                    schedule.retry(retry_key);
+                }
                 if storage_alerted.insert(entity)
                     && let Some(def) = state
                         .dynamic_tasks()
@@ -183,6 +192,9 @@ pub fn schedule_run_accounting_system(
                 defs.retain(|def| def.id != pending.record.schedule_id);
                 if let Err(error) = store.save(&defs) {
                     warn!(event = "ScheduleAccountingFailed", %error, "expired definition removal will retry");
+                    if let Some(schedule) = schedule.as_deref_mut() {
+                        schedule.retry(retry_key);
+                    }
                     continue;
                 }
             }
@@ -205,6 +217,9 @@ pub fn schedule_run_accounting_system(
                 ),
             );
         }
+        if let Some(schedule) = schedule.as_deref_mut() {
+            schedule.clear(retry_key);
+        }
         storage_alerted.remove(&entity);
         commands.entity(entity).despawn();
     }
@@ -212,6 +227,10 @@ pub fn schedule_run_accounting_system(
         .as_deref()
         .map_or(3, |settings| settings.0.schedule_failure_alert_threshold);
     for (entity, task, run) in &runs {
+        let retry_key = DeadlineKey::Accounting(entity);
+        if schedule.as_deref().is_some_and(|s| s.blocked(retry_key)) {
+            continue;
+        }
         if !task.status().is_terminal()
             || outputs.iter().any(|output| output.task_id == task.id)
             || sends.iter().any(|send| send.task_id == task.id)
@@ -257,6 +276,9 @@ pub fn schedule_run_accounting_system(
             && let Err(error) = store.append_run(&record)
         {
             warn!(event = "ScheduleAccountingFailed", task_id = %task.id, %error, "terminal run ledger will retry");
+            if let Some(schedule) = schedule.as_deref_mut() {
+                schedule.retry(retry_key);
+            }
             if storage_alerted.insert(entity)
                 && let Some(def) = state
                     .dynamic_tasks()
@@ -292,6 +314,9 @@ pub fn schedule_run_accounting_system(
                 && let Err(error) = store.save(&defs)
             {
                 warn!(event = "ScheduleAccountingFailed", task_id = %task.id, %error, "health commit will retry without incrementing twice");
+                if let Some(schedule) = schedule.as_deref_mut() {
+                    schedule.retry(retry_key);
+                }
                 if storage_alerted.insert(entity) {
                     notify(
                         frontends.as_deref(),
@@ -316,6 +341,9 @@ pub fn schedule_run_accounting_system(
                 def,
                 format!("定时任务「{}」运行记录存储恢复正常。", def.name),
             );
+        }
+        if let Some(schedule) = schedule.as_deref_mut() {
+            schedule.clear(retry_key);
         }
         completed_at.remove(&task.id);
         commands.entity(entity).insert(ScheduleRunRecorded);
@@ -404,6 +432,7 @@ pub fn schedule_persist_system(
     state: Res<SchedulerState>,
     store: Option<Res<ScheduleStore>>,
     mut retry: Local<bool>,
+    mut schedule: Option<ResMut<DemandSchedule>>,
 ) {
     let Some(store) = store else {
         return;
@@ -411,15 +440,26 @@ pub fn schedule_persist_system(
     if !state.is_changed() && !*retry {
         return;
     }
+    if schedule
+        .as_deref()
+        .is_some_and(|s| s.blocked(DeadlineKey::Persist))
+    {
+        return;
+    }
     *retry = false;
     if let Err(e) = store.save(state.dynamic_tasks()) {
         *retry = true;
+        if let Some(schedule) = schedule.as_deref_mut() {
+            schedule.retry(DeadlineKey::Persist);
+        }
         warn!(
             event = "ScheduleStoreSaveFailed",
             path = %store.path().display(),
             error = %e,
             "failed to persist scheduled task definitions"
         );
+    } else if let Some(schedule) = schedule.as_deref_mut() {
+        schedule.clear(DeadlineKey::Persist);
     }
 }
 
