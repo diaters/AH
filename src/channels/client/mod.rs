@@ -336,15 +336,17 @@ impl Channel for Client {
         if message.attachments.len() > 8 {
             return Err(ChannelError::NotSupported);
         }
+        let mut attachment_ids = vec![];
         {
             let mut store = self.store.lock().expect("client state mutex poisoned");
             for attachment in &message.attachments {
-                store
+                let file = store
                     .import_attachment(&message.recipient, session_id, &attachment.target)
                     .map_err(|error| ChannelError::Api {
                         code: 500,
                         message: error.to_string(),
                     })?;
+                attachment_ids.push(file.id);
             }
         }
         self.store
@@ -354,7 +356,7 @@ impl Channel for Client {
                 &message.recipient,
                 session_id,
                 "text",
-                json!({"role":"system","content":message.content,"background_notification":true}),
+                json!({"role":"system","content":message.content,"background_notification":true,"attachment_ids":attachment_ids}),
                 self.config.meow.as_ref(),
             )
             .map_err(|error| ChannelError::Api {

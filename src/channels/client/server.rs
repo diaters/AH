@@ -531,6 +531,7 @@ async fn command(
                 } else {
                     &content
                 },
+                &attachment_ids,
                 &payload,
             )?;
             // 发送者来自凭证；不会经过本地 UserAction 的 sender=None 可信旁路。

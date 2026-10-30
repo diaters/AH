@@ -1,4 +1,4 @@
-export interface MessageDto { role: string; content: string; task_id?: string; }
+export interface MessageDto { role: string; content: string; task_id?: string; attachment_ids?: string[]; }
 export interface TaskDto {
   task_id: string; name: string; status: string; result?: string; agent_name?: string;
   parent_id?: string; revision?: string; can_stop?: boolean; can_finish?: boolean;
