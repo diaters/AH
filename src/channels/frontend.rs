@@ -133,6 +133,11 @@ impl Frontend for ChannelFrontend {
 
     fn push_event(&self, event: EngineEvent) {
         match event {
+            EngineEvent::ToolCallCompleted { .. } => {}
+            EngineEvent::AutomationSnapshot { .. } => {}
+            EngineEvent::TaskInteractionChanged { .. }
+            | EngineEvent::QuestionPresented { .. }
+            | EngineEvent::CommandResult { .. } => {}
             EngineEvent::Text {
                 target,
                 role,

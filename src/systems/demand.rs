@@ -186,6 +186,8 @@ pub(crate) fn install_demand_drive(app: &mut App) {
         DeferredResult,
         Signal,
         UserInputMessage,
+        InteractionRequest,
+        ScheduleRequest,
         RetryReadyMessage,
         TriggerTaskMessage,
         AgentExecutionRequestMessage,

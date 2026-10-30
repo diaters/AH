@@ -156,6 +156,11 @@ pub enum ChannelError {
 pub trait Channel: Send + Sync + 'static {
     fn name(&self) -> &str;
 
+    /// 原生客户端接收结构化事件；IM 通道继续使用默认文本适配器。
+    fn native_frontend(&self) -> Option<Box<dyn crate::domain::Frontend>> {
+        None
+    }
+
     /// 发送消息，返回 message_id（如通道支持事后引用）。
     /// 不支持撤回/编辑的通道返回 None。
     async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError>;

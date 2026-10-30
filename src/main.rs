@@ -90,6 +90,9 @@ fn main() -> Result<()> {
         .expect("failed to install rustls ring crypto provider");
 
     dotenvy::from_filename(".env.local").ok();
+    if harness::channels::client::run_admin_command()? {
+        return Ok(());
+    }
     let (_log_guard, process_log) = init_tracing();
     // 正常入口必须先加载 dotenv 和日志，再让守护器继承宿主环境。
     let process_backend =
@@ -127,11 +130,12 @@ fn main() -> Result<()> {
 
     let runtime = Arc::new(Runtime::new().context("failed to create tokio runtime")?);
     let config = HarnessConfig::from_env()?;
-    if headless && config.channels.telegram.is_none() && config.channels.qq.is_none() {
-        anyhow::bail!(
-            "--headless requires at least one IM channel (HARNESS_CHANNELS_CONFIG): \
-             without a terminal, approvals can only be answered over IM"
-        );
+    if headless
+        && config.channels.telegram.is_none()
+        && config.channels.qq.is_none()
+        && config.channels.client.is_none()
+    {
+        anyhow::bail!("--headless requires at least one channel (HARNESS_CHANNELS_CONFIG)");
     }
 
     // 启动期配置校验：agents.toml 损坏或重名时立即退出，而非运行期 panic
@@ -191,6 +195,19 @@ fn main() -> Result<()> {
 
     // 创建 input channel：IM 入向消息和 TUI 输入共用
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
+
+    let client_server = if let Some(client_config) = config.channels.client.clone() {
+        let store = harness::channels::client::Store::open(client_config.state_path.clone())?;
+        let client = harness::channels::client::Client::new(client_config, store, input_tx.clone());
+        let server = runtime.block_on(harness::channels::client::ClientServer::start(
+            client.clone(),
+        ))?;
+        info!(event="ClientChannelEnabled", address=%server.address, "HTTPS client channel enabled");
+        channel_list.push(Arc::new(client));
+        Some(server)
+    } else {
+        None
+    };
 
     // 启动 ChannelManager（无通道时为空操作）
     // 必须在 Tokio runtime 上下文中 spawn supervisor 任务。
@@ -386,6 +403,9 @@ fn main() -> Result<()> {
         channel_manager.shutdown();
     }
     let _ = runtime_clone.block_on(channel_handle);
+    if let Some(server) = client_server {
+        runtime_clone.block_on(server.shutdown())?;
+    }
 
     Ok(())
 }

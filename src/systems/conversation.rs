@@ -63,6 +63,11 @@ pub(crate) fn conversation_input_order_system(
     mut commands: Commands,
     mut deferred_logged: Local<HashSet<Entity>>,
     inputs: Query<(Entity, &UserInputMessage, Option<&InputSequence>)>,
+    interactions: Query<(
+        Entity,
+        &crate::domain::InteractionRequest,
+        Option<&InputSequence>,
+    )>,
     tasks: Query<&Task>,
     inflight_llm: Option<Res<crate::domain::InflightLlmRequests>>,
     pending: Query<&ToolRequestPending>,
@@ -98,12 +103,21 @@ pub(crate) fn conversation_input_order_system(
             .or_default()
             .push((
                 entity,
-                input,
+                UserCommand::parse(&input.content).is_command(),
                 sequence.map_or(entity.to_bits(), |seq| seq.0),
+                false,
             ));
     }
+    for (entity, input, sequence) in &interactions {
+        groups.entry(input.channel.clone()).or_default().push((
+            entity,
+            true,
+            sequence.map_or(entity.to_bits(), |seq| seq.0),
+            true,
+        ));
+    }
     for (channel, mut inputs) in groups {
-        inputs.sort_by_key(|(_, _, sequence)| *sequence);
+        inputs.sort_by_key(|(_, _, sequence, _)| *sequence);
         let closing = channel_is_closing(&channel, &tasks, &pending, backend.as_deref())
             || clears.iter().any(|clear| {
                 tasks
@@ -111,9 +125,10 @@ pub(crate) fn conversation_input_order_system(
                     .any(|task| task.id == clear.task_id && is_user_root(task, &channel))
             });
         let mut barrier = false;
-        for (position, (entity, input, sequence_number)) in inputs.into_iter().enumerate() {
-            let command = UserCommand::parse(&input.content).is_command();
-            let blocked = closing || barrier || (position > 0 && command);
+        for (position, (entity, command, sequence_number, interaction)) in
+            inputs.into_iter().enumerate()
+        {
+            let blocked = (closing && !interaction) || barrier || (position > 0 && command);
             if blocked {
                 if deferred_logged.insert(entity) {
                     tracing::debug!(event = "ConversationInputDeferred", channel = ?channel,
@@ -128,5 +143,5 @@ pub(crate) fn conversation_input_order_system(
             barrier |= command;
         }
     }
-    deferred_logged.retain(|entity| inputs.contains(*entity));
+    deferred_logged.retain(|entity| inputs.contains(*entity) || interactions.contains(*entity));
 }

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChannelConfigs {
     #[serde(default)]
+    pub client: Option<super::client::ClientConfig>,
+    #[serde(default)]
     pub telegram: Option<TelegramConfig>,
     #[serde(default)]
     pub qq: Option<QqConfig>,
@@ -68,10 +70,15 @@ impl ChannelConfigs {
 
     /// 展开配置文件中的环境变量引用。
     ///
-    /// 当前处理 Telegram 和 QQ 的凭证字段：
+    /// 当前处理 Telegram、QQ 凭证和 MeoW 接收昵称：
     /// - 支持 `${VAR}` 形式展开；
     /// - 若展开后为空，则尝试回退读取对应环境变量。
     pub fn expand_env_vars(&mut self) {
+        if let Some(meow) = self.client.as_mut().and_then(|c| c.meow.as_mut()) {
+            for recipient in meow.recipients.values_mut() {
+                *recipient = expand_env_var(recipient);
+            }
+        }
         if let Some(tg) = &mut self.telegram {
             tg.bot_token = expand_env_var(&tg.bot_token);
             if tg.bot_token.is_empty()

@@ -6,7 +6,7 @@ use crate::domain::ATTACHMENT_MARKER_SYNTAX_HINT;
 use crate::domain::{FrontendKind, ToolAction, ToolError, ToolPermission, ToolSchema};
 
 const ATTACHMENT_HINT: &str = r#"
-Prefer plain text responses over this tool: the system automatically routes your text replies back to the source IM channel of the current task. Only use this tool when:
+Prefer plain text responses over this tool: the system automatically routes your text replies back to the source channel of the current task. Only use this tool when:
 1. The user explicitly asks you to send files, images, videos, audio, or other attachments.
 2. You need to send a message to a different channel than the current task's source channel.
 
@@ -17,12 +17,12 @@ pub struct ChannelSendTool;
 
 impl ChannelSendTool {
     pub fn definition() -> crate::domain::ToolDefinition {
-        let im_names = FrontendKind::im_channel_names();
+        let channel_names = FrontendKind::message_channel_names();
         crate::domain::ToolDefinition {
             name: "channel_send".to_string(),
             description: format!(
-                "向指定 IM 通道（{}）发送消息。若省略 target，则发送到当前任务的路由通道（任务配置的输出通道，回退到来源会话）。{}\n{}",
-                im_names.join("/"),
+                "向指定通道（{}）发送消息。若省略 target，则发送到当前任务的路由通道（任务配置的输出通道，回退到来源会话）。{}\n{}",
+                channel_names.join("/"),
                 ATTACHMENT_HINT.trim(),
                 ATTACHMENT_MARKER_SYNTAX_HINT
             ),
@@ -32,7 +32,7 @@ impl ChannelSendTool {
                     "properties": {
                         "channel": {
                             "type": "string",
-                            "enum": im_names,
+                            "enum": channel_names,
                             "description": "通道名称"
                         },
                         "target": {

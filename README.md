@@ -9,6 +9,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 
 - 按需 ECS 驱动：输入、执行结果和截止时间唤醒；等待期间阻塞，TUI 按可见变化刷新
 - TUI 驱动的本地交互与事件循环
+- 原生客户端：HTTPS/WSS、配对鉴权、可靠同步、任务控制、审批问答、附件、自动化与 MeoW 通知；
+  [HarmonyOS API 26 工作台](docs/client-channel.md) 已提供原生工程，真机验证与后续管理能力仍待完成
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - Brain 调度、Agent 配置加载与多 Agent 执行链路
 - `create_tasks` + `wait_tasks` 驱动的任务分解能力

@@ -44,6 +44,34 @@ pub(crate) fn input_ingress_system(
         .unwrap_or_default();
     for input in pending.into_iter().chain(receiver.0.try_iter().take(256)) {
         match input {
+            ExternalInput::Schedule {
+                channel,
+                command_id,
+                action,
+            } => {
+                commands.spawn((
+                    crate::domain::ScheduleRequest {
+                        channel,
+                        command_id,
+                        action,
+                    },
+                    sequence.next_sequence(),
+                ));
+            }
+            ExternalInput::Interaction {
+                channel,
+                command_id,
+                interaction,
+            } => {
+                commands.spawn((
+                    crate::domain::InteractionRequest {
+                        channel,
+                        command_id,
+                        interaction,
+                    },
+                    sequence.next_sequence(),
+                ));
+            }
             ExternalInput::TextWithChannel {
                 channel,
                 content,

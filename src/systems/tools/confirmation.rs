@@ -100,6 +100,7 @@ pub fn tool_confirmation_result_system(
     let frontend_registry = &index_clock_loader_frontends.3;
     let runtime_grants = &mut index_clock_loader_frontends.4;
     let initiators = &index_clock_loader_frontends.5;
+    let mut resolved_requests = std::collections::HashSet::new();
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
         let Some((request_entity, tool_request)) = tool_requests
@@ -141,6 +142,12 @@ pub fn tool_confirmation_result_system(
             continue;
         }
 
+        // Commands 延迟销毁请求；同帧重复回复不能再次执行工具或重复结算。
+        if !resolved_requests.insert(response.request_id) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         // 统计仍排队的 sibling 请求数（不含当前这条）
         let pending_sibling_count = tool_requests
             .iter()
@@ -157,6 +164,28 @@ pub fn tool_confirmation_result_system(
         let selected_option = options
             .iter()
             .find(|opt| opt.id == response.selected_option);
+
+        if let Some(channel) = index
+            .get_task(&tool_request.request.task_id)
+            .and_then(|e| tasks.get(e).ok())
+            .and_then(|(_, task)| task.routing_policy.approval_channel().cloned())
+            .filter(|c| c.frontend == crate::domain::FrontendKind::Client)
+        {
+            let event = EngineEvent::ApprovalResult {
+                target: EventTarget::Directed(vec![channel]),
+                request_id: response.request_id,
+                decision: selected_option
+                    .map_or("deny", |option| option.id.as_str())
+                    .into(),
+            };
+            for frontend in frontend_registry
+                .frontends
+                .iter()
+                .filter(|f| f.kind() == crate::domain::FrontendKind::Client)
+            {
+                frontend.push_event(event.clone());
+            }
+        }
 
         match selected_option {
             Some(option) if option.is_deny() => {
@@ -682,6 +711,87 @@ mod tests {
             task.pending_confirmation_id.is_none(),
             "pending_confirmation_id should be cleared after approval"
         );
+    }
+
+    #[test]
+    fn native_confirmation_resolves_once_and_keeps_original_request_scope() {
+        use crate::domain::{Frontend, UserAction};
+        use std::sync::{Arc, Mutex};
+        struct Capture(Arc<Mutex<Vec<EngineEvent>>>);
+        impl Frontend for Capture {
+            fn kind(&self) -> FrontendKind {
+                FrontendKind::Client
+            }
+            fn poll_actions(&self) -> Vec<UserAction> {
+                vec![]
+            }
+            fn push_event(&self, event: EngineEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        for option in ["allow_once", "deny"] {
+            let mut world = test_world();
+            let events = Arc::new(Mutex::new(vec![]));
+            world.insert_resource(FrontendRegistry {
+                frontends: vec![Box::new(Capture(events.clone()))],
+            });
+            let id = crate::domain::TaskId::new();
+            let request_id = Uuid::new_v4();
+            let channel = ChannelId {
+                frontend: FrontendKind::Client,
+                user_id: "alice".into(),
+                thread_id: Some("owned-session".into()),
+            };
+            let mut task = dummy_task(id);
+            task.origin_channel = Some(channel.clone());
+            task.routing_policy = crate::domain::TaskRoutingPolicy::conversational(channel.clone());
+            task.pending_confirmation_id = Some(request_id);
+            let entity = world.spawn(task).id();
+            world
+                .resource_mut::<crate::ecs::EntityIndex>()
+                .tasks
+                .insert(id, entity);
+            world.spawn(dummy_request(id, crate::domain::AgentId::new(), request_id));
+            for _ in 0..2 {
+                world.spawn(ToolConfirmationResponseMessage {
+                    sender: None,
+                    request_id,
+                    selected_option: option.into(),
+                    feedback: None,
+                });
+            }
+            world
+                .run_system_once(tool_confirmation_result_system)
+                .unwrap();
+            let captured = events.lock().unwrap();
+            let results: Vec<_> = captured
+                .iter()
+                .filter(|event| matches!(event, EngineEvent::ApprovalResult { .. }))
+                .collect();
+            assert_eq!(
+                results.len(),
+                1,
+                "same-frame duplicate replies resolve once"
+            );
+            let EngineEvent::ApprovalResult {
+                target,
+                request_id: actual,
+                decision,
+            } = results[0]
+            else {
+                unreachable!()
+            };
+            assert_eq!(*actual, request_id);
+            assert_eq!(decision, option);
+            assert!(matches!(target,EventTarget::Directed(channels) if channels==&vec![channel]));
+            assert_eq!(
+                world
+                    .query::<&ToolExecutionResultMessage>()
+                    .iter(&world)
+                    .count(),
+                1
+            );
+        }
     }
 
     /// 用于 sync 路径测试的 dummy executor：`kind() == Sync`，`execute` 返回

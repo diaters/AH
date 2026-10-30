@@ -156,6 +156,16 @@ impl Signal {
 /// 外部输入
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ExternalInput {
+    Schedule {
+        channel: super::ChannelId,
+        command_id: Uuid,
+        action: super::ScheduleAction,
+    },
+    Interaction {
+        channel: super::ChannelId,
+        command_id: Uuid,
+        interaction: super::TaskInteraction,
+    },
     TextWithChannel {
         channel: super::ChannelId,
         content: String,

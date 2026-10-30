@@ -11,15 +11,17 @@ pub enum FrontendKind {
     Telegram,
     Web,
     QQ,
+    Client,
 }
 
 impl FrontendKind {
     /// 全部变体，按注册顺序排列。
-    pub const ALL: [FrontendKind; 4] = [
+    pub const ALL: [FrontendKind; 5] = [
         FrontendKind::Tui,
         FrontendKind::Telegram,
         FrontendKind::Web,
         FrontendKind::QQ,
+        FrontendKind::Client,
     ];
 
     /// 通道名（`FrontendKind` 与字符串通道名的唯一权威映射）。
@@ -29,6 +31,7 @@ impl FrontendKind {
             FrontendKind::Telegram => "telegram",
             FrontendKind::Web => "web",
             FrontendKind::QQ => "qq",
+            FrontendKind::Client => "client",
         }
     }
 
@@ -39,13 +42,14 @@ impl FrontendKind {
             "telegram" => Ok(FrontendKind::Telegram),
             "web" => Ok(FrontendKind::Web),
             "qq" => Ok(FrontendKind::QQ),
+            "client" => Ok(FrontendKind::Client),
             _ => Err(format!("unknown channel name: {name}")),
         }
     }
 
-    /// IM 通道名列表（供 `channel_send` 等工具 schema 生成枚举）。
-    pub fn im_channel_names() -> &'static [&'static str] {
-        &["telegram", "qq"]
+    /// 出向消息通道名列表（供 `channel_send` 等工具 schema 生成枚举）。
+    pub fn message_channel_names() -> &'static [&'static str] {
+        &["telegram", "qq", "client"]
     }
 }
 
@@ -150,6 +154,42 @@ pub enum PermissionAuditContext {
 /// 引擎 → 前端事件
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
+    ToolCallCompleted {
+        target: EventTarget,
+        task_id: TaskId,
+        call_id: Option<String>,
+        agent_name: String,
+        tool_name: String,
+        success: bool,
+        output: String,
+        truncated: bool,
+        late_result: bool,
+    },
+    /// 权限过滤后的客户端自动化视图，不携带 ECS 内部实体。
+    AutomationSnapshot {
+        target: EventTarget,
+        snapshot: serde_json::Value,
+    },
+    TaskInteractionChanged {
+        target: EventTarget,
+        task_id: TaskId,
+        revision: String,
+        question_id: Option<String>,
+        can_stop: bool,
+        can_finish: bool,
+    },
+    QuestionPresented {
+        target: EventTarget,
+        task_id: TaskId,
+        question_id: String,
+        question: String,
+    },
+    /// 已处理或拒绝，不代表任务或外部副作用执行成功。
+    CommandResult {
+        target: EventTarget,
+        command_id: Uuid,
+        outcome: Result<(), String>,
+    },
     /// 用户可见文本（Agent 回复、系统消息）
     Text {
         target: EventTarget,
@@ -345,6 +385,11 @@ impl EngineEvent {
     /// 获取事件的路由目标
     pub fn target(&self) -> &EventTarget {
         match self {
+            Self::ToolCallCompleted { target, .. } => target,
+            Self::AutomationSnapshot { target, .. } => target,
+            Self::TaskInteractionChanged { target, .. }
+            | Self::QuestionPresented { target, .. }
+            | Self::CommandResult { target, .. } => target,
             Self::Text { target, .. } => target,
             Self::ApprovalRequest { target, .. } => target,
             Self::ApprovalResult { target, .. } => target,

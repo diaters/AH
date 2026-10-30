@@ -142,7 +142,7 @@ Agent 尚未消费的 `shell_output` 监控通知按会话合并为最新结果�
 ### 主循环
 
 TUI 与 `--headless` 共用同一主循环（`harness::app::run_loop`）。`--headless` 不注册 TUI 前端，
-启动时要求至少配置一个 IM 通道。
+启动时要求至少配置一个 IM 或原生客户端通道。
 主循环按输入、执行结果、发送回执和截止时间阻塞等待；等待任务不会维持固定频率更新。
 维护周期为 30 秒，旧式拉取前端的兼容检查为 150 ms；后台 shell 检查继续使用
 `HARNESS_BACKGROUND_POLL_MS`。TUI 输入由独立线程读取，绘制最大约每 16 ms 一次且要求存在可见变化。
@@ -373,19 +373,21 @@ system_prompt = "You are a helper." # 系统提示
 | `/reload-plugins` | 热重载插件（清除旧贡献，重新扫描磁盘） |
 | `/<plugin_id>:<command> [args]` | 调用插件贡献的命令 |
 
-## IM 通道配置
+## IM 与原生客户端通道配置
 
 ### 核心变量
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `HARNESS_CHANNELS_CONFIG` | 无（不启用通道） | IM 通道配置文件路径（TOML 格式） |
+| `HARNESS_CHANNELS_CONFIG` | 无（不启用通道） | IM / 原生客户端通道配置文件路径（TOML 格式） |
 
 当 `HARNESS_CHANNELS_CONFIG` 未设置时，IM 通道不启用，`ChannelManager` 以空实例运行。
 
 ### 配置文件格式
 
-配置文件为 TOML 格式，当前支持 Telegram 和 QQ 通道：
+配置文件为 TOML 格式，支持 Telegram、QQ 和可选的 `[client]` 原生通道。
+原生通道的 TLS、配对、设备撤销、MeoW 用户映射、额度时区与恢复边界见 [客户端使用说明](client-channel.md)。
+现有 IM 配置示例：
 
 ```toml
 [telegram]

@@ -1,6 +1,10 @@
 mod brain;
+mod client_schedules;
 mod command;
 mod conversation;
+pub(crate) use client_schedules::{
+    ScheduleSubscriptions, client_schedule_request_system, client_schedule_snapshot_system,
+};
 pub(crate) use conversation::conversation_input_order_system;
 pub mod demand;
 mod dispatch;
@@ -10,6 +14,8 @@ pub mod experience;
 mod frontend_input;
 mod frontend_output;
 mod ingress;
+mod interaction;
+pub(crate) use interaction::{interaction_request_system, interaction_state_system};
 mod ingress_hook;
 mod knowledge_hook;
 mod loop_control;

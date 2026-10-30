@@ -21,10 +21,13 @@ AI Harness 是一个基于 Rust + Bevy ECS + TUI 的 AI harness 框架，当前�
   旧式拉取 Frontend 明确保留 150 ms 兼容检查。运行机制见
   [按需调度设计](design/2026-10-29-ecs-wakeup-design.md) 与 [管线说明](design/2026-10-30-demand-runtime-pipeline.md)。
 - TUI 已作为当前主要交互入口
-- 无终端运行形态：`--headless` 不初始化 TUI，只驱动运行时（审批经 IM 通道），启动时要求至少配置一个 IM 通道；
+- 无终端运行形态：`--headless` 不初始化 TUI，只驱动运行时（审批经 IM 或原生客户端通道），启动时要求至少配置一个通道；
   SIGINT / SIGTERM 请求优雅退出，30 秒内未空闲或收到第二个信号时直接退出。TUI 与 headless 共用
   `harness::app::run_loop`，前端差异由 `LoopHooks` 提供
 - 结构化日志、CI、集成测试与回归测试已接入主流程
+- 原生客户端：独立设备凭证、HTTPS/WSS、持久化同步、任务控制、审批问答、附件、自动化与 MeoW；
+  HarmonyOS API 26 工程与使用边界见 [客户端使用说明](client-channel.md)。
+  源码与自动化覆盖不代表真机验收；设备、真实通知接收与原生生命周期仍待验证。
 - Android aarch64 支持（rustls TLS 后端），可通过交叉编译在 Android 设备运行
 
 #### 任务与执行模型

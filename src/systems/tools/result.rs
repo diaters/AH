@@ -18,6 +18,7 @@ const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 ///
 /// 处理 Tool 执行结果，记录 ToolCall，恢复原 Task。
 /// 当 ToolCallingState 存在时保留 ToolExecutionResultMessage，由 orchestrator 清理。
+#[allow(clippy::too_many_arguments)]
 pub fn tool_result_system(
     mut commands: Commands,
     clock: Res<Clock>,
@@ -30,6 +31,8 @@ pub fn tool_result_system(
     )>,
     calling_states: Query<&ToolCallingState>,
     _settings: Res<HarnessSettings>,
+    registry: Option<Res<crate::contracts::FrontendRegistry>>,
+    agents: Query<&crate::domain::Agent>,
 ) {
     for (entity, mut result) in &mut results {
         if result.processed {
@@ -43,6 +46,43 @@ pub fn tool_result_system(
                 continue;
             }
             found_task = true;
+            if let Some(registry) = registry
+                .as_deref()
+                .filter(|r| r.has_frontend(crate::domain::FrontendKind::Client))
+                && let Some(channel) = task
+                    .routing_policy
+                    .output_channel()
+                    .filter(|c| c.frontend == crate::domain::FrontendKind::Client)
+                && result.result.work_item_id.is_none()
+            {
+                let output = match &result.tool_output {
+                    Ok(value) => value.to_string(),
+                    Err(error) => error.to_string(),
+                };
+                let truncated = output.chars().count() > 12800;
+                let event = crate::domain::EngineEvent::ToolCallCompleted {
+                    target: crate::domain::EventTarget::Directed(vec![channel.clone()]),
+                    task_id: task.id,
+                    call_id: result.tool_call_id.clone(),
+                    agent_name: agents
+                        .iter()
+                        .find(|a| a.id == result.result.agent_id)
+                        .map(|a| a.profile.name.clone())
+                        .unwrap_or_else(|| result.result.agent_id.to_string()),
+                    tool_name: result.tool_name.clone(),
+                    success: result.tool_output.is_ok(),
+                    output: output.chars().take(12800).collect(),
+                    truncated,
+                    late_result: task.status().is_terminal(),
+                };
+                for frontend in registry
+                    .frontends
+                    .iter()
+                    .filter(|f| f.kind() == crate::domain::FrontendKind::Client)
+                {
+                    frontend.push_event(event.clone());
+                }
+            }
 
             if result.result.work_item_id.is_none()
                 && let Some(stm) = short_term_memory.as_mut()
@@ -229,5 +269,95 @@ mod tests {
             trusted.0.iter().cloned().collect::<Vec<_>>(),
             vec!["/tmp/ok.png".to_string()]
         );
+    }
+    #[test]
+    fn native_observation_keeps_routing_bounds_and_errors() {
+        use crate::domain::{EngineEvent, EventTarget, Frontend, UserAction};
+        use std::sync::{Arc, Mutex};
+        struct Capture(Arc<Mutex<Vec<EngineEvent>>>);
+        impl Frontend for Capture {
+            fn kind(&self) -> FrontendKind {
+                FrontendKind::Client
+            }
+            fn poll_actions(&self) -> Vec<UserAction> {
+                vec![]
+            }
+            fn push_event(&self, event: EngineEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        let events = Arc::new(Mutex::new(vec![]));
+        let mut app = App::new();
+        app.init_resource::<Clock>();
+        app.insert_resource(HarnessSettings::default_test());
+        app.insert_resource(crate::contracts::FrontendRegistry {
+            frontends: vec![Box::new(Capture(events.clone()))],
+        });
+        app.add_systems(Update, tool_result_system);
+        let channel = ChannelId {
+            frontend: FrontendKind::Client,
+            user_id: "alice".into(),
+            thread_id: Some("owned-session".into()),
+        };
+        let task = Task::from_user_input("goal", 3, channel.clone());
+        let task_id = task.id;
+        app.world_mut().spawn(result_message(
+            &task,
+            "shell_read",
+            Ok(serde_json::json!("界".repeat(13000))),
+        ));
+        app.world_mut().spawn(result_message(
+            &task,
+            "shell_exec",
+            Err(ToolError::PermissionDenied("blocked".into())),
+        ));
+        app.world_mut().spawn(task);
+        let local = Task::from_user_input(
+            "private",
+            3,
+            ChannelId {
+                frontend: FrontendKind::Tui,
+                user_id: "local".into(),
+                thread_id: None,
+            },
+        );
+        app.world_mut().spawn(result_message(
+            &local,
+            "shell_exec",
+            Ok(serde_json::json!("secret")),
+        ));
+        app.world_mut().spawn(local);
+        app.update();
+        app.update();
+        let captured = events.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            2,
+            "one event per result; local results stay local"
+        );
+        for event in captured.iter() {
+            let EngineEvent::ToolCallCompleted {
+                target,
+                task_id: id,
+                success,
+                output,
+                truncated,
+                ..
+            } = event
+            else {
+                panic!("unexpected event")
+            };
+            assert_eq!(*id, task_id);
+            assert!(
+                matches!(target,EventTarget::Directed(channels) if channels==&vec![channel.clone()])
+            );
+            if *success {
+                assert!(*truncated);
+                assert_eq!(output.chars().count(), 12800);
+            } else {
+                assert!(output.contains("blocked"));
+                assert!(!truncated);
+            }
+        }
     }
 }
