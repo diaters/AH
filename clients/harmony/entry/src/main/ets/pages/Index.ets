@@ -402,7 +402,7 @@ struct Index {
             Text(device.revoked ? '已撤销' : `有效至 ${new Date(device.expires_at * 1000).toLocaleString()}`).fontSize(13)
             Button('撤销凭证').enabled(this.connected && !this.busy && !device.revoked && this.connection.supports('devices.revoke')).onClick(() => { this.revokeDevice(device); })
           }.padding(14).width('100%').alignItems(HorizontalAlign.Start).backgroundColor('#FFFFFF').borderRadius(12)
-        }, (device: DeviceDto) => device.id)
+        }, (device: DeviceDto) => JSON.stringify(device))
         Text('模型配置、全局 Skills 和共享记忆尚未通过此接口开放。').fontSize(13).fontColor('#526070')
       }.width('100%').padding(20).constraintSize({ maxWidth: 850 })
     }.width('100%').layoutWeight(1)
@@ -458,7 +458,7 @@ struct Index {
               }
             }
           }.alignItems(HorizontalAlign.Start).width('100%').padding(16).backgroundColor('#FFFFFF').borderRadius(12)
-        }, (notification: NotificationDto) => notification.id)
+        }, (notification: NotificationDto) => JSON.stringify(notification))
         if (this.notifications.length === 0) { Text('当前没有通知记录') }
       }.padding(20).width('100%').constraintSize({ maxWidth: 850 })
     }.width('100%').layoutWeight(1)
@@ -511,7 +511,7 @@ struct Index {
               Button('记录').enabled(this.connected && !this.busy && !this.hasPending).onClick(() => { this.manageSchedule({ kind: 'history', schedule_id: plan.id }); })
             }
           }.alignItems(HorizontalAlign.Start).padding(16).backgroundColor('#FFFFFF').borderRadius(12).width('100%')
-        }, (plan: ScheduleDto) => plan.id)
+        }, (plan: ScheduleDto) => JSON.stringify(plan))
         if (this.automation.archive_truncated) { Text('部分计划超出当前归档展示上限。') }
         if (this.automation.history) {
           Text('最近运行记录（最多 50 条）').fontSize(20).fontWeight(FontWeight.Bold)
@@ -557,6 +557,7 @@ struct Index {
     }.width('100%').layoutWeight(1)
   }
 
+  // 普通 DTO 的同 ID 对象会整体替换；行键包含版本/可变内容，避免 ForEach 复用旧闭包。
   @Builder private sessionList() {
     Column({ space: 12 }) {
       Row() {
@@ -576,7 +577,7 @@ struct Index {
             }.width('100%').alignItems(HorizontalAlign.Start).padding(14)
               .backgroundColor(this.selected === session.id ? '#DDF3ED' : '#FFFFFF').borderRadius(12)
           }.onClick(() => { this.select(session.id); })
-        }, (session: SessionDto) => session.id)
+        }, (session: SessionDto) => `${session.id}:${session.version}`)
       }.layoutWeight(1)
       if (this.sessions.length === 0) { Text('创建会话，开始一项工作').fontColor('#526070') }
     }.padding(16).height('100%').width(this.windowWidth < 700 ? '100%' : 280)
@@ -600,7 +601,7 @@ struct Index {
             }
           }
         }.alignItems(HorizontalAlign.Start).width('100%').padding(12).backgroundColor('#FFFFFF').borderRadius(12)
-      }, (task: TaskDto) => task.task_id)
+      }, (task: TaskDto) => JSON.stringify(task))
       ForEach(Object.values(this.current()?.progress ?? {}), (progress: ProgressDto) => {
         Column({space:6}) {
           if (progress.batch_id) { Text(`子任务批次：${progress.completed ?? 0} / ${progress.total ?? 0}`).fontSize(13) }
@@ -620,7 +621,7 @@ struct Index {
               .onClick(() => { this.approve(request, option.id); })
           })
         }.padding(12).backgroundColor('#FFF4DA').borderRadius(12).width('100%')
-      }, (request: ApprovalDto) => request.request_id)
+      }, (request: ApprovalDto) => `${request.request_id}:${request.version}:${request.claimed}`)
       ForEach(this.questions(), (question: QuestionDto) => {
         Column({ space: 8 }) {
           Text('等待你的回答').fontWeight(FontWeight.Bold)
@@ -633,7 +634,7 @@ struct Index {
               .onClick(() => { this.answerQuestion(question); })
           }
         }.width('100%').padding(12).backgroundColor('#EAF1FC').borderRadius(12)
-      }, (question: QuestionDto) => `${question.task_id}/${question.question_id}`)
+      }, (question: QuestionDto) => `${question.task_id}/${question.question_id}:${question.claimed}`)
     }.padding(16).width('100%').alignItems(HorizontalAlign.Start)
   }
 
