@@ -15,13 +15,14 @@ app_secret = "your-app-secret"
 allowed_users = []
 pairing_enabled = false
 
-# 原生客户端通道（按 docs/client-channel.md 准备证书后取消注释）
+# 原生客户端通道（见 docs/client-channel.md；省略证书时自管私有 CA，用 --client-pair 生成配对链接）
 # [client]
 # listen = "0.0.0.0:9443"
 # instance_name = "我的 Harness"
-# tls_cert = ".harness/client/server.pem"
-# tls_key = ".harness/client/server-key.pem"
 # state_path = ".harness/client/state.json"
+# advertise = ["192.168.1.10"]  # 可选：客户端可达地址，省略时使用本机网卡地址
+# tls_cert = ".harness/client/server.pem"  # 可选：使用公网可信证书时与 tls_key 一起配置
+# tls_key = ".harness/client/server-key.pem"
 
 # 可选：服务端自动通知；用户 ID 与 --client-pair 的用户一致，昵称不放入客户端。
 # [client.meow]

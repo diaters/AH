@@ -35,9 +35,10 @@ impl ClientServer {
         if let Some(config) = &client.config.meow {
             config.validate()?;
         }
-        let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(
-            &client.config.tls_cert,
-            &client.config.tls_key,
+        let material = super::tls::load(&client.config)?;
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+            material.cert_pem.into_bytes(),
+            material.key_pem.into_bytes(),
         )
         .await?;
         let listener = TcpListener::bind(client.config.listen)?;
@@ -86,6 +87,7 @@ impl Drop for ClientServer {
 pub fn router(client: Client) -> Router {
     Router::new()
         .route("/v1/identity", get(identity))
+        .route("/v1/ca", get(ca))
         .route("/v1/pair", post(pair))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/devices", get(devices))
@@ -117,6 +119,16 @@ async fn identity(State(client): State<Client>) -> Json<Value> {
         json!({"instance_id":client.store.lock().expect("client state mutex poisoned").instance_id(),
         "instance_name":client.config.instance_name,"protocol_version":1}),
     )
+}
+
+/// 公开 CA 证书。客户端以配对链接中的指纹校验后才信任，不依赖本次传输的真实性。
+async fn ca(State(client): State<Client>) -> Result<Response, ClientError> {
+    let pem = super::tls::published_ca(&client.config).ok_or(ClientError::NotFound)?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/x-pem-file")],
+        pem,
+    )
+        .into_response())
 }
 
 impl IntoResponse for ClientError {

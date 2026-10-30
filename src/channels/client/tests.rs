@@ -41,10 +41,15 @@ impl Fixture {
         let config = ClientConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
             instance_name: "test".into(),
-            tls_cert: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/client-tls/test-cert.pem"),
-            tls_key: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/client-tls/test-key.pem"),
+            tls_cert: Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/client-tls/test-cert.pem"),
+            ),
+            tls_key: Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/client-tls/test-key.pem"),
+            ),
+            advertise: vec![],
             state_path: dir.path().join("state.json"),
             meow: None,
         };
@@ -736,4 +741,44 @@ async fn file_size_limits_and_diagnostics_preserve_user_scope() {
         f.request("", "GET", "/v1/diagnostics", json!(null)).await.0,
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn managed_ca_is_fetched_by_fingerprint_then_verifies_tls() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut f = Fixture::new();
+    f.client.config.tls_cert = None;
+    f.client.config.tls_key = None;
+    f.client.config.listen = "127.0.0.1:0".parse().unwrap();
+    let server = ClientServer::start(f.client.clone()).await.unwrap();
+    let url = format!("https://127.0.0.1:{}", server.address.port());
+    // 首次获取 CA 不校验证书，信任来自配对链接中的指纹。
+    let insecure = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let pem = insecure
+        .get(format!("{url}/v1/ca"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let expected = super::tls::load(&f.client.config).unwrap().ca_fingerprint;
+    assert_eq!(super::tls::fingerprint(&pem).ok(), expected);
+    let http = reqwest::Client::builder()
+        .add_root_certificate(reqwest::Certificate::from_pem(pem.as_bytes()).unwrap())
+        .build()
+        .unwrap();
+    let identity: Value = http
+        .get(format!("{url}/v1/identity"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(identity["protocol_version"], 1);
+    server.shutdown().await.unwrap();
 }

@@ -5,7 +5,8 @@
 `client` 是平台无关通道，HarmonyOS 是首个原生客户端。
 提供 HTTPS/WSS、一次性配对、设备撤销、可靠同步、任务控制、审批问答、执行观察、附件、定时管理与 MeoW 通知。
 输入复用 `ExternalInput`，设备不能指定操作者；审批继续由运行时校验原请求与发起人。
-原生工程位于 `clients/harmony`，按窗口宽度在单栏、双栏和三栏之间切换。
+原生工程位于 `clients/harmony`，以对话为主体：平板宽度下侧栏内嵌且可收起，手机宽度下侧栏为抽屉；
+产物与执行记录在可关闭的右侧面板中查看。
 
 全局模型配置、Skills、共享记忆管理与直接进程控制尚未通过客户端接口开放。
 进程输出可通过工具结果和后台通知观察，不提供没有运行时依据的暂停/继续按钮。
@@ -20,42 +21,21 @@
 [client]
 listen = "0.0.0.0:9443"
 instance_name = "我的 Harness"
-tls_cert = ".harness/client/server.pem"
-tls_key = ".harness/client/server-key.pem"
 state_path = ".harness/client/state.json"
+# 可选：客户端实际可达的主机名或 IP（如 EasyTier 地址）；省略时使用本机网卡地址。
+# advertise = ["192.168.1.10", "10.126.0.2"]
 ```
 
+省略 `tls_cert` / `tls_key` 时，实例在 `state_path` 所在目录自管私有 CA
+（`ca.pem`、权限 0600 的 `ca-key.pem`），每次启动为 `advertise` 或本机网卡地址签发服务端证书。
+CA 指纹写入配对链接，客户端首次连接时从公开的 `GET /v1/ca` 取回证书，
+指纹一致才信任，此后按正常 TLS 校验地址与证书。网卡地址变化后重启服务即可重新签发，无需重新配对。
+
+已有公网可信证书时，同时配置 `tls_cert` 与 `tls_key`，此时不发布 CA，客户端使用系统信任。
 地址可由局域网或 EasyTier 提供；应用鉴权独立于组网。服务端只接受 TLS。
-证书 SAN 必须覆盖客户端实际使用的主机名或 IP，客户端使用系统信任或手动导入的专用 CA。
-不要把私钥、配对码、设备令牌或实例状态文件提交到 Git。
+不要把 CA 私钥、配对链接、设备令牌或实例状态文件提交到 Git。
 
-下面创建独立的测试 CA 与服务证书；将 `harness.local` 和 IP 换成真实可达地址。
-已有可信证书时直接使用现有文件。
-
-```sh
-mkdir -p .harness/client
-chmod 700 .harness/client
-openssl req -x509 -newkey rsa:3072 -nodes \
-  -keyout .harness/client/ca-key.pem -out .harness/client/ca.pem \
-  -days 365 -subj '/CN=Harness Private CA' \
-  -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,keyCertSign,cRLSign'
-openssl req -newkey rsa:3072 -nodes \
-  -keyout .harness/client/server-key.pem -out .harness/client/server.csr \
-  -subj '/CN=harness.local'
-cat > .harness/client/server.ext <<'EOF'
-subjectAltName=DNS:harness.local,IP:192.168.1.10
-basicConstraints=critical,CA:FALSE
-extendedKeyUsage=serverAuth
-keyUsage=critical,digitalSignature,keyEncipherment
-EOF
-openssl x509 -req -in .harness/client/server.csr \
-  -CA .harness/client/ca.pem -CAkey .harness/client/ca-key.pem -CAcreateserial \
-  -out .harness/client/server.pem -days 90 -extfile .harness/client/server.ext
-chmod 600 .harness/client/*key.pem
-```
-
-在服务未运行时，生成服务端指定用户的一次性配对码，再启动服务：
+在服务未运行时，生成服务端指定用户的一次性配对链接，再启动服务：
 
 ```sh
 export HARNESS_CHANNELS_CONFIG=channels.toml
@@ -63,20 +43,23 @@ cargo run -- --client-pair alice
 cargo run -- --headless
 ```
 
-管理命令输出实例 ID、配对码及 300 秒有效期。每个新设备单独生成一枚码。
+管理命令在终端输出二维码和 `harness://pair?...` 链接，包含实例 ID、一次性配对码、
+CA 指纹与候选地址，300 秒内有效。每个新设备单独生成一枚。
 状态持有跨进程独占锁，禁止与运行实例并发修改；当前新增配对需安排一次重启。
 配对码只使用一次，服务端只保存码与令牌的 SHA-256 摘要。设备令牌有效期 90 天。
 两台设备使用同一用户配对即可访问相同会话，设备 ID、用户 ID、会话 ID 相互独立。
 
-客户端填写 HTTPS 地址、实例 ID、配对码；使用私有 CA 时粘贴 `ca.pem` 的全文。
-先核对实例身份，再发送设备凭证。不要粘贴私钥。
-令牌保存在 HarmonyOS Asset Store，地址、CA、草稿及待发送命令保存在应用沙箱。
+客户端点击“扫码配对”或粘贴链接即可。客户端按顺序尝试候选地址，
+先按指纹信任 CA 并核对实例身份，再发送配对码；之后打开应用自动重连上次可用的地址。
+令牌保存在 HarmonyOS Asset Store，配对信息、草稿及待发送命令保存在应用沙箱。
+旧版本客户端的手动地址/CA 配置不再读取，升级后需重新扫码配对一次。
 
 ## 协议与恢复
 
 | 接口 | 用途 |
 | --- | --- |
 | `GET /v1/identity` | 不带令牌核对公开的实例 ID、名称和协议版本 |
+| `GET /v1/ca` | 自管模式下公开实例 CA 证书，客户端以配对链接中的指纹校验 |
 | `POST /v1/pair` | 使用实例 ID、配对码和设备名称取得独立凭证 |
 | `GET /v1/capabilities` | 返回实际可用的操作、保留范围与恢复能力 |
 | `GET /v1/diagnostics` | 当前用户的待办、重启未知命令、存储状态与同步边界，不返回配置密钥 |
