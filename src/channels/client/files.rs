@@ -11,6 +11,8 @@ use std::{
 use uuid::Uuid;
 
 pub(crate) const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
+/// 原机已授权产物（如短视频）的上限，高于设备上传上限。
+pub(crate) const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ClientFile {
     pub id: Uuid,
@@ -21,6 +23,22 @@ pub struct ClientFile {
     pub sha256: String,
     pub kind: String,
     pub source: String,
+}
+/// 客户端据此选择预览方式；无法识别的类型只提供保存。
+pub(crate) fn file_kind(name: &str) -> &'static str {
+    if crate::domain::image_mime_type(name).is_some() {
+        return "image";
+    }
+    match extension(name).to_ascii_lowercase().as_str() {
+        "mp4" | "m4v" | "mov" | "webm" | "mkv" | "ts" => "video",
+        "pdf" => "pdf",
+        "html" | "htm" => "html",
+        "txt" | "md" | "markdown" | "log" | "csv" | "tsv" | "json" | "jsonl" | "toml" | "yaml"
+        | "yml" | "xml" | "ini" | "conf" | "rs" | "py" | "js" | "tsx" | "jsx" | "ets" | "sh"
+        | "c" | "h" | "cc" | "cpp" | "hpp" | "go" | "java" | "kt" | "swift" | "sql" | "css"
+        | "diff" | "patch" => "text",
+        _ => "document",
+    }
 }
 fn extension(name: &str) -> &str {
     std::path::Path::new(name)
@@ -53,8 +71,7 @@ impl Store {
         let file = self.file(user, id)?;
         let data = fs::File::open(self.file_path(&file))?;
         let mut bytes = vec![];
-        data.take((MAX_FILE_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)?;
+        data.take((file.size + 1) as u64).read_to_end(&mut bytes)?;
         if bytes.len() != file.size || format!("{:x}", Sha256::digest(&bytes)) != file.sha256 {
             return Err(ClientError::StorageUnavailable);
         }
@@ -81,7 +98,12 @@ impl Store {
         {
             return Err(ClientError::Invalid("invalid file name"));
         }
-        if bytes.len() > MAX_FILE_BYTES {
+        let limit = if source == "artifact" {
+            MAX_ARTIFACT_BYTES
+        } else {
+            MAX_FILE_BYTES
+        };
+        if bytes.len() > limit {
             return Err(ClientError::Invalid("file too large"));
         }
         let image = crate::domain::image_mime_type(name).is_some();
@@ -109,7 +131,7 @@ impl Store {
             name: name.into(),
             size: bytes.len(),
             sha256: digest,
-            kind: if image { "image" } else { "document" }.into(),
+            kind: file_kind(name).into(),
             source: source.into(),
         };
         let path = self.file_path(&file);
@@ -143,9 +165,7 @@ impl Store {
                 }
                 let input = fs::File::open(&path)?;
                 let mut existing = vec![];
-                input
-                    .take((MAX_FILE_BYTES + 1) as u64)
-                    .read_to_end(&mut existing)?;
+                input.take((limit + 1) as u64).read_to_end(&mut existing)?;
                 if existing != bytes {
                     return Err(ClientError::Conflict("unregistered file content differs"));
                 }
@@ -211,7 +231,7 @@ impl Store {
         }
         let mut bytes = vec![];
         input
-            .take((MAX_FILE_BYTES + 1) as u64)
+            .take((MAX_ARTIFACT_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;
         let name = path
             .file_name()
@@ -233,5 +253,22 @@ impl Store {
             &bytes,
             "artifact",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds_select_viewer_by_extension() {
+        assert_eq!(file_kind("shot.PNG"), "image");
+        assert_eq!(file_kind("demo.mp4"), "video");
+        assert_eq!(file_kind("report.pdf"), "pdf");
+        assert_eq!(file_kind("index.html"), "html");
+        assert_eq!(file_kind("README.md"), "text");
+        assert_eq!(file_kind("main.rs"), "text");
+        assert_eq!(file_kind("archive.zip"), "document");
+        assert_eq!(file_kind("noext"), "document");
     }
 }

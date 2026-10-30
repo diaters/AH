@@ -112,7 +112,9 @@ export class Connection {
     const headers: Record<string, string> = { 'Content-Type': typeof body === 'string' ? 'application/json' : 'application/octet-stream', 'Authorization': `Bearer ${this.credential}` };
     try {
       // 身份、权限和快照必须来自当前连接，不能复用上一次信任配置下的响应。
-      const options: http.HttpRequestOptions = { method: method, header: headers, usingCache: false, reuseConnections: false, connectTimeout: this.connectTimeout, readTimeout: 30000, expectDataType: type };
+      const options: http.HttpRequestOptions = { method: method, header: headers, usingCache: false, reuseConnections: false, connectTimeout: this.connectTimeout, readTimeout: type === http.HttpDataType.ARRAY_BUFFER ? 180000 : 30000, expectDataType: type };
+      // 默认 5 MB 上限会截断产物下载；服务端单个原机产物最大 64 MiB。
+      if (type === http.HttpDataType.ARRAY_BUFFER) { options.maxLimit = 100 * 1024 * 1024; }
       if (typeof body !== 'string' || body.length > 0) { options.extraData = body; }
       if (this.caPath.length > 0) { options.caPath = this.caPath; }
       const response = await request.request(`${this.address}${path}`, options);

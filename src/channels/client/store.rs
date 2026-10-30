@@ -486,6 +486,7 @@ impl Store {
         id: Uuid,
         session_id: Uuid,
         text: &str,
+        attachments: &[Uuid],
         payload: &str,
     ) -> Result<CommandReceipt, ClientError> {
         self.session(user, session_id)?;
@@ -506,7 +507,7 @@ impl Store {
                 state,
                 session_id,
                 "text",
-                serde_json::json!({"role":"user", "content":text, "command_id":id}),
+                serde_json::json!({"role":"user", "content":text, "command_id":id, "attachment_ids":attachments}),
             );
             Ok(receipt)
         })

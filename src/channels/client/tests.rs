@@ -529,6 +529,16 @@ async fn files_are_scoped_idempotent_and_only_owned_ids_become_runtime_markers()
         f.request(&alice, "POST", "/v1/commands", request).await.0,
         StatusCode::OK
     );
+    let (_, snapshot) = f.request(&alice, "GET", "/v1/snapshot", Value::Null).await;
+    let sent = snapshot["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["messages"].as_array().unwrap().iter())
+        .find(|m| m["content"] == "see file")
+        .unwrap()
+        .clone();
+    assert_eq!(sent["attachment_ids"][0], id.to_string());
     match f.input.try_recv().unwrap() {
         ExternalInput::TextWithChannel {
             content, sender, ..
@@ -573,6 +583,37 @@ async fn approved_channel_send_registers_real_local_artifacts() {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0]["source"], "artifact");
     assert_eq!(files[0]["size"], 14);
+    assert_eq!(files[0]["kind"], "text");
+    // 消息携带产物 ID，客户端据此在对话中内联展示。
+    let messages = snapshot["sessions"][0]["messages"].as_array().unwrap();
+    assert_eq!(
+        messages.last().unwrap()["attachment_ids"][0],
+        files[0]["id"]
+    );
+    // 原机产物允许超过设备上传上限（如短视频），并按类型标注供客户端选择预览方式。
+    let video = f._dir.path().join("demo.mp4");
+    std::fs::write(&video, vec![7u8; super::store::MAX_FILE_BYTES + 1]).unwrap();
+    let mut message = message;
+    message.attachments[0].target = video.to_string_lossy().into_owned();
+    f.client.send(&message).await.unwrap();
+    let (_, snapshot) = f.request(&token, "GET", "/v1/snapshot", Value::Null).await;
+    let video = snapshot["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["name"] == "demo.mp4")
+        .unwrap()
+        .clone();
+    assert_eq!(video["kind"], "video");
+    let id: Uuid = video["id"].as_str().unwrap().parse().unwrap();
+    let (_, bytes) = f
+        .client
+        .store
+        .lock()
+        .unwrap()
+        .read_file("alice", id)
+        .unwrap();
+    assert_eq!(bytes.len(), super::store::MAX_FILE_BYTES + 1);
 }
 
 #[tokio::test]

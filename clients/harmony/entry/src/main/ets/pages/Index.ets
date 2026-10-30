@@ -2,13 +2,13 @@ import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
-import { image } from '@kit.ImageKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
 import { Theme } from '../common/Theme';
-import { InlineSpan, MdBlock, parseMarkdown } from '../common/Markdown';
+import { MarkdownView } from '../components/MarkdownView';
+import { ArtifactRef, ArtifactViewer, AttachmentThumb, artifactIcon, fileArtifact, linkArtifacts } from '../components/ArtifactViewer';
 
 @Extend(Button) function ghost() {
   .type(ButtonType.Normal).height(32).fontSize(13).fontColor(Theme.text).backgroundColor(Color.Transparent)
@@ -70,7 +70,7 @@ struct Index {
   @State pendingUpload: PendingUploadDto | undefined = undefined;
   @State devices: DeviceDto[] = [];
   @State diagnostics: DiagnosticsDto | undefined = undefined;
-  @State preview: image.PixelMap | undefined = undefined;
+  @State viewing: ArtifactRef | undefined = undefined;
   @State sessionSearch: string = '';
   @State approvalFeedback: Record<string, string> = {};
   private conversationScroller: Scroller = new Scroller();
@@ -144,7 +144,7 @@ struct Index {
     } catch (_) { this.status = '无法保存本地状态，尚未发送新命令'; return false; }
   }
   private select(id: string): void {
-    this.preview?.release().catch(() => {}); this.preview = undefined;
+    this.viewing = undefined;
     this.selected = id; this.save('selected', id); this.view = 'chat';
     if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
     try { this.draft = this.storage?.getSync(`draft:${id}`, '') as string ?? ''; }
@@ -415,19 +415,31 @@ struct Index {
     } catch (error) { this.status = `${(error as Error).message}。已保留上传缓存，可重试`; }
     finally { this.busy = false; if (!this.connected) { this.scheduleReconnect(); } }
   }
-  private async previewFile(file: ClientFileDto): Promise<void> {
-    if (this.busy) { return; } this.busy = true;
-    try {
-      const source = image.createImageSource(await this.connection.download(file.id));
-      try {
-        const info = await source.getImageInfo();
-        const scale = Math.min(1, 1024 / Math.max(info.size.width, info.size.height));
-        const decoded = await source.createPixelMap({ desiredSize: { width: Math.max(1, Math.floor(info.size.width * scale)), height: Math.max(1, Math.floor(info.size.height * scale)) } });
-        this.preview?.release().catch(() => {}); this.preview = decoded;
-      } finally { await source.release(); }
-    } catch (error) { this.status = `无法预览：${(error as Error).message}`; }
-    finally { this.busy = false; }
+  private openArtifact(ref: ArtifactRef): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => {
+      this.viewing = ref; this.panelTab = 'artifacts'; this.panelOpen = true;
+      // 查看器加宽后若对话区过窄，收起内嵌侧栏让出空间。
+      if (this.wide() && this.sidebarOpen && this.windowWidth - 272 - this.panelWidth() < 560) { this.sidebarOpen = false; }
+    });
   }
+  private closeArtifact(): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.viewing = undefined; });
+  }
+  // 产物已以卡片展示，隐藏通道消息里的原机路径标记。
+  private visibleText(content: string): string {
+    return content.replace(/\[(IMAGE|VIDEO|AUDIO|DOCUMENT|FILE)[^\]]*\]/gi, '').trim();
+  }
+  private fileById(id: string): ClientFileDto | undefined { return this.files.find((file: ClientFileDto) => file.id === id); }
+  private messageFiles(message: MessageDto): ClientFileDto[] {
+    const files: ClientFileDto[] = [];
+    for (const id of message.attachment_ids ?? []) { const file = this.fileById(id); if (file) { files.push(file); } }
+    return files;
+  }
+  private sessionLinks(): ArtifactRef[] {
+    const texts = (this.current()?.messages ?? []).filter((m: MessageDto) => m.role !== 'user').map((m: MessageDto) => m.content);
+    return linkArtifacts(texts, this.preferred);
+  }
+  private panelWidth(): number { return this.viewing ? Math.max(440, Math.floor(this.windowWidth * 0.45)) : 380; }
   private async downloadFile(file: ClientFileDto): Promise<void> {
     if (this.busy) { return; } this.busy = true;
     try {
@@ -643,6 +655,35 @@ struct Index {
       }
     }.width('100%').height(52 + this.top()).padding({ left: 12, right: 12, top: this.top() })
   }
+  // 消息附带的文件（上传附件或 Agent 产物）与回复中的链接，点击在右侧查看。
+  @Builder private messageAttachments(message: MessageDto) {
+    if (this.messageFiles(message).length > 0 || (message.role !== 'user' && linkArtifacts([message.content], this.preferred).length > 0)) {
+      Flex({ wrap: FlexWrap.Wrap }) {
+        ForEach(this.messageFiles(message), (file: ClientFileDto) => {
+          if (fileArtifact(file).kind === 'image') {
+            AttachmentThumb({ file: file, connection: this.connection })
+              .margin({ right: 8, bottom: 8 }).onClick(() => { this.openArtifact(fileArtifact(file)); })
+          } else { this.artifactChip(fileArtifact(file)) }
+        }, (file: ClientFileDto) => file.id)
+        if (message.role !== 'user') {
+          ForEach(linkArtifacts([message.content], this.preferred), (ref: ArtifactRef) => { this.artifactChip(ref) }, (ref: ArtifactRef) => ref.key)
+        }
+      }.width('100%').margin({ top: 4 })
+    }
+  }
+  @Builder private artifactChip(ref: ArtifactRef) {
+    Row({ space: 10 }) {
+      Stack() { SymbolGlyph(artifactIcon(ref.kind)).fontSize(16).fontColor([Theme.accent]) }
+        .width(32).height(32).borderRadius(8).backgroundColor(Theme.accentSoft)
+      Column({ space: 2 }) {
+        Text(ref.title).fontSize(13).fontColor(Theme.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(ref.detail).fontSize(11).fontColor(Theme.secondary)
+      }.alignItems(HorizontalAlign.Start).constraintSize({ maxWidth: 220 })
+    }.padding({ left: 8, right: 14, top: 8, bottom: 8 }).margin({ right: 8, bottom: 8 })
+      .backgroundColor(this.viewing?.key === ref.key ? Theme.accentSoft : Theme.surface)
+      .border({ width: 1, color: this.viewing?.key === ref.key ? Theme.accent : Theme.line, radius: 12 })
+      .onClick(() => { this.openArtifact(ref); })
+  }
   @Builder private message(message: MessageDto) {
     if (message.role === 'user' || message.role === 'agent') {
       Row({ space: 14 }) {
@@ -650,44 +691,22 @@ struct Index {
           if (message.role === 'user') { SymbolGlyph($r('sys.symbol.person')).fontSize(16).fontColor([Theme.secondary]) }
           else { Text('H').fontSize(15).fontColor(Color.White).fontFamily(Theme.serif).fontWeight(FontWeight.Medium) }
         }.width(32).height(32).borderRadius(16).backgroundColor(message.role === 'user' ? Theme.selected : Theme.accent)
-        if (message.role === 'user') {
-          Text(message.content).fontSize(15).lineHeight(26).fontColor(Theme.text)
-            .copyOption(CopyOptions.LocalDevice).layoutWeight(1).margin({ top: 3 })
-        } else {
-          Column({ space: 10 }) {
-            ForEach(parseMarkdown(message.content), (item: MdBlock) => { this.markdownBlock(item) })
-          }.layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ top: 3 })
+        Column({ space: 8 }) {
+          if (message.role === 'user') {
+            if (message.content !== '[附件]' || this.messageFiles(message).length === 0) {
+              Text(message.content).fontSize(15).lineHeight(26).fontColor(Theme.text).copyOption(CopyOptions.LocalDevice).width('100%')
+            }
+          } else { MarkdownView({ source: message.content }) }
+          this.messageAttachments(message)
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ top: 3 })
+      }.width('100%').alignItems(VerticalAlign.Top)
+    } else {
+      Column({ space: 8 }) {
+        if (this.visibleText(message.content)) {
+          Text(this.visibleText(message.content)).caption().width('100%').copyOption(CopyOptions.LocalDevice)
         }
-      }.width('100%').alignItems(VerticalAlign.Top)
-    } else {
-      Text(message.content).caption().width('100%').padding({ left: 46 }).copyOption(CopyOptions.LocalDevice)
-    }
-  }
-  @Builder private richText(spans: InlineSpan[], size: number, color: string) {
-    Text() {
-      ForEach(spans, (span: InlineSpan) => {
-        if (span.code) { Span(span.text).fontFamily('monospace').fontSize(size - 1).fontColor(Theme.text).textBackgroundStyle({ color: Theme.selected, radius: 4 }) }
-        else { Span(span.text).fontWeight(span.bold ? FontWeight.Medium : FontWeight.Normal).fontColor(span.bold ? Theme.text : color) }
-      })
-    }.fontSize(size).lineHeight(size + 11).fontColor(color).copyOption(CopyOptions.LocalDevice).width('100%')
-  }
-  @Builder private markdownBlock(item: MdBlock) {
-    if (item.kind === 'h') {
-      Text(item.spans.map((span: InlineSpan) => span.text).join('')).heading(item.level <= 2 ? 20 : 17).margin({ top: 6 }).width('100%')
-    } else if (item.kind === 'li') {
-      Row({ space: 8 }) {
-        Text(item.text).fontSize(15).lineHeight(26).fontColor(Theme.secondary).constraintSize({ minWidth: 14 })
-        Column() { this.richText(item.spans, 15, '#4A4840') }.layoutWeight(1)
-      }.width('100%').alignItems(VerticalAlign.Top)
-    } else if (item.kind === 'code' || item.kind === 'table') {
-      Scroll() {
-        Text(item.text).fontSize(13).lineHeight(21).fontFamily('monospace').fontColor('#4A4840').copyOption(CopyOptions.LocalDevice)
-      }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-        .padding(12).backgroundColor(Theme.surface).border({ width: 1, color: Theme.line, radius: 10 })
-    } else if (item.kind === 'hr') {
-      Divider().color(Theme.line)
-    } else {
-      this.richText(item.spans, 15, '#4A4840')
+        this.messageAttachments(message)
+      }.width('100%').padding({ left: 46 }).alignItems(HorizontalAlign.Start)
     }
   }
   @Builder private planStep(todo: TodoDto, index: number, last: boolean) {
@@ -862,7 +881,7 @@ struct Index {
   @Builder private panel() {
     Column() {
       Row({ space: 4 }) {
-        this.panelTabButton(`产物 ${this.sessionFiles().length || ''}`, 'artifacts')
+        this.panelTabButton(`产物 ${this.sessionFiles().length + this.sessionLinks().length || ''}`, 'artifacts')
         this.panelTabButton('执行记录', 'execution')
         Blank()
         Button() { SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([Theme.secondary]) }
@@ -873,33 +892,46 @@ struct Index {
           if (this.panelTab === 'artifacts') { this.artifacts() } else { this.execution() }
         }.width('100%').padding({ left: 16, right: 16, bottom: 24 + this.bottom() })
       }.layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Off)
+        .visibility(this.panelTab === 'artifacts' && this.viewing ? Visibility.None : Visibility.Visible)
+      if (this.panelTab === 'artifacts' && this.viewing) {
+        // 每个产物独立创建查看器，Web 与视频控制器不跨产物复用。
+        Column() {
+          ForEach([this.viewing as ArtifactRef], (ref: ArtifactRef) => {
+            ArtifactViewer({ target: ref, connection: this.connection, onBack: () => { this.closeArtifact(); },
+              onSave: (file: ClientFileDto) => { this.downloadFile(file); } }).width('100%').height('100%')
+          }, (ref: ArtifactRef) => ref.key)
+        }.width('100%').layoutWeight(1).padding({ bottom: this.bottom() })
+      }
     }.width('100%').height('100%').backgroundColor(Theme.surface).border({ width: { left: 1 }, color: Theme.line })
   }
+  @Builder private artifactRow(ref: ArtifactRef) {
+    Row({ space: 12 }) {
+      Stack() { SymbolGlyph(artifactIcon(ref.kind)).fontSize(17).fontColor([Theme.accent]) }
+        .width(36).height(36).borderRadius(10).backgroundColor(Theme.accentSoft)
+      Column({ space: 3 }) {
+        Text(ref.title).fontSize(14).fontColor(Theme.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(ref.detail).caption()
+      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      if (ref.file) {
+        Text('附加').fontSize(12).fontColor(Theme.accent).enabled(!this.hasPending && !this.busy)
+          .onClick(() => { if (ref.file) { this.attachFile(ref.file); } })
+      }
+      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([Theme.faint])
+    }.width('100%').padding({ top: 10, bottom: 10 }).border({ width: { bottom: 1 }, color: Theme.line })
+      .onClick(() => { this.openArtifact(ref); })
+  }
   @Builder private artifacts() {
-    if (this.preview) {
-      Stack({ alignContent: Alignment.TopEnd }) {
-        Image(this.preview).width('100%').objectFit(ImageFit.Contain).borderRadius(10)
-        Button() { SymbolGlyph($r('sys.symbol.xmark')).fontSize(14).fontColor([Theme.secondary]) }
-          .icon().width(28).height(28).backgroundColor(Theme.surface).margin(6)
-          .onClick(() => { this.preview?.release().catch(() => {}); this.preview = undefined; })
-      }.width('100%')
+    if (this.sessionFiles().length > 0) {
+      Text('文件').caption().width('100%').margin({ top: 4 })
+      ForEach(this.sessionFiles().slice().reverse(), (file: ClientFileDto) => { this.artifactRow(fileArtifact(file)) }, (file: ClientFileDto) => file.id)
     }
-    ForEach(this.sessionFiles(), (file: ClientFileDto) => {
-      Column({ space: 6 }) {
-        Row({ space: 10 }) {
-          SymbolGlyph(file.kind === 'image' ? $r('sys.symbol.picture') : $r('sys.symbol.doc_text')).fontSize(18).fontColor([Theme.secondary])
-          Text(file.name).fontSize(14).fontColor(Theme.text).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        Text(`${(file.size / 1024).toFixed(1)} KB · ${file.source === 'upload' ? '我上传的' : 'Agent 产物'}`).caption()
-        Row({ space: 14 }) {
-          if (file.kind === 'image') { Text('预览').fontSize(13).fontColor(Theme.accent).enabled(this.connected && !this.busy).onClick(() => { this.previewFile(file); }) }
-          Text('保存').fontSize(13).fontColor(Theme.accent).enabled(this.connected && !this.busy).onClick(() => { this.downloadFile(file); })
-          Text('附加到消息').fontSize(13).fontColor(Theme.accent).enabled(!this.hasPending && !this.busy).onClick(() => { this.attachFile(file); })
-        }.margin({ top: 4 })
-      }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 12 })
-        .border({ width: { bottom: 1 }, color: Theme.line })
-    }, (file: ClientFileDto) => file.id)
-    if (this.sessionFiles().length === 0) { Text('这个任务还没有文件。使用输入框左侧的回形针上传附件。').caption().margin({ top: 12 }) }
+    if (this.sessionLinks().length > 0) {
+      Text('链接').caption().width('100%').margin({ top: 12 })
+      ForEach(this.sessionLinks(), (ref: ArtifactRef) => { this.artifactRow(ref) }, (ref: ArtifactRef) => ref.key)
+    }
+    if (this.sessionFiles().length + this.sessionLinks().length === 0) {
+      Text('这个任务还没有产物。Agent 发送的文件、回复中的链接和你上传的附件会出现在这里。').caption().margin({ top: 12 })
+    }
   }
   @Builder private execution() {
     if (this.current()?.observations_truncated) { Text('更早的执行记录已超出保留范围').caption() }
@@ -1078,7 +1110,7 @@ struct Index {
         Column() {
           if (this.view === 'chat') { this.conversation() } else { this.otherPage() }
         }.layoutWeight(1).height('100%')
-        if (this.panelOpen && this.view === 'chat' && this.current() && this.wide()) { Column() { this.panel() }.width(380).height('100%').clip(true)
+        if (this.panelOpen && this.view === 'chat' && this.current() && this.wide()) { Column() { this.panel() }.width(this.panelWidth()).height('100%').clip(true)
           .transition(TransitionEffect.move(TransitionEdge.END).combine(TransitionEffect.OPACITY)) }
       }.width('100%').height('100%').backgroundColor(Theme.page)
       if (this.panelOpen && this.view === 'chat' && this.current() && !this.wide()) { Column() { this.panel() }.width('100%').height('100%')
