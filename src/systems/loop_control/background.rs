@@ -16,6 +16,7 @@ use crate::domain::{
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
 use crate::systems::NativeProcessBackend;
+use crate::systems::tools::backend::native::is_session_not_found;
 
 /// 通知中携带的 shell 输出末尾行数。
 const NOTIFICATION_TAIL_LINES: usize = 20;
@@ -179,8 +180,28 @@ pub(crate) fn background_job_monitor_system(
                             )))
                         }
                     },
-                    // 会话已不存在：静默清理
-                    Err(_) => Some(None),
+                    Err(error) => match backend.lost_session_reason(*handle_id) {
+                        // 进程服务失效回收了该会话：无论 notify_on_exit，都告知所属任务监控已中断。
+                        Some(reason) => Some(Some((
+                            "lost".to_string(),
+                            format!(
+                                "session_id: {handle_id}\n进程服务故障，该后台会话已被终止且无法恢复；如仍需要请重新启动。\nreason: {reason}"
+                            ),
+                        ))),
+                        // 会话已结束且记录被淘汰：静默清理
+                        None if is_session_not_found(&error) => Some(None),
+                        // 单次调用失败（超时、服务重启中）：保留任务，下次轮询再确认
+                        None => {
+                            debug!(
+                                event = "BackgroundJobPollDeferred",
+                                task_id = %job.owner_task_id,
+                                error_type = "ProcessBackend",
+                                error = %error,
+                                "background session status unavailable, retrying on next poll"
+                            );
+                            None
+                        }
+                    },
                 }
             }
             JobSource::SubTaskBatch { task_ids, .. } => {
@@ -460,6 +481,80 @@ mod tests {
                 TaskStatus::Failed(FailureReason::UserCancelled)
             ));
         }
+    }
+
+    fn shell_job_fixture(
+        backend: NativeProcessBackend,
+        handle_id: crate::domain::SessionHandleId,
+    ) -> Fixture {
+        let mut f = fixture();
+        f.app.insert_resource(backend);
+        let mut commands_queue = f.app.world_mut().commands();
+        spawn_background_job(
+            &mut commands_queue,
+            f.owner,
+            f.owner_id,
+            JobSource::Shell {
+                handle_id,
+                notify_on_exit: false,
+            },
+            chrono::Utc::now(),
+        );
+        f.app.world_mut().flush();
+        f.app.add_systems(Update, background_job_monitor_system);
+        f
+    }
+
+    fn shell_notifications(app: &mut App) -> Vec<(String, String)> {
+        deliveries(app)
+            .into_iter()
+            .filter_map(|delivery| match delivery.item {
+                InboxItem::TaskNotification {
+                    source,
+                    status,
+                    summary,
+                    ..
+                } if source == "shell" => Some((status, summary)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shell_session_lost_to_process_service_failure_notifies_owner() {
+        let backend = NativeProcessBackend::default();
+        let handle_id = crate::domain::SessionHandleId::new();
+        backend.mark_session_lost(handle_id, "process supervisor sent no response for 30s");
+        let mut f = shell_job_fixture(backend, handle_id);
+        tick(&mut f.app);
+        let notifications = shell_notifications(&mut f.app);
+        assert_eq!(
+            notifications.len(),
+            1,
+            "notify_on_exit=false must not hide a lost session"
+        );
+        assert_eq!(notifications[0].0, "lost");
+        assert!(notifications[0].1.contains("no response for 30s"));
+        assert_eq!(
+            job_count(&mut f.app),
+            1,
+            "only the subtask batch job remains"
+        );
+    }
+
+    #[test]
+    fn evicted_shell_session_retires_silently() {
+        let mut f = shell_job_fixture(
+            NativeProcessBackend::default(),
+            crate::domain::SessionHandleId::new(),
+        );
+        tick(&mut f.app);
+        assert!(shell_notifications(&mut f.app).is_empty());
+        assert_eq!(
+            job_count(&mut f.app),
+            1,
+            "only the subtask batch job remains"
+        );
     }
 
     #[test]

@@ -423,13 +423,14 @@ fn exec_timeout_and_interactive_session_use_separate_stdin() {
 }
 
 #[test]
-fn supervisor_death_fails_closed_without_unmanaged_spawn() {
+fn supervisor_death_restarts_managed_service_and_reports_lost_sessions() {
+    use harness::domain::SessionReadRequest;
     let directory = tempfile::tempdir().unwrap();
     let log_path = directory.path().join("unexpected-exit.jsonl");
     let backend =
         NativeProcessBackend::supervised_with_log(env!("CARGO_BIN_EXE_harness"), &log_path)
             .unwrap();
-    backend
+    let lost = backend
         .start_session(request(format!(
             "echo $$ > '{}'; echo $PPID > '{}'; exec sleep 120",
             directory.path().join("leader").display(),
@@ -440,17 +441,97 @@ fn supervisor_death_fails_closed_without_unmanaged_spawn() {
     let owner = Identity::from_file(&directory.path().join("owner"));
     owner.cleanup();
     let deadline = Instant::now() + Duration::from_secs(3);
-    while backend.list_active_sessions().is_ok() && Instant::now() < deadline {
+    while owner.running() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
-    let refused = backend.start_session(request("true".to_string())).is_err();
+    // 读取线程先发现断开；首个调用补做登记并重启新一代服务。
+    thread::sleep(Duration::from_millis(100));
+    let read = backend.read_session(SessionReadRequest {
+        handle_id: lost.handle_id,
+        tail_lines: 10,
+    });
+    let reason = backend.lost_session_reason(lost.handle_id);
+    let restarted = backend.start_session(request(format!(
+        "echo $PPID > '{}'; exec sleep 120",
+        directory.path().join("new-owner").display()
+    )));
+    let new_owner = restarted
+        .is_ok()
+        .then(|| Identity::from_file(&directory.path().join("new-owner")));
     leader.cleanup();
-    assert!(refused, "backend silently fell back to unmanaged execution");
+    backend.shutdown().unwrap();
+    let error = read.unwrap_err();
+    assert!(error.contains("process service failed"), "{error}");
     assert!(
-        std::fs::read_to_string(log_path)
-            .unwrap()
-            .contains("ProcessSupervisorAbnormalExit"),
-        "unexpected service death was not independently logged"
+        reason.is_some(),
+        "session of the failed generation was not marked lost"
+    );
+    let new_owner = new_owner.expect("backend did not restart the process service");
+    assert_ne!(new_owner.pid, owner.pid);
+    assert_ne!(
+        new_owner.pid,
+        std::process::id() as i32,
+        "backend silently fell back to unmanaged execution"
+    );
+    let log = std::fs::read_to_string(log_path).unwrap();
+    for event in [
+        "ProcessSupervisorAbnormalExit",
+        "ProcessSupervisorFailed",
+        "ProcessSupervisorRestarted",
+    ] {
+        assert!(log.contains(event), "{event} was not independently logged");
+    }
+}
+
+#[test]
+fn frozen_supervisor_fails_single_call_without_stopping_managed_processes() {
+    use harness::domain::SessionReadRequest;
+    let backend = supervised();
+    let directory = tempfile::tempdir().unwrap();
+    let handle = backend
+        .start_session(request(format!(
+            "echo $$ > '{}'; echo $PPID > '{}'; exec sleep 120",
+            directory.path().join("leader").display(),
+            directory.path().join("owner").display()
+        )))
+        .unwrap();
+    let leader = Identity::from_file(&directory.path().join("leader"));
+    let owner = Identity::from_file(&directory.path().join("owner"));
+    let read = || {
+        backend.read_session(SessionReadRequest {
+            handle_id: handle.handle_id,
+            tail_lines: 10,
+        })
+    };
+    // 模拟系统停顿：服务进程超过 RPC 期限没有调度。
+    // SAFETY: owner 刚由会话写入且仍是本测试启动的服务进程。
+    unsafe { libc::kill(owner.pid, libc::SIGSTOP) };
+    let started = Instant::now();
+    let stalled = read();
+    let stalled_for = started.elapsed();
+    thread::sleep(Duration::from_millis(500));
+    // SAFETY: 同上，恢复刚暂停的服务进程。
+    unsafe { libc::kill(owner.pid, libc::SIGCONT) };
+    let survived = leader.running() && owner.running();
+    let resumed = read();
+    let next_start = backend.start_session(request("true".to_string()));
+    backend.shutdown().unwrap();
+    let error = stalled.unwrap_err();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(
+        !error.contains("all instance processes"),
+        "a slow call stopped the whole instance: {error}"
+    );
+    assert!(stalled_for < Duration::from_secs(4));
+    assert!(
+        survived,
+        "managed processes were stopped by a transient stall"
+    );
+    assert!(resumed.unwrap().status == harness::domain::SessionStatus::Running);
+    assert!(next_start.is_ok());
+    assert!(
+        !leader.running(),
+        "explicit shutdown still reclaims processes"
     );
 }
 
@@ -644,7 +725,7 @@ fn oversized_request_fails_closed_and_does_not_spawn() {
 }
 
 #[test]
-fn review_blocked_input_has_a_deadline_without_external_shutdown() {
+fn blocked_input_has_a_deadline_and_keeps_the_instance_running() {
     use harness::domain::SessionInputRequest;
     let backend = supervised();
     let directory = tempfile::tempdir().unwrap();
@@ -676,11 +757,10 @@ fn review_blocked_input_has_a_deadline_without_external_shutdown() {
     });
     let reply = rx.recv_timeout(Duration::from_secs(5));
     let finished_without_help = reply.is_ok();
-    let survived_at_reply = identity.running() || other_identity.running();
+    let survived_at_reply = identity.running() && other_identity.running();
+    let still_usable = backend.start_session(request("true".to_string())).is_ok();
     // 只有超出观察期限后才从测试外部清理；这不能算作被测超时实现。
-    if !finished_without_help {
-        let _ = backend.shutdown();
-    }
+    let _ = backend.shutdown();
     identity.cleanup();
     other_identity.cleanup();
     worker.join().unwrap();
@@ -690,14 +770,14 @@ fn review_blocked_input_has_a_deadline_without_external_shutdown() {
     );
     let error = reply.unwrap().unwrap_err();
     assert!(
-        error.contains("timed out") && error.contains("all instance processes"),
-        "timeout scope missing: {error}"
+        error.contains("did not accept input"),
+        "unexpected error: {error}"
     );
     assert!(
-        !survived_at_reply,
-        "timeout returned before instance cleanup completed"
+        survived_at_reply,
+        "a blocked input stopped unrelated managed processes"
     );
-    assert!(backend.start_session(request("true".to_string())).is_err());
+    assert!(still_usable, "a blocked input disabled the process service");
 }
 
 #[test]
