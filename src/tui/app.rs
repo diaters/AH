@@ -597,6 +597,7 @@ impl App {
         match event {
             EngineEvent::ToolCallCompleted { .. } => {}
             EngineEvent::AutomationSnapshot { .. } => {}
+            EngineEvent::ExperienceDraftUpdated { .. } => {}
             EngineEvent::TaskInteractionChanged { .. }
             | EngineEvent::QuestionPresented { .. }
             | EngineEvent::CommandResult { .. } => {}

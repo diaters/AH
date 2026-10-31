@@ -77,6 +77,11 @@ pub fn build_harness_app(
     app.init_resource::<crate::ecs::EntityIndex>();
     app.init_resource::<crate::domain::RuntimeGrants>();
 
+    // 经验库：默认读写 .harness/experience；main 会注入与客户端通道共享的同一实例。
+    app.insert_resource(crate::systems::experience_library::ExperienceLibraryHandle(
+        std::sync::Arc::new(crate::infrastructure::experience::FileExperienceLibrary::default()),
+    ));
+
     // Space Resources
     app.insert_resource(SharedKnowledgeBase::default());
     app.insert_resource(PendingKnowledgeWriteHooks::default());

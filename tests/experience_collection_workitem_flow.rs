@@ -24,7 +24,7 @@ fn test_config() -> HarnessConfig {
 }
 
 #[test]
-fn persistent_task_termination_creates_experience_collection_workitem() {
+fn task_termination_no_longer_auto_collects_experience() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -69,11 +69,12 @@ fn persistent_task_termination_creates_experience_collection_workitem() {
         .filter(|wi| wi.work_type == WorkItemType::ExperienceCollection)
         .collect();
 
+    // 经验改为用户在客户端主动总结；任务终态不再自动派发经验收集。
     assert!(
-        work_items
+        !work_items
             .iter()
             .any(|wi| wi.task_id == task_id && wi.governing_agent_id == Some(governing_agent_id)),
-        "should create ExperienceCollection WorkItem with task delegate as governing agent"
+        "task termination must not auto-create ExperienceCollection WorkItem"
     );
 }
 
@@ -320,7 +321,7 @@ fn child_task_experience_still_aggregates_into_parent_inbox() {
 /// 验证方式：先确认 /finish 能正确触发经验收集链路（产生 WorkItem），
 /// 再通过领域层单元测试验证 ExperienceStore 的收束方法不会重复处理。
 #[test]
-fn finish_command_triggers_experience_collection_via_proper_chain() {
+fn finish_command_terminates_without_experience_side_effects() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(NoOpExecutor);
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
@@ -373,17 +374,12 @@ fn finish_command_triggers_experience_collection_via_proper_chain() {
     // Run enough updates for the full chain:
     // command_parse -> FinishTaskMessage -> finish_task_system (mark done)
     // -> task_termination_system (Changed<Task>) -> TaskTerminatedMessage
-    // -> task_terminated_experience_trigger_system -> ExperienceCollectionRequestMessage
-    // -> experience_collection_workitem_system -> WorkItem
+    // （任务终态不再自动触发经验收集）
     for _ in 0..5 {
         app.update();
     }
 
-    // 关键验证：/finish 通过 FinishTaskMessage -> task_termination_system -> TaskTerminatedMessage
-    // 这条唯一链路触发经验收集，不会产生重复。
-    // 因为 NoOpExecutor 立即返回，WorkItem 可能已被完成并 despawn，
-    // 所以我们验证经验收集请求至少被触发过（通过 TaskTerminatedMessage 被正确生成）。
-    // 去重验证由领域层单元测试覆盖。
+    // /finish 走完终态链路后不产生经验候选，也不应 panic。
     let store = app.world().resource::<harness::domain::ExperienceStore>();
     // NoOpExecutor 不会提交候选，所以 store 为空，但不应 panic 或产生其他异常
     assert!(

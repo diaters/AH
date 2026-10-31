@@ -44,7 +44,8 @@ impl AgentExecutor for BrainMockExecutor {
                     reasoning_content: None,
                 })
             }),
-            harness::domain::AgentRequestKind::ToolExecution { .. } => {
+            harness::domain::AgentRequestKind::ToolExecution { .. }
+            | harness::domain::AgentRequestKind::Experience => {
                 // Tool 执行由专门的 tool_execution_system 处理，此处不应到达
                 Box::pin(async move {
                     Err(harness::domain::ExecutionError::Unknown(

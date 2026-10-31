@@ -549,6 +549,28 @@ pub fn handle_tool_action<B: SessionBackend>(
                 action,
             );
         }
+        Ok(ToolAction::SearchExperience { situation }) => {
+            // 检索交给经验管理员；结果由 experience_librarian_response_system 回填本次调用。
+            let Some(tool_call_id) = request.tool_call_id.clone() else {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput("search_experience requires a tool call id".into()),
+                );
+                return;
+            };
+            commands.spawn(crate::domain::ExperienceLookupRequest {
+                task_id: request.request.task_id,
+                situation,
+                origin: crate::domain::ExperienceLookupOrigin::ToolCall {
+                    agent_id: request.request.agent_id,
+                    request_kind: request.request.request_kind.clone(),
+                    tool_call_id,
+                },
+            });
+            commands.entity(request_entity).despawn();
+        }
         Ok(ToolAction::SubmitExperienceCandidate(submission)) => {
             handle_submit_experience_candidate(
                 commands,

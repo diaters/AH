@@ -12,7 +12,7 @@ pub mod writeback;
 pub(crate) use approval::experience_approval_result_system;
 pub(crate) use collection::{
     experience_collection_completion_system, experience_collection_workitem_system,
-    handle_experience_collection_llm_response, task_terminated_experience_trigger_system,
+    handle_experience_collection_llm_response,
 };
 pub(crate) use consolidation::experience_consolidation_trigger_system;
 pub(crate) use experience_hook::on_experience_hook_system;

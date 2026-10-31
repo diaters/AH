@@ -8,57 +8,9 @@ use crate::domain::{
     ExperienceCollectionRequestMessage, ExperienceConsolidationRequestMessage,
     ExperienceGovernanceRequestMessage, ExperienceKindHint, ExperienceStore, OutputContent,
     PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task, TaskExperiencePolicy,
-    TaskInjectedSkill, TaskTerminatedMessage, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
+    TaskInjectedSkill, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
 };
 use crate::ecs::EntityIndex;
-
-/// 任务终态经验收集触发系统：任务进入终态后统一生成经验收集请求。
-pub(crate) fn task_terminated_experience_trigger_system(
-    mut commands: Commands,
-    index: Res<EntityIndex>,
-    terminated: Query<(Entity, &TaskTerminatedMessage)>,
-    tasks: Query<&Task>,
-) {
-    for (_entity, terminated_msg) in &terminated {
-        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-        let Some(task) = index
-            .get_task(&terminated_msg.task_id)
-            .and_then(|e| tasks.get(e).ok())
-        else {
-            debug!(
-                event = "ExperienceCollectionTaskNotFound",
-                task_id = %terminated_msg.task_id,
-                "task not found for experience collection, skipping"
-            );
-            continue;
-        };
-
-        let Some(governing_agent_id) = task.delegate else {
-            debug!(
-                event = "ExperienceCollectionSkipped",
-                task_id = %task.id,
-                reason = "missing_delegate",
-                "task has no delegate, skipping experience collection"
-            );
-            continue;
-        };
-
-        debug!(
-            event = "ExperienceCollectionRequested",
-            task_id = %task.id,
-            governing_agent_id = %governing_agent_id,
-            parent_task_id = ?task.parent_task_id,
-            "spawning experience collection request from task termination"
-        );
-
-        commands.spawn(ExperienceCollectionRequestMessage {
-            task_id: task.id,
-            parent_task_id: task.parent_task_id,
-            parent_agent_id: None,
-            governing_agent_id,
-        });
-    }
-}
 
 /// 经验收集 WorkItem 创建系统：将收集请求转换为独立 WorkItem。
 pub(crate) fn experience_collection_workitem_system(

@@ -27,6 +27,7 @@ shell_exec = "Confirm"
 shell_start = "Confirm"
 channel_send = "Confirm"
 update_todos = "Allow"  # 仅更新展示清单，不执行工作
+search_experience = "Allow"  # 查经验库，由经验管理员判断，只读
 
 [[agent]]
 name = "brain"
@@ -56,6 +57,28 @@ default_permission = "Deny"
 name = "evaluator"
 tags = ["evaluation"]
 description = "任务评估专家，负责评估任务执行状态"
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+
+# 经验管理员：为主 Agent 检索经验库、把客户端发起的总结整理成经验草稿。
+# 只做判断与撰写，不需要任何工具；建议配置响应快的模型以缩短检索等待。
+[[agent]]
+name = "experience-librarian"
+tags = ["experience-librarian"]
+description = "经验管理员，负责经验检索与经验草稿撰写"
+system_prompt = """
+你是经验管理员，为直接与用户协作的主 Agent 维护经验库。经验库记录以往任务中验证过的做法和走不通的路线，目的是让主 Agent 遇到类似问题时不必从零尝试。
+
+你会收到两类请求：
+1. 检索：判断经验库目录中哪些经验能直接帮助当前情况。宁缺毋滥：话题相近但做法无法迁移的不要选，没有合适的就返回空结果。
+2. 起草：把一次会话中的尝试过程整理成经验草稿。重点写清试过但失败的路线及原因、最终可行的做法；只写记录中能确认的事实。
+
+严格按请求中给出的 JSON 格式输出，不要输出其他文字。"""
 
 [[agent.models]]
 provider = "openai"

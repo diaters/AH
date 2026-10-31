@@ -7,13 +7,13 @@ use crate::prelude::*;
 use crate::systems::{
     HarnessSet, agent_execution_system, experience_approval_result_system,
     experience_collection_completion_system, experience_collection_workitem_system,
-    experience_consolidation_trigger_system, experience_governance_system,
+    experience_consolidation_trigger_system, experience_governance_system, experience_library,
     experience_writeback_system, ingest_execution_results_system, llm_response_system,
     model_chain_state_update_system, on_experience_hook_system, on_llm_response_hook_system,
     profile_generation_completion_system, profile_generation_workitem_system,
     profile_update_trigger_system, profile_update_writeback_system, skill_creation_workitem_system,
     skill_creation_writeback_system, skill_update_completion_system, skill_update_workitem_system,
-    task_terminated_experience_trigger_system, tool_calling_orchestrator_system,
+    tool_calling_orchestrator_system,
 };
 
 /// 执行 Plugin
@@ -44,12 +44,8 @@ impl Plugin for ExecutionPlugin {
                 agent_execution_system.in_set(HarnessSet::Execution),
                 // ModelChainState 状态更新
                 model_chain_state_update_system.in_set(HarnessSet::Execution),
-                // 经验收集：任务终态触发收集请求
-                task_terminated_experience_trigger_system.in_set(HarnessSet::Execution),
-                // 经验收集：将请求转换为 WorkItem
-                experience_collection_workitem_system
-                    .in_set(HarnessSet::Execution)
-                    .after(task_terminated_experience_trigger_system),
+                // 经验收集：将请求转换为 WorkItem（任务终态不再自动触发收集）
+                experience_collection_workitem_system.in_set(HarnessSet::Execution),
                 // 经验收集完成后汇聚与治理触发
                 experience_collection_completion_system
                     .in_set(HarnessSet::Execution)
@@ -89,6 +85,23 @@ impl Plugin for ExecutionPlugin {
                 experience_writeback_system
                     .in_set(HarnessSet::Execution)
                     .after(experience_governance_system),
+            ),
+        );
+        app.add_systems(
+            Update,
+            (
+                // 经验库：管理员回复（检索回填 / 预查投递 / 草稿结果）
+                experience_library::experience_librarian_response_system
+                    .in_set(HarnessSet::Transform)
+                    .after(crate::systems::llm_response_system),
+                // 经验库：开局预查 → 检索请求 → 管理员 WorkItem
+                experience_library::experience_preflight_trigger_system
+                    .in_set(HarnessSet::Execution),
+                experience_library::experience_lookup_request_system
+                    .in_set(HarnessSet::Execution)
+                    .after(experience_library::experience_preflight_trigger_system),
+                experience_library::experience_draft_request_system.in_set(HarnessSet::Execution),
+                experience_library::experience_draft_notify_system.in_set(HarnessSet::Output),
             ),
         );
         app.add_systems(

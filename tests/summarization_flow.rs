@@ -51,7 +51,7 @@ impl AgentExecutor for SummarizationMockExecutor {
                 AgentRequestKind::BrainDecision => {
                     Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
                 }
-                AgentRequestKind::ToolExecution { .. } => {
+                AgentRequestKind::ToolExecution { .. } | AgentRequestKind::Experience => {
                     Err(harness::domain::ExecutionError::Unknown("Not supported".to_string()))
                 }
                 AgentRequestKind::Evaluation => {

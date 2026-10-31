@@ -60,19 +60,29 @@ pub enum InboxItem {
         summary: String,
         received_at: DateTime<Utc>,
     },
+    /// 经验管理员开局预查命中的历史经验；随下一次请求送达，不单独唤醒任务。
+    ExperienceHint {
+        content: String,
+        received_at: DateTime<Utc>,
+    },
 }
 
 impl InboxItem {
     pub fn received_at(&self) -> DateTime<Utc> {
         match self {
-            Self::UserSteer { received_at, .. } | Self::TaskNotification { received_at, .. } => {
-                *received_at
-            }
+            Self::UserSteer { received_at, .. }
+            | Self::TaskNotification { received_at, .. }
+            | Self::ExperienceHint { received_at, .. } => *received_at,
         }
     }
 
     pub fn is_user_steer(&self) -> bool {
         matches!(self, Self::UserSteer { .. })
+    }
+
+    /// 是否只随后续请求附带、不应单独唤醒空闲任务。
+    pub fn is_passive(&self) -> bool {
+        matches!(self, Self::ExperienceHint { .. })
     }
 
     /// 渲染为送达 LLM 的标签块。
@@ -90,6 +100,9 @@ impl InboxItem {
             } => format!(
                 "<task-notification source=\"{source}\" job=\"{job_id}\" status=\"{status}\">\n{summary}\n</task-notification>"
             ),
+            Self::ExperienceHint { content, .. } => {
+                format!("<experience_hint>\n{content}\n</experience_hint>")
+            }
         }
     }
 }
@@ -221,6 +234,16 @@ impl TaskInbox {
 
     pub fn has_user_steer(&self) -> bool {
         self.items.iter().any(InboxItem::is_user_steer)
+    }
+
+    /// 需要 Agent 处理的积压条数（不含被动条目）。
+    pub fn actionable_len(&self) -> usize {
+        self.items.iter().filter(|item| !item.is_passive()).count()
+    }
+
+    /// 积压是否全部为被动条目（不触发空闲唤醒）。
+    pub fn only_passive(&self) -> bool {
+        self.items.iter().all(InboxItem::is_passive)
     }
 
     /// 首条积压确定合并截止时间；后续通知不能无限延后唤醒。

@@ -169,6 +169,10 @@ pub fn dispatch_system(
         let request_kind = match work_type {
             WorkItemType::Evaluation => AgentRequestKind::Evaluation,
             WorkItemType::Summarization => AgentRequestKind::Summarization,
+            // 管理员请求不得把所属任务标记为 Running（检索期间父任务仍在等待工具结果）。
+            WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {
+                AgentRequestKind::Experience
+            }
             _ => AgentRequestKind::LlmCompletion,
         };
 

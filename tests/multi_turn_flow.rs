@@ -342,7 +342,7 @@ fn agent_has_long_term_memory() {
 }
 
 #[test]
-fn experience_collection_triggered_on_agent_termination() {
+fn agent_termination_does_not_auto_collect_experience() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
@@ -462,8 +462,7 @@ fn experience_collection_triggered_on_agent_termination() {
         .iter(app.world())
         .count();
 
-    // 验证新的经验治理流程被触发：任务终止后应生成 ExperienceCollectionRequestMessage
-    // 或 WorkItem（请求可能被 experience_collection_workitem_system 立即消费）
+    // 经验改为用户主动总结：任务终止后不应再生成经验收集请求或 WorkItem。
     let collection_requests = app
         .world_mut()
         .query::<&ExperienceCollectionRequestMessage>()
@@ -482,8 +481,8 @@ fn experience_collection_triggered_on_agent_termination() {
         .count();
 
     assert!(
-        collection_requests > 0 || work_items > 0,
-        "task termination should trigger experience collection: requests={}, work_items={}; terminated_after={}; task_before={:?}",
+        collection_requests == 0 && work_items == 0,
+        "task termination must not auto-trigger experience collection: requests={}, work_items={}; terminated_after={}; task_before={:?}",
         collection_requests,
         work_items,
         terminated_after,

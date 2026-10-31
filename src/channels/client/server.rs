@@ -101,6 +101,25 @@ pub fn router(client: Client) -> Router {
         .route("/v1/notifications/:id/ack", post(notification_ack))
         .route("/v1/notifications/:id/retry", post(notification_retry))
         .route("/v1/files/:id", get(download_file))
+        .route("/v1/experiences", get(super::experience::list))
+        .route(
+            "/v1/experiences/:id",
+            get(super::experience::get)
+                .put(super::experience::update)
+                .delete(super::experience::delete),
+        )
+        .route(
+            "/v1/sessions/:session/experience-drafts",
+            post(super::experience::start_draft),
+        )
+        .route(
+            "/v1/sessions/:session/experience-drafts/:draft",
+            delete(super::experience::discard_draft),
+        )
+        .route(
+            "/v1/sessions/:session/experience-drafts/:draft/save",
+            post(super::experience::save_draft),
+        )
         .route(
             "/v1/sessions/:session/files/:id",
             put(upload_file)
@@ -152,7 +171,7 @@ impl IntoResponse for ClientError {
     }
 }
 
-fn token(headers: &HeaderMap) -> Result<&str, ClientError> {
+pub(super) fn token(headers: &HeaderMap) -> Result<&str, ClientError> {
     headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
@@ -161,7 +180,7 @@ fn token(headers: &HeaderMap) -> Result<&str, ClientError> {
         .ok_or(ClientError::Unauthorized)
 }
 
-fn authenticate(client: &Client, headers: &HeaderMap) -> Result<Device, ClientError> {
+pub(super) fn authenticate(client: &Client, headers: &HeaderMap) -> Result<Device, ClientError> {
     client
         .store
         .lock()
@@ -201,10 +220,30 @@ async fn capabilities(
 ) -> Result<Json<Value>, ClientError> {
     let device = authenticate(&client, &headers)?;
     let store = client.store.lock().expect("client state mutex poisoned");
+    let mut operations = vec![
+        "sessions.create",
+        "sessions.text",
+        "tasks.stop",
+        "tasks.finish",
+        "questions.answer",
+        "schedules.manage",
+        "tools.observe",
+        "files.transfer",
+        "approvals.respond",
+        "snapshot",
+        "events",
+        "devices.list",
+        "devices.revoke",
+        "diagnostics.read",
+        "permissions.observe",
+    ];
+    if client.experience.is_some() {
+        operations.push("experiences.manage");
+    }
     Ok(Json(
         json!({"protocol_version":1,"instance_id":store.instance_id(),"instance_name":client.config.instance_name,
         "device_id":device.id,"user_id":device.user_id,
-        "operations":["sessions.create","sessions.text","tasks.stop","tasks.finish","questions.answer","schedules.manage","tools.observe","files.transfer","approvals.respond","snapshot","events","devices.list","devices.revoke","diagnostics.read","permissions.observe"],
+        "operations":operations,
         "event_retention":super::store::EVENT_RETENTION,"task_restart_recovery":false,"meow_enabled":client.config.meow.as_ref().is_some_and(|c|c.recipients.contains_key(&device.user_id)),
         "delivery_receipt":"server_persisted","command_receipt":"queued_is_not_consumed"}),
     ))

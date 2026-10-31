@@ -58,6 +58,29 @@ pub(crate) fn input_ingress_system(
                     sequence.next_sequence(),
                 ));
             }
+            ExternalInput::ExperienceDraft {
+                channel,
+                draft_id,
+                transcript,
+                note,
+            } => {
+                debug!(
+                    event = "ExternalInputReceived",
+                    kind = "ExperienceDraft",
+                    draft_id = %draft_id,
+                    transcript_len = transcript.len(),
+                    "received experience draft request"
+                );
+                commands.spawn((
+                    crate::domain::ExperienceDraftRequest {
+                        channel,
+                        draft_id,
+                        transcript,
+                        note,
+                    },
+                    sequence.next_sequence(),
+                ));
+            }
             ExternalInput::Interaction {
                 channel,
                 command_id,

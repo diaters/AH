@@ -5,7 +5,8 @@ import { util } from '@kit.ArkTS';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
-import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
+import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
+  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
@@ -79,6 +80,21 @@ struct Index {
   @State viewing: ArtifactRef | undefined = undefined;
   @State sessionSearch: string = '';
   @State approvalFeedback: Record<string, string> = {};
+  // 经验总结：草稿编辑态按草稿 ID 保存，刷新快照不会冲掉未保存的修改。
+  @State summaryOpen: boolean = false;
+  @State summaryNote: string = '';
+  @State draftTitles: Record<string, string> = {};
+  @State draftBodies: Record<string, string> = {};
+  @State draftEditing: Record<string, boolean> = {};
+  @State draftAsNew: Record<string, boolean> = {};
+  // 经验库页面
+  @State experiences: ExperienceSummaryDto[] = [];
+  @State experienceQuery: string = '';
+  @State experienceDetail: ExperienceDto | undefined = undefined;
+  @State experienceEditing: boolean = false;
+  @State experienceTitle: string = '';
+  @State experienceBody: string = '';
+  @State experienceDeleting: string = '';
   private conversationScroller: Scroller = new Scroller();
   private editPlanRevision: string = '';
   @StorageLink('harnessForeground') @Watch('lifecycle') foreground: boolean = true;
@@ -151,6 +167,8 @@ struct Index {
     this.sessions = []; this.files = []; this.notifications = []; this.notificationsTruncated = false; this.notificationOverflow = 0;
     this.automation = { available: false, schedules: [], timezone: '' }; this.devices = []; this.diagnostics = undefined;
     this.questionDrafts = {}; this.approvalFeedback = {}; this.processExpanded = {}; this.viewing = undefined;
+    this.summaryOpen = false; this.summaryNote = ''; this.draftTitles = {}; this.draftBodies = {}; this.draftEditing = {}; this.draftAsNew = {};
+    this.experiences = []; this.experienceDetail = undefined; this.experienceEditing = false; this.experienceDeleting = '';
     this.lastCommandId = ''; this.view = 'chat'; this.resetPlan();
   }
   private switchInstance(saved: SavedInstance): void {
@@ -600,6 +618,99 @@ struct Index {
     if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
     if (view === 'automation' && this.connection.supports('schedules.manage')) { this.manageSchedule({ kind: 'list' }); }
     if (view === 'management') { this.loadManagement(); }
+    if (view === 'experiences') { this.experienceDetail = undefined; this.experienceEditing = false; this.loadExperiences(); }
+  }
+
+  // ---------- 经验总结与经验库 ----------
+  private canManageExperience(): boolean { return this.connection.supports('experiences.manage'); }
+  private drafts(): ExperienceDraftDto[] {
+    const session = this.current();
+    return session ? Object.values(session.experience_drafts ?? {}) : [];
+  }
+  private draftGenerating(): boolean { return this.drafts().some((draft: ExperienceDraftDto) => draft.status === 'generating'); }
+  private copyRecord<T>(source: Record<string, T>, key: string, value: T): Record<string, T> {
+    const next: Record<string, T> = {};
+    for (const existing of Object.keys(source)) { next[existing] = source[existing]; }
+    next[key] = value;
+    return next;
+  }
+  private draftTitle(draft: ExperienceDraftDto): string { return this.draftTitles[draft.draft_id] ?? draft.title ?? ''; }
+  private draftBody(draft: ExperienceDraftDto): string { return this.draftBodies[draft.draft_id] ?? draft.body ?? ''; }
+  private mergeTarget(draft: ExperienceDraftDto): string {
+    return draft.merge_target && !(this.draftAsNew[draft.draft_id] ?? false) ? draft.merge_target.id : '';
+  }
+  private async startSummary(note: string): Promise<void> {
+    if (this.busy || !this.selected) { return; } this.busy = true;
+    try {
+      await this.connection.startExperienceDraft(this.selected, util.generateRandomUUID(), note);
+      this.summaryOpen = false; this.summaryNote = ''; this.status = '';
+      await this.refresh();
+    } catch (error) { this.status = `无法开始总结：${(error as Error).message}`; }
+    finally { this.busy = false; }
+  }
+  private async saveDraft(draft: ExperienceDraftDto): Promise<void> {
+    if (this.busy) { return; } this.busy = true;
+    try {
+      const saved = await this.connection.saveExperienceDraft(this.selected, draft.draft_id, this.draftTitle(draft).trim(),
+        this.draftBody(draft).trim(), this.mergeTarget(draft));
+      this.status = this.mergeTarget(draft) ? `已更新经验「${saved.title}」` : `已保存到经验库：${saved.title}`;
+      await this.refresh();
+    } catch (error) { this.status = `保存失败：${(error as Error).message}`; }
+    finally { this.busy = false; }
+  }
+  private async discardDraft(draft: ExperienceDraftDto, retry: boolean): Promise<void> {
+    if (this.busy) { return; } this.busy = true;
+    try {
+      await this.connection.discardExperienceDraft(this.selected, draft.draft_id);
+      if (retry) { await this.connection.startExperienceDraft(this.selected, util.generateRandomUUID(), draft.note ?? ''); }
+      await this.refresh();
+    } catch (error) { this.status = (error as Error).message; }
+    finally { this.busy = false; }
+  }
+  private async loadExperiences(): Promise<void> {
+    if (!this.connected || this.busy || !this.canManageExperience()) { return; } this.busy = true;
+    try { this.experiences = (await this.connection.experiences()).experiences; }
+    catch (error) { this.status = (error as Error).message; }
+    finally { this.busy = false; }
+  }
+  private async openExperience(id: string): Promise<void> {
+    if (this.busy) { return; } this.busy = true;
+    try {
+      this.experienceDetail = await this.connection.experience(id);
+      this.experienceEditing = false; this.experienceDeleting = '';
+    } catch (error) { this.status = (error as Error).message; }
+    finally { this.busy = false; }
+  }
+  private editExperience(): void {
+    if (!this.experienceDetail) { return; }
+    this.experienceTitle = this.experienceDetail.title; this.experienceBody = this.experienceDetail.body; this.experienceEditing = true;
+  }
+  private async saveExperience(): Promise<void> {
+    const detail = this.experienceDetail;
+    if (!detail || this.busy) { return; } this.busy = true;
+    try {
+      this.experienceDetail = await this.connection.updateExperience(detail.id, this.experienceTitle.trim(), this.experienceBody.trim(), detail.updated_at);
+      this.experienceEditing = false; this.status = '经验已更新';
+      this.experiences = (await this.connection.experiences()).experiences;
+    } catch (error) {
+      const message = (error as Error).message;
+      this.status = message.includes('HTTP 409') ? '这条经验已在别处修改，请重新打开后再编辑' : `保存失败：${message}`;
+    }
+    finally { this.busy = false; }
+  }
+  private async deleteExperience(id: string): Promise<void> {
+    if (this.busy) { return; } this.busy = true;
+    try {
+      await this.connection.deleteExperience(id);
+      this.experienceDetail = undefined; this.experienceDeleting = ''; this.status = '经验已删除';
+      this.experiences = (await this.connection.experiences()).experiences;
+    } catch (error) { this.status = (error as Error).message; }
+    finally { this.busy = false; }
+  }
+  private filteredExperiences(): ExperienceSummaryDto[] {
+    const query = this.experienceQuery.trim();
+    if (!query) { return this.experiences; }
+    return this.experiences.filter((item: ExperienceSummaryDto) => item.title.includes(query) || item.scenario.includes(query));
   }
 
   // ---------- 配对 ----------
@@ -691,6 +802,7 @@ struct Index {
         this.navItem($r('sys.symbol.house'), '工作台', 'chat', this.approvals().length + this.questions().length)
         this.navItem($r('sys.symbol.clock'), '自动化', 'automation', 0)
         this.navItem($r('sys.symbol.bell'), '通知', 'inbox', this.unread())
+        if (this.canManageExperience()) { this.navItem($r('sys.symbol.book'), '经验库', 'experiences', 0) }
         this.navItem($r('sys.symbol.gearshape'), '设备与连接', 'management', 0)
       }.margin({ top: 18 })
       Divider().color(Theme.line).margin({ top: 18, bottom: 14 })
@@ -905,6 +1017,132 @@ struct Index {
       }.card()
     }, (question: QuestionDto) => `${question.task_id}/${question.question_id}:${question.claimed}`)
   }
+  @Builder private summaryEntry() {
+    if (this.canManageExperience() && (this.current()?.messages.length ?? 0) > 0 && !this.draftGenerating()) {
+      if (this.summaryOpen) {
+        Column({ space: 10 }) {
+          Text('总结这次的尝试经验').fontSize(15).fontColor(Theme.text).fontWeight(FontWeight.Medium)
+          Text('经验管理员会根据本任务的对话和工具记录，整理出试过的路线、失败原因和最终可行的做法，保存前你可以修改。').caption()
+          TextInput({ placeholder: '想重点记下什么（可选）', text: this.summaryNote }).height(38).fontSize(14).backgroundColor(Theme.page)
+            .onChange((value: string) => { this.summaryNote = value; })
+          Row({ space: 10 }) {
+            Button('开始总结').primary().height(36).enabled(this.connected && !this.busy).onClick(() => { this.startSummary(this.summaryNote); })
+            Button('取消').ghost().height(36).onClick(() => { this.summaryOpen = false; })
+          }
+        }.card()
+      } else {
+        Row() {
+          Button() {
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.book')).fontSize(14).fontColor([Theme.text])
+              Text('总结经验').fontSize(13).fontColor(Theme.text)
+            }
+          }.ghost().enabled(this.connected && !this.busy).onClick(() => { this.summaryOpen = true; })
+        }.width('100%').justifyContent(FlexAlign.End)
+      }
+    }
+  }
+  @Builder private experienceDrafts() {
+    ForEach(this.drafts(), (draft: ExperienceDraftDto) => {
+      Column({ space: 10 }) {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.book')).fontSize(15).fontColor([Theme.accent])
+          Text(draft.status === 'generating' ? '正在整理经验…' : draft.status === 'failed' ? '经验总结失败' : '经验草稿')
+            .fontSize(15).fontColor(Theme.text).fontWeight(FontWeight.Medium).layoutWeight(1)
+        }.width('100%')
+        if (draft.note) { Text(`重点：${draft.note}`).caption() }
+        if (draft.status === 'generating') {
+          Row({ space: 10 }) {
+            LoadingProgress().width(20).height(20).color(Theme.accent)
+            Text('经验管理员正在阅读本任务的对话与工具记录').caption().layoutWeight(1)
+            Text('取消').fontSize(13).fontColor(Theme.secondary).enabled(!this.busy).onClick(() => { this.discardDraft(draft, false); })
+          }.width('100%')
+        } else if (draft.status === 'failed') {
+          Text(draft.error ?? '未知错误').fontSize(13).fontColor(Theme.danger).copyOption(CopyOptions.LocalDevice)
+          Row({ space: 10 }) {
+            Button('重试').ghost().enabled(this.connected && !this.busy).onClick(() => { this.discardDraft(draft, true); })
+            Button('关闭').ghost().enabled(!this.busy).onClick(() => { this.discardDraft(draft, false); })
+          }
+        } else {
+          if (draft.merge_target) {
+            Row({ space: 8 }) {
+              Text(this.draftAsNew[draft.draft_id] ? `另存为新经验（与「${draft.merge_target.title}」相似）` : `将合并更新已有经验「${draft.merge_target.title}」`)
+                .fontSize(13).fontColor(Theme.warn).layoutWeight(1)
+              Text(this.draftAsNew[draft.draft_id] ? '改为合并' : '另存为新经验').fontSize(13).fontColor(Theme.accent)
+                .onClick(() => { this.draftAsNew = this.copyRecord(this.draftAsNew, draft.draft_id, !(this.draftAsNew[draft.draft_id] ?? false)); })
+            }.width('100%')
+          }
+          TextInput({ placeholder: '标题', text: this.draftTitle(draft) }).height(40).fontSize(15).backgroundColor(Theme.page)
+            .onChange((value: string) => { this.draftTitles = this.copyRecord(this.draftTitles, draft.draft_id, value); })
+          if (this.draftEditing[draft.draft_id]) {
+            TextArea({ text: this.draftBody(draft) }).height(280).fontSize(14).fontFamily('monospace').backgroundColor(Theme.page)
+              .onChange((value: string) => { this.draftBodies = this.copyRecord(this.draftBodies, draft.draft_id, value); })
+          } else {
+            Column() { MarkdownView({ source: this.draftBody(draft), fontSize: 14 }) }
+              .width('100%').padding(12).backgroundColor(Theme.page).borderRadius(10)
+          }
+          Row({ space: 10 }) {
+            Button(this.mergeTarget(draft) ? '合并保存' : '保存到经验库').primary().height(36)
+              .enabled(this.connected && !this.busy && this.draftTitle(draft).trim().length > 0 && this.draftBody(draft).trim().length > 0)
+              .onClick(() => { this.saveDraft(draft); })
+            Button(this.draftEditing[draft.draft_id] ? '预览' : '编辑正文').ghost().height(36)
+              .onClick(() => { this.draftEditing = this.copyRecord(this.draftEditing, draft.draft_id, !(this.draftEditing[draft.draft_id] ?? false)); })
+            Blank()
+            Text('丢弃').fontSize(13).fontColor(Theme.secondary).enabled(!this.busy).onClick(() => { this.discardDraft(draft, false); })
+          }.width('100%')
+        }
+      }.card().backgroundColor(draft.status === 'failed' ? Theme.warnSoft : Theme.surface)
+    }, (draft: ExperienceDraftDto) => `${draft.draft_id}:${draft.status}`)
+  }
+  @Builder private experiencesBody() {
+    if (this.experienceDetail) {
+      Column({ space: 12 }) {
+        Text('‹ 返回列表').fontSize(14).fontColor(Theme.accent).onClick(() => { this.experienceDetail = undefined; this.experienceEditing = false; })
+        if (this.experienceEditing) {
+          TextInput({ placeholder: '标题', text: this.experienceTitle }).height(40).backgroundColor(Theme.page)
+            .onChange((value: string) => { this.experienceTitle = value; })
+          TextArea({ text: this.experienceBody }).height(360).fontSize(14).fontFamily('monospace').backgroundColor(Theme.page)
+            .onChange((value: string) => { this.experienceBody = value; })
+          Row({ space: 10 }) {
+            Button('保存').primary().height(36)
+              .enabled(this.connected && !this.busy && this.experienceTitle.trim().length > 0 && this.experienceBody.trim().length > 0)
+              .onClick(() => { this.saveExperience(); })
+            Button('取消').ghost().height(36).onClick(() => { this.experienceEditing = false; })
+          }
+        } else {
+          Text(this.experienceDetail.title).heading(24).width('100%')
+          Text(`更新于 ${this.experienceDetail.updated_at.substring(0, 10)}`).caption()
+          MarkdownView({ source: this.experienceDetail.body })
+          Row({ space: 16 }) {
+            Text('编辑').fontSize(13).fontColor(Theme.accent).enabled(!this.busy).onClick(() => { this.editExperience(); })
+            if (this.experienceDeleting === this.experienceDetail.id) {
+              Text('确认删除').fontSize(13).fontColor(Theme.danger).enabled(this.connected && !this.busy)
+                .onClick(() => { if (this.experienceDetail) { this.deleteExperience(this.experienceDetail.id); } })
+              Text('取消').fontSize(13).fontColor(Theme.secondary).onClick(() => { this.experienceDeleting = ''; })
+            } else {
+              Text('删除').fontSize(13).fontColor(Theme.danger).onClick(() => { this.experienceDeleting = this.experienceDetail?.id ?? ''; })
+            }
+          }.margin({ top: 8 })
+        }
+      }.card()
+    } else {
+      Row({ space: 8 }) {
+        TextInput({ placeholder: '搜索标题或适用场景', text: this.experienceQuery }).height(36).fontSize(13).layoutWeight(1).backgroundColor(Theme.surface)
+          .onChange((value: string) => { this.experienceQuery = value; })
+        Button('刷新').ghost().enabled(this.connected && !this.busy).onClick(() => { this.loadExperiences(); })
+      }.width('100%')
+      ForEach(this.filteredExperiences(), (item: ExperienceSummaryDto) => {
+        Column({ space: 4 }) {
+          Text(item.title).fontSize(15).fontColor(Theme.text).fontWeight(FontWeight.Medium)
+          Text(item.scenario).fontSize(13).fontColor('#4A4840').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(`更新于 ${item.updated_at.substring(0, 10)}`).caption()
+        }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 12 }).border({ width: { bottom: 1 }, color: Theme.line })
+          .onClick(() => { this.openExperience(item.id); })
+      }, (item: ExperienceSummaryDto) => `${item.id}:${item.updated_at}`)
+      if (this.experiences.length === 0) { Text('还没有经验。在任务里点「总结经验」，确认后的经验会出现在这里。').caption() }
+      else if (this.filteredExperiences().length === 0) { Text('没有匹配的经验').caption() }
+    }
+  }
   @Builder private taskControls() {
     ForEach(this.tasks().filter((task: TaskDto) => (task.can_stop ?? false) || (task.can_finish ?? false)), (task: TaskDto) => {
       Row({ space: 8 }) {
@@ -949,7 +1187,9 @@ struct Index {
               }.width('100%').alignItems(HorizontalAlign.Start)
             }
             this.interactions()
+            this.experienceDrafts()
             this.taskControls()
+            this.summaryEntry()
           }
         }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, top: 8, bottom: 24 })
       }.layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
@@ -1096,7 +1336,11 @@ struct Index {
       this.header()
       Scroll() {
         Column({ space: 16 }) {
-          Text(this.view === 'automation' ? '自动化' : this.view === 'inbox' ? '通知' : '设备与连接').heading(32).width('100%')
+          Text(this.view === 'automation' ? '自动化' : this.view === 'inbox' ? '通知' : this.view === 'experiences' ? '经验库' : '设备与连接')
+            .heading(32).width('100%')
+          if (this.view === 'experiences') {
+            Text('总结过的试错经验。Agent 遇到类似问题时会先查这里，避开已验证走不通的路线。').fontSize(14).fontColor(Theme.secondary).width('100%')
+          }
           if (this.view === 'automation') { Text('定时运行的任务，结果回到所选任务中。').fontSize(14).fontColor(Theme.secondary).width('100%') }
           if (this.view === 'inbox') {
             Text(this.connection.capabilities?.meow_enabled ? '重要事件由服务端经 MeoW 推送。' : '未配置 MeoW 推送，待办仍会在任务中显示。')
@@ -1105,6 +1349,7 @@ struct Index {
           if (this.status) { Text(this.status).caption().width('100%') }
           if (this.view === 'automation') { this.automationBody() }
           else if (this.view === 'inbox') { this.inboxBody() }
+          else if (this.view === 'experiences') { this.experiencesBody() }
           else { this.managementBody() }
         }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, bottom: 32 + this.bottom() })
       }.layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off)

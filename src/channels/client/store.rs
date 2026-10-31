@@ -67,6 +67,9 @@ pub struct Session {
     pub observations_truncated: bool,
     #[serde(default)]
     pub progress: BTreeMap<String, Value>,
+    /// 进行中或待确认的经验草稿；保存或丢弃后移除。
+    #[serde(default)]
+    pub experience_drafts: BTreeMap<String, Value>,
     pub messages: Vec<Value>,
     pub history_truncated: bool,
     /// 最近一次变更时的实例事件序号，供客户端按最近活动排序。
@@ -462,6 +465,7 @@ impl Store {
                 observations: vec![],
                 observations_truncated: false,
                 progress: BTreeMap::new(),
+                experience_drafts: BTreeMap::new(),
                 messages: vec![],
                 history_truncated: false,
                 updated_at: state.sequence,
@@ -838,6 +842,24 @@ fn append_event(state: &mut State, session_id: Uuid, kind: &str, data: Value) {
         if session.messages.len() > 500 {
             session.messages.remove(0);
             session.history_truncated = true;
+        }
+    } else if kind == "experience_draft" {
+        if let Some(id) = data["draft_id"].as_str() {
+            if matches!(data["status"].as_str(), Some("saved" | "discarded")) {
+                session.experience_drafts.remove(id);
+            } else {
+                let mut draft = session
+                    .experience_drafts
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                if let (Some(target), Some(fields)) = (draft.as_object_mut(), data.as_object()) {
+                    for (key, value) in fields {
+                        target.insert(key.clone(), value.clone());
+                    }
+                }
+                session.experience_drafts.insert(id.into(), draft);
+            }
         }
     } else if kind == "approval_required" {
         if let Some(id) = data["request_id"].as_str().and_then(|id| id.parse().ok()) {

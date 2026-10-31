@@ -874,3 +874,321 @@ async fn conversation_records_progress_tools_and_response_in_order() {
     assert!(sequence(&session["observations"][0]) < sequence(&session["observations"][1]));
     assert!(sequence(&session["observations"][1]) < sequence(&session["messages"][1]));
 }
+
+// ============ 经验总结与经验库 ============
+
+/// 测试用内存经验库（通道层不得依赖 infrastructure 的文件实现）。
+#[derive(Default)]
+struct MemoryLibrary(
+    std::sync::Mutex<std::collections::BTreeMap<String, crate::domain::ExperienceEntry>>,
+);
+
+impl crate::contracts::ExperienceLibrary for MemoryLibrary {
+    fn list(&self) -> anyhow::Result<Vec<crate::domain::ExperienceEntry>> {
+        Ok(self.0.lock().unwrap().values().cloned().collect())
+    }
+    fn get(&self, id: &str) -> anyhow::Result<Option<crate::domain::ExperienceEntry>> {
+        Ok(self.0.lock().unwrap().get(id).cloned())
+    }
+    fn save(&self, entry: &crate::domain::ExperienceEntry) -> anyhow::Result<()> {
+        entry.validate()?;
+        self.0
+            .lock()
+            .unwrap()
+            .insert(entry.id.clone(), entry.clone());
+        Ok(())
+    }
+    fn delete(&self, id: &str) -> anyhow::Result<bool> {
+        Ok(self.0.lock().unwrap().remove(id).is_some())
+    }
+}
+
+fn with_library(fixture: Fixture) -> (Fixture, crate::contracts::SharedExperienceLibrary) {
+    let library: crate::contracts::SharedExperienceLibrary =
+        std::sync::Arc::new(MemoryLibrary::default());
+    let Fixture {
+        client,
+        input,
+        _dir,
+    } = fixture;
+    (
+        Fixture {
+            client: client.with_experience_library(library.clone()),
+            input,
+            _dir,
+        },
+        library,
+    )
+}
+
+fn seed_history(fixture: &Fixture, user: &str, session: Uuid) {
+    let mut store = fixture.client.store.lock().unwrap();
+    store
+        .append(
+            user,
+            session,
+            "text",
+            json!({"role":"user","content":"hdc install 一直报 9568322"}),
+        )
+        .unwrap();
+    store
+        .append(
+            user,
+            session,
+            "tool_started",
+            json!({"task_id":"t","tool_name":"shell_exec","input_summary":"hdc install a.hap"}),
+        )
+        .unwrap();
+    let output = format!("{}error: install failed code 9568322", "log ".repeat(2000));
+    store
+        .append(
+            user,
+            session,
+            "tool_completed",
+            json!({"task_id":"t","tool_name":"shell_exec","success":false,"output":output}),
+        )
+        .unwrap();
+}
+
+fn draft_ready(fixture: &Fixture, user: &str, session: Uuid, draft: Uuid, merge: Option<String>) {
+    fixture
+        .client
+        .push_event(EngineEvent::ExperienceDraftUpdated {
+            target: EventTarget::Directed(vec![crate::domain::ChannelId {
+                frontend: FrontendKind::Client,
+                user_id: user.into(),
+                thread_id: Some(session.to_string()),
+            }]),
+            draft_id: draft,
+            outcome: Ok(crate::domain::ExperienceDraftContent {
+                title: "HAP 安装签名错误".into(),
+                body: "## 适用场景\n9568322".into(),
+                merge_target: merge,
+            }),
+        });
+}
+
+#[tokio::test]
+async fn experience_capability_requires_library() {
+    let fixture = Fixture::new();
+    let (_, token) = fixture.pair("u");
+    let (_, caps) = fixture
+        .request(&token, "GET", "/v1/capabilities", Value::Null)
+        .await;
+    assert!(
+        !caps["operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("experiences.manage"))
+    );
+    let (status, _) = fixture
+        .request(&token, "GET", "/v1/experiences", Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (fixture, _) = with_library(fixture);
+    let (_, caps) = fixture
+        .request(&token, "GET", "/v1/capabilities", Value::Null)
+        .await;
+    assert!(
+        caps["operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("experiences.manage"))
+    );
+}
+
+#[tokio::test]
+async fn experience_draft_lifecycle_from_session_history_to_library() {
+    let (fixture, library) = with_library(Fixture::new());
+    let (_, token) = fixture.pair("u");
+    let session = fixture.session(&token).await;
+    seed_history(&fixture, "u", session);
+    let drafts = format!("/v1/sessions/{session}/experience-drafts");
+    let draft = Uuid::new_v4();
+
+    let (status, body) = fixture
+        .request(
+            &token,
+            "POST",
+            &drafts,
+            json!({"draft_id":draft,"note":"记下签名"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let Ok(ExternalInput::ExperienceDraft {
+        channel,
+        draft_id,
+        transcript,
+        note,
+    }) = fixture.input.try_recv()
+    else {
+        panic!("draft request must reach the runtime");
+    };
+    assert_eq!(draft_id, draft);
+    assert_eq!(
+        channel.thread_id.as_deref(),
+        Some(session.to_string().as_str())
+    );
+    assert_eq!(note.as_deref(), Some("记下签名"));
+    assert!(transcript.contains("[用户] hdc install 一直报 9568322"));
+    assert!(transcript.contains("[调用 shell_exec] hdc install a.hap"));
+    assert!(
+        transcript.contains("[失败 shell_exec]")
+            && transcript.contains("install failed code 9568322"),
+        "failed output tail must survive truncation: {transcript}"
+    );
+
+    // 同一草稿幂等；另起草稿在生成中被拒绝；未就绪不能保存。
+    let (status, _) = fixture
+        .request(&token, "POST", &drafts, json!({"draft_id":draft}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = fixture
+        .request(&token, "POST", &drafts, json!({"draft_id":Uuid::new_v4()}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let save = format!("{drafts}/{draft}/save");
+    let (status, _) = fixture
+        .request(&token, "POST", &save, json!({"title":"t","body":"b"}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    draft_ready(&fixture, "u", session, draft, None);
+    let (_, snapshot) = fixture
+        .request(&token, "GET", "/v1/snapshot", Value::Null)
+        .await;
+    let card = &snapshot["sessions"][0]["experience_drafts"][draft.to_string()];
+    assert_eq!(card["status"], "ready");
+    assert_eq!(card["note"], "记下签名");
+    assert_eq!(card["title"], "HAP 安装签名错误");
+
+    let (status, saved) = fixture
+        .request(
+            &token,
+            "POST",
+            &save,
+            json!({"title":"HAP 安装签名错误","body":"## 适用场景\n用户编辑后"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let id = saved["id"].as_str().unwrap().to_string();
+    let stored = library.get(&id).unwrap().unwrap();
+    assert_eq!(stored.body, "## 适用场景\n用户编辑后");
+    assert_eq!(stored.source_session, Some(session.to_string()));
+    let (_, snapshot) = fixture
+        .request(&token, "GET", "/v1/snapshot", Value::Null)
+        .await;
+    assert!(
+        snapshot["sessions"][0]["experience_drafts"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+
+    // 经验库管理
+    let (_, list) = fixture
+        .request(&token, "GET", "/v1/experiences", Value::Null)
+        .await;
+    assert_eq!(list["experiences"][0]["id"], id);
+    assert_eq!(list["experiences"][0]["scenario"], "用户编辑后");
+    let item = format!("/v1/experiences/{id}");
+    let (status, entry) = fixture.request(&token, "GET", &item, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let stale = "2000-01-01T00:00:00Z";
+    let (status, _) = fixture
+        .request(
+            &token,
+            "PUT",
+            &item,
+            json!({"title":"新标题","body":"正文","expected_updated_at":stale}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, updated) = fixture
+        .request(
+            &token,
+            "PUT",
+            &item,
+            json!({"title":"新标题","body":"正文","expected_updated_at":entry["updated_at"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(library.get(&id).unwrap().unwrap().title, "新标题");
+    let (status, _) = fixture.request(&token, "DELETE", &item, Value::Null).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = fixture.request(&token, "GET", &item, Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = fixture
+        .request(&token, "GET", "/v1/experiences/..%2Fstate", Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn experience_draft_merges_into_existing_entry_and_discard_removes_card() {
+    let (fixture, library) = with_library(Fixture::new());
+    let existing = crate::domain::ExperienceEntry::new(
+        "旧标题",
+        "## 适用场景\n旧内容",
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    library.save(&existing).unwrap();
+    let (_, token) = fixture.pair("u");
+    let session = fixture.session(&token).await;
+    seed_history(&fixture, "u", session);
+    let drafts = format!("/v1/sessions/{session}/experience-drafts");
+
+    let draft = Uuid::new_v4();
+    fixture
+        .request(&token, "POST", &drafts, json!({"draft_id":draft}))
+        .await;
+    draft_ready(&fixture, "u", session, draft, Some(existing.id.clone()));
+    let (_, snapshot) = fixture
+        .request(&token, "GET", "/v1/snapshot", Value::Null)
+        .await;
+    let card = &snapshot["sessions"][0]["experience_drafts"][draft.to_string()];
+    assert_eq!(card["merge_target"]["title"], "旧标题");
+
+    let (status, _) = fixture
+        .request(
+            &token,
+            "POST",
+            &format!("{drafts}/{draft}/save"),
+            json!({"title":"合并后","body":"## 适用场景\n新旧合并","target_id":existing.id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = library.list().unwrap();
+    assert_eq!(entries.len(), 1, "merge must not create a new entry");
+    assert_eq!(entries[0].id, existing.id);
+    assert_eq!(entries[0].created_at, existing.created_at);
+    assert_eq!(entries[0].body, "## 适用场景\n新旧合并");
+
+    let second = Uuid::new_v4();
+    fixture
+        .request(&token, "POST", &drafts, json!({"draft_id":second}))
+        .await;
+    let (status, _) = fixture
+        .request(&token, "DELETE", &format!("{drafts}/{second}"), Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, snapshot) = fixture
+        .request(&token, "GET", "/v1/snapshot", Value::Null)
+        .await;
+    assert!(
+        snapshot["sessions"][0]["experience_drafts"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+
+    // 其他用户无法对该会话发起总结。
+    let (_, other) = fixture.pair("v");
+    let (status, _) = fixture
+        .request(&other, "POST", &drafts, json!({"draft_id":Uuid::new_v4()}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

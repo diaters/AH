@@ -166,6 +166,13 @@ pub enum ExternalInput {
         command_id: Uuid,
         interaction: super::TaskInteraction,
     },
+    /// 客户端请求把会话试错过程起草为经验。
+    ExperienceDraft {
+        channel: super::ChannelId,
+        draft_id: Uuid,
+        transcript: String,
+        note: Option<String>,
+    },
     TextWithChannel {
         channel: super::ChannelId,
         content: String,

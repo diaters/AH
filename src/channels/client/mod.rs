@@ -1,4 +1,5 @@
 //! 平台无关的原生客户端入口。网络层只鉴权和同步，输入仍进入统一运行时。
+mod experience;
 mod server;
 mod store;
 #[cfg(test)]
@@ -112,6 +113,8 @@ pub struct Client {
     pub(super) store: Arc<Mutex<Store>>,
     pub(super) input: crossbeam_channel::Sender<ExternalInput>,
     pub(super) changed: watch::Sender<u64>,
+    /// 经验库；未注入时客户端不提供经验总结与管理。
+    pub(super) experience: Option<crate::contracts::SharedExperienceLibrary>,
 }
 
 impl Client {
@@ -126,7 +129,17 @@ impl Client {
             store: Arc::new(Mutex::new(store)),
             input,
             changed,
+            experience: None,
         }
+    }
+
+    /// 启用经验总结与管理（与 ECS 共享同一经验库实例）。
+    pub fn with_experience_library(
+        mut self,
+        library: crate::contracts::SharedExperienceLibrary,
+    ) -> Self {
+        self.experience = Some(library);
+        self
     }
 
     fn wake(&self) {
@@ -155,6 +168,12 @@ impl Client {
                 json!({"task_id":task_id,"call_id":call_id,"agent_name":agent_name,"tool_name":tool_name,"success":success,"output":output,"truncated":truncated,"late_result":late_result}),
             ),
             EngineEvent::AutomationSnapshot { snapshot, .. } => ("automation", snapshot.clone()),
+            EngineEvent::ExperienceDraftUpdated {
+                draft_id, outcome, ..
+            } => (
+                "experience_draft",
+                experience::draft_event(self, *draft_id, outcome),
+            ),
             EngineEvent::TaskInteractionChanged {
                 task_id,
                 revision,
