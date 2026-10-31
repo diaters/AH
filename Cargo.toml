@@ -44,7 +44,7 @@ reqwest_013 = { package = "reqwest", version = "0.13", default-features = false,
 webpki-roots = "0.26"
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 if-addrs = "0.13"
-qrcode = { version = "0.14", default-features = false }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
