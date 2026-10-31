@@ -33,11 +33,15 @@ import { ArtifactRef, ArtifactViewer, AttachmentThumb, artifactIcon, fileArtifac
   .fontSize(size).fontColor(Theme.text).fontFamily(Theme.serif).fontWeight(FontWeight.Medium)
 }
 
+interface SavedInstance { instance: string; fingerprint: string; addresses: string[]; preferred: string; name: string; }
+
 @Entry
 @Component
 struct Index {
   @State processExpanded: Record<string, boolean> = {};
   @State instance: string = '';
+  @State instances: SavedInstance[] = [];
+  @State instanceMenu: boolean = false;
   @State fingerprint: string = '';
   @State addresses: string[] = [];
   @State preferred: string = '';
@@ -95,30 +99,67 @@ struct Index {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       this.storage = preferences.getPreferencesSync(context, { name: 'harness' });
       this.loadPairing();
-      this.selected = this.storage.getSync('selected', '') as string;
-      this.draft = this.storage.getSync(`draft:${this.selected}`, '') as string;
-      this.attachments = JSON.parse(this.storage.getSync(`attachments:${this.selected}`, '[]') as string) as string[];
-      const upload = this.storage.getSync('pending-upload', '') as string;
-      if (upload) { this.pendingUpload = JSON.parse(upload) as PendingUploadDto; }
-      const saved = this.storage.getSync('pending', '') as string;
-      if (saved.length > 0) {
-        try { this.pending = JSON.parse(saved) as CommandDto; this.hasPending = true; } catch (_) { this.status = '待发送记录损坏，请检查'; }
-      }
+      this.loadLocalState();
     } catch (_) { this.status = '无法读取本地状态，请检查应用存储'; }
     if (this.paired) { this.connect(''); }
   }
   aboutToDisappear(): void { this.cancelReconnect(); this.connection.close(); }
 
-  // 配对信息只在配对成功后整体写入；重新配对失败时可回到已保存的连接。
+  // 旧版的单个配对记录作为首个实例保留，旧状态按原实例惰性读取。
   private loadPairing(): void {
-    this.instance = this.storage?.getSync('pair.instance', '') as string ?? '';
-    this.fingerprint = this.storage?.getSync('pair.fingerprint', '') as string ?? '';
-    this.preferred = this.storage?.getSync('pair.preferred', '') as string ?? '';
-    try { this.addresses = JSON.parse(this.storage?.getSync('pair.addresses', '[]') as string ?? '[]') as string[]; }
-    catch (_) { this.addresses = []; }
-    this.paired = this.instance.length > 0 && this.addresses.length > 0;
+    const legacy = this.storage?.getSync('pair.instance', '') as string ?? '';
+    try { this.instances = JSON.parse(this.storage?.getSync('instances', '[]') as string ?? '[]') as SavedInstance[]; }
+    catch (_) { this.instances = []; }
+    if (this.instances.length === 0 && legacy) {
+      let addresses: string[] = [];
+      try { addresses = JSON.parse(this.storage?.getSync('pair.addresses', '[]') as string ?? '[]') as string[]; } catch (_) {}
+      if (addresses.length > 0) {
+        this.instances = [{ instance: legacy, fingerprint: this.storage?.getSync('pair.fingerprint', '') as string ?? '',
+          addresses: addresses, preferred: this.storage?.getSync('pair.preferred', '') as string ?? '', name: '' }];
+        this.save('instances', JSON.stringify(this.instances));
+      }
+    }
+    const active = this.storage?.getSync('active-instance', legacy) as string ?? legacy;
+    const saved = this.instances.find((item: SavedInstance) => item.instance === active) ?? this.instances[0];
+    if (saved) { this.usePairing(saved); } else { this.paired = false; }
   }
-  private savedInstance(): string { try { return this.storage?.getSync('pair.instance', '') as string ?? ''; } catch (_) { return ''; } }
+  private usePairing(saved: SavedInstance): void {
+    this.instance = saved.instance; this.fingerprint = saved.fingerprint;
+    this.addresses = saved.addresses; this.preferred = saved.preferred; this.paired = true;
+  }
+  private savedInstance(): string { return this.instances.length > 0 ? this.instances[0].instance : ''; }
+  private localKey(key: string): string { return `instance:${this.instance}:${key}`; }
+  private localRead(key: string, fallback: string): string {
+    if (!this.storage) { return fallback; }
+    const missing = '__harness_missing_local_state__';
+    const value = this.storage.getSync(this.localKey(key), missing) as string;
+    if (value !== missing) { return value; }
+    const legacy = this.storage.getSync('pair.instance', '') as string;
+    return legacy === this.instance ? this.storage.getSync(key, fallback) as string : fallback;
+  }
+  private loadLocalState(): void {
+    this.selected = this.localRead('selected', '');
+    this.draft = this.localRead(`draft:${this.selected}`, '');
+    try { this.attachments = JSON.parse(this.localRead(`attachments:${this.selected}`, '[]')) as string[]; } catch (_) { this.attachments = []; }
+    this.pendingUpload = undefined; this.pending = undefined; this.hasPending = false;
+    const upload = this.localRead('pending-upload', '');
+    if (upload) { try { this.pendingUpload = JSON.parse(upload) as PendingUploadDto; } catch (_) { this.status = '待上传记录损坏，请检查'; } }
+    const pending = this.localRead('pending', '');
+    if (pending) { try { this.pending = JSON.parse(pending) as CommandDto; this.hasPending = true; } catch (_) { this.status = '待发送记录损坏，请检查'; } }
+  }
+  private resetInstanceView(): void {
+    this.sessions = []; this.files = []; this.notifications = []; this.notificationsTruncated = false; this.notificationOverflow = 0;
+    this.automation = { available: false, schedules: [], timezone: '' }; this.devices = []; this.diagnostics = undefined;
+    this.questionDrafts = {}; this.approvalFeedback = {}; this.processExpanded = {}; this.viewing = undefined;
+    this.lastCommandId = ''; this.view = 'chat'; this.resetPlan();
+  }
+  private switchInstance(saved: SavedInstance): void {
+    if (saved.instance === this.instance) { this.instanceMenu = false; return; }
+    if (this.busy || this.refreshing) { this.status = '正在同步，请稍后再切换'; return; }
+    this.cancelReconnect(); this.connection.close(); this.connected = false; this.resetInstanceView();
+    this.usePairing(saved); this.save('active-instance', saved.instance); this.loadLocalState();
+    this.instanceMenu = false; this.connect('');
+  }
   private top(): number { return this.getUIContext().px2vp(this.safeTop); }
   private bottom(): number { return this.getUIContext().px2vp(this.safeBottom); }
   // 侧栏与右侧面板的显隐统一走同一曲线，内嵌布局的宽度变化随之过渡。
@@ -142,16 +183,18 @@ struct Index {
   private save(key: string, value: string): boolean {
     try {
       if (!this.storage) { throw new Error('storage unavailable'); }
-      this.storage.putSync(key, value); this.storage.flushSync(); return true;
+      const local = key === 'selected' || key === 'pending' || key === 'pending-instance' || key === 'pending-upload' ||
+        key.startsWith('draft:') || key.startsWith('attachments:') || key.startsWith('answer:') || key.startsWith('approval:');
+      this.storage.putSync(local ? this.localKey(key) : key, value); this.storage.flushSync(); return true;
     } catch (_) { this.status = '无法保存本地状态，尚未发送新命令'; return false; }
   }
   private select(id: string): void {
     this.viewing = undefined;
     this.selected = id; this.save('selected', id); this.view = 'chat';
     if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
-    try { this.draft = this.storage?.getSync(`draft:${id}`, '') as string ?? ''; }
+    try { this.draft = this.localRead(`draft:${id}`, ''); }
     catch (_) { this.status = '无法读取草稿'; this.draft = ''; }
-    try { this.attachments = JSON.parse(this.storage?.getSync(`attachments:${id}`, '[]') as string ?? '[]') as string[]; }
+    try { this.attachments = JSON.parse(this.localRead(`attachments:${id}`, '[]')) as string[]; }
     catch (_) { this.attachments = []; }
   }
   private current(): SessionDto | undefined { return this.sessions.find((session: SessionDto) => session.id === this.selected); }
@@ -193,7 +236,7 @@ struct Index {
   private questionDraft(question: QuestionDto): string {
     const key = this.questionKey(question);
     if (this.questionDrafts[key] !== undefined) { return this.questionDrafts[key]; }
-    try { return this.storage?.getSync(key, '') as string ?? ''; } catch (_) { return ''; }
+    try { return this.localRead(key, ''); } catch (_) { return ''; }
   }
   private editAnswer(question: QuestionDto, value: string): void {
     const key = this.questionKey(question);
@@ -224,15 +267,20 @@ struct Index {
   private async pairWith(text: string): Promise<void> {
     let link: PairingLink;
     try { link = parseLink(text); } catch (error) { this.status = (error as Error).message; return; }
+    this.resetInstanceView();
     this.instance = link.instance; this.fingerprint = link.fingerprint; this.addresses = link.addresses; this.preferred = '';
+    this.loadLocalState();
     await this.connect(link.code);
     if (!this.connected) { return; }
-    this.save('pair.instance', link.instance); this.save('pair.fingerprint', link.fingerprint);
-    this.save('pair.addresses', JSON.stringify(link.addresses));
+    const saved: SavedInstance = { instance: link.instance, fingerprint: link.fingerprint, addresses: link.addresses,
+      preferred: this.preferred, name: this.connection.capabilities?.instance_name ?? '' };
+    this.instances = this.instances.filter((item: SavedInstance) => item.instance !== link.instance).concat([saved]);
+    this.save('instances', JSON.stringify(this.instances)); this.save('active-instance', link.instance);
     this.paired = true; this.linkText = ''; this.sidebarOpen = this.wide();
   }
   private unpair(): void {
-    this.cancelReconnect(); this.connection.close(); this.connected = false; this.paired = false; this.status = '';
+    if (this.busy || this.refreshing) { this.status = '正在同步，请稍后再操作'; return; }
+    this.cancelReconnect(); this.connection.close(); this.connected = false; this.paired = false; this.status = ''; this.instanceMenu = false;
   }
 
   // 依次尝试配对链接中的地址：先按指纹信任实例 CA，再核对实例身份，之后才发送设备凭证。
@@ -243,7 +291,7 @@ struct Index {
     this.connected = false;
     this.status = code ? '正在配对…' : '正在连接…';
     try {
-      if (this.hasPending && this.storage?.getSync('pending-instance', '') !== this.instance) {
+      if (this.hasPending && this.localRead('pending-instance', '') !== this.instance) {
         throw new Error('另一个实例仍有待发送命令，请先处理或清除本地重试');
       }
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -273,7 +321,12 @@ struct Index {
         if (!this.connection.credential) { throw new Error('本机没有该实例的凭证，请重新配对'); }
         await this.connection.verify();
       }
-      this.preferred = chosen; this.save('pair.preferred', chosen);
+      this.preferred = chosen;
+      const saved = this.instances.find((item: SavedInstance) => item.instance === this.instance);
+      if (saved && !code) {
+        saved.preferred = chosen; saved.name = this.connection.capabilities?.instance_name ?? saved.name;
+        this.instances = this.instances.slice(); this.save('instances', JSON.stringify(this.instances));
+      }
       const snapshot = await this.connection.snapshot();
       if (!this.foreground) { this.connection.close(); return; }
       this.applySnapshot(snapshot.sessions, snapshot.automation, snapshot.notifications, snapshot.notifications_truncated, snapshot.notification_overflow, snapshot.files);
@@ -351,9 +404,11 @@ struct Index {
   }
 
   private async queryPending(): Promise<void> {
-    if (!this.pending) { return; }
+    if (!this.pending || this.busy) { return; }
+    this.busy = true;
     try { const receipt = await this.connection.status(this.pending.command_id); this.status = `服务器命令状态：${receipt.status} ${receipt.result_code ?? ''}`; }
     catch (error) { this.status = (error as Error).message; }
+    finally { this.busy = false; }
   }
   // 新任务在首次发送时才创建会话，标题取自首行内容。
   private async send(): Promise<void> {
@@ -473,7 +528,7 @@ struct Index {
   private feedback(request: ApprovalDto): string {
     const key = `approval:${this.selected}:${request.request_id}`;
     if (this.approvalFeedback[key] !== undefined) { return this.approvalFeedback[key]; }
-    try { return this.storage?.getSync(key, '') as string ?? ''; } catch (_) { return ''; }
+    try { return this.localRead(key, ''); } catch (_) { return ''; }
   }
   private editFeedback(request: ApprovalDto, value: string): void {
     const key = `approval:${this.selected}:${request.request_id}`;
@@ -579,7 +634,7 @@ struct Index {
         if (this.busy) { LoadingProgress().width(28).height(28).color(Theme.accent) }
         if (this.status) { Text(this.status).fontSize(13).fontColor(Theme.secondary).textAlign(TextAlign.Center) }
         if (this.savedInstance()) {
-          Button('返回已保存的连接').ghost().enabled(!this.busy).onClick(() => { this.loadPairing(); if (this.paired) { this.connect(''); } })
+          Button('返回已保存的连接').ghost().enabled(!this.busy).onClick(() => { this.loadPairing(); this.resetInstanceView(); this.loadLocalState(); if (this.paired) { this.connect(''); } })
         }
         Text('凭证保存在系统安全存储；实例证书按链接中的指纹校验后才被信任。').caption().textAlign(TextAlign.Center).margin({ top: 12 })
       }.width('100%').constraintSize({ maxWidth: 440 }).padding({ left: 28, right: 28, top: 80 + this.top(), bottom: 40 + this.bottom() })
@@ -603,12 +658,35 @@ struct Index {
         Button() { SymbolGlyph($r('sys.symbol.close_sidebar')).fontSize(20).fontColor([Theme.secondary]) }
           .icon().onClick(() => { this.setSidebar(false); })
       }.width('100%').margin({ top: 8, bottom: 20 })
+      Row({ space: 8 }) {
+        Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
+        Text(this.instances.find((item: SavedInstance) => item.instance === this.instance)?.name || this.instance.substring(0, 8))
+          .fontSize(14).fontColor(Theme.text).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([Theme.secondary])
+      }.width('100%').height(44).padding({ left: 14, right: 14 }).borderRadius(10).backgroundColor(Theme.surface)
+        .onClick(() => { this.instanceMenu = !this.instanceMenu; })
+      if (this.instanceMenu) {
+        Column({ space: 2 }) {
+          ForEach(this.instances, (item: SavedInstance) => {
+            Row() {
+              Column({ space: 2 }) {
+                Text(item.name || '实例').fontSize(14).fontColor(Theme.text).maxLines(1)
+                Text(item.instance.substring(0, 8)).caption()
+              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+              if (item.instance === this.instance) { Text('当前').caption() }
+            }.width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
+              .onClick(() => { this.switchInstance(item); })
+          }, (item: SavedInstance) => item.instance)
+          Text('+ 添加实例').fontSize(14).fontColor(Theme.accent).width('100%').padding({ left: 14, top: 10, bottom: 10 })
+            .onClick(() => { this.unpair(); })
+        }.width('100%').backgroundColor(Theme.surface).borderRadius(10).margin({ top: 4 })
+      }
       Button() {
         Row({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.plus')).fontSize(16).fontColor([Theme.text])
           Text('新任务').fontSize(15).fontColor(Theme.text)
         }
-      }.ghost().height(44).width('100%').border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
+      }.ghost().height(44).width('100%').margin({ top: 10 }).border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
       Column({ space: 4 }) {
         this.navItem($r('sys.symbol.house'), '工作台', 'chat', this.approvals().length + this.questions().length)
         this.navItem($r('sys.symbol.clock'), '自动化', 'automation', 0)
