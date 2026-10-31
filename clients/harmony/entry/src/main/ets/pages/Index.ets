@@ -7,6 +7,7 @@ import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
 import { Theme } from '../common/Theme';
+import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
 import { ArtifactRef, ArtifactViewer, AttachmentThumb, artifactIcon, fileArtifact, linkArtifacts } from '../components/ArtifactViewer';
 
@@ -35,6 +36,7 @@ import { ArtifactRef, ArtifactViewer, AttachmentThumb, artifactIcon, fileArtifac
 @Entry
 @Component
 struct Index {
+  @State processExpanded: Record<string, boolean> = {};
   @State instance: string = '';
   @State fingerprint: string = '';
   @State addresses: string[] = [];
@@ -290,6 +292,18 @@ struct Index {
   }
   private applySnapshot(sessions: SessionDto[], automation: AutomationDto | undefined, notifications: NotificationDto[] | undefined,
     truncated: boolean | undefined, overflow: number | undefined, files: ClientFileDto[] | undefined): void {
+    // 新回复到达时收起过程，即使用户此前曾手动展开运行中的过程。
+    const previous = this.sessions.find((session: SessionDto) => session.id === this.selected);
+    const updated = sessions.find((session: SessionDto) => session.id === this.selected);
+    if (previous && updated) {
+      const oldRows = conversationRows(previous);
+      const next: Record<string, boolean> = {};
+      for (const key of Object.keys(this.processExpanded)) { next[key] = this.processExpanded[key]; }
+      for (const row of conversationRows(updated)) {
+        if (row.complete && oldRows.some((old: ConversationRow) => old.key === row.key && !old.complete)) { next[row.key] = false; }
+      }
+      this.processExpanded = next;
+    }
     this.sessions = sessions;
     this.automation = automation ?? { available: false, schedules: [], timezone: '' };
     this.notifications = notifications ?? []; this.notificationsTruncated = truncated ?? false; this.notificationOverflow = overflow ?? 0;
@@ -696,7 +710,10 @@ struct Index {
             if (message.content !== '[附件]' || this.messageFiles(message).length === 0) {
               Text(message.content).fontSize(15).lineHeight(26).fontColor(Theme.text).copyOption(CopyOptions.LocalDevice).width('100%')
             }
-          } else { MarkdownView({ source: message.content }) }
+          } else {
+            if (message.phase === 'response') { Text('回复').caption() }
+            MarkdownView({ source: message.content })
+          }
           this.messageAttachments(message)
         }.layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ top: 3 })
       }.width('100%').alignItems(VerticalAlign.Top)
@@ -708,6 +725,40 @@ struct Index {
         this.messageAttachments(message)
       }.width('100%').padding({ left: 46 }).alignItems(HorizontalAlign.Start)
     }
+  }
+  private isProcessExpanded(row: ConversationRow): boolean {
+    return this.processExpanded[row.key] ?? !row.complete;
+  }
+  @Builder private process(row: ConversationRow) {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        Text(this.isProcessExpanded(row) ? '⌄' : '›').fontSize(18).fontColor(Theme.secondary)
+        Text(row.complete ? '执行过程' : '正在执行').fontSize(13).fontColor(Theme.secondary).fontWeight(FontWeight.Medium)
+        Text(`${row.entries?.length ?? 0} 条记录`).caption()
+      }.width('100%').onClick(() => {
+        const next: Record<string, boolean> = {};
+        for (const key of Object.keys(this.processExpanded)) { next[key] = this.processExpanded[key]; }
+        next[row.key] = !this.isProcessExpanded(row);
+        this.processExpanded = next;
+      })
+      if (this.isProcessExpanded(row)) {
+        ForEach(row.entries ?? [], (entry: ProcessEntry) => {
+          if (entry.message) {
+            Column() { MarkdownView({ source: entry.message.content }) }
+              .width('100%').alignItems(HorizontalAlign.Start)
+          } else if (entry.observation) {
+            Column({ space: 4 }) {
+              Text(`${entry.observation.agent_name} · ${entry.observation.tool_name} · ${entry.observation.kind === 'tool_started' ? '调用' : entry.observation.success ? '完成' : '失败'}`)
+                .fontSize(13).fontColor(Theme.secondary)
+              if (entry.observation.input_summary) { Text(entry.observation.input_summary).fontSize(12).fontColor(Theme.secondary).copyOption(CopyOptions.LocalDevice) }
+              if (entry.observation.output) { Text(entry.observation.output).fontSize(12).fontColor(Theme.secondary).fontFamily('monospace').copyOption(CopyOptions.LocalDevice) }
+              if (entry.observation.truncated) { Text('输出已截断').caption() }
+              if (entry.observation.late_result) { Text('任务结束后的返回').caption() }
+            }.width('100%').alignItems(HorizontalAlign.Start)
+          }
+        }, (entry: ProcessEntry) => `${entry.sequence}`)
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ left: 46 })
   }
   @Builder private planStep(todo: TodoDto, index: number, last: boolean) {
     Row({ space: 16 }) {
@@ -806,7 +857,11 @@ struct Index {
           else {
             Text(this.current()?.title ?? '').heading(28).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').margin({ top: 4 })
             if (this.current()?.history_truncated) { Text('更早的消息已超出保留范围').caption() }
-            ForEach(this.current()?.messages ?? [], (message: MessageDto) => { this.message(message) })
+            if (this.current()?.observations_truncated) { Text('更早的执行记录已超出保留范围').caption() }
+            ForEach(this.current() ? conversationRows(this.current() as SessionDto) : [], (row: ConversationRow) => {
+              if (row.message) { this.message(row.message) }
+              else { this.process(row) }
+            }, (row: ConversationRow) => `${row.key}:${row.complete}:${row.entries?.length ?? 0}`)
             if (this.todos().length > 0) {
               Column({ space: 14 }) {
                 Divider().color(Theme.line)

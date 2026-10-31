@@ -823,3 +823,54 @@ async fn managed_ca_is_fetched_by_fingerprint_then_verifies_tls() {
     assert_eq!(identity["protocol_version"], 1);
     server.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn conversation_records_progress_tools_and_response_in_order() {
+    let f = Fixture::new();
+    let (_, token) = f.pair("alice");
+    let session_id = f.session(&token).await;
+    let task_id = crate::domain::TaskId::new();
+    let target = EventTarget::Directed(vec![crate::domain::ChannelId {
+        frontend: FrontendKind::Client,
+        user_id: "alice".into(),
+        thread_id: Some(session_id.to_string()),
+    }]);
+    f.client.push_event(EngineEvent::AgentOutput {
+        target: target.clone(),
+        task_id,
+        content: "checking".into(),
+        progress: true,
+    });
+    f.client.push_event(EngineEvent::ToolCallStarted {
+        target: target.clone(),
+        task_id,
+        agent_name: "agent".into(),
+        tool_name: "shell".into(),
+        tool_input_summary: "ls".into(),
+    });
+    f.client.push_event(EngineEvent::ToolCallCompleted {
+        target: target.clone(),
+        task_id,
+        call_id: Some("call".into()),
+        agent_name: "agent".into(),
+        tool_name: "shell".into(),
+        success: true,
+        output: "ok".into(),
+        truncated: false,
+        late_result: false,
+    });
+    f.client.push_event(EngineEvent::AgentOutput {
+        target,
+        task_id,
+        content: "answer".into(),
+        progress: false,
+    });
+    let (_, snapshot) = f.request(&token, "GET", "/v1/snapshot", Value::Null).await;
+    let session = &snapshot["sessions"][0];
+    assert_eq!(session["messages"][0]["phase"], "progress");
+    assert_eq!(session["messages"][1]["phase"], "response");
+    let sequence = |value: &Value| value["sequence"].as_u64().unwrap();
+    assert!(sequence(&session["messages"][0]) < sequence(&session["observations"][0]));
+    assert!(sequence(&session["observations"][0]) < sequence(&session["observations"][1]));
+    assert!(sequence(&session["observations"][1]) < sequence(&session["messages"][1]));
+}
