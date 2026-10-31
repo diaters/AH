@@ -139,9 +139,7 @@ fn main() -> Result<()> {
     }
 
     // 启动期配置校验：agents.toml 损坏或重名时立即退出，而非运行期 panic
-    harness::infrastructure::incubation::agent_registry::validate_agent_config(
-        &config.agents_config_path,
-    )?;
+    harness::infrastructure::agents_config::validate_agent_config(&config.agents_config_path)?;
 
     // 加载 providers.toml 或从环境变量构建
     let executor_registry = if std::path::Path::new(&config.providers_config_path).exists() {

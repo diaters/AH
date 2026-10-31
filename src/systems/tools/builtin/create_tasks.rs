@@ -162,15 +162,11 @@ fn detect_cycle(definitions: &[SubTaskDefinition]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
+    use crate::domain::BuiltinTool;
 
     #[test]
     fn executor_create_tasks() {
-        let knowledge = SharedKnowledgeBase::default();
-        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
-            knowledge: &knowledge,
-            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -180,7 +176,6 @@ mod tests {
             current_task_id: crate::domain::TaskId::nil(),
             current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
-            current_skill_dir: None,
         };
         let executor = CreateTasksTool;
         let input = serde_json::json!({

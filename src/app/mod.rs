@@ -9,8 +9,8 @@ use crate::{
     contracts::{AsyncRuntime, Clock, FrontendRegistry},
     domain::{
         AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
-        Frontend, PendingKnowledgeWriteHooks, RetryReadyMessage, SharedKnowledgeBase, Signal, Task,
-        TaskTerminatedMessage, ToolCallingState, UserInputMessage, UserOutputMessage,
+        Frontend, RetryReadyMessage, Signal, Task, TaskTerminatedMessage, ToolCallingState,
+        UserInputMessage, UserOutputMessage,
     },
     llm::ExecutorRegistry,
     plugins::DefaultRuntimePluginGroup,
@@ -82,16 +82,8 @@ pub fn build_harness_app(
         std::sync::Arc::new(crate::infrastructure::experience::FileExperienceLibrary::default()),
     ));
 
-    // Space Resources
-    app.insert_resource(SharedKnowledgeBase::default());
-    app.insert_resource(PendingKnowledgeWriteHooks::default());
-
-    // Skill 加载器与注册表：由 brain_dispatch / experience_governance 等 system 通过 Res 读取。
-    // build_registry 扫描 .harness/assets/agents/<owner>/skills/<name>/SKILL.md 构造 SkillRegistry。
-    let skill_loader = crate::infrastructure::skills::SkillLoader::default_path();
-    let skill_registry = skill_loader.build_registry();
-    app.insert_resource(skill_loader);
-    app.insert_resource(skill_registry);
+    // Skill 加载器：派发时扫描 .harness/assets/agents/<agent>/skills/<name>/SKILL.md 注入系统提示。
+    app.insert_resource(crate::infrastructure::skills::SkillLoader::default_path());
 
     // Signal 触发路由（默认空，由 main.rs 根据 triggers.toml 配置覆盖）
     app.insert_resource(crate::domain::SignalTriggerRegistry::default());
@@ -138,9 +130,7 @@ pub fn build_harness_app(
         .resource_mut::<crate::systems::MonitorDeliveries>()
         .set_wake(wake);
 
-    // agent_factory_system 在 HarnessSet::Maintenance 中运行，
-    // agent_termination_system 和 experience_collection_cleanup_system
-    // 由 ExecutionPlugin 在 HarnessSet::Execution 和 HarnessSet::Maintenance 中注册。
+    // agent_factory_system 在 HarnessSet::Maintenance 中运行。
     // validate_required_tags_system 通过 Local<bool> 保证仅运行一次，扫描启动期
     // 已加载的持久化 Agent 与工具 required_tag 的匹配关系（O7）。
     app.add_systems(

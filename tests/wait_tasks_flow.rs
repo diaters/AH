@@ -3,9 +3,8 @@
 use harness::prelude::*;
 use harness::{
     domain::Agent, domain::AgentCapabilities, domain::AgentId, domain::AgentKind,
-    domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId, domain::ExperienceStore,
-    domain::FrontendKind, domain::SharedKnowledgeBase, domain::ToolContext,
-    domain::WaitingForTasksInfo, systems::HarnessConfig,
+    domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId, domain::FrontendKind,
+    domain::ToolContext, domain::WaitingForTasksInfo, systems::HarnessConfig,
 };
 
 #[allow(dead_code)]
@@ -54,8 +53,6 @@ fn test_wait_tasks_tool_parsing() {
     });
 
     let _ctx = ToolContext {
-        knowledge: &SharedKnowledgeBase::default(),
-        experience_store: &ExperienceStore::default(),
         default_wait_tasks_timeout_secs: 300,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,
@@ -65,7 +62,6 @@ fn test_wait_tasks_tool_parsing() {
         current_task_id: harness::domain::TaskId::new(),
         current_agent_id: AgentId::new(),
         current_origin_channel: None,
-        current_skill_dir: None,
     };
 
     // This test will need the WaitTasksTool to be accessible

@@ -9,14 +9,13 @@ use tracing::{debug, info, warn};
 use crate::contracts::{FrontendRegistry, SharedExperienceLibrary};
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentId,
-    AgentKind, AgentRequestKind, DispatchHint, DispatchKind, DispatchStrategy, EngineEvent,
-    EventTarget, ExperienceDraftOrigin, ExperienceDraftReadyMessage, ExperienceDraftRequest,
-    ExperienceEntry, ExperienceLookupOrigin, ExperienceLookupRequest, FrontendKind,
-    InboxDeliveryMessage, InboxItem, NO_MATCHING_EXPERIENCE, OutputContent, PendingDispatch,
-    ScheduledRun, SystemOutputMessage, Task, TaskId, TaskStatus, ToolError,
-    ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem, WorkItemType,
-    build_draft_prompt, build_lookup_prompt, librarian_index, parse_draft, parse_lookup_decision,
-    rank_by_overlap, render_lookup_result,
+    AgentKind, AgentRequestKind, DispatchHint, DispatchKind, EngineEvent, EventTarget,
+    ExperienceDraftOrigin, ExperienceDraftReadyMessage, ExperienceDraftRequest, ExperienceEntry,
+    ExperienceLookupOrigin, ExperienceLookupRequest, FrontendKind, InboxDeliveryMessage, InboxItem,
+    NO_MATCHING_EXPERIENCE, OutputContent, PendingDispatch, ScheduledRun, SystemOutputMessage,
+    Task, TaskId, TaskStatus, ToolError, ToolExecutionResultMessage, ToolReturnedHookPending,
+    WaitingReason, WorkItem, WorkItemType, build_draft_prompt, build_lookup_prompt,
+    librarian_index, parse_draft, parse_lookup_decision, rank_by_overlap, render_lookup_result,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -56,12 +55,7 @@ fn spawn_librarian_work_item(
         origin,
         PendingDispatch {
             kind: DispatchKind::WorkItem(work_type),
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
+            hint: DispatchHint::default(),
         },
     ));
     id

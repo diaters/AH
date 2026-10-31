@@ -11,9 +11,9 @@ use tracing::{debug, info};
 
 use crate::{
     domain::{
-        CreateTaskMessage, DispatchHint, DispatchKind, DispatchStrategy, EntryMetadata, EntryRole,
-        HookPoint, NewlyCreatedTask, PendingDispatch, ScheduledRun, ShortTermMemory, Task,
-        TaskInitiator, TrustedImages,
+        CreateTaskMessage, DispatchHint, DispatchKind, EntryMetadata, EntryRole, HookPoint,
+        NewlyCreatedTask, PendingDispatch, ScheduledRun, ShortTermMemory, Task, TaskInitiator,
+        TrustedImages,
     },
     systems::HarnessSettings,
     user_plugins::{
@@ -25,7 +25,6 @@ use crate::{
             approval::ApprovalContext,
             entity_query::WorldSnapshot,
             entity_write::{WorldCommand, WorldWriter},
-            experience::ExperienceContext,
             message::MessageContext,
             plugin_resource::PluginRoots,
             skills_meta::SkillsSnapshot,
@@ -182,12 +181,7 @@ pub fn user_message_to_task_system(
             NewlyCreatedTask,
             PendingDispatch {
                 kind: DispatchKind::Task,
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::BrainLlm,
-                    preferred_agent_name: None,
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::main_agent(),
             },
         );
         if let Some(channel) = &message.origin_channel {
@@ -260,35 +254,25 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
         world,
         registry,
         writer_tx: writer_tx.clone(),
-        ctx_builder: Box::new(
-            |plugin: &crate::user_plugins::registry::LoadedPlugin, world: &mut World| {
-                let local_outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
-                PluginContext {
-                    snapshot: snap.clone(),
-                    writer: WorldWriter::new(writer_tx.clone()),
-                    outcome: local_outcome,
-                    plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
-                    approval: ApprovalContext {
-                        current_request_id: None,
-                    },
-                    experience: ExperienceContext {
-                        store: Arc::new(
-                            world
-                                .get_resource::<crate::domain::ExperienceStore>()
-                                .cloned()
-                                .unwrap_or_default(),
-                        ),
-                    },
-                    skills: SkillsSnapshot::empty(),
-                    message: MessageContext {
-                        plugin_id: plugin.manifest.id.clone(),
-                        tx: message_tx.clone(),
-                    },
-                    temp_resource: TempResourceSlot::new(),
-                    tool: ToolCallContext::default(),
-                }
-            },
-        ),
+        ctx_builder: Box::new(|plugin: &crate::user_plugins::registry::LoadedPlugin| {
+            let local_outcome: SharedHookOutcome = Arc::new(Mutex::new(HookOutcome::default()));
+            PluginContext {
+                snapshot: snap.clone(),
+                writer: WorldWriter::new(writer_tx.clone()),
+                outcome: local_outcome,
+                plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
+                approval: ApprovalContext {
+                    current_request_id: None,
+                },
+                skills: SkillsSnapshot::empty(),
+                message: MessageContext {
+                    plugin_id: plugin.manifest.id.clone(),
+                    tx: message_tx.clone(),
+                },
+                temp_resource: TempResourceSlot::new(),
+                tool: ToolCallContext::default(),
+            }
+        }),
     };
 
     let _ = dispatch_hook(input);

@@ -68,10 +68,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::systems::BrainConfig {
-            enabled: true,
-            fallback_agent: None,
-        }),
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -96,35 +93,6 @@ fn test_config() -> HarnessConfig {
 
 /// Helper function to spawn a default agent for tests
 fn spawn_default_agent(app: &mut App) {
-    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    let brain_id = harness::domain::AgentId::new();
-    let brain_entity = app
-        .world_mut()
-        .spawn((
-            Agent {
-                id: brain_id,
-                profile: AgentProfile {
-                    name: "brain".to_string(),
-                    model: "gpt-4.1-mini".to_string(),
-                },
-                capabilities: AgentCapabilities {
-                    tags: vec!["brain".to_string()],
-                    description: "Brain Agent".to_string(),
-                },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
-                tool_permissions: AgentToolPermissions::default(),
-                system_prompt: None,
-            },
-            LongTermMemory::default(),
-        ))
-        .id();
-    app.world_mut()
-        .resource_mut::<harness::ecs::EntityIndex>()
-        .agents
-        .insert(brain_id, brain_entity);
-
     let default_id = harness::domain::AgentId::new();
     let default_entity = app
         .world_mut()

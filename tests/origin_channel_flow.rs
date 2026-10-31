@@ -20,7 +20,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,

@@ -243,21 +243,17 @@ fn wait_timeout_runs_without_new_inputs() {
 }
 
 #[test]
-fn delayed_brain_and_llm_results_complete_without_polling() {
+fn delayed_llm_results_complete_without_polling() {
     use harness::domain::{
-        AgentExecutionOutput, AgentExecutionRequest, AgentRequestKind, ChannelId, EngineEvent,
-        ExecutorFuture, Frontend, FrontendKind, OutputContent, UserAction,
+        AgentExecutionOutput, AgentExecutionRequest, ChannelId, EngineEvent, ExecutorFuture,
+        Frontend, FrontendKind, OutputContent, UserAction,
     };
     struct Delayed;
     impl AgentExecutor for Delayed {
-        fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
+        fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(20)).await;
-                let text = if request.request_kind == AgentRequestKind::BrainDecision {
-                    common::mock_executor::DEFAULT_BRAIN_DECISION_JSON
-                } else {
-                    "demand-complete"
-                };
+                let text = "demand-complete";
                 Ok(AgentExecutionOutput {
                     content: OutputContent::Text(text.into()),
                     reasoning_content: None,
@@ -287,13 +283,6 @@ fn delayed_brain_and_llm_results_complete_without_polling() {
         .resource_mut::<harness::systems::HarnessSettings>()
         .0
         .agents_config_path = "tests/fixtures/test_agents.toml".into();
-    app.world_mut()
-        .resource_mut::<harness::systems::HarnessSettings>()
-        .0
-        .brain = Some(harness::systems::BrainConfig {
-        enabled: true,
-        fallback_agent: None,
-    });
     let memory_dir = tempfile::tempdir().unwrap();
     app.insert_resource(harness::infrastructure::memory::LongTermMemoryService::new(
         harness::infrastructure::memory::MemoryRepository::new(Box::new(

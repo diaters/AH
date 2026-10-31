@@ -52,8 +52,6 @@ fn schedule_task_execute_is_async_only_defense() {
     let result = ScheduleTaskTool.execute(
         &serde_json::json!({}),
         &harness::domain::ToolContext {
-            knowledge: Box::leak(Box::new(harness::domain::SharedKnowledgeBase::default())),
-            experience_store: Box::leak(Box::new(harness::domain::ExperienceStore::default())),
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -63,7 +61,6 @@ fn schedule_task_execute_is_async_only_defense() {
             current_task_id: harness::domain::TaskId::new(),
             current_agent_id: harness::domain::AgentId::new(),
             current_origin_channel: None,
-            current_skill_dir: None,
         },
     );
     assert!(matches!(result, Err(ToolError::InternalState(_))));

@@ -20,7 +20,6 @@ use crate::user_plugins::host_api::{
     approval::ApprovalContext,
     entity_query::WorldSnapshot,
     entity_write::{WorldCommand, WorldWriter},
-    experience::ExperienceContext,
     message::MessageContext,
     plugin_resource::PluginRoots,
     skills_meta::SkillsSnapshot,
@@ -112,36 +111,26 @@ fn dispatch_terminal_hook(
         world,
         registry,
         writer_tx: writer_tx.clone(),
-        ctx_builder: Box::new(
-            |plugin: &crate::user_plugins::registry::LoadedPlugin, world: &mut World| {
-                let local_outcome: SharedHookOutcome =
-                    std::sync::Arc::new(std::sync::Mutex::new(HookOutcome::default()));
-                PluginContext {
-                    snapshot: snap.clone(),
-                    writer: WorldWriter::new(writer_tx.clone()),
-                    outcome: local_outcome,
-                    plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
-                    approval: ApprovalContext {
-                        current_request_id: None,
-                    },
-                    experience: ExperienceContext {
-                        store: std::sync::Arc::new(
-                            world
-                                .get_resource::<crate::domain::ExperienceStore>()
-                                .cloned()
-                                .unwrap_or_default(),
-                        ),
-                    },
-                    skills: SkillsSnapshot::empty(),
-                    message: MessageContext {
-                        plugin_id: plugin.manifest.id.clone(),
-                        tx: message_tx.clone(),
-                    },
-                    temp_resource: TempResourceSlot::new(),
-                    tool: ToolCallContext::default(),
-                }
-            },
-        ),
+        ctx_builder: Box::new(|plugin: &crate::user_plugins::registry::LoadedPlugin| {
+            let local_outcome: SharedHookOutcome =
+                std::sync::Arc::new(std::sync::Mutex::new(HookOutcome::default()));
+            PluginContext {
+                snapshot: snap.clone(),
+                writer: WorldWriter::new(writer_tx.clone()),
+                outcome: local_outcome,
+                plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
+                approval: ApprovalContext {
+                    current_request_id: None,
+                },
+                skills: SkillsSnapshot::empty(),
+                message: MessageContext {
+                    plugin_id: plugin.manifest.id.clone(),
+                    tx: message_tx.clone(),
+                },
+                temp_resource: TempResourceSlot::new(),
+                tool: ToolCallContext::default(),
+            }
+        }),
     };
 
     let _ = dispatch_hook(input);

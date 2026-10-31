@@ -7,11 +7,11 @@ use crate::prelude::*;
 use crate::systems::{
     HarnessSet, clear_task_system, command_parse_system, continue_task_system, finish_task_system,
     frontend_input_system, frontend_output_system, input_ingress_system,
-    on_message_received_hook_system, on_shared_knowledge_write_hook_system,
-    on_task_created_hook_system, once_schedule_completion_system, reload_plugins_system,
-    reload_triggers_message_consumer_system, retry_wakeup_system, schedule_catch_up_startup_system,
-    schedule_persist_system, signal_ingest_system, tick_clock_system, trigger_task_routing_system,
-    user_input_routing_system, user_message_to_task_system,
+    on_message_received_hook_system, on_task_created_hook_system, once_schedule_completion_system,
+    reload_plugins_system, reload_triggers_message_consumer_system, retry_wakeup_system,
+    schedule_catch_up_startup_system, schedule_persist_system, signal_ingest_system,
+    tick_clock_system, trigger_task_routing_system, user_input_routing_system,
+    user_message_to_task_system,
 };
 
 /// 前端 Plugin
@@ -93,10 +93,6 @@ impl Plugin for FrontendPlugin {
                     .after(command_parse_system),
                 // /reload-triggers 伴生系统（消费 ReloadTriggersMessage）
                 reload_triggers_message_consumer_system
-                    .in_set(HarnessSet::Transform)
-                    .after(command_parse_system),
-                // on_shared_knowledge_write 观察 hook companion 系统
-                on_shared_knowledge_write_hook_system
                     .in_set(HarnessSet::Transform)
                     .after(command_parse_system),
                 // 任务完成

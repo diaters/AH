@@ -2,7 +2,7 @@ mod common;
 
 use std::{sync::Arc, time::Duration};
 
-use common::mock_executor::BrainAwareEchoExecutor;
+use common::mock_executor::FixedTextExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app,
@@ -14,7 +14,7 @@ use harness::{
     },
     ecs::EntityIndex,
     llm::ExecutorRegistry,
-    systems::{BrainConfig, HarnessConfig},
+    systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use wiremock::matchers::{body_string_contains, method, path};
@@ -26,48 +26,10 @@ fn extract_short_id_from_text(text: &str) -> Option<String> {
     Some(text[start..end].to_string())
 }
 
-/// 生成启用 Brain 的测试配置（auto_channel_reply 测试需要走 BrainLlm 派发路径）。
-fn brain_enabled_config() -> HarnessConfig {
-    HarnessConfig {
-        brain: Some(BrainConfig {
-            enabled: true,
-            fallback_agent: None,
-        }),
-        ..Default::default()
-    }
-}
-
-/// Spawn Brain Agent 与 default-llm-agent（auto_channel_reply 测试需要两者）。
+/// Spawn default-llm-agent（主 Agent）。
 ///
-/// 同时写入 `EntityIndex.agents`，确保 `dispatch_system` 能经 index O(1) 解析
-/// brain_agent_id → Entity（ADR-005 §3 阶段 2 要求）。
-fn spawn_brain_and_default_agent(app: &mut bevy_app::App) {
-    let brain_agent = Agent {
-        id: harness::domain::AgentId::new(),
-        profile: AgentProfile {
-            name: "brain".to_string(),
-            model: "gpt-4.1-mini".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["brain".to_string()],
-            description: "Brain Agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions::default(),
-        system_prompt: None,
-    };
-    let brain_id = brain_agent.id;
-    let brain_entity = app
-        .world_mut()
-        .spawn((brain_agent, harness::domain::LongTermMemory::default()))
-        .id();
-    app.world_mut()
-        .resource_mut::<EntityIndex>()
-        .agents
-        .insert(brain_id, brain_entity);
-
+/// 同时写入 `EntityIndex.agents`，模拟 `spawn_agent` 封装的索引维护。
+fn spawn_default_agent(app: &mut bevy_app::App) {
     let default_agent = Agent {
         id: harness::domain::AgentId::new(),
         profile: AgentProfile {
@@ -133,9 +95,9 @@ fn auto_channel_reply() {
 
         let config = HarnessConfig {
             agents_config_path: "/nonexistent_agents.toml".to_string(),
-            ..brain_enabled_config()
+            ..Default::default()
         };
-        let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo reply"));
+        let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo reply"));
         let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(
@@ -150,8 +112,8 @@ fn auto_channel_reply() {
         // 初始化 Startup 系统
         app.update();
 
-        // 手动 spawn Brain + default-llm-agent（因为 agents.toml 不存在）
-        spawn_brain_and_default_agent(&mut app);
+        // 手动 spawn default-llm-agent（因为 agents.toml 不存在）
+        spawn_default_agent(&mut app);
 
         // 注入一条来自 Telegram 的入向消息
         let origin = ChannelId {
@@ -214,9 +176,9 @@ fn scheduled_tasks_share_output_channel_with_different_short_ids() {
 
         let config = HarnessConfig {
             agents_config_path: "/nonexistent_agents.toml".to_string(),
-            ..brain_enabled_config()
+            ..Default::default()
         };
-        let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo reply"));
+        let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo reply"));
         let executor_registry = ExecutorRegistry::from_single_executor(executor, "openai");
 
         let mut app = build_harness_app(
@@ -230,8 +192,8 @@ fn scheduled_tasks_share_output_channel_with_different_short_ids() {
 
         app.update();
 
-        // 手动 spawn Brain + default-llm-agent（因为 agents.toml 不存在）
-        spawn_brain_and_default_agent(&mut app);
+        // 手动 spawn default-llm-agent（因为 agents.toml 不存在）
+        spawn_default_agent(&mut app);
 
         let origin = ChannelId {
             frontend: FrontendKind::Telegram,

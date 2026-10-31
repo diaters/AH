@@ -7,9 +7,9 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::AgentExecutionOutput, domain::AgentExecutionRequest,
-    domain::AgentExecutor, domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy,
-    domain::ExecutorFuture, domain::PendingDispatch, domain::WorkItem, domain::WorkItemStatus,
-    domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::AgentExecutor, domain::DispatchHint, domain::DispatchKind, domain::ExecutorFuture,
+    domain::PendingDispatch, domain::WorkItem, domain::WorkItemStatus, domain::WorkItemType,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -40,7 +40,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "tests/fixtures/test_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -90,12 +90,7 @@ fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
         work_item,
         PendingDispatch {
             kind: DispatchKind::WorkItem(WorkItemType::Evaluation),
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
+            hint: DispatchHint::default(),
         },
     ));
 
@@ -153,12 +148,7 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
         work_item,
         PendingDispatch {
             kind: DispatchKind::WorkItem(WorkItemType::Summarization),
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
+            hint: DispatchHint::default(),
         },
     ));
 
@@ -214,12 +204,7 @@ fn workitem_without_matching_agent_is_marked_failed() {
         work_item,
         PendingDispatch {
             kind: DispatchKind::WorkItem(WorkItemType::Execution),
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
+            hint: DispatchHint::default(),
         },
     ));
 
@@ -248,139 +233,5 @@ fn workitem_without_matching_agent_is_marked_failed() {
         states[0].status(),
         WorkItemStatus::Failed,
         "Work item should be marked Failed when no matching agent"
-    );
-}
-
-/// Test: Pending ExperienceCollection WorkItem is dispatched to collector agent
-#[test]
-fn pending_experience_collection_workitem_is_dispatched_to_collector() {
-    let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor_registry,
-        input_rx,
-        vec![],
-        harness::channels::ChannelManager::empty().0,
-    );
-
-    app.update();
-
-    let task_id = harness::domain::TaskId::new();
-    let tool = harness::domain::ToolDefinition {
-        name: "submit_experience_candidate".to_string(),
-        description: "submit".to_string(),
-        parameters: harness::domain::ToolSchema::default(),
-        default_permission: harness::domain::ToolPermission::Allow,
-        executor: harness::domain::ToolExecutorKind::Builtin(
-            "submit_experience_candidate".to_string(),
-        ),
-        required_tag: None,
-    };
-    let work_item = WorkItem::experience_collection(
-        task_id,
-        "collect experience".to_string(),
-        None,
-        vec![],
-        vec![tool],
-        harness::domain::AgentId::new(),
-    );
-    let work_item_id = work_item.id;
-    app.world_mut().spawn((
-        work_item,
-        PendingDispatch {
-            kind: DispatchKind::WorkItem(WorkItemType::ExperienceCollection),
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
-        },
-    ));
-
-    app.update();
-
-    let states: Vec<_> = app
-        .world_mut()
-        .query::<&WorkItem>()
-        .iter(app.world())
-        .collect();
-    assert_eq!(states.len(), 1);
-    assert_eq!(states[0].status(), WorkItemStatus::Running);
-    assert_eq!(states[0].id, work_item_id);
-    assert!(states[0].assigned_agent().is_some());
-}
-
-/// Test: ExperienceCollection WorkItem without collector agent is marked Failed
-#[test]
-fn experience_collection_workitem_without_collector_is_failed() {
-    let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let (_input_tx, input_rx) = unbounded();
-    let mut cfg = test_config();
-    cfg.agents_config_path = "/nonexistent_agents.toml".to_string();
-    let mut app = build_harness_app(
-        cfg,
-        runtime,
-        executor_registry,
-        input_rx,
-        vec![],
-        harness::channels::ChannelManager::empty().0,
-    );
-
-    app.update();
-
-    let task_id = harness::domain::TaskId::new();
-    let tool = harness::domain::ToolDefinition {
-        name: "submit_experience_candidate".to_string(),
-        description: "submit".to_string(),
-        parameters: harness::domain::ToolSchema::default(),
-        default_permission: harness::domain::ToolPermission::Allow,
-        executor: harness::domain::ToolExecutorKind::Builtin(
-            "submit_experience_candidate".to_string(),
-        ),
-        required_tag: None,
-    };
-    let work_item = WorkItem::experience_collection(
-        task_id,
-        "collect experience".to_string(),
-        None,
-        vec![],
-        vec![tool],
-        harness::domain::AgentId::new(),
-    );
-    app.world_mut().spawn((
-        work_item,
-        PendingDispatch {
-            kind: DispatchKind::WorkItem(WorkItemType::ExperienceCollection),
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: None,
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
-        },
-    ));
-
-    for _ in 0..5 {
-        app.update();
-        thread::sleep(Duration::from_millis(20));
-    }
-
-    let states: Vec<_> = app
-        .world_mut()
-        .query::<&WorkItem>()
-        .iter(app.world())
-        .collect();
-    assert_eq!(states.len(), 1);
-    assert_eq!(
-        states[0].status(),
-        WorkItemStatus::Failed,
-        "ExperienceCollection WorkItem should be Failed when no collector agent"
     );
 }

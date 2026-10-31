@@ -24,7 +24,7 @@ pub struct SubTaskDefinition {
     pub model: Option<String>,
 }
 
-/// 附加在每个子 Task 实体上，供 Brain 和调度系统读取
+/// 附加在每个子 Task 实体上，供调度系统读取
 #[derive(Debug, Clone, Component)]
 pub struct SubTaskConfig {
     pub batch_id: Uuid,
@@ -35,7 +35,7 @@ pub struct SubTaskConfig {
     pub parent_agent_id: AgentId,
     /// 本任务依赖的其他子任务 name 列表（在 batch 内）
     pub depends_on: Vec<String>,
-    /// 依赖本任务完成的子任务 name 列表（反向索引，Brain 用）
+    /// 依赖本任务完成的子任务 name 列表（反向索引）
     pub depended_by: Vec<String>,
 }
 
@@ -64,7 +64,7 @@ pub struct BatchTaskStatus {
 pub enum BatchTaskState {
     /// 等待依赖满足
     Pending,
-    /// 已分发给 Brain/Agent
+    /// 已分发给 Agent
     Dispatched,
     /// Agent 正在执行
     Running,

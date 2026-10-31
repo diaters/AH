@@ -9,15 +9,13 @@ use crate::{
     contracts::{Clock, FrontendRegistry},
     domain::{
         Agent, BuiltinToolExecutors, ChatSession, ConfirmationOption, EngineEvent, EventTarget,
-        ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks, PermissionAction,
-        PermissionAuditContext, PermissionSource, ProfileGenerationContext, RuntimeGrants,
-        SharedKnowledgeBase, ShortTermMemory, SkillCreationContext, SkillUpdateContext, Task,
-        TaskId, TaskInitiator, TaskStatus, ToolActionKind, ToolCallingState,
-        ToolConfirmationResponseMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
+        ExecutionError, GrantMode, PermissionAction, PermissionAuditContext, PermissionSource,
+        RuntimeGrants, ShortTermMemory, Task, TaskId, TaskInitiator, TaskStatus, ToolActionKind,
+        ToolCallingState, ToolConfirmationResponseMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+        WaitingReason,
     },
     ecs::EntityIndex,
-    infrastructure::skills::SkillLoader,
     systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
@@ -62,44 +60,30 @@ pub fn tool_confirmation_result_system(
     agents: Query<&mut Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
-    knowledge: Res<SharedKnowledgeBase>,
-    mut experience_store: ResMut<ExperienceStore>,
-    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     mut short_term_memories: Query<&mut ShortTermMemory>,
     chat_sessions: Query<&ChatSession>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     responses: Query<(Entity, &ToolConfirmationResponseMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
-    // 合并 ProfileGenerationContext 与 SkillUpdateContext 查询为单个 SystemParam，
-    // 规避 Bevy 单 system 16 参数上限；两者都是与 WorkItem 同 entity 的 Component，
-    // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
-    context_queries: Query<(
-        Entity,
-        Option<&ProfileGenerationContext>,
-        Option<&SkillUpdateContext>,
-        Option<&SkillCreationContext>,
-        &WorkItem,
-    )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
+    // 合并 index / clock / frontend_registry 等为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock 转发给 handle_tool_action；
     // frontend_registry 用于在用户确认路径推送 ToolCallStarted 事件。
     // runtime_grants 记录"本会话允许"授权（按 Agent × 工具 × 会话）。
-    mut index_clock_loader_frontends: (
+    mut index_clock_frontends: (
         ResMut<EntityIndex>,
         Res<Clock>,
-        Res<SkillLoader>,
         Res<FrontendRegistry>,
         Option<ResMut<RuntimeGrants>>,
         Query<&TaskInitiator>,
     ),
 ) {
-    let index = &mut index_clock_loader_frontends.0;
-    let clock = &index_clock_loader_frontends.1;
-    let frontend_registry = &index_clock_loader_frontends.3;
-    let runtime_grants = &mut index_clock_loader_frontends.4;
-    let initiators = &index_clock_loader_frontends.5;
+    let index = &mut index_clock_frontends.0;
+    let clock = &index_clock_frontends.1;
+    let frontend_registry = &index_clock_frontends.2;
+    let runtime_grants = &mut index_clock_frontends.3;
+    let initiators = &index_clock_frontends.4;
     let mut resolved_requests = std::collections::HashSet::new();
     for (entity, response) in &responses {
         // 查找对应的 Tool 执行请求（通过 pending_confirmation_id 关联）
@@ -107,40 +91,14 @@ pub fn tool_confirmation_result_system(
             .iter()
             .find(|(_, r)| r.pending_confirmation_id == Some(response.request_id))
         else {
-            // 经验治理与孵化审批不属于 ToolExecutionRequestMessage，留给专用 system 处理。
-            // 检查是否有对应的经验候选审批绑定，有则跳过（不报 NoMatch）。
-            let is_experience_approval = experience_store
-                .candidate_id_for_request(response.request_id)
-                .is_some();
-            if !is_experience_approval {
-                warn!(
-                    event = "ToolConfirmationNoMatch",
-                    request_id = %response.request_id,
-                    "no matching tool request found"
-                );
-            }
+            warn!(
+                event = "ToolConfirmationNoMatch",
+                request_id = %response.request_id,
+                "no matching tool request found"
+            );
             commands.entity(entity).despawn();
             continue;
         };
-
-        // experience_governance / profile_generation 特判：
-        // 销毁执行占位实体，不执行工具，不销毁响应。
-        // 这两种工具的审批由 experience_approval_result_system 统一处理
-        // （通过 store.bind_approval_request 绑定 candidate_id）。
-        if tool_request.tool_name == "experience_governance"
-            || tool_request.tool_name == "profile_generation"
-        {
-            debug!(
-                event = "ConfirmationHandledByDedicatedSystem",
-                request_id = %response.request_id,
-                tool_name = %tool_request.tool_name,
-                "{} confirmation handled by dedicated system",
-                tool_request.tool_name,
-            );
-            commands.entity(request_entity).despawn();
-            // 不 despawn response entity，留给 experience_approval_result_system
-            continue;
-        }
 
         // Commands 延迟销毁请求；同帧重复回复不能再次执行工具或重复结算。
         if !resolved_requests.insert(response.request_id) {
@@ -427,8 +385,6 @@ pub fn tool_confirmation_result_system(
                 }
 
                 let ctx = ToolContext {
-                    knowledge: &knowledge,
-                    experience_store: &experience_store,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
@@ -443,7 +399,6 @@ pub fn tool_confirmation_result_system(
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
-                    current_skill_dir: None,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
@@ -464,18 +419,12 @@ pub fn tool_confirmation_result_system(
                             agents: &agents,
                             chat_sessions: &chat_sessions,
                             short_term_memories: &mut short_term_memories,
-                            context_queries: &context_queries,
-                            calling_states: &calling_states,
                         },
                         &mut ToolResources {
                             backend: &*backend,
-                            experience_store: &mut experience_store,
-                            pending_experience_hooks: &mut pending_experience_hooks,
-                            skill_loader: &index_clock_loader_frontends.2,
                             frontend_registry,
-                            clock: &index_clock_loader_frontends.1,
+                            clock: &index_clock_frontends.1,
                         },
-                        None,
                         &mut *index,
                     );
                 }
@@ -569,13 +518,7 @@ mod tests {
         world.insert_resource(Clock(Utc::now()));
         world.insert_resource(NativeProcessBackend::default());
         world.insert_resource(crate::domain::BuiltinToolExecutors::default());
-        world.insert_resource(crate::domain::SharedKnowledgeBase::default());
-        world.insert_resource(crate::domain::ExperienceStore::default());
-        world.insert_resource(crate::domain::PendingExperienceHooks::default());
         world.insert_resource(crate::ecs::EntityIndex::default());
-        world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
-            std::path::PathBuf::from("/nonexistent_skills_root"),
-        ));
         world.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         world
     }
@@ -638,7 +581,6 @@ mod tests {
             pending_confirmation_id: Some(request_id),
             tool_call_id: None,
             pending_confirmation_options: Some(ConfirmationOption::default_options()),
-            work_item_entity: None,
             confirmed_once: false,
         }
     }

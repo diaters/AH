@@ -37,14 +37,10 @@ impl crate::domain::BuiltinTool for SearchExperienceTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
+    use crate::domain::BuiltinTool;
 
-    fn ctx() -> ToolContext<'static> {
-        static KNOWLEDGE: std::sync::OnceLock<SharedKnowledgeBase> = std::sync::OnceLock::new();
-        static STORE: std::sync::OnceLock<ExperienceStore> = std::sync::OnceLock::new();
+    fn ctx() -> ToolContext {
         ToolContext {
-            knowledge: KNOWLEDGE.get_or_init(SharedKnowledgeBase::default),
-            experience_store: STORE.get_or_init(ExperienceStore::default),
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -54,7 +50,6 @@ mod tests {
             current_task_id: crate::domain::TaskId::new(),
             current_agent_id: crate::domain::AgentId::new(),
             current_origin_channel: None,
-            current_skill_dir: None,
         }
     }
 

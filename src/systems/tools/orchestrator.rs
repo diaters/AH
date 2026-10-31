@@ -5,21 +5,19 @@
 //! # 流水线协议约定（单一权威）
 //!
 //! - **sync 路径边界**：`handle_tool_action`（sync 路径）只处理会话型/任务编排/
-//!   提交类 `ToolAction`。`shell_exec` 与 `list_experience_candidates` 等已上桥
+//!   提交类 `ToolAction`。`shell_exec` 等已上桥
 //!   async worker（kind==Async）；`Direct` / `ExecSession` 是退役动作，sync 路径
 //!   误用即报错（见 [`handle_retired_action`]），防止静默构造结果消息绕过异步桥
 //!   的 hook 与通道单点落地。
 //! - **InFlightToolCall claim 语义**：摘除 `InFlightToolCall` 后，cancel sweeper
 //!   不再扫该实体（防重复发 error）。
 //! - **工具结果落地 + 请求 despawn 协议**：结果消息统一经 `spawn_tool_error` /
-//!   `spawn_shell_result` / `spawn_tool_success` 构造并 spawn
-//!   （`ToolExecutionResultMessage` + `ToolReturnedHookPending`）；`request_entity`
-//!   由各 handler 负责 despawn——`spawn_tool_error` / `spawn_shell_result` 内部
-//!   已含 despawn，`spawn_tool_success` 不含、由调用方收尾时 despawn。
+//!   `spawn_shell_result` 构造并 spawn（`ToolExecutionResultMessage` +
+//!   `ToolReturnedHookPending`），二者内部已含 `request_entity` despawn。
 
 use crate::prelude::*;
 use serde::Serialize;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::contracts::{Clock, FrontendRegistry};
@@ -28,18 +26,14 @@ use crate::domain::SessionBackend;
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, AskUserPending,
     BatchTaskState, ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind,
-    DispatchStrategy, EngineEvent, EntryRole, EventTarget, ExperienceCandidate,
-    ExperienceCandidatePayload, ExperienceCandidateSubmission, ExperienceKindHint, ExperienceStore,
-    FrontendKind, MessageRole, OutputContent, PendingDispatch, PendingExperienceHooks,
-    ProfileGenerationContext, SessionHandleId, SessionInputRequest, SessionReadRequest,
-    SessionStartRequest, SessionSummary, ShellSessionResult, ShortTermMemory, SkillCreationContext,
-    SkillUpdateContext, SubTaskBatchCreatedMessage, SubTaskBatchState, SubTaskConfig,
-    SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState, ToolError,
-    ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-    WaitingForTasksInfo, WaitingReason, WorkItem,
+    EngineEvent, EntryRole, EventTarget, FrontendKind, MessageRole, OutputContent, PendingDispatch,
+    SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest, SessionSummary,
+    ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
+    SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
+    ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+    WaitingForTasksInfo, WaitingReason,
 };
 use crate::ecs::EntityIndex;
-use crate::infrastructure::skills::{SkillLoader, apply_skill_operations};
 
 /// 清除任务上正在等待的工具确认 ID。
 pub fn clear_task_pending_confirmation_id(
@@ -135,9 +129,8 @@ pub fn spawn_create_tasks_messages(
             depended_by,
         };
 
-        // 同步注册 EntityIndex：brain_decision_system 等经索引 O(1) 查找任务。
-        // 若不注册，子任务的 Brain 决策结果会被 brain_decision_system 静默丢弃，
-        // 子任务永久卡在 Waiting(Agent)。与 spawn_task 封装保持同样的索引一致性。
+        // 同步注册 EntityIndex：各 system 经索引 O(1) 查找任务，
+        // 与 spawn_task 封装保持同样的索引一致性。
         let child_entity = commands
             .spawn((child_task, sub_task_config, ShortTermMemory::default()))
             .id();
@@ -173,7 +166,7 @@ pub fn spawn_create_tasks_messages(
         total_count,
     });
 
-    // 产出 SubTaskBatchCreatedMessage（触发父 Task 阻塞 + Brain 分发）
+    // 产出 SubTaskBatchCreatedMessage（触发父 Task 阻塞 + 子任务派发）
     commands.spawn(SubTaskBatchCreatedMessage {
         parent_task_id: task_id,
         batch_id,
@@ -382,18 +375,6 @@ pub fn spawn_wait_result_message(
     ));
 }
 
-/// context_queries 的 QueryData：ProfileGeneration / SkillUpdate / SkillCreation
-/// 三种 WorkItem 附着上下文 + WorkItem 本体。三者都是与 WorkItem 同 entity 的
-/// Component，任一 WorkItem entity 至多只有其中之一，通过 `Option<&...>` 在单
-/// SystemParam 中表达"存在与否"，避免触发 Bevy 16 参数上限。
-pub(crate) type WorkItemContexts<'p, 'u, 'c, 'w> = (
-    Entity,
-    Option<&'p ProfileGenerationContext>,
-    Option<&'u SkillUpdateContext>,
-    Option<&'c SkillCreationContext>,
-    &'w WorkItem,
-);
-
 /// `handle_tool_action` 的 ECS 查询组：各工具分支共用的 World 检索句柄。
 ///
 /// 生命周期约定：`Query` 对 `'world`/`'state`/`D` 均 invariant，无法靠子类型
@@ -401,52 +382,18 @@ pub(crate) type WorkItemContexts<'p, 'u, 'c, 'w> = (
 /// 的生命周期相互独立，因此全部独立声明、由调用处推断各自匹配：
 /// - `'a`：本 struct 对各 Query 的借用期，覆盖一次 `handle_tool_action` 调用即可；
 /// - `('wt,'st,'dt)` / `('wa,'sa,'da)` / ...：tasks / agents / ... 各自的三元组；
-/// - `('dx1..'dx4)`：context_queries 元组内各组件引用的独立标记。
-pub(crate) struct ToolWorldQueries<
-    'a,
-    'wt,
-    'st,
-    'dt,
-    'wa,
-    'sa,
-    'da,
-    'wc,
-    'sc,
-    'dc,
-    'wm,
-    'sm,
-    'dm,
-    'wx,
-    'sx,
-    'dx1,
-    'dx2,
-    'dx3,
-    'dx4,
-    'wl,
-    'sl,
-    'dl,
-> {
+pub(crate) struct ToolWorldQueries<'a, 'wt, 'st, 'dt, 'wa, 'sa, 'da, 'wc, 'sc, 'dc, 'wm, 'sm, 'dm> {
     pub(crate) tasks: &'a mut Query<'wt, 'st, (Entity, &'dt mut Task)>,
     /// 调用方 system 持有 `Query<&mut Agent>`（approval 路径需 `get_mut`），
     /// 此处按可变引用透传，各分支内仅只读使用。
     pub(crate) agents: &'a Query<'wa, 'sa, &'da mut Agent>,
     pub(crate) chat_sessions: &'a Query<'wc, 'sc, &'dc ChatSession>,
     pub(crate) short_term_memories: &'a mut Query<'wm, 'sm, &'dm mut ShortTermMemory>,
-    /// 见 [`WorkItemContexts`]。
-    pub(crate) context_queries: &'a Query<'wx, 'sx, WorkItemContexts<'dx1, 'dx2, 'dx3, 'dx4>>,
-    /// ToolCallingState 查询：用于在 ProfileGeneration 收尾路径
-    /// （SubmitProfileUpdate / SkipProfileUpdate）despawn 关联 State，
-    /// 阻止 tool_calling_orchestrator_system 触发 follow-up LLM 请求。
-    /// 按 (task_id, work_item_id) 严格匹配，与 find_calling_state 语义一致。
-    pub(crate) calling_states: &'a Query<'wl, 'sl, (Entity, &'dl ToolCallingState)>,
 }
 
 /// `handle_tool_action` 的资源句柄组：工具落地所需的全局资源。
 pub(crate) struct ToolResources<'a, B: SessionBackend> {
     pub(crate) backend: &'a B,
-    pub(crate) experience_store: &'a mut ExperienceStore,
-    pub(crate) pending_experience_hooks: &'a mut PendingExperienceHooks,
-    pub(crate) skill_loader: &'a SkillLoader,
     /// ask_user 需要把问题推送到 task 的 output_channel 对应前端。
     pub(crate) frontend_registry: &'a FrontendRegistry,
     pub(crate) clock: &'a Clock,
@@ -468,32 +415,8 @@ pub fn handle_tool_action<B: SessionBackend>(
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
     action: Result<ToolAction, ToolError>,
-    world: &mut ToolWorldQueries<
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-    >,
+    world: &mut ToolWorldQueries<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_>,
     resources: &mut ToolResources<'_, B>,
-    parent_agent_id: Option<AgentId>,
     index: &mut EntityIndex,
 ) {
     match action {
@@ -571,18 +494,6 @@ pub fn handle_tool_action<B: SessionBackend>(
             });
             commands.entity(request_entity).despawn();
         }
-        Ok(ToolAction::SubmitExperienceCandidate(submission)) => {
-            handle_submit_experience_candidate(
-                commands,
-                request_entity,
-                request,
-                world.tasks,
-                resources.experience_store,
-                resources.pending_experience_hooks,
-                parent_agent_id,
-                submission,
-            );
-        }
         Ok(ToolAction::SendChannelMessage {
             channel,
             target,
@@ -618,57 +529,6 @@ pub fn handle_tool_action<B: SessionBackend>(
                 message,
                 context,
                 handle,
-            );
-        }
-        Ok(ToolAction::SubmitProfileUpdate {
-            name,
-            tags,
-            description,
-        }) => {
-            handle_submit_profile_update(
-                commands,
-                request_entity,
-                request,
-                world.context_queries,
-                world.calling_states,
-                name,
-                tags,
-                description,
-            );
-        }
-        Ok(ToolAction::SkipProfileUpdate) => {
-            handle_skip_profile_update(
-                commands,
-                request_entity,
-                request,
-                world.context_queries,
-                world.calling_states,
-            );
-        }
-        Ok(ToolAction::SubmitSkillUpdate {
-            operations,
-            rationale,
-        }) => {
-            handle_submit_skill_update(
-                commands,
-                request_entity,
-                request,
-                world.context_queries,
-                resources.skill_loader,
-                operations,
-                rationale,
-            );
-        }
-        Ok(ToolAction::SubmitSkillCandidate { name, description }) => {
-            handle_submit_skill_candidate(
-                commands,
-                request_entity,
-                request,
-                world.context_queries,
-                resources.experience_store,
-                resources.pending_experience_hooks,
-                name,
-                description,
             );
         }
         Ok(ToolAction::AskUser { question }) => {
@@ -1030,50 +890,6 @@ fn handle_stop_session<B: SessionBackend>(
     }
 }
 
-/// SubmitExperienceCandidate 分支：按父任务有无写入父层 inbox 或 root 候选，
-/// 并推入待派发 hook 队列。
-#[allow(clippy::too_many_arguments)]
-fn handle_submit_experience_candidate(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    tasks: &Query<(Entity, &mut Task)>,
-    experience_store: &mut ExperienceStore,
-    pending_experience_hooks: &mut PendingExperienceHooks,
-    parent_agent_id: Option<AgentId>,
-    submission: ExperienceCandidateSubmission,
-) {
-    let candidate = submission_to_candidate(
-        &submission,
-        request.request.agent_id,
-        request.request.task_id,
-    );
-
-    // 判断当前任务是否有父任务：有则写入父层 inbox，无则作为顶层 root 候选。
-    let parent_task_id = tasks
-        .iter()
-        .find(|(_, t)| t.id == request.request.task_id)
-        .and_then(|(_, t)| t.parent_task_id);
-
-    match parent_task_id {
-        Some(pid) => {
-            let owner_agent_id = parent_agent_id.unwrap_or(request.request.agent_id);
-            experience_store.queue_for_parent(pid, owner_agent_id, candidate.clone());
-        }
-        None => {
-            experience_store.stage_root_candidate(candidate.clone());
-        }
-    }
-
-    // 推入待派发队列，由 companion 系统触发 on_experience_candidate_submitted hook。
-    pending_experience_hooks.0.push((
-        crate::domain::HookPoint::OnExperienceCandidateSubmitted,
-        candidate.candidate_id,
-    ));
-
-    spawn_experience_candidate_result(commands, request_entity, request, &candidate);
-}
-
 /// SendChannelMessage 分支：只 spawn PendingChannelSend，由通道系统异步落地。
 fn handle_send_channel_message(
     commands: &mut Commands,
@@ -1105,30 +921,7 @@ fn handle_start_chat_round(
     request_entity: Entity,
     task_entity: Entity,
     request: &ToolExecutionRequestMessage,
-    world: &mut ToolWorldQueries<
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-    >,
+    world: &mut ToolWorldQueries<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_>,
     clock: &Clock,
     agent_name: Option<String>,
     agent_tags: Vec<String>,
@@ -1211,30 +1004,7 @@ fn continue_chat_round(
     commands: &mut Commands,
     request_entity: Entity,
     request: &ToolExecutionRequestMessage,
-    world: &mut ToolWorldQueries<
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-    >,
+    world: &mut ToolWorldQueries<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_>,
     clock: &Clock,
     handle: TaskId,
     message: &str,
@@ -1303,12 +1073,7 @@ fn continue_chat_round(
     // 附加 PendingDispatch，由 dispatch_system 处理 DirectDelegate 派发
     commands.entity(child_entity).insert(PendingDispatch {
         kind: DispatchKind::Task,
-        hint: DispatchHint {
-            strategy: DispatchStrategy::DirectDelegate,
-            preferred_agent_name: Some(child_agent_name),
-            required_skill_id: None,
-            agent_spawn_spec: None,
-        },
+        hint: DispatchHint::agent(child_agent_name),
     });
 
     // 唤醒子任务
@@ -1328,30 +1093,7 @@ fn start_new_chat(
     commands: &mut Commands,
     request_entity: Entity,
     request: &ToolExecutionRequestMessage,
-    world: &ToolWorldQueries<
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-        '_,
-    >,
+    world: &ToolWorldQueries<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_, '_>,
     agent_name: Option<String>,
     agent_tags: Vec<String>,
     message: String,
@@ -1431,717 +1173,11 @@ fn start_new_chat(
         },
         PendingDispatch {
             kind: DispatchKind::Task,
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: Some(agent.profile.name.clone()),
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
+            hint: DispatchHint::agent(agent.profile.name.clone()),
         },
     ));
 
     Some((child_task_id, batch_id))
-}
-
-/// 构造并 spawn 工具成功结果（AgentExecutionResult + ToolExecutionResultMessage +
-/// ToolReturnedHookPending）。
-///
-/// 提交类工具（SubmitProfileUpdate / SkipProfileUpdate / SubmitSkillUpdate /
-/// SubmitSkillCandidate）共用的落地模式。不负责 despawn `request_entity`，
-/// 由各 handler 在完成收尾后自行 despawn（见模块级 rustdoc 协议约定）。
-fn spawn_tool_success(
-    commands: &mut Commands,
-    request: &ToolExecutionRequestMessage,
-    tool_name: &str,
-    text_content: String,
-    output_json: serde_json::Value,
-) {
-    let execution_result = AgentExecutionResult {
-        task_id: request.request.task_id,
-        agent_id: request.request.agent_id,
-        request_kind: request.request.request_kind.clone(),
-        result: Ok(AgentExecutionOutput {
-            content: OutputContent::Text(text_content),
-            reasoning_content: None,
-        }),
-        prompt: String::new(),
-        system_prompt: None,
-        tools: vec![],
-        reasoning_content: None,
-        work_item_id: None,
-        conversation: None,
-        turn_generation: None,
-    };
-
-    commands.spawn((
-        ToolExecutionResultMessage {
-            result: execution_result,
-            tool_name: tool_name.to_string(),
-            tool_output: Ok(output_json),
-            tool_call_id: request.tool_call_id.clone(),
-            processed: false,
-            original_tool_output: None,
-        },
-        ToolReturnedHookPending,
-    ));
-}
-
-/// despawn 指定 `(task_id, work_item_id)` 的全部 ToolCallingState。
-///
-/// ProfileGeneration 收尾（SubmitProfileUpdate / SkipProfileUpdate）使用：
-/// profile 已提交进入审批，LLM 对话语义上结束，State 应随之消亡，
-/// 阻止 tool_calling_orchestrator_system 触发 follow-up LLM 请求。
-/// 按 (task_id, work_item_id) 严格匹配，与 find_calling_state 语义一致。
-fn despawn_calling_states_for(
-    commands: &mut Commands,
-    calling_states: &Query<(Entity, &ToolCallingState)>,
-    task_id: TaskId,
-    work_item_id: Option<Uuid>,
-    reason: &str,
-) {
-    for (cs_entity, cs) in calling_states.iter() {
-        if cs.task_id == task_id && cs.work_item_id == work_item_id {
-            commands.entity(cs_entity).despawn();
-            debug!(
-                event = "ToolCallingStateDespawned",
-                task_id = %task_id,
-                work_item_id = ?work_item_id,
-                reason = reason,
-                "despawned ToolCallingState to prevent follow-up LLM loop"
-            );
-        }
-    }
-}
-
-/// SubmitProfileUpdate 分支：重置 ProfileGenerationContext 异常计数、
-/// spawn ProfileGenerationCompletedMessage、落地工具结果并 despawn 关联 State。
-#[allow(clippy::too_many_arguments)]
-fn handle_submit_profile_update(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    context_queries: &Query<WorkItemContexts>,
-    calling_states: &Query<(Entity, &ToolCallingState)>,
-    name: String,
-    tags: Vec<String>,
-    description: String,
-) {
-    // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
-    // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
-    let mut resolved_kind = crate::domain::ProfileGenerationKind::Incubation;
-    if let Some((wi_entity, Some(ctx), _, _, _wi)) = context_queries
-        .iter()
-        .find(|(_, prof, _, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
-    {
-        resolved_kind = ctx.kind.clone();
-        // 重置 exception_count：clone + modify + insert（不可变 Query + Commands 写回）
-        let mut new_ctx = ctx.clone();
-        new_ctx.exception_count = 0;
-        commands.entity(wi_entity).insert(new_ctx);
-    }
-
-    // spawn ProfileGenerationCompletedMessage 供 profile_generation_completion_system 消费
-    commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
-        task_id: request.request.task_id,
-        agent_id: request.request.agent_id,
-        generated_profile: Some(crate::domain::GeneratedProfile {
-            name: name.clone(),
-            tags: tags.clone(),
-            description: description.clone(),
-        }),
-        kind: resolved_kind.clone(),
-    });
-
-    // 返回工具执行结果给 LLM
-    let output = serde_json::json!({
-        "status": "submitted",
-        "name": name,
-        "tags": tags,
-        "description": description,
-    });
-
-    spawn_tool_success(
-        commands,
-        request,
-        "submit_profile_update",
-        format!("profile submitted: {}", name),
-        output,
-    );
-
-    // ProfileGeneration 收尾：despawn 关联的 ToolCallingState，
-    // 阻止 tool_calling_orchestrator_system 触发 follow-up LLM 请求。
-    despawn_calling_states_for(
-        commands,
-        calling_states,
-        request.request.task_id,
-        request.request.work_item_id,
-        "profile_generation_submit_completed",
-    );
-
-    debug!(
-        event = "ProfileUpdateSubmitted",
-        task_id = %request.request.task_id,
-        agent_id = %request.request.agent_id,
-        kind = ?resolved_kind,
-        "profile update submitted by LLM"
-    );
-
-    commands.entity(request_entity).despawn();
-}
-
-/// SkipProfileUpdate 分支：与 SubmitProfileUpdate 对称，spawn skip 版
-/// ProfileGenerationCompletedMessage 并 despawn 关联 State。
-fn handle_skip_profile_update(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    context_queries: &Query<WorkItemContexts>,
-    calling_states: &Query<(Entity, &ToolCallingState)>,
-) {
-    // 通过 Query 查找匹配 task_id 的 ProfileGenerationContext Component
-    // （与 WorkItem 同 Entity）。LLM 成功调用工具，异常计数归 0。
-    let mut resolved_kind = crate::domain::ProfileGenerationKind::Update;
-    if let Some((wi_entity, Some(ctx), _, _, _wi)) = context_queries
-        .iter()
-        .find(|(_, prof, _, _, wi)| prof.is_some() && wi.task_id == request.request.task_id)
-    {
-        resolved_kind = ctx.kind.clone();
-        let mut new_ctx = ctx.clone();
-        new_ctx.exception_count = 0;
-        commands.entity(wi_entity).insert(new_ctx);
-    }
-
-    // spawn ProfileGenerationCompletedMessage（None 表示 skip）
-    commands.spawn(crate::domain::ProfileGenerationCompletedMessage {
-        task_id: request.request.task_id,
-        agent_id: request.request.agent_id,
-        generated_profile: None,
-        kind: resolved_kind.clone(),
-    });
-
-    let output = serde_json::json!({"status": "skipped"});
-
-    spawn_tool_success(
-        commands,
-        request,
-        "skip_profile_update",
-        "profile update skipped".to_string(),
-        output,
-    );
-
-    // ProfileGeneration 收尾（与 SubmitProfileUpdate 分支对称）：
-    // despawn 关联的 ToolCallingState，阻止 follow-up LLM 请求。
-    despawn_calling_states_for(
-        commands,
-        calling_states,
-        request.request.task_id,
-        request.request.work_item_id,
-        "profile_generation_skip_completed",
-    );
-
-    debug!(
-        event = "ProfileUpdateSkipped",
-        task_id = %request.request.task_id,
-        agent_id = %request.request.agent_id,
-        kind = ?resolved_kind,
-        "profile update skipped by LLM"
-    );
-
-    commands.entity(request_entity).despawn();
-}
-
-/// SubmitSkillUpdate 分支：经 [`resolve_skill_update_context`] 校验后，
-/// 将 SkillUpdateCompletedMessage insert 到 WorkItem entity 并落地工具结果。
-///
-/// skill_id / base_version / new_version 由 orchestrator 从
-/// SkillUpdateContext 服务端权威注入，避免 LLM 臆造 skill_id。
-///
-/// work_item_id（Uuid）仍需要保留：用于 SkillUpdateCompletedMessage.work_item_id
-/// 字段与日志关联。work_item_entity（Entity）则用于 O(1) 直接查询 context。
-fn handle_submit_skill_update(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    context_queries: &Query<WorkItemContexts>,
-    skill_loader: &SkillLoader,
-    operations: Vec<crate::domain::SkillUpdateOperation>,
-    rationale: String,
-) {
-    let Some((work_item_id, work_item_entity, skill_id, base_version, new_version)) =
-        resolve_skill_update_context(
-            commands,
-            request_entity,
-            request,
-            context_queries,
-            skill_loader,
-            &operations,
-        )
-    else {
-        return;
-    };
-
-    // dry-run 通过，将 SkillUpdateCompletedMessage insert 到 WorkItem entity 上
-    // （而非 spawn 独立 entity），让 skill_update_completion_system 通过同 entity 的
-    // Component 查询直接拿到 SkillUpdateContext，避免用 work_item_id 反查。
-    // work_item_entity 已在前面校验为 Some（None 路径已 early return）。
-    let completed_message = crate::domain::SkillUpdateCompletedMessage {
-        work_item_id,
-        task_id: request.request.task_id,
-        agent_id: request.request.agent_id,
-        skill_id: skill_id.clone(),
-        base_version,
-        new_version,
-        operations: operations.clone(),
-        rationale: rationale.clone(),
-    };
-    commands.entity(work_item_entity).insert(completed_message);
-
-    // 返回工具执行结果给 LLM
-    let output = serde_json::json!({
-        "status": "submitted",
-        "skill_id": skill_id.as_string(),
-        "base_version": base_version,
-        "new_version": new_version,
-        "operations_count": operations.len(),
-        "rationale": rationale,
-    });
-
-    spawn_tool_success(
-        commands,
-        request,
-        "submit_skill_update",
-        format!(
-            "skill update submitted: {} (v{} -> v{})",
-            skill_id.as_string(),
-            base_version,
-            new_version
-        ),
-        output,
-    );
-
-    debug!(
-        event = "SkillUpdateSubmitted",
-        task_id = %request.request.task_id,
-        agent_id = %request.request.agent_id,
-        skill_id = %skill_id.as_string(),
-        base_version,
-        new_version,
-        operations_count = operations.len(),
-        "skill update submitted by LLM"
-    );
-
-    commands.entity(request_entity).despawn();
-}
-
-/// 解析并校验 submit_skill_update 的执行上下文与 operations dry-run。
-///
-/// 覆盖三层校验（work_item_id / work_item_entity / SkillUpdateContext）与
-/// dry-run（提前 apply 一次 operations 到当前 SKILL.md）；任一失败即
-/// `spawn_tool_error` 落地错误并返回 `None`。成功返回
-/// `(work_item_id, work_item_entity, skill_id, base_version, new_version)`。
-fn resolve_skill_update_context(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    context_queries: &Query<WorkItemContexts>,
-    skill_loader: &SkillLoader,
-    operations: &[crate::domain::SkillUpdateOperation],
-) -> Option<(Uuid, Entity, crate::domain::SkillId, u32, u32)> {
-    let work_item_id = match request.request.work_item_id {
-        Some(id) => id,
-        None => {
-            warn!(
-                event = "SkillUpdateMissingWorkItemId",
-                task_id = %request.request.task_id,
-                agent_id = %request.request.agent_id,
-                "submit_skill_update missing work_item_id, rejecting"
-            );
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::InternalState(
-                    "work_item_id missing for submit_skill_update".to_string(),
-                ),
-            );
-            return None;
-        }
-    };
-
-    // [重要-1] 修复：work_item_entity 为 None 是不可达路径。
-    // 前置条件：llm_response.rs 中 work_item_entity 是基于同一 WorkItem query 设置的，
-    // 反查 work_item_id 成功意味着 work_item_entity 也应为 Some。
-    // 原实现为 warn + spawn 独立 entity，但独立 entity 没有 SkillUpdateContext，
-    // 会被 completion_system 的 fallback 路径 despawn，形成"fallback 必然失败"链。
-    // 改为 error! + 直接拒绝，与其他错误路径风格一致，避免伪精细控制面。
-    let work_item_entity = match request.work_item_entity {
-        Some(e) => e,
-        None => {
-            error!(
-                event = "SkillUpdateMissingWorkItemEntity",
-                task_id = %request.request.task_id,
-                agent_id = %request.request.agent_id,
-                work_item_id = %work_item_id,
-                "work_item_entity is None despite context lookup succeeded; \
-                 rejecting submit_skill_update"
-            );
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::InternalState(
-                    "work_item_entity missing for submit_skill_update \
-                     (framework state inconsistency)"
-                        .to_string(),
-                ),
-            );
-            return None;
-        }
-    };
-
-    // [重要-2] 修复：用 work_item_entity 做 O(1) 直接查询，替代 O(n) Uuid 反查。
-    // 三层错误分支覆盖所有失败情况，每条路径都 spawn_tool_error 直接拒绝。
-    let Some((_, _, context_opt, _, _)) = context_queries.get(work_item_entity).ok() else {
-        warn!(
-            event = "SkillUpdateWorkItemNotInContextQueries",
-            task_id = %request.request.task_id,
-            agent_id = %request.request.agent_id,
-            work_item_id = %work_item_id,
-            work_item_entity = ?work_item_entity,
-            "WorkItem entity not found in context_queries, rejecting submit_skill_update"
-        );
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InternalState(format!(
-                "WorkItem entity {:?} not in context_queries for work_item_id={}",
-                work_item_entity, work_item_id
-            )),
-        );
-        return None;
-    };
-
-    let Some(context) = context_opt else {
-        warn!(
-            event = "SkillUpdateContextNotFound",
-            task_id = %request.request.task_id,
-            agent_id = %request.request.agent_id,
-            work_item_id = %work_item_id,
-            work_item_entity = ?work_item_entity,
-            "SkillUpdateContext not found on work_item_entity, rejecting submit_skill_update"
-        );
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InternalState(format!(
-                "SkillUpdateContext not found on work_item_entity {:?} for work_item_id={}",
-                work_item_entity, work_item_id
-            )),
-        );
-        return None;
-    };
-
-    let skill_id = context.skill_id.clone();
-    let base_version = context.base_version;
-    let new_version = base_version + 1;
-
-    // dry-run：提前 apply 一次 operations 到当前 SKILL.md，
-    // 检查 section 名是否存在 / frontmatter 字段是否在白名单。
-    // Bug C 修复：之前 operations 错误要等到 completion_system 才发现，
-    // 错误反馈异步且不可见；现在改为同步返回 ToolError，LLM 可立即修正。
-    //
-    // TOCTOU 说明：dry-run 通过后 completion_system 会重新读取 SKILL.md 并 apply。
-    // 两次读取之间存在理论上的 time-of-check-to-time-of-use 窗口，本实现未加文件锁。
-    // 当前 skill-update 串行执行（同一 task 同一时刻至多一个 SkillUpdate WorkItem），
-    // 外部并发修改风险可接受。若未来允许并发 skill update，需要引入文件锁或
-    // work item 级互斥。
-    let skill_path = skill_loader.skill_md_path(&skill_id);
-    let content = match std::fs::read_to_string(&skill_path) {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(
-                event = "SkillMdReadFailed",
-                task_id = %request.request.task_id,
-                agent_id = %request.request.agent_id,
-                skill_id = %skill_id.as_string(),
-                skill_path = ?skill_path,
-                error = %e,
-                "failed to read SKILL.md for dry-run, rejecting submit_skill_update"
-            );
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::InternalState(format!("failed to read SKILL.md for dry-run: {}", e)),
-            );
-            return None;
-        }
-    };
-
-    if let Err(apply_err) = apply_skill_operations(&content, operations) {
-        warn!(
-            event = "SkillUpdateDryRunFailed",
-            task_id = %request.request.task_id,
-            agent_id = %request.request.agent_id,
-            skill_id = %skill_id.as_string(),
-            error = %apply_err,
-            "operations dry-run failed, rejecting submit_skill_update"
-        );
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput(format!(
-                "operations dry-run failed: {}. 注意：replace_section / replace_subsection 的 content 字段不得包含标题行本身（系统会自动保留原标题），只需提供标题下方的正文内容。若为 SectionNotFound，请确保 section 名与原 SKILL.md 中实际存在的标题完全一致。",
-                apply_err
-            )),
-        );
-        return None;
-    }
-
-    Some((
-        work_item_id,
-        work_item_entity,
-        skill_id,
-        base_version,
-        new_version,
-    ))
-}
-
-/// SubmitSkillCandidate 分支：经 [`validate_skill_sandbox`] 校验沙箱后，
-/// 构造 ExperienceCandidate 入队并落地工具结果。
-#[allow(clippy::too_many_arguments)]
-fn handle_submit_skill_candidate(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    context_queries: &Query<WorkItemContexts>,
-    experience_store: &mut ExperienceStore,
-    pending_experience_hooks: &mut PendingExperienceHooks,
-    name: String,
-    description: String,
-) {
-    // Sanitize skill name: reject path separators and traversal sequences
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput(
-                "skill name must not contain path separators or '..'".to_string(),
-            ),
-        );
-        return;
-    }
-
-    // 通过 Query 查找匹配 task_id 的 SkillCreationContext Component
-    // （与 WorkItem 同 Entity）。
-    let wi_info = context_queries
-        .iter()
-        .find_map(|(e, _, _, creation_ctx, wi)| {
-            if wi.task_id == request.request.task_id {
-                Some((e, creation_ctx.cloned()))
-            } else {
-                None
-            }
-        });
-
-    let Some((wi_entity, creation_ctx)) = wi_info else {
-        warn!(
-            event = "SkillCandidateSubmitWithoutContext",
-            task_id = %request.request.task_id,
-            agent_id = %request.request.agent_id,
-            %name,
-            "SubmitSkillCandidate without SkillCreationContext"
-        );
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InternalState(
-                "SubmitSkillCandidate without SkillCreationContext".to_string(),
-            ),
-        );
-        return;
-    };
-
-    let sandbox_dir = &creation_ctx.as_ref().unwrap().sandbox_dir;
-
-    let Some(parsed) = validate_skill_sandbox(commands, request_entity, request, sandbox_dir)
-    else {
-        return;
-    };
-
-    // 4. Scan sandbox for file_refs
-    let file_refs = scan_sandbox_files(sandbox_dir);
-
-    // 5. Construct ExperienceCandidate
-    let candidate_id = uuid::Uuid::new_v4();
-    let candidate = ExperienceCandidate::skill_new(
-        candidate_id,
-        request.request.task_id,
-        request.request.agent_id,
-        format!("新建 skill: {}", name),
-        name.clone(),
-        description.clone(),
-        parsed.instructions,
-        file_refs,
-    );
-
-    // 6. Enqueue in ExperienceStore
-    experience_store.stage_root_candidate(candidate);
-
-    // 7. Push PendingExperienceHooks
-    pending_experience_hooks.0.push((
-        crate::domain::HookPoint::OnExperienceCandidateSubmitted,
-        candidate_id,
-    ));
-
-    // 8. Update SkillCreationContext.skill_name
-    let ctx_inner = creation_ctx.unwrap();
-    commands.entity(wi_entity).insert(SkillCreationContext {
-        skill_name: name.clone(),
-        ..ctx_inner.clone()
-    });
-
-    // 9. Spawn success result
-    let output = serde_json::json!({
-        "status": "submitted",
-        "candidate_id": candidate_id.to_string(),
-        "skill_name": name,
-    });
-
-    spawn_tool_success(
-        commands,
-        request,
-        "submit_skill_candidate",
-        format!("skill candidate submitted: {}", name),
-        output,
-    );
-
-    debug!(
-        event = "SkillCandidateSubmitted",
-        task_id = %request.request.task_id,
-        agent_id = %request.request.agent_id,
-        %name,
-        %candidate_id,
-        "skill candidate submitted by LLM"
-    );
-
-    commands.entity(request_entity).despawn();
-}
-
-/// 校验 skill 沙箱：SKILL.md 存在性、frontmatter 合法性（name/description/version）
-/// 与 path safety（所有文件位于 sandbox 目录内）。
-///
-/// 任一失败即 `spawn_tool_error` 并返回 `None`；成功返回解析出的 LoadedSkill。
-fn validate_skill_sandbox(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    sandbox_dir: &std::path::Path,
-) -> Option<crate::infrastructure::skills::loader::LoadedSkill> {
-    // 1. Validate SKILL.md exists
-    let skill_md_path = sandbox_dir.join("SKILL.md");
-    if !skill_md_path.exists() {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput("SKILL.md not found in sandbox directory".to_string()),
-        );
-        return None;
-    }
-
-    // 2. Parse and validate frontmatter
-    let skill_md_content = match std::fs::read_to_string(&skill_md_path) {
-        Ok(c) => c,
-        Err(e) => {
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::InternalState(format!("failed to read SKILL.md: {}", e)),
-            );
-            return None;
-        }
-    };
-
-    let parsed = crate::infrastructure::skills::loader::parse_skill_md(
-        &skill_md_content,
-        sandbox_dir.to_path_buf(),
-    );
-    let Some(parsed) = parsed else {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput("SKILL.md frontmatter is invalid or missing".to_string()),
-        );
-        return None;
-    };
-
-    if parsed.name.is_empty() {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput("SKILL.md frontmatter 'name' must not be empty".to_string()),
-        );
-        return None;
-    }
-    if parsed.description.is_empty() {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput(
-                "SKILL.md frontmatter 'description' must not be empty".to_string(),
-            ),
-        );
-        return None;
-    }
-    if parsed.version != 1 {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput(format!(
-                "new skill must have version 1, got {}",
-                parsed.version
-            )),
-        );
-        return None;
-    }
-
-    // 3. Path safety: verify all sandbox files reside under sandbox_dir
-    let sandbox_canonical = match sandbox_dir.canonicalize() {
-        Ok(c) => c,
-        Err(e) => {
-            spawn_tool_error(
-                commands,
-                request_entity,
-                request,
-                ToolError::InternalState(format!("failed to canonicalize sandbox dir: {}", e)),
-            );
-            return None;
-        }
-    };
-    let mut path_safe = true;
-    check_path_safety_recursive(sandbox_dir, &sandbox_canonical, &mut path_safe);
-    if !path_safe {
-        spawn_tool_error(
-            commands,
-            request_entity,
-            request,
-            ToolError::InvalidInput("sandbox contains files outside sandbox directory".to_string()),
-        );
-        return None;
-    }
-
-    Some(parsed)
 }
 
 /// AskUser 分支：把问题推送到 task 的 output_channel 前端并挂起等待用户回复。
@@ -2214,96 +1250,6 @@ fn handle_ask_user(
     }
 
     // 6. despawn ToolExecutionRequestMessage
-    commands.entity(request_entity).despawn();
-}
-
-/// 将 ExperienceCandidateSubmission 转换为 ExperienceCandidate。
-///
-/// 将工具层的提交数据转换为领域模型，载荷根据 kind 进行解析。
-fn submission_to_candidate(
-    submission: &ExperienceCandidateSubmission,
-    agent_id: AgentId,
-    task_id: TaskId,
-) -> ExperienceCandidate {
-    let payload = match &submission.kind {
-        ExperienceKindHint::Knowledge => {
-            let content = submission.content.clone().unwrap_or_default();
-            ExperienceCandidatePayload::Knowledge { content }
-        }
-        ExperienceKindHint::Skill => {
-            let name = submission.title.clone();
-            let description = submission.skill_description.clone().unwrap_or_default();
-            let instructions = submission.instructions.clone().unwrap_or_default();
-            let file_refs = submission.file_refs.clone();
-            ExperienceCandidatePayload::Skill {
-                name,
-                description,
-                instructions,
-                file_refs,
-                is_new: false,
-            }
-        }
-    };
-
-    ExperienceCandidate {
-        candidate_id: uuid::Uuid::new_v4(),
-        producer_task_id: task_id,
-        producer_agent_id: agent_id,
-        title: submission.title.clone(),
-        kind_hint: submission.kind.clone(),
-        payload,
-        dependency_refs: Vec::new(),
-        status: crate::domain::ExperienceCandidateStatus::Submitted,
-        governing_agent_id: None,
-        derived_from_candidate_ids: Vec::new(),
-    }
-}
-
-/// 生成经验候选提交结果。
-///
-/// 返回成功确认，候选实际存入 ExperienceStore 由 experience_collection 系统处理。
-fn spawn_experience_candidate_result(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    candidate: &ExperienceCandidate,
-) {
-    let output = serde_json::json!({
-        "status": "submitted",
-        "candidate_id": candidate.candidate_id.to_string(),
-        "title": candidate.title,
-        "kind_hint": format!("{:?}", candidate.kind_hint),
-    });
-
-    let execution_result = AgentExecutionResult {
-        task_id: request.request.task_id,
-        agent_id: request.request.agent_id,
-        request_kind: request.request.request_kind.clone(),
-        result: Ok(AgentExecutionOutput {
-            content: OutputContent::Text("experience candidate submitted".to_string()),
-            reasoning_content: None,
-        }),
-        prompt: String::new(),
-        system_prompt: None,
-        tools: vec![],
-        reasoning_content: None,
-        work_item_id: None,
-        conversation: None,
-        turn_generation: None,
-    };
-
-    commands.spawn((
-        ToolExecutionResultMessage {
-            result: execution_result,
-            tool_name: "submit_experience_candidate".to_string(),
-            tool_output: Ok(output),
-            tool_call_id: request.tool_call_id.clone(),
-            processed: false,
-            original_tool_output: None,
-        },
-        ToolReturnedHookPending,
-    ));
-
     commands.entity(request_entity).despawn();
 }
 
@@ -2409,85 +1355,6 @@ pub fn spawn_shell_result(
     ));
 
     commands.entity(request_entity).despawn();
-}
-
-/// Scan sandbox directory for skill file references (top-level files only).
-///
-/// Skips SKILL.md (handled separately via frontmatter parsing).
-/// For MVP, only top-level files are scanned since `write_skill_file` creates flat files.
-/// Recursively check that all files in the sandbox resolve to paths under the sandbox directory.
-fn check_path_safety_recursive(
-    current_dir: &std::path::Path,
-    sandbox_canonical: &std::path::Path,
-    path_safe: &mut bool,
-) {
-    if !*path_safe {
-        return;
-    }
-    if let Ok(entries) = std::fs::read_dir(current_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                check_path_safety_recursive(&path, sandbox_canonical, path_safe);
-                if !*path_safe {
-                    return;
-                }
-            } else if path.is_file()
-                && let Ok(canonical) = path.canonicalize()
-                && !canonical.starts_with(sandbox_canonical)
-            {
-                *path_safe = false;
-                return;
-            }
-        }
-    }
-}
-
-fn scan_sandbox_files(sandbox_dir: &std::path::Path) -> Vec<crate::domain::SkillFileRef> {
-    let mut refs = Vec::new();
-    scan_sandbox_files_recursive(sandbox_dir, sandbox_dir, &mut refs);
-    refs
-}
-
-/// Recursive helper for scan_sandbox_files.
-fn scan_sandbox_files_recursive(
-    base_dir: &std::path::Path,
-    current_dir: &std::path::Path,
-    refs: &mut Vec<crate::domain::SkillFileRef>,
-) {
-    if let Ok(entries) = std::fs::read_dir(current_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                scan_sandbox_files_recursive(base_dir, &path, refs);
-            } else if path.is_file() {
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                if file_name == "SKILL.md" {
-                    continue;
-                }
-                let relative = path
-                    .strip_prefix(base_dir)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .to_string();
-                refs.push(crate::domain::SkillFileRef {
-                    path: relative,
-                    role: infer_file_role(&path.to_string_lossy()),
-                });
-            }
-        }
-    }
-}
-
-/// Infer file role from file extension.
-fn infer_file_role(path: &str) -> crate::domain::SkillFileRole {
-    if path.ends_with(".sh") || path.ends_with(".py") {
-        crate::domain::SkillFileRole::Script
-    } else if path.ends_with(".md") {
-        crate::domain::SkillFileRole::Reference
-    } else {
-        crate::domain::SkillFileRole::Asset
-    }
 }
 
 #[cfg(test)]
@@ -2612,8 +1479,7 @@ mod tests {
             "subtask channel must NOT be the hardcoded Tui/default"
         );
         // 回归保护：子任务必须注册进 EntityIndex。
-        // 此前 create_tasks 裸 spawn 未注册索引，导致 brain_decision_system
-        // 查不到子任务、静默丢弃 Brain 决策结果，子任务永久卡在 Waiting(Agent)。
+        // 此前 create_tasks 裸 spawn 未注册索引，经索引查找的 system 会查不到子任务。
         let index = app.world().resource::<EntityIndex>();
         assert!(
             index.get_task(&child_tasks[0].id).is_some(),
@@ -2630,7 +1496,6 @@ mod tests {
     // 4. request_entity 被 despawn
     // 5. 无 output_channel 时返回错误（task 不切 Waiting）
 
-    use crate::domain::SharedKnowledgeBase;
     use crate::domain::{Frontend, UserAction};
     use std::sync::{Arc, Mutex};
 
@@ -2662,18 +1527,7 @@ mod tests {
         chat_sessions: Query<&ChatSession>,
         mut short_term_memories: Query<&mut ShortTermMemory>,
         backend: Res<crate::systems::NativeProcessBackend>,
-        mut experience_store: ResMut<ExperienceStore>,
-        mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
         clock: Res<Clock>,
-        context_queries: Query<(
-            Entity,
-            Option<&ProfileGenerationContext>,
-            Option<&SkillUpdateContext>,
-            Option<&SkillCreationContext>,
-            &WorkItem,
-        )>,
-        skill_loader: Res<SkillLoader>,
-        calling_states: Query<(Entity, &ToolCallingState)>,
         frontend_registry: Res<FrontendRegistry>,
         mut index: ResMut<EntityIndex>,
         requests: Query<(Entity, &ToolExecutionRequestMessage)>,
@@ -2700,18 +1554,13 @@ mod tests {
                 agents: &agents,
                 chat_sessions: &chat_sessions,
                 short_term_memories: &mut short_term_memories,
-                context_queries: &context_queries,
-                calling_states: &calling_states,
             },
             &mut ToolResources {
                 backend: &*backend,
-                experience_store: &mut experience_store,
-                pending_experience_hooks: &mut pending_experience_hooks,
-                skill_loader: &skill_loader,
+
                 frontend_registry: &frontend_registry,
                 clock: &clock,
             },
-            None,
             &mut index,
         );
     }
@@ -2771,22 +1620,15 @@ mod tests {
             pending_confirmation_id: None,
             tool_call_id: Some("call-1".to_string()),
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         }
     }
 
     /// 初始化测试所需资源（不含 frontend，由各测试单独注入）
     fn init_ask_user_world(world: &mut World) {
-        world.init_resource::<SharedKnowledgeBase>();
-        world.init_resource::<ExperienceStore>();
-        world.init_resource::<PendingExperienceHooks>();
         world.init_resource::<EntityIndex>();
         world.insert_resource(crate::systems::NativeProcessBackend::default());
         world.insert_resource(Clock::default());
-        world.insert_resource(SkillLoader::new(std::path::PathBuf::from(
-            "/nonexistent_skills_root",
-        )));
     }
 
     /// ask_user 成功路径：task 切到 Waiting(AskUser)，AskUserPending 挂载，

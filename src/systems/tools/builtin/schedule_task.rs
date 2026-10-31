@@ -220,8 +220,6 @@ mod tests {
         let result = ScheduleTaskTool.execute(
             &serde_json::json!({}),
             &crate::domain::ToolContext {
-                knowledge: Box::leak(Box::new(crate::domain::SharedKnowledgeBase::default())),
-                experience_store: Box::leak(Box::new(crate::domain::ExperienceStore::default())),
                 default_wait_tasks_timeout_secs: 300,
                 shell_default_tail_lines: 50,
                 shell_max_tail_lines: 500,
@@ -231,7 +229,6 @@ mod tests {
                 current_task_id: crate::domain::TaskId::new(),
                 current_agent_id: crate::domain::AgentId::new(),
                 current_origin_channel: None,
-                current_skill_dir: None,
             },
         );
         assert!(matches!(result, Err(ToolError::InternalState(_))));

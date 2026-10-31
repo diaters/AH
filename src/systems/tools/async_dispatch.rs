@@ -32,9 +32,9 @@ use crate::{
     domain::{
         Agent, BuiltinToolExecutors, EngineEvent, EventTarget, InFlightToolCall, OwnedToolContext,
         PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants,
-        SkillCreationContext, SpaceToolRegistry, Task, TaskInitiator, ToolActionKind,
-        ToolAsyncResult, ToolExecutionRequestMessage, ToolPermission, ToolRequestPending,
-        ToolWorkerOutput, ToolWorkerPayload, resolve_tool_permission,
+        SpaceToolRegistry, Task, TaskInitiator, ToolActionKind, ToolAsyncResult,
+        ToolExecutionRequestMessage, ToolPermission, ToolRequestPending, ToolWorkerOutput,
+        ToolWorkerPayload, resolve_tool_permission,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
@@ -67,28 +67,25 @@ pub fn async_tool_dispatch_system(
     settings: Res<HarnessSettings>,
     executors: Res<BuiltinToolExecutors>,
     registry: Option<Res<SpaceToolRegistry>>,
-    // 合并 index / agents / tasks / skill_creation_contexts 为单 SystemParam，
+    // 合并 index / agents / tasks / initiators 为单 SystemParam，
     // 规避 Bevy 单 system 16 参数上限（与 dispatch.rs 的 index_clock_loader 同模式）。
-    index_agents_tasks_skill_ctx: (
+    index_agents_tasks_initiators: (
         Res<EntityIndex>,
         Query<&Agent>,
         Query<&Task>,
-        Query<&SkillCreationContext>,
         Query<&TaskInitiator>,
     ),
     sender: Res<ToolResultSender>,
     backend: Option<Res<crate::systems::tools::NativeProcessBackend>>,
     scheduler_state: Option<Res<SchedulerState>>,
-    experience_store: Option<Res<crate::domain::ExperienceStore>>,
     frontend_registry: Option<Res<FrontendRegistry>>,
     runtime_grants: Option<Res<RuntimeGrants>>,
     requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
-    let index = &index_agents_tasks_skill_ctx.0;
-    let agents = &index_agents_tasks_skill_ctx.1;
-    let tasks = &index_agents_tasks_skill_ctx.2;
-    let skill_creation_contexts = &index_agents_tasks_skill_ctx.3;
-    let initiators = &index_agents_tasks_skill_ctx.4;
+    let index = &index_agents_tasks_initiators.0;
+    let agents = &index_agents_tasks_initiators.1;
+    let tasks = &index_agents_tasks_initiators.2;
+    let initiators = &index_agents_tasks_initiators.3;
     let runtime_grants = runtime_grants.as_deref();
     let grant_scope = |task_id| {
         task_grant_scope(
@@ -195,20 +192,7 @@ pub fn async_tool_dispatch_system(
         let backend_arc: Option<Arc<dyn SessionBackend>> = backend
             .as_deref()
             .map(|b| Arc::new(b.clone()) as Arc<dyn SessionBackend>);
-        // 经验候选快照：从 ExperienceStore 按 task_id 抓一份 cloned 列表，
-        // 包成 Arc<Vec<...>> 给 worker。dispatch 在此完成 task_id 过滤——
-        // worker 直接遍历，不再二次过滤。
         let task_id = request.request.task_id;
-        let experience_candidates: Option<Arc<Vec<crate::domain::ExperienceCandidate>>> =
-            experience_store.as_deref().map(|store| {
-                Arc::new(
-                    store
-                        .list_for_task(task_id)
-                        .into_iter()
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                )
-            });
         // 从 Task.origin_channel 注入 current_origin_channel（Task 14 Step E）：
         // schedule_task 等需要继承通道的异步工具靠此字段在 worker 内拿到真值。
         // Task 不存在时（测试世界或异常状态）降级为 None，与既有容忍语义一致。
@@ -217,13 +201,6 @@ pub fn async_tool_dispatch_system(
             .get_task(&task_id)
             .and_then(|e| tasks.get(e).ok())
             .and_then(|t| t.origin_channel.clone());
-        // 从 WorkItem 的 SkillCreationContext 注入 current_skill_dir（与同步路径
-        // dispatch.rs:255-282 对称）。write_skill_file 等异步 skill 工具需要此值
-        // 确定沙盒目录。
-        let current_skill_dir = request
-            .work_item_entity
-            .and_then(|wi_entity| skill_creation_contexts.get(wi_entity).ok())
-            .map(|ctx| ctx.sandbox_dir.clone());
         let owned_ctx = OwnedToolContext {
             scheduler_state: scheduler_state
                 .as_deref()
@@ -232,11 +209,9 @@ pub fn async_tool_dispatch_system(
             tool_inflight_timeout_secs: settings.0.tool_inflight_timeout_secs,
             shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,
             backend: backend_arc,
-            experience_candidates,
             current_task_id: Some(task_id),
             current_agent_id: Some(request.request.agent_id),
             current_origin_channel,
-            current_skill_dir,
             cancel: cancel.clone(),
         };
 

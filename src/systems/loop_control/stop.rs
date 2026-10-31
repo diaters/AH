@@ -236,7 +236,6 @@ mod tests {
             pending_confirmation_id: pending,
             tool_call_id: Some("call".to_string()),
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         }
     }

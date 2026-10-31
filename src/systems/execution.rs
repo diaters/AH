@@ -29,10 +29,8 @@ pub(crate) fn agent_execution_system(
 ) {
     for (entity, message) in &requests {
         let request = message.request.clone();
-        let is_task_turn_request = matches!(
-            request.request_kind,
-            AgentRequestKind::LlmCompletion | AgentRequestKind::BrainDecision
-        ) && request.work_item_id.is_none();
+        let is_task_turn_request = request.request_kind == AgentRequestKind::LlmCompletion
+            && request.work_item_id.is_none();
         if is_task_turn_request
             && tasks
                 .iter()
@@ -48,7 +46,7 @@ pub(crate) fn agent_execution_system(
         for mut task in &mut tasks {
             if task.id == request.task_id {
                 // 只有 LlmCompletion 请求才标记任务为 Running
-                // BrainDecision 和 Summarization 不改变任务状态
+                // Summarization 等其他请求不改变任务状态
                 if request.request_kind == AgentRequestKind::LlmCompletion {
                     // 只有非终态任务才标记为 Running
                     if !task.status.is_terminal() {

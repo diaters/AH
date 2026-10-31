@@ -7,10 +7,10 @@ use crate::{
     domain::{
         Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
         AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
-        DispatchStrategy, EntryMetadata, EntryRole, InFlightToolCall, InboxDeliveryMessage,
-        InboxItem, OutputContent, PendingDispatch, ShortTermMemory, SystemOutputMessage, Task,
-        TaskRoutingPolicy, TaskStatus, ToolConfirmationResponseMessage, ToolExecutionResultMessage,
-        ToolRequestPending, TrustedImages, UserCommand, UserInputMessage, WaitingReason,
+        EntryMetadata, EntryRole, InFlightToolCall, InboxDeliveryMessage, InboxItem, OutputContent,
+        PendingDispatch, ShortTermMemory, SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus,
+        ToolConfirmationResponseMessage, ToolExecutionResultMessage, ToolRequestPending,
+        TrustedImages, UserCommand, UserInputMessage, WaitingReason,
     },
 };
 
@@ -423,14 +423,10 @@ pub(crate) fn continue_task_system(
                 );
             }
 
-            // 续轮派发语义（恢复 2026-06-07 设计意图，修正 477c1bb 的静默反转）：
-            // TopLevelTask（parent_task_id == None）续轮默认复用上一轮 delegate，
-            // 走 DirectDelegate，避免每轮重跑 Brain（省一次 LLM 决策）。
-            // 无 delegate / delegate 指向的 agent 已不存在（stale） / SubTask：
-            // 回退到 BrainLlm，与原行为一致。
-            // 无论哪条路径都先清空 delegate：dispatch_system 的 BrainLlm 分支对
-            // "已有 delegate" 的任务会跳过，置 None 可避免误判；DirectDelegate 分支
-            // 会按 preferred_agent_name 重新 mark_waiting_for_agent 重设 delegate。
+            // 续轮派发语义：TopLevelTask（parent_task_id == None）续轮复用上一轮的
+            // Persistent delegate；无 delegate / delegate 已不存在 / SubTask 交给主 Agent。
+            // 先清空 delegate：dispatch_system 对未指定 Agent 且已有 delegate 的任务会跳过；
+            // 指定 Agent 时会按 preferred_agent_name 重新 mark_waiting_for_agent 设置 delegate。
             task.delegate = None;
             let reuse_hint = if task.parent_task_id.is_none() {
                 match prev_delegate.and_then(|id| {
@@ -438,26 +434,11 @@ pub(crate) fn continue_task_system(
                         .iter()
                         .find(|a| a.id == id && a.kind == AgentKind::Persistent)
                 }) {
-                    Some(agent) => DispatchHint {
-                        strategy: DispatchStrategy::DirectDelegate,
-                        preferred_agent_name: Some(agent.profile.name.clone()),
-                        required_skill_id: None,
-                        agent_spawn_spec: None,
-                    },
-                    None => DispatchHint {
-                        strategy: DispatchStrategy::BrainLlm,
-                        preferred_agent_name: None,
-                        required_skill_id: None,
-                        agent_spawn_spec: None,
-                    },
+                    Some(agent) => DispatchHint::agent(agent.profile.name.clone()),
+                    None => DispatchHint::main_agent(),
                 }
             } else {
-                DispatchHint {
-                    strategy: DispatchStrategy::BrainLlm,
-                    preferred_agent_name: None,
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                }
+                DispatchHint::main_agent()
             };
             commands.entity(task_entity).insert(PendingDispatch {
                 kind: DispatchKind::Task,
@@ -478,9 +459,8 @@ mod tests {
     use crate::domain::MemoryConfig;
     use crate::domain::{
         Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, AskUserPending,
-        ChannelId, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchStrategy,
-        FinishTaskMessage, FrontendKind, PendingDispatch, PendingKnowledgeWriteHooks,
-        SharedKnowledgeBase, SystemOutputMessage, Task, TaskStatus,
+        ChannelId, ContinueTaskMessage, CreateTaskMessage, DispatchHint, FinishTaskMessage,
+        FrontendKind, PendingDispatch, SystemOutputMessage, Task, TaskStatus,
         ToolConfirmationResponseMessage, ToolExecutionResultMessage, UserInputMessage,
         WaitingReason,
     };
@@ -961,8 +941,6 @@ mod tests {
         app.add_systems(Update, (user_input_routing_system, command_parse_system));
         app.insert_resource(Clock::default());
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(crate::ecs::EntityIndex::default());
 
         let pending_id = uuid::Uuid::new_v4();
@@ -1025,10 +1003,6 @@ mod tests {
         let hint = run_continue_and_get_hint(&mut app, task, Some(agent));
         let hint = hint.expect("PendingDispatch should be attached after continue");
 
-        assert!(
-            matches!(hint.strategy, DispatchStrategy::DirectDelegate),
-            "TopLevelTask with existing persistent delegate should reuse it via DirectDelegate"
-        );
         assert_eq!(
             hint.preferred_agent_name.as_deref(),
             Some("reused-agent"),
@@ -1044,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn continue_top_level_task_with_missing_delegate_agent_falls_back_to_brain_llm() {
+    fn continue_top_level_task_with_missing_delegate_agent_falls_back_to_main_agent() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
         app.init_resource::<EntityIndex>();
@@ -1057,13 +1031,13 @@ mod tests {
         let hint = run_continue_and_get_hint(&mut app, task, None);
         let hint = hint.expect("PendingDispatch should be attached after continue");
         assert!(
-            matches!(hint.strategy, DispatchStrategy::BrainLlm),
-            "stale delegate should fall back to BrainLlm"
+            hint.preferred_agent_name.is_none(),
+            "stale delegate should go to the main agent"
         );
     }
 
     #[test]
-    fn continue_subtask_always_uses_brain_llm() {
+    fn continue_subtask_goes_to_main_agent() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
         app.init_resource::<EntityIndex>();
@@ -1077,13 +1051,13 @@ mod tests {
         let hint = run_continue_and_get_hint(&mut app, task, Some(agent));
         let hint = hint.expect("PendingDispatch should be attached after continue");
         assert!(
-            matches!(hint.strategy, DispatchStrategy::BrainLlm),
-            "SubTask must always re-run Brain, even with a valid persistent delegate"
+            hint.preferred_agent_name.is_none(),
+            "SubTask goes to the main agent, even with a valid persistent delegate"
         );
     }
 
     #[test]
-    fn continue_task_without_delegate_uses_brain_llm() {
+    fn continue_task_without_delegate_goes_to_main_agent() {
         let mut app = App::new();
         app.insert_resource(Clock::default());
         app.init_resource::<EntityIndex>();
@@ -1094,8 +1068,8 @@ mod tests {
         let hint = run_continue_and_get_hint(&mut app, task, None);
         let hint = hint.expect("PendingDispatch should be attached after continue");
         assert!(
-            matches!(hint.strategy, DispatchStrategy::BrainLlm),
-            "no delegate should fall back to BrainLlm"
+            hint.preferred_agent_name.is_none(),
+            "no delegate should go to the main agent"
         );
     }
 

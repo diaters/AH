@@ -14,15 +14,12 @@ use crossbeam_channel::Sender;
 use tracing::{debug, warn};
 
 use crate::domain::HookPoint;
-use crate::domain::{
-    ChannelId, DispatchHint, DispatchKind, DispatchStrategy, FrontendKind, PendingDispatch, Task,
-};
+use crate::domain::{ChannelId, DispatchHint, DispatchKind, FrontendKind, PendingDispatch, Task};
 use crate::prelude::{ResMut, Resource, World};
 use crate::user_plugins::host_api;
 use crate::user_plugins::host_api::approval::ApprovalContext;
 use crate::user_plugins::host_api::entity_query::WorldSnapshot;
 use crate::user_plugins::host_api::entity_write::{WorldCommand, WorldWriter};
-use crate::user_plugins::host_api::experience::ExperienceContext;
 use crate::user_plugins::host_api::message::MessageContext;
 use crate::user_plugins::host_api::plugin_resource::PluginRoots;
 use crate::user_plugins::host_api::skills_meta::SkillsSnapshot;
@@ -51,7 +48,6 @@ pub struct PluginContext {
     pub outcome: SharedHookOutcome,
     pub plugin_roots: PluginRoots,
     pub approval: ApprovalContext,
-    pub experience: ExperienceContext,
     pub skills: SkillsSnapshot,
     pub message: MessageContext,
     pub temp_resource: TempResourceSlot,
@@ -73,7 +69,7 @@ pub struct HookDispatchInput<'a> {
     /// 构造一个**新的** `TempResourceSlot`（每次 hook 派发独立 state，不复用）。
     /// 其他字段从当前 `World` 与 `PluginRegistry` 派生。
     #[allow(clippy::type_complexity)]
-    pub ctx_builder: Box<dyn Fn(&LoadedPlugin, &mut World) -> PluginContext + 'a>,
+    pub ctx_builder: Box<dyn Fn(&LoadedPlugin) -> PluginContext + 'a>,
 }
 
 /// hook 单脚本超时：hook 在 ECS 线程上同步等待，超时过长会让整个主循环卡顿。
@@ -133,7 +129,7 @@ pub fn dispatch_hook(input: HookDispatchInput<'_>) -> HookOutcome {
             Some(a) if !a.is_empty() => a,
             _ => continue,
         };
-        let ctx = (input.ctx_builder)(&plugin, input.world);
+        let ctx = (input.ctx_builder)(&plugin);
 
         for ast in asts {
             run_one_ast(&plugin, ast, &ctx, input.point, &outcome);
@@ -251,12 +247,7 @@ fn apply_world_command(world: &mut World, cmd: WorldCommand) {
                         crate::domain::ShortTermMemory::default(),
                         PendingDispatch {
                             kind: DispatchKind::Task,
-                            hint: DispatchHint {
-                                strategy: DispatchStrategy::BrainLlm,
-                                preferred_agent_name: None,
-                                required_skill_id: None,
-                                agent_spawn_spec: None,
-                            },
+                            hint: DispatchHint::main_agent(),
                         },
                     ))
                     .id();
@@ -331,27 +322,22 @@ mod tests {
             world,
             registry,
             writer_tx,
-            ctx_builder: Box::new(
-                move |plugin: &LoadedPlugin, _world: &mut World| PluginContext {
-                    snapshot: WorldSnapshot::empty(),
-                    writer: WorldWriter::new(tx.clone()),
-                    outcome: Arc::new(Mutex::new(HookOutcome::default())),
-                    plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
-                    approval: ApprovalContext {
-                        current_request_id: None,
-                    },
-                    experience: ExperienceContext {
-                        store: Arc::new(crate::domain::ExperienceStore::default()),
-                    },
-                    skills: SkillsSnapshot::empty(),
-                    message: MessageContext {
-                        plugin_id: plugin.manifest.id.clone(),
-                        tx: message_tx.clone(),
-                    },
-                    temp_resource: TempResourceSlot::new(),
-                    tool: ToolCallContext::default(),
+            ctx_builder: Box::new(move |plugin: &LoadedPlugin| PluginContext {
+                snapshot: WorldSnapshot::empty(),
+                writer: WorldWriter::new(tx.clone()),
+                outcome: Arc::new(Mutex::new(HookOutcome::default())),
+                plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
+                approval: ApprovalContext {
+                    current_request_id: None,
                 },
-            ),
+                skills: SkillsSnapshot::empty(),
+                message: MessageContext {
+                    plugin_id: plugin.manifest.id.clone(),
+                    tx: message_tx.clone(),
+                },
+                temp_resource: TempResourceSlot::new(),
+                tool: ToolCallContext::default(),
+            }),
         });
     }
 

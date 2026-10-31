@@ -4,9 +4,8 @@ use tracing::{debug, info, warn};
 
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, ChatSession, DispatchHint, DispatchKind,
-    DispatchStrategy, EntryMetadata, EntryRole, FailureReason, OffTrackPolicy, OutputContent,
-    PendingDispatch, ShortTermMemory, SystemOutputMessage, Task, TaskStatus, WaitingReason,
-    WorkItem, WorkItemType,
+    EntryMetadata, EntryRole, FailureReason, OffTrackPolicy, OutputContent, PendingDispatch,
+    ShortTermMemory, SystemOutputMessage, Task, TaskStatus, WaitingReason, WorkItem, WorkItemType,
 };
 use crate::ecs::EntityIndex;
 
@@ -77,12 +76,7 @@ pub(crate) fn evaluation_trigger_system(
                         work_item,
                         PendingDispatch {
                             kind: DispatchKind::WorkItem(WorkItemType::Evaluation),
-                            hint: DispatchHint {
-                                strategy: DispatchStrategy::DirectDelegate,
-                                preferred_agent_name: None,
-                                required_skill_id: None,
-                                agent_spawn_spec: None,
-                            },
+                            hint: DispatchHint::default(),
                         },
                     ));
 

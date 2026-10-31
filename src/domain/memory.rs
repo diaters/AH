@@ -209,21 +209,6 @@ mod tests {
     }
 
     #[test]
-    fn executable_memory_entry_keeps_asset_refs_readable() {
-        let entry = ExecutableMemoryEntry {
-            memory_id: uuid::Uuid::new_v4(),
-            title: "shell smoke test".to_string(),
-            intent: "run a reusable smoke test".to_string(),
-            when_to_use: "after changing shell orchestration".to_string(),
-            asset_refs: vec!["default-agent/asset-1-shell-smoke.sh".to_string()],
-            dependency_refs: vec![],
-        };
-
-        assert_eq!(entry.asset_refs.len(), 1);
-        assert!(entry.asset_refs[0].contains("shell-smoke"));
-    }
-
-    #[test]
     fn long_term_memory_entry_carries_source_traceability() {
         let mut entry = LongTermMemoryEntry::new("traceable fact");
         entry.source_candidate_id = Some(uuid::Uuid::new_v4());
@@ -990,17 +975,6 @@ pub struct LongTermMemory {
     pub agent_name: Option<String>,
     /// 长期记忆条目。
     pub entries: Vec<LongTermMemoryEntry>,
-}
-
-/// 可执行经验条目：经过治理和确认后的可执行经验，属于长期资产体系。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExecutableMemoryEntry {
-    pub memory_id: uuid::Uuid,
-    pub title: String,
-    pub intent: String,
-    pub when_to_use: String,
-    pub asset_refs: Vec<String>,
-    pub dependency_refs: Vec<String>,
 }
 
 impl LongTermMemory {

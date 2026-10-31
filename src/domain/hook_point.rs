@@ -56,16 +56,8 @@ define_hook_points! {
     OnLlmResponse => "on_llm_response",
     OnLongTermMemoryWrite => "on_long_term_memory_write",
     OnLongTermMemoryEvicted => "on_long_term_memory_evicted",
-    OnSharedKnowledgeWrite => "on_shared_knowledge_write",
-    OnExperienceCandidateSubmitted => "on_experience_candidate_submitted",
-    OnExperienceCandidateApproved => "on_experience_candidate_approved",
-    OnExperienceCandidateRejected => "on_experience_candidate_rejected",
     OnApprovalRequested => "on_approval_requested",
     OnApprovalResolved => "on_approval_resolved",
-    OnAgentProfileGenerated => "on_agent_profile_generated",
-    OnAgentProfileUpdated => "on_agent_profile_updated",
-    OnAgentIncubated => "on_agent_incubated",
-    OnAgentProfileGenerationFailed => "on_agent_profile_generation_failed",
 }
 
 #[derive(Debug, Error)]

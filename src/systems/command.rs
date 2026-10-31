@@ -3,24 +3,18 @@ use tracing::debug;
 
 use crate::domain::MemoryConfig;
 use crate::domain::{
-    Agent, ClearTaskMessage, CreateTaskMessage, FinishTaskMessage, PendingKnowledgeWriteHooks,
-    ReloadPluginsMessage, ReloadTriggersMessage, SharedKnowledgeBase, SharedKnowledgeEntry,
-    ShortTermMemory, StopTaskMessage, SummarizationRequestMessage, SummarizationTrigger, Task,
-    TaskRoutingPolicy, UserCommand, UserInputMessage,
+    ClearTaskMessage, CreateTaskMessage, FinishTaskMessage, ReloadPluginsMessage,
+    ReloadTriggersMessage, ShortTermMemory, StopTaskMessage, SummarizationRequestMessage,
+    SummarizationTrigger, Task, TaskRoutingPolicy, UserCommand, UserInputMessage,
 };
-use crate::ecs::EntityIndex;
 
 /// 命令解析系统：解析用户输入中的指令
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn command_parse_system(
     mut commands: Commands,
-    mut knowledge: ResMut<SharedKnowledgeBase>,
-    mut pending_writes: ResMut<PendingKnowledgeWriteHooks>,
     config: Res<MemoryConfig>,
-    index: Res<EntityIndex>,
     user_inputs: Query<(Entity, &UserInputMessage), Without<crate::domain::InputBlocked>>,
     tasks: Query<(&Task, Option<&ShortTermMemory>)>,
-    agents: Query<&Agent>,
     plugin_registry: Option<Res<crate::user_plugins::registry::PluginRegistry>>,
 ) {
     for (entity, input) in &user_inputs {
@@ -176,28 +170,6 @@ pub(crate) fn command_parse_system(
                 }
                 commands.entity(entity).despawn();
             }
-            UserCommand::Remember { content } => {
-                // /remember - 以用户显式批准的共享知识条目写入共享知识库
-                if content.is_empty() {
-                    debug!(
-                        event = "RememberCommandEmpty",
-                        "remember command received with empty content - ignoring"
-                    );
-                } else {
-                    debug!(
-                        event = "RememberCommandReceived",
-                        content = %content,
-                        content_len = content.len(),
-                        knowledge_entries_before = knowledge.entries.len(),
-                        "adding knowledge via /remember command"
-                    );
-                    let entry = SharedKnowledgeEntry::approved_from_user_input(content.clone());
-                    knowledge.entries.push(entry.clone());
-                    // 推入待派发队列，由 companion 系统触发 on_shared_knowledge_write hook。
-                    pending_writes.0.push(entry);
-                }
-                commands.entity(entity).despawn();
-            }
             UserCommand::PlainText(_) => {
                 // 普通输入，交给路由系统处理
                 // 不 despawn，让 user_input_routing_system 处理
@@ -312,46 +284,6 @@ pub(crate) fn command_parse_system(
                 }
                 commands.entity(entity).despawn();
             }
-            UserCommand::CreateSkill { intent } => {
-                // /skill - 为当前任务的 Agent 创建新 skill
-                if intent.is_empty() {
-                    eprintln!("[skill] usage: /skill <intent description>");
-                } else {
-                    // 查找当前活跃任务的 Agent（与 /finish 同逻辑：同 channel、非终态）
-                    let current_task = tasks.iter().find(|(t, _)| {
-                        !t.status.is_terminal()
-                            && super::conversation::is_user_root(t, &input.origin_channel)
-                    });
-
-                    if let Some((task, _)) = current_task {
-                        // 优先使用 task.delegate（执行 Agent），回退到 task.creator
-                        let agent_id = task.delegate.unwrap_or(task.creator);
-                        let agent_name = index
-                            .get_agent(&agent_id)
-                            .and_then(|e| agents.get(e).ok())
-                            .map(|a| a.profile.name.clone())
-                            .unwrap_or_default();
-
-                        debug!(
-                            event = "SkillCreationCommandReceived",
-                            task_id = %task.id,
-                            agent_id = %agent_id,
-                            agent_name = %agent_name,
-                            intent = %intent,
-                            "spawning skill creation request"
-                        );
-                        commands.spawn(crate::domain::SkillCreationRequestMessage {
-                            task_id: task.id,
-                            agent_id,
-                            agent_name,
-                            intent,
-                        });
-                    } else {
-                        eprintln!("[skill] no active task — /skill requires an active task");
-                    }
-                }
-                commands.entity(entity).despawn();
-            }
         }
     }
 }
@@ -421,9 +353,8 @@ mod tests {
     use crate::{
         domain::MemoryConfig,
         domain::{
-            Agent, ChannelId, CreateTaskMessage, KnowledgeValidationStatus,
-            PendingKnowledgeWriteHooks, SharedKnowledgeBase, ShortTermMemory, Task, TaskStatus,
-            UserCommand, UserCommand::Remember, UserInputMessage,
+            ChannelId, CreateTaskMessage, ShortTermMemory, Task, TaskStatus, UserCommand,
+            UserInputMessage,
         },
     };
 
@@ -466,27 +397,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_remember_with_content() {
-        let cmd = UserCommand::parse("/remember This is important knowledge");
-        assert_eq!(
-            cmd,
-            UserCommand::Remember {
-                content: "This is important knowledge".to_string()
-            }
-        );
-        assert!(cmd.is_command());
-    }
-
-    #[test]
-    fn parse_remember_without_content() {
-        let cmd = UserCommand::parse("/remember");
-        assert_eq!(
-            cmd,
-            UserCommand::Remember {
-                content: String::new()
-            }
-        );
-        assert!(cmd.is_command());
+    fn removed_remember_and_skill_are_plain_text() {
+        for input in [
+            "/remember Docs should stay in Chinese",
+            "/skill code review",
+        ] {
+            assert_eq!(
+                UserCommand::parse(input),
+                UserCommand::PlainText(input.to_string())
+            );
+        }
     }
 
     #[test]
@@ -497,47 +417,6 @@ mod tests {
             UserCommand::PlainText("Hello, how are you?".to_string())
         );
         assert!(!cmd.is_command());
-    }
-
-    #[test]
-    fn remember_command_creates_approved_shared_knowledge_entry() {
-        let mut app = App::new();
-        app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
-        app.insert_resource(EntityIndex::default());
-        app.add_systems(Update, command_parse_system);
-        app.world_mut().spawn(UserInputMessage {
-            sender: None,
-            content: "/remember Docs should stay in Chinese".to_string(),
-            origin_channel: crate::domain::ChannelId {
-                frontend: crate::domain::FrontendKind::Tui,
-                user_id: "default".to_string(),
-                thread_id: None,
-            },
-        });
-
-        app.update();
-
-        let knowledge = app.world().resource::<SharedKnowledgeBase>();
-        assert_eq!(knowledge.entries.len(), 1);
-        assert_eq!(
-            knowledge.entries[0].validation_status,
-            KnowledgeValidationStatus::Approved
-        );
-        assert_eq!(
-            knowledge.entries[0].approved_by.as_deref(),
-            Some("user:/remember")
-        );
-        // 待派发 hook 队列也应包含一条记录
-        let pending = app.world().resource::<PendingKnowledgeWriteHooks>();
-        assert_eq!(pending.0.len(), 1);
-        assert_eq!(
-            UserCommand::parse("/remember Docs should stay in Chinese"),
-            Remember {
-                content: "Docs should stay in Chinese".to_string()
-            }
-        );
     }
 
     #[test]
@@ -609,8 +488,6 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
@@ -684,8 +561,6 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
@@ -759,8 +634,6 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
@@ -825,8 +698,6 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
@@ -900,8 +771,6 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 
@@ -957,233 +826,11 @@ mod tests {
     }
 
     #[test]
-    fn skill_command_spawns_creation_request() {
-        use crate::domain::{FrontendKind, SkillCreationRequestMessage, Task, TaskStatus};
-
-        let mut app = App::new();
-        app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
-        app.insert_resource(EntityIndex::default());
-        app.add_systems(Update, command_parse_system);
-
-        let channel = ChannelId {
-            frontend: FrontendKind::Tui,
-            user_id: "test".to_string(),
-            thread_id: None,
-        };
-        let now = chrono::Utc::now();
-        let task_id = crate::domain::TaskId::new();
-        let creator_id = crate::domain::AgentId::new();
-        app.world_mut().spawn((
-            Task {
-                id: task_id,
-                content: "active task".to_string(),
-                creator: creator_id,
-                delegate: None,
-                status: TaskStatus::Running,
-                pending_confirmation_id: None,
-                input_summary: "test".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: now,
-                updated_at: now,
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: false,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(channel.clone()),
-                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ));
-
-        app.world_mut().spawn(UserInputMessage {
-            sender: None,
-            content: "/skill 做代码审查".to_string(),
-            origin_channel: channel,
-        });
-
-        app.update();
-
-        let skill_msgs: Vec<&SkillCreationRequestMessage> = app
-            .world_mut()
-            .query::<&SkillCreationRequestMessage>()
-            .iter(app.world())
-            .collect();
-        assert_eq!(skill_msgs.len(), 1);
-        assert_eq!(skill_msgs[0].task_id, task_id);
-        assert_eq!(skill_msgs[0].intent, "做代码审查");
-        // delegate 为 None，回退到 creator；无 Agent entity，agent_name 为空
-        assert_eq!(skill_msgs[0].agent_id, creator_id);
-        assert!(skill_msgs[0].agent_name.is_empty());
-    }
-
-    #[test]
-    fn skill_command_uses_delegate_agent_name() {
-        use crate::domain::{FrontendKind, SkillCreationRequestMessage, Task, TaskStatus};
-
-        let mut app = App::new();
-        app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
-        app.insert_resource(EntityIndex::default());
-        app.add_systems(Update, command_parse_system);
-
-        let channel = ChannelId {
-            frontend: FrontendKind::Tui,
-            user_id: "test".to_string(),
-            thread_id: None,
-        };
-        let now = chrono::Utc::now();
-        let task_id = crate::domain::TaskId::new();
-        let delegate_id = crate::domain::AgentId::new();
-        // 注册 Agent 实体
-        let agent_entity = app
-            .world_mut()
-            .spawn(Agent {
-                id: delegate_id,
-                profile: crate::domain::AgentProfile {
-                    name: "browser-operator".to_string(),
-                    model: "gpt-4".to_string(),
-                },
-                capabilities: crate::domain::AgentCapabilities {
-                    tags: vec![],
-                    description: String::new(),
-                },
-                kind: crate::domain::AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
-                tool_permissions: crate::domain::AgentToolPermissions::default(),
-                system_prompt: None,
-            })
-            .id();
-        app.world_mut()
-            .resource_mut::<EntityIndex>()
-            .agents
-            .insert(delegate_id, agent_entity);
-
-        app.world_mut().spawn((
-            Task {
-                id: task_id,
-                content: "active task".to_string(),
-                creator: crate::domain::AgentId::new(),
-                delegate: Some(delegate_id),
-                status: TaskStatus::Running,
-                pending_confirmation_id: None,
-                input_summary: "test".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: now,
-                updated_at: now,
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: false,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(channel.clone()),
-                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ));
-
-        app.world_mut().spawn(UserInputMessage {
-            sender: None,
-            content: "/skill 创建测试 skill".to_string(),
-            origin_channel: channel,
-        });
-
-        app.update();
-
-        let skill_msgs: Vec<&SkillCreationRequestMessage> = app
-            .world_mut()
-            .query::<&SkillCreationRequestMessage>()
-            .iter(app.world())
-            .collect();
-        assert_eq!(skill_msgs.len(), 1);
-        assert_eq!(skill_msgs[0].task_id, task_id);
-        assert_eq!(skill_msgs[0].agent_id, delegate_id);
-        assert_eq!(skill_msgs[0].agent_name, "browser-operator");
-    }
-
-    #[test]
-    fn skill_command_empty_intent_no_request() {
-        use crate::domain::{FrontendKind, SkillCreationRequestMessage, Task, TaskStatus};
-
-        let mut app = App::new();
-        app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
-        app.insert_resource(EntityIndex::default());
-        app.add_systems(Update, command_parse_system);
-
-        let channel = ChannelId {
-            frontend: FrontendKind::Tui,
-            user_id: "test".to_string(),
-            thread_id: None,
-        };
-        let now = chrono::Utc::now();
-        app.world_mut().spawn((
-            Task {
-                id: crate::domain::TaskId::new(),
-                content: "active task".to_string(),
-                creator: crate::domain::AgentId::nil(),
-                delegate: None,
-                status: TaskStatus::Running,
-                pending_confirmation_id: None,
-                input_summary: "test".to_string(),
-                result_summary: String::new(),
-                priority: 0,
-                created_at: now,
-                updated_at: now,
-                retry_count: 0,
-                max_retries: 3,
-                next_retry_at: None,
-                last_error: None,
-                multi_turn: false,
-                parent_task_id: None,
-                batch_id: None,
-                origin_channel: Some(channel.clone()),
-                routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
-                last_evaluated_turn: None,
-            },
-            ShortTermMemory::default(),
-        ));
-
-        app.world_mut().spawn(UserInputMessage {
-            sender: None,
-            content: "/skill".to_string(),
-            origin_channel: channel,
-        });
-
-        app.update();
-
-        let skill_count = app
-            .world_mut()
-            .query::<&SkillCreationRequestMessage>()
-            .iter(app.world())
-            .count();
-        assert_eq!(
-            skill_count, 0,
-            "/skill with no intent should not spawn request"
-        );
-    }
-
-    #[test]
     fn clear_does_not_clear_other_channel_task() {
         use crate::domain::{ClearTaskMessage, FrontendKind, Task, TaskStatus};
 
         let mut app = App::new();
         app.insert_resource(MemoryConfig::default());
-        app.insert_resource(SharedKnowledgeBase::default());
-        app.insert_resource(PendingKnowledgeWriteHooks::default());
         app.insert_resource(EntityIndex::default());
         app.add_systems(Update, command_parse_system);
 

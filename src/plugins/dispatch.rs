@@ -6,7 +6,7 @@ use crate::prelude::*;
 
 use crate::systems::{
     HarnessSet, agent_started_hook_system, agent_stopped_hook_system, approval_dispatch_system,
-    approval_result_system, brain_decision_system, dispatch_system, evaluation_trigger_system,
+    approval_result_system, dispatch_system, evaluation_trigger_system,
     on_approval_requested_hook_system, on_approval_resolved_hook_system,
     on_message_dispatched_hook_system, subtask_dispatch_preparation_system,
     tool_confirmation_result_system, workitem_lifecycle_hook_system,
@@ -22,10 +22,6 @@ impl Plugin for DispatchPlugin {
         app.add_systems(
             Update,
             (
-                // Brain LLM 输出处理：解析 {agent_name, skill_name?} 并附加 PendingDispatch(DirectDelegate)
-                brain_decision_system
-                    .in_set(HarnessSet::Transform)
-                    .after(crate::systems::ingest_execution_results_system),
                 // 统一派发系统（处理带 PendingDispatch 的 Task / WorkItem）
                 dispatch_system.in_set(HarnessSet::Dispatch),
                 // SubTask 派发前置系统（为 SubTask 附加 PendingDispatch）
