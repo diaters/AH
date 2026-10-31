@@ -81,6 +81,8 @@ struct Index {
   @State sessionSearch: string = '';
   @State approvalFeedback: Record<string, string> = {};
   // 经验总结：草稿编辑态按草稿 ID 保存，刷新快照不会冲掉未保存的修改。
+  // 能力来自连接对象（非状态），镜像为状态以便侧栏等常驻区域随连接刷新。
+  @State experienceEnabled: boolean = false;
   @State summaryOpen: boolean = false;
   @State summaryNote: string = '';
   @State draftTitles: Record<string, string> = {};
@@ -168,7 +170,7 @@ struct Index {
     this.automation = { available: false, schedules: [], timezone: '' }; this.devices = []; this.diagnostics = undefined;
     this.questionDrafts = {}; this.approvalFeedback = {}; this.processExpanded = {}; this.viewing = undefined;
     this.summaryOpen = false; this.summaryNote = ''; this.draftTitles = {}; this.draftBodies = {}; this.draftEditing = {}; this.draftAsNew = {};
-    this.experiences = []; this.experienceDetail = undefined; this.experienceEditing = false; this.experienceDeleting = '';
+    this.experienceEnabled = false; this.experiences = []; this.experienceDetail = undefined; this.experienceEditing = false; this.experienceDeleting = '';
     this.lastCommandId = ''; this.view = 'chat'; this.resetPlan();
   }
   private switchInstance(saved: SavedInstance): void {
@@ -349,6 +351,7 @@ struct Index {
       if (!this.foreground) { this.connection.close(); return; }
       this.applySnapshot(snapshot.sessions, snapshot.automation, snapshot.notifications, snapshot.notifications_truncated, snapshot.notification_overflow, snapshot.files);
       this.connected = true;
+      this.experienceEnabled = this.connection.supports('experiences.manage');
       this.status = '';
       this.reconnectDelay = 1000;
       await this.connection.subscribe(snapshot.cursor, () => { this.refresh(); }, (text: string) => {
@@ -622,7 +625,7 @@ struct Index {
   }
 
   // ---------- 经验总结与经验库 ----------
-  private canManageExperience(): boolean { return this.connection.supports('experiences.manage'); }
+  private canManageExperience(): boolean { return this.experienceEnabled; }
   private drafts(): ExperienceDraftDto[] {
     const session = this.current();
     return session ? Object.values(session.experience_drafts ?? {}) : [];
