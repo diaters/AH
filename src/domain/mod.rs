@@ -12,6 +12,7 @@ mod dispatch;
 mod error;
 mod evaluation;
 mod execution;
+mod experience_library;
 mod frontend;
 mod interaction;
 pub use interaction::{InteractionRequest, TaskInteraction};
@@ -280,6 +281,15 @@ pub use task::{
     AskUserPending, NewlyCreatedTask, PreviousTaskStatus, Task, TaskInitiator, TaskRoutingPolicy,
     TaskStatus, ToolCalledHookPending, ToolReturnedHookPending, WaitingForSessionInfo,
     WaitingForTasksInfo,
+};
+
+// experience_library
+pub use experience_library::{
+    ExperienceDraftContent, ExperienceDraftOrigin, ExperienceDraftReadyMessage,
+    ExperienceDraftRequest, ExperienceEntry, ExperienceError, ExperienceLookupOrigin,
+    ExperienceLookupRequest, ExperienceMatch, ExperienceSummary, NO_MATCHING_EXPERIENCE,
+    build_draft_prompt, build_lookup_prompt, is_valid_experience_id, librarian_index, parse_draft,
+    parse_lookup_decision, rank_by_overlap, render_lookup_result,
 };
 
 // task_experience

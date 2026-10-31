@@ -7,6 +7,7 @@ mod list_experience_candidates;
 mod read_skill_file;
 mod schedule_task;
 pub mod scheduled;
+mod search_experience;
 mod shell;
 mod skip_profile_update;
 mod submit_experience_candidate;
@@ -27,6 +28,7 @@ pub use schedule_task::ScheduleTaskTool;
 pub use scheduled::DeleteScheduledTaskTool;
 pub use scheduled::ListScheduledTasksTool;
 pub use scheduled::UpdateScheduledTaskTool;
+pub use search_experience::SearchExperienceTool;
 pub use shell::{
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
 };

@@ -4,6 +4,7 @@
 //! 系统层不直接耦合文件格式和存储细节。
 
 pub mod assets;
+pub mod experience;
 pub mod incubation;
 pub mod memory;
 pub mod schedules;

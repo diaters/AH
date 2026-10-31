@@ -196,9 +196,14 @@ fn main() -> Result<()> {
     // 创建 input channel：IM 入向消息和 TUI 输入共用
     let (input_tx, input_rx) = unbounded::<ExternalInput>();
 
+    // 经验库：客户端通道（总结与管理）与运行时（检索与起草）共享同一实例。
+    let experience_library: harness::contracts::SharedExperienceLibrary =
+        Arc::new(harness::infrastructure::experience::FileExperienceLibrary::default());
+
     let client_server = if let Some(client_config) = config.channels.client.clone() {
         let store = harness::channels::client::Store::open(client_config.state_path.clone())?;
-        let client = harness::channels::client::Client::new(client_config, store, input_tx.clone());
+        let client = harness::channels::client::Client::new(client_config, store, input_tx.clone())
+            .with_experience_library(experience_library.clone());
         let server = runtime.block_on(harness::channels::client::ClientServer::start(
             client.clone(),
         ))?;
@@ -236,6 +241,9 @@ fn main() -> Result<()> {
     );
 
     app.insert_resource(process_backend.clone());
+    app.insert_resource(
+        harness::systems::experience_library::ExperienceLibraryHandle(experience_library),
+    );
     // 在 app / channel / runtime 之前析构，覆盖 TUI 初始化等后续错误返回和 panic unwind。
     let _process_shutdown = ProcessShutdownGuard(process_backend.clone());
 

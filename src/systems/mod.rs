@@ -11,6 +11,7 @@ mod dispatch;
 mod evaluation;
 mod execution;
 pub mod experience;
+pub mod experience_library;
 mod frontend_input;
 mod frontend_output;
 mod ingress;
@@ -51,7 +52,6 @@ pub(crate) use experience::{
     profile_generation_completion_system, profile_generation_workitem_system,
     profile_update_trigger_system, profile_update_writeback_system, skill_creation_workitem_system,
     skill_creation_writeback_system, skill_update_completion_system, skill_update_workitem_system,
-    task_terminated_experience_trigger_system,
 };
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;

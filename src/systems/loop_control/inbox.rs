@@ -112,7 +112,8 @@ pub(crate) fn inbox_wake_system(
     >,
 ) {
     for (task_entity, task, mut inbox, budget, owned_jobs, deferred) in &mut tasks {
-        if inbox.is_empty() || !is_idle_for_wake(task) {
+        // 经验提示等被动条目只随下一次请求附带，不单独拉起空闲任务。
+        if inbox.is_empty() || inbox.only_passive() || !is_idle_for_wake(task) {
             continue;
         }
 

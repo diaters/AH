@@ -4,7 +4,8 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
+import { CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, ExperienceDto, ExperienceListDto,
+  ExperienceSummaryDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
 
 // 服务端 `--client-pair` 输出的单个配对链接。
 export interface PairingLink { instance: string; code: string; fingerprint: string; addresses: string[]; }
@@ -185,6 +186,34 @@ export class Connection {
   async retryNotification(id: string, allowUnknown: boolean): Promise<void> {
     const body: Record<string, boolean> = { 'allow_unknown': allowUnknown };
     await this.request(`/v1/notifications/${id}/retry`, http.RequestMethod.POST, JSON.stringify(body));
+  }
+  // ---------- 经验库 ----------
+  async startExperienceDraft(session: string, draftId: string, note: string): Promise<void> {
+    const body: Record<string, string> = { 'draft_id': draftId };
+    if (note.trim().length > 0) { body['note'] = note.trim(); }
+    await this.request(`/v1/sessions/${session}/experience-drafts`, http.RequestMethod.POST, JSON.stringify(body));
+  }
+  async saveExperienceDraft(session: string, draftId: string, title: string, content: string, targetId: string): Promise<ExperienceSummaryDto> {
+    const body: Record<string, string> = { 'title': title, 'body': content };
+    if (targetId.length > 0) { body['target_id'] = targetId; }
+    return JSON.parse(await this.request(`/v1/sessions/${session}/experience-drafts/${draftId}/save`, http.RequestMethod.POST,
+      JSON.stringify(body))) as ExperienceSummaryDto;
+  }
+  async discardExperienceDraft(session: string, draftId: string): Promise<void> {
+    await this.request(`/v1/sessions/${session}/experience-drafts/${draftId}`, http.RequestMethod.DELETE);
+  }
+  async experiences(): Promise<ExperienceListDto> {
+    return JSON.parse(await this.request('/v1/experiences', http.RequestMethod.GET)) as ExperienceListDto;
+  }
+  async experience(id: string): Promise<ExperienceDto> {
+    return JSON.parse(await this.request(`/v1/experiences/${id}`, http.RequestMethod.GET)) as ExperienceDto;
+  }
+  async updateExperience(id: string, title: string, content: string, expectedUpdatedAt: string): Promise<ExperienceDto> {
+    const body: Record<string, string> = { 'title': title, 'body': content, 'expected_updated_at': expectedUpdatedAt };
+    return JSON.parse(await this.request(`/v1/experiences/${id}`, http.RequestMethod.PUT, JSON.stringify(body))) as ExperienceDto;
+  }
+  async deleteExperience(id: string): Promise<void> {
+    await this.request(`/v1/experiences/${id}`, http.RequestMethod.DELETE);
   }
   supports(operation: string): boolean { return this.capabilities?.operations.includes(operation) ?? false; }
 

@@ -170,6 +170,12 @@ pub enum EngineEvent {
         target: EventTarget,
         snapshot: serde_json::Value,
     },
+    /// 经验草稿状态变化（生成完成或失败）。
+    ExperienceDraftUpdated {
+        target: EventTarget,
+        draft_id: uuid::Uuid,
+        outcome: Result<super::ExperienceDraftContent, String>,
+    },
     TaskInteractionChanged {
         target: EventTarget,
         task_id: TaskId,
@@ -394,6 +400,7 @@ impl EngineEvent {
         match self {
             Self::ToolCallCompleted { target, .. } => target,
             Self::AutomationSnapshot { target, .. } => target,
+            Self::ExperienceDraftUpdated { target, .. } => target,
             Self::TaskInteractionChanged { target, .. }
             | Self::QuestionPresented { target, .. }
             | Self::CommandResult { target, .. } => target,

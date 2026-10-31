@@ -210,6 +210,8 @@ pub enum ToolAction {
     StopSession(SessionHandleId),
     /// 提交经验候选
     SubmitExperienceCandidate(ExperienceCandidateSubmission),
+    /// 请经验管理员检索经验库；结果在管理员回复后回填本次工具调用。
+    SearchExperience { situation: String },
     /// 向 IM 通道发送消息
     SendChannelMessage {
         channel: String,

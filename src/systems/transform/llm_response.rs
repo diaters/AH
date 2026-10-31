@@ -128,6 +128,8 @@ pub fn llm_response_system(
                         );
                         continue;
                     }
+                    // 经验管理员回复由 experience_librarian_response_system 处理。
+                    WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => continue,
                     WorkItemType::Summarization => {
                         handle_summarization_work_item_result(
                             &mut commands,
@@ -364,9 +366,10 @@ pub fn llm_response_system(
                             .get(task_entity)
                             .map(|jobs| jobs.jobs().len())
                             .unwrap_or(0);
+                        // 经验提示等被动条目不阻止完成，否则任务会停在等待且永不唤醒。
                         let pending_inbox = inboxes
                             .get(task_entity)
-                            .map(|inbox| inbox.len())
+                            .map(|inbox| inbox.actionable_len())
                             .unwrap_or(0);
                         if active_jobs > 0 || pending_inbox > 0 {
                             debug!(

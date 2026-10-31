@@ -12,9 +12,13 @@ use super::{AgentId, TaskId, ToolDefinition};
 pub enum AgentRequestKind {
     LlmCompletion,
     BrainDecision,
-    ToolExecution { tool_name: String },
+    ToolExecution {
+        tool_name: String,
+    },
     Summarization,
     Evaluation,
+    /// 经验管理员请求（检索 / 起草）：不改变所属任务状态。
+    Experience,
 }
 
 /// LLM 返回的 Tool 调用

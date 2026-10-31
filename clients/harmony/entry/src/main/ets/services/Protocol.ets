@@ -15,8 +15,17 @@ export interface SessionDto {
   tasks: Record<string, TaskDto>; approvals: Record<string, ApprovalDto>; history_truncated: boolean;
   questions: Record<string, QuestionDto>;
   observations: ObservationDto[]; observations_truncated: boolean; progress: Record<string, ProgressDto>;
-  updated_at?: number;
+  updated_at?: number; experience_drafts?: Record<string, ExperienceDraftDto>;
 }
+// 经验草稿：generating → ready / failed；保存或丢弃后从会话移除。
+export interface ExperienceRefDto { id: string; title: string; }
+export interface ExperienceDraftDto {
+  draft_id: string; status: string; note?: string; title?: string; body?: string;
+  merge_target?: ExperienceRefDto | null; error?: string | null;
+}
+export interface ExperienceSummaryDto { id: string; title: string; scenario: string; updated_at: string; }
+export interface ExperienceListDto { experiences: ExperienceSummaryDto[]; }
+export interface ExperienceDto { id: string; title: string; body: string; created_at: string; updated_at: string; source_session?: string; }
 export interface ScheduleInputDto { name: string; content: string; schedule: string; enabled: boolean; notify: string; }
 export interface ScheduleHealthDto { consecutive_failures: number; alerting: boolean; last_fired_at?: string; }
 export interface ScheduleDto extends ScheduleInputDto {

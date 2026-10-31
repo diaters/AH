@@ -51,10 +51,10 @@ use crate::domain::{
 use self::builtin::{
     AskUserTool, ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool,
     ListExperienceCandidatesTool, ListScheduledTasksTool, ReadSkillFileTool, ScheduleTaskTool,
-    ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    SkipProfileUpdateTool, SubmitExperienceCandidateTool, SubmitProfileUpdateTool, SubmitSkillTool,
-    SubmitSkillUpdateTool, UpdateScheduledTaskTool, UpdateTodosTool, ViewImageTool, WaitTasksTool,
-    WriteSkillFileTool,
+    SearchExperienceTool, ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool,
+    ShellStartTool, ShellStopTool, SkipProfileUpdateTool, SubmitExperienceCandidateTool,
+    SubmitProfileUpdateTool, SubmitSkillTool, SubmitSkillUpdateTool, UpdateScheduledTaskTool,
+    UpdateTodosTool, ViewImageTool, WaitTasksTool, WriteSkillFileTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -272,6 +272,28 @@ pub fn register_builtin_tools(
         required_tag: None,
     });
     executors.register(Box::new(ViewImageTool));
+
+    // 经验库检索：判断交给经验管理员，主 Agent 只拿到相关经验原文
+    registry.register(ToolDefinition {
+        name: "search_experience".to_string(),
+        description: "在经验库中查找以往任务沉淀的试错经验（验证过的做法与走不通的路线）。遇到报错，或准备尝试一个不确定能否成功的方案之前，先调用本工具，避免重复已经失败过的尝试。由经验管理员判断哪些经验适用并返回原文；没有相关经验时会明确说明。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "situation": {
+                        "type": "string",
+                        "description": "用自然语言描述当前要做的事、所处环境和遇到的现象；有报错时附上关键报错原文"
+                    }
+                },
+                "required": ["situation"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("search_experience".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(SearchExperienceTool));
 
     // Experience candidate tools
     registry.register(ToolDefinition {

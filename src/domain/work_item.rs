@@ -25,6 +25,10 @@ pub enum WorkItemType {
     SkillUpdate,
     /// skill 创建工作项：由 skill-creator Agent 消费，根据用户意图生成新 skill
     SkillCreation,
+    /// 经验检索工作项：由经验管理员判断经验库中哪些条目适用
+    ExperienceLookup,
+    /// 经验起草工作项：由经验管理员把会话试错过程整理为经验草稿
+    ExperienceDraft,
 }
 
 impl WorkItemType {
@@ -41,6 +45,9 @@ impl WorkItemType {
             WorkItemType::SkillCreation => "skill-creator",
             WorkItemType::ProfileGeneration => "profile",
             WorkItemType::Execution => "execution",
+            WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {
+                "experience-librarian"
+            }
         }
     }
 }
@@ -80,6 +87,8 @@ pub enum WorkItemOrigin {
     Evaluation,
     /// 经验收集
     ExperienceCollection,
+    /// 经验库（检索 / 起草）
+    ExperienceLibrary,
 }
 
 /// 工作项写回目标
@@ -93,6 +102,8 @@ pub enum WorkItemWritebackTarget {
     LongTermMemory,
     /// 经验收件箱
     ExperienceInbox,
+    /// 回送发起方（工具调用、任务收件箱或客户端草稿）
+    Requester,
 }
 
 /// 工作项上下文
@@ -234,6 +245,21 @@ impl WorkItem {
             input,
             WorkItemOrigin::Evaluation,
             WorkItemWritebackTarget::TaskResult,
+        )
+    }
+
+    /// 创建经验管理员工作项（检索或起草），单轮无工具。
+    pub fn experience_librarian(task_id: TaskId, work_type: WorkItemType, prompt: String) -> Self {
+        debug_assert!(matches!(
+            work_type,
+            WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft
+        ));
+        Self::new(
+            task_id,
+            work_type,
+            WorkItemInput::new(prompt),
+            WorkItemOrigin::ExperienceLibrary,
+            WorkItemWritebackTarget::Requester,
         )
     }
 
@@ -577,6 +603,18 @@ mod tests {
     #[test]
     fn required_tag_execution() {
         assert_eq!(WorkItemType::Execution.required_tag(), "execution");
+    }
+
+    #[test]
+    fn required_tag_experience_librarian() {
+        assert_eq!(
+            WorkItemType::ExperienceLookup.required_tag(),
+            "experience-librarian"
+        );
+        assert_eq!(
+            WorkItemType::ExperienceDraft.required_tag(),
+            "experience-librarian"
+        );
     }
 
     #[test]
