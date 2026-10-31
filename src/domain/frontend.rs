@@ -190,6 +190,13 @@ pub enum EngineEvent {
         command_id: Uuid,
         outcome: Result<(), String>,
     },
+    /// 客户端区分工具调用过程文字与回复。
+    AgentOutput {
+        target: EventTarget,
+        task_id: TaskId,
+        content: String,
+        progress: bool,
+    },
     /// 用户可见文本（Agent 回复、系统消息）
     Text {
         target: EventTarget,
@@ -390,7 +397,7 @@ impl EngineEvent {
             Self::TaskInteractionChanged { target, .. }
             | Self::QuestionPresented { target, .. }
             | Self::CommandResult { target, .. } => target,
-            Self::Text { target, .. } => target,
+            Self::Text { target, .. } | Self::AgentOutput { target, .. } => target,
             Self::ApprovalRequest { target, .. } => target,
             Self::ApprovalResult { target, .. } => target,
             Self::AgentStatusChanged { target, .. } => target,

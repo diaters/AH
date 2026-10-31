@@ -113,7 +113,16 @@ pub(crate) fn frontend_output_system(
             }
         } else {
             for frontend in &registry.frontends {
-                frontend.push_event(event.clone());
+                if frontend.kind() == crate::domain::FrontendKind::Client {
+                    frontend.push_event(EngineEvent::AgentOutput {
+                        target: event.target().clone(),
+                        task_id: output.task_id,
+                        content: output.content.clone(),
+                        progress: output.progress,
+                    });
+                } else {
+                    frontend.push_event(event.clone());
+                }
             }
         }
         commands.entity(entity).despawn();
@@ -557,6 +566,7 @@ mod tests {
             .tasks
             .insert(task_id, task_entity);
         app.world_mut().spawn(UserOutputMessage {
+            progress: false,
             task_id,
             content: "should not be sent".to_string(),
         });
@@ -598,6 +608,7 @@ mod tests {
             .tasks
             .insert(task_id, task_entity);
         app.world_mut().spawn(UserOutputMessage {
+            progress: false,
             task_id,
             content: "hello".to_string(),
         });
@@ -613,6 +624,40 @@ mod tests {
             })
             .expect("should emit Text event with task_id");
         assert_eq!(text_task_id, task_id);
+    }
+
+    #[test]
+    fn client_output_preserves_progress_phase() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(MockFrontend {
+                kind: FrontendKind::Client,
+                events: events.clone(),
+            })],
+        });
+        app.insert_resource(EntityIndex::default());
+        app.add_systems(Update, frontend_output_system);
+        let channel = ChannelId {
+            frontend: FrontendKind::Client,
+            user_id: "u1".into(),
+            thread_id: None,
+        };
+        let task = Task::from_user_input("test", 3, channel);
+        let task_id = task.id;
+        let entity = app.world_mut().spawn(task).id();
+        app.world_mut()
+            .resource_mut::<EntityIndex>()
+            .tasks
+            .insert(task_id, entity);
+        app.world_mut().spawn(UserOutputMessage {
+            progress: true,
+            task_id,
+            content: "checking".into(),
+        });
+        app.update();
+        assert!(events.lock().unwrap().iter().any(|event| matches!(event,
+            EngineEvent::AgentOutput { task_id: id, progress: true, content, .. } if *id == task_id && content == "checking")));
     }
 
     #[test]
@@ -1267,6 +1312,7 @@ mod tests {
             .tasks
             .insert(task_id, entity);
         app.world_mut().spawn(UserOutputMessage {
+            progress: false,
             task_id,
             content: "no change".into(),
         });
@@ -1406,6 +1452,7 @@ mod tests {
             .insert(task_id, entity);
         // explicit 最终回复留在 TUI，只有 channel_send 会产生真实通知。
         app.world_mut().spawn(UserOutputMessage {
+            progress: false,
             task_id,
             content: "final reply".into(),
         });

@@ -1,4 +1,4 @@
-export interface MessageDto { role: string; content: string; task_id?: string; attachment_ids?: string[]; }
+export interface MessageDto { role: string; content: string; task_id?: string; phase?: string; sequence?: number; attachment_ids?: string[]; }
 export interface TaskDto {
   task_id: string; name: string; status: string; result?: string; agent_name?: string;
   parent_id?: string; revision?: string; can_stop?: boolean; can_finish?: boolean;
@@ -35,7 +35,7 @@ export interface NotificationDto {
 }
 export interface ClientFileDto { id: string; session_id: string; name: string; size: number; sha256: string; kind: string; source: string; }
 export interface PendingUploadDto { instance_id: string; id: string; session_id: string; name: string; local_path: string; }
-export interface ObservationDto { kind: string; task_id: string; tool_name: string; agent_name: string; action?: string; source?: string; context?: string; input_summary?: string; output?: string; success?: boolean; truncated?: boolean; late_result?: boolean; }
+export interface ObservationDto { sequence?: number; kind: string; task_id: string; tool_name: string; agent_name: string; action?: string; source?: string; context?: string; input_summary?: string; output?: string; success?: boolean; truncated?: boolean; late_result?: boolean; }
 export interface SnapshotDto {
   instance_id: string; cursor: number; sessions: SessionDto[]; automation: AutomationDto;
   notifications: NotificationDto[]; notifications_truncated: boolean; notification_overflow: number;

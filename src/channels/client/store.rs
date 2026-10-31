@@ -726,6 +726,7 @@ fn append_event(state: &mut State, session_id: Uuid, kind: &str, data: Value) {
     if matches!(kind, "tool_started" | "tool_completed" | "permission_audit") {
         let mut observation = data.clone();
         observation["kind"] = kind.into();
+        observation["sequence"] = state.sequence.into();
         session.observations.push(observation);
         if session.observations.len() > 200 {
             session.observations.remove(0);
@@ -831,7 +832,9 @@ fn append_event(state: &mut State, session_id: Uuid, kind: &str, data: Value) {
                 .retain(|_, p| p["task_id"].as_str() != Some(id));
         }
     } else if kind == "text" {
-        session.messages.push(data.clone());
+        let mut message = data.clone();
+        message["sequence"] = state.sequence.into();
+        session.messages.push(message);
         if session.messages.len() > 500 {
             session.messages.remove(0);
             session.history_truncated = true;

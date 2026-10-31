@@ -785,7 +785,7 @@ impl App {
             }
             // 权限审计事件仅供可观测性消费（如日志聚合 / 监控面板），
             // TUI 不直接展示，避免噪音。
-            EngineEvent::PermissionAudit { .. } => {}
+            EngineEvent::PermissionAudit { .. } | EngineEvent::AgentOutput { .. } => {}
         }
     }
 

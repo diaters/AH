@@ -183,6 +183,15 @@ impl Client {
                 "command_result",
                 json!({"command_id":command_id,"status":if outcome.is_ok(){"processed"}else{"rejected"},"result_code":outcome.as_ref().err()}),
             ),
+            EngineEvent::AgentOutput {
+                task_id,
+                content,
+                progress,
+                ..
+            } => (
+                "text",
+                json!({"role":"agent", "content":content, "task_id":task_id, "phase":if *progress { "progress" } else { "response" }}),
+            ),
             EngineEvent::Text {
                 role,
                 content,

@@ -84,6 +84,7 @@ fn registered_webhook_creates_task_and_routes_approval() {
     let task_id = task.id;
 
     app.world_mut().spawn(UserOutputMessage {
+        progress: false,
         task_id,
         content: "normal output should be dropped".to_string(),
     });

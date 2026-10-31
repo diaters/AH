@@ -337,6 +337,7 @@ pub fn llm_response_system(
                             "multi-turn: task now waiting for user"
                         );
                         commands.spawn(UserOutputMessage {
+                            progress: false,
                             task_id: task.id,
                             content: content.clone(),
                         });
@@ -383,6 +384,7 @@ pub fn llm_response_system(
                         }
                         task.mark_done(result_summary, clock.0);
                         commands.spawn(UserOutputMessage {
+                            progress: false,
                             task_id: task.id,
                             content: content.clone(),
                         });
@@ -407,6 +409,7 @@ pub fn llm_response_system(
                         }
                         if !(task.parent_task_id.is_some() && chat_session.is_some()) {
                             commands.spawn(UserOutputMessage {
+                                progress: true,
                                 task_id: task.id,
                                 content: text.to_string(),
                             });
@@ -473,6 +476,7 @@ pub fn llm_response_system(
                     warn!(event = "BackgroundReportFailed", task_id = %task.id, error = %error,
                         "report failed; task-owned background jobs remain active");
                     commands.spawn(UserOutputMessage {
+                        progress: false,
                         task_id: task.id,
                         content: format!("后台汇报失败：{}。本任务的后台作业仍在运行，可继续查询、补充要求或使用 /finish 结束。", error.message()),
                     });
@@ -509,6 +513,7 @@ pub fn llm_response_system(
                     );
                     task.mark_failed(error, clock.0);
                     commands.spawn(UserOutputMessage {
+                        progress: false,
                         task_id: task.id,
                         content: format!(
                             "任务执行失败（{:?}）：{}",
@@ -613,6 +618,15 @@ mod tests {
                 usize::from(!internal_chat),
                 "internal agent progress must stay with the parent"
             );
+            if !internal_chat {
+                assert!(
+                    app.world_mut()
+                        .query::<&UserOutputMessage>()
+                        .single(app.world())
+                        .unwrap()
+                        .progress
+                );
+            }
             assert_eq!(
                 app.world().get::<Task>(entity).unwrap().status(),
                 &TaskStatus::Waiting(WaitingReason::ToolExecution)

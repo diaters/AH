@@ -272,6 +272,7 @@ pub struct AgentExecutionResultMessage {
 /// 用户输出消息
 #[derive(Debug, Clone, Component)]
 pub struct UserOutputMessage {
+    pub progress: bool,
     pub task_id: TaskId,
     pub content: String,
 }
