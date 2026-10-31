@@ -26,18 +26,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::mock_executor::{CannedExecutor, DEFAULT_BRAIN_DECISION_JSON, text_output};
+use common::mock_executor::{CannedExecutor, text_output};
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     app::build_harness_app, domain::AgentExecutionRequest, domain::AgentRequestKind,
-    domain::ChannelId, domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy,
-    domain::ExternalInput, domain::FrontendKind, domain::JudgeOutcome, domain::JudgeRubric,
-    domain::JudgeVerdict, domain::JudgeVote, domain::LongTermMemory, domain::MemoryConfig,
-    domain::PendingDispatch, domain::ShortTermMemory, domain::Task, domain::TaskStatus,
-    domain::WaitingReason, domain::WorkItem, domain::WorkItemType, domain::parse_judge_verdict,
-    llm::ExecutorRegistry, llm::JudgePromptData, llm::build_judge_user_prompt,
-    llm::judge_system_prompt, systems::HarnessConfig,
+    domain::ChannelId, domain::DispatchHint, domain::DispatchKind, domain::ExternalInput,
+    domain::FrontendKind, domain::JudgeOutcome, domain::JudgeRubric, domain::JudgeVerdict,
+    domain::JudgeVote, domain::LongTermMemory, domain::MemoryConfig, domain::PendingDispatch,
+    domain::ShortTermMemory, domain::Task, domain::TaskStatus, domain::WaitingReason,
+    domain::WorkItem, domain::WorkItemType, domain::parse_judge_verdict, llm::ExecutorRegistry,
+    llm::JudgePromptData, llm::build_judge_user_prompt, llm::judge_system_prompt,
+    systems::HarnessConfig,
 };
 use harness::{
     domain::Agent, domain::AgentCapabilities, domain::AgentExecutor, domain::AgentKind,
@@ -250,7 +250,6 @@ struct ScenarioReport {
 // ============ 场景自检 mock executor（本文件专用，不进共享库） ============
 
 /// mock 模式专用执行器：
-/// - `BrainDecision` → 标准决策 JSON（复用共享常量）
 /// - `Evaluation`（Judge 请求）→ 高置信 canned verdict
 /// - 其他 → 固定汇报文本（满足 echo_report 的确定性断言）
 struct ScenarioSelfcheckExecutor {
@@ -260,9 +259,6 @@ struct ScenarioSelfcheckExecutor {
 impl AgentExecutor for ScenarioSelfcheckExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
         match request.request_kind {
-            AgentRequestKind::BrainDecision => {
-                Box::pin(async { Ok(text_output(DEFAULT_BRAIN_DECISION_JSON)) })
-            }
             AgentRequestKind::Evaluation => Box::pin(async {
                 // canned Judge verdict：高置信通过，验证投票链路
                 Ok(text_output(
@@ -314,7 +310,7 @@ fn scenario_config() -> HarnessConfig {
             api_key: Some("scenario-test-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 8,
@@ -530,7 +526,7 @@ fn execute_scenario(
     spawn_scenario_agent(&mut app);
 
     // DirectDelegate 直派 default-llm-agent：场景聚焦"单轮输入 → 完整工具循环 → 完成"
-    // 链路；Brain 调度策略属 Layer 0 既有覆盖（brain_dispatch_flow.rs）。
+    // 链路。
     let mut task = Task::from_user_input_ready(&spec.input, 3, scenario_channel());
     // 多轮场景置 multi_turn：LLM 文本回复后任务转 Waiting(User) 等续轮，
     // follow-up 才能经 routing continue_existing 挂回同一 Task（STM 保留）；
@@ -544,12 +540,7 @@ fn execute_scenario(
             ShortTermMemory::default(),
             PendingDispatch {
                 kind: DispatchKind::Task,
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::DirectDelegate,
-                    preferred_agent_name: Some("default-llm-agent".to_string()),
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::agent("default-llm-agent".to_string()),
             },
         ))
         .id();

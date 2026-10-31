@@ -1,4 +1,3 @@
-mod brain;
 mod client_schedules;
 mod command;
 mod conversation;
@@ -10,7 +9,6 @@ pub mod demand;
 mod dispatch;
 mod evaluation;
 mod execution;
-pub mod experience;
 pub mod experience_library;
 mod frontend_input;
 mod frontend_output;
@@ -18,7 +16,6 @@ mod ingress;
 mod interaction;
 pub(crate) use interaction::{interaction_request_system, interaction_state_system};
 mod ingress_hook;
-mod knowledge_hook;
 mod loop_control;
 mod maintenance;
 mod memory;
@@ -34,7 +31,6 @@ pub mod transform;
 
 use bevy_ecs::schedule::SystemSet;
 
-pub(crate) use brain::brain_decision_system;
 pub(crate) use command::{
     command_parse_system, reload_plugins_system, reload_triggers_message_consumer_system,
 };
@@ -45,19 +41,10 @@ pub(crate) use dispatch::{
 };
 pub(crate) use evaluation::evaluation_trigger_system;
 pub(crate) use execution::{agent_execution_system, model_chain_state_update_system};
-pub(crate) use experience::{
-    experience_approval_result_system, experience_collection_completion_system,
-    experience_collection_workitem_system, experience_consolidation_trigger_system,
-    experience_governance_system, experience_writeback_system, on_experience_hook_system,
-    profile_generation_completion_system, profile_generation_workitem_system,
-    profile_update_trigger_system, profile_update_writeback_system, skill_creation_workitem_system,
-    skill_creation_writeback_system, skill_update_completion_system, skill_update_workitem_system,
-};
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;
 pub(crate) use ingress::{input_ingress_system, retry_wakeup_system, tick_clock_system};
 pub(crate) use ingress_hook::on_message_received_hook_system;
-pub(crate) use knowledge_hook::on_shared_knowledge_write_hook_system;
 pub(crate) use loop_control::{
     background_job_cleanup_system, background_job_monitor_system, clear_stop_requested_system,
     context_attachment_system, inbox_ingest_system, inbox_status_sync_system, inbox_wake_system,
@@ -87,7 +74,7 @@ pub(crate) use tools::{
 // `async_tool_dispatch_system` 供集成测试经 `harness::systems::async_tool_dispatch_system`
 // 调用 `world.run_system_once(...)`，故单独 `pub use`（其余 tools 内部系统保持
 // `pub(crate)` 仅 crate 内可见）。
-pub use runtime_config::{BrainConfig, HarnessConfig, HarnessSettings};
+pub use runtime_config::{DEFAULT_MAIN_AGENT, HarnessConfig, HarnessSettings};
 pub use sweeper::sweep_inflight_tool_calls;
 pub use task_retention::{conversation_idle_system, terminal_task_retention_system};
 pub use tools::async_tool_dispatch_system;

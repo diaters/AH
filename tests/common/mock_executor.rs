@@ -22,13 +22,6 @@ pub fn text_output(text: &str) -> AgentExecutionOutput {
     }
 }
 
-/// 标准 BrainDecision JSON 决策（选择 default-llm-agent）。
-///
-/// TopLevelTask 经 `user_message_to_task_system` 创建时附加 `PendingDispatch(BrainLlm)`，
-/// 走 BrainLlm 派发路径的测试都需要 BrainDecision 请求返回该 JSON。
-pub const DEFAULT_BRAIN_DECISION_JSON: &str =
-    r#"{"agent_name":"default-llm-agent","skill_name":null}"#;
-
 /// 固定返回 `"echo"` 文本。
 pub struct EchoExecutor;
 
@@ -77,25 +70,19 @@ impl AgentExecutor for PanickingExecutor {
     }
 }
 
-/// Brain 决策感知的回显执行器。
-///
-/// `BrainDecision` 请求返回 [`DEFAULT_BRAIN_DECISION_JSON`]，其余请求返回
-/// `fallback_text`。适用于带 Brain 派发路径的多轮/多场景测试。
-pub struct BrainAwareEchoExecutor {
+/// 固定返回构造时给定文本的执行器，适用于多轮/多场景测试。
+pub struct FixedTextExecutor {
     fallback_text: &'static str,
 }
 
-impl BrainAwareEchoExecutor {
+impl FixedTextExecutor {
     pub fn new(fallback_text: &'static str) -> Self {
         Self { fallback_text }
     }
 }
 
-impl AgentExecutor for BrainAwareEchoExecutor {
-    fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        if request.request_kind == AgentRequestKind::BrainDecision {
-            return Box::pin(async { Ok(text_output(DEFAULT_BRAIN_DECISION_JSON)) });
-        }
+impl AgentExecutor for FixedTextExecutor {
+    fn execute(&self, _request: AgentExecutionRequest) -> ExecutorFuture {
         let fallback = self.fallback_text;
         Box::pin(async move { Ok(text_output(fallback)) })
     }
@@ -103,7 +90,6 @@ impl AgentExecutor for BrainAwareEchoExecutor {
 
 /// 按顺序返回预设 LLM 输出的执行器，用于端到端测试。
 ///
-/// - `BrainDecision` 请求返回标准 JSON 决策（见 [`DEFAULT_BRAIN_DECISION_JSON`]）。
 /// - 治理型 WorkItem / 非普通 LLM 请求直接返回 `"ok"` 占位文本，避免干扰主流程。
 /// - 普通请求按预设序列 `pop_front` 返回；序列耗尽后返回 `"done"`。
 pub struct CannedExecutor {
@@ -125,9 +111,6 @@ impl CannedExecutor {
 
 impl AgentExecutor for CannedExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        if request.request_kind == AgentRequestKind::BrainDecision {
-            return Box::pin(async { Ok(text_output(DEFAULT_BRAIN_DECISION_JSON)) });
-        }
         if request.work_item_id.is_some() || request.request_kind != AgentRequestKind::LlmCompletion
         {
             return Box::pin(async { Ok(text_output("ok")) });

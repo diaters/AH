@@ -9,10 +9,9 @@ use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
     domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
     domain::AgentToolPermissions, domain::ChannelId, domain::DispatchHint, domain::DispatchKind,
-    domain::DispatchStrategy, domain::ExecutionError, domain::ExecutorFuture,
-    domain::ExternalInput, domain::FrontendKind, domain::LongTermMemory, domain::PendingDispatch,
-    domain::Task, domain::TaskStatus, domain::WaitingReason, llm::ExecutorRegistry,
-    systems::HarnessConfig,
+    domain::ExecutionError, domain::ExecutorFuture, domain::ExternalInput, domain::FrontendKind,
+    domain::LongTermMemory, domain::PendingDispatch, domain::Task, domain::TaskStatus,
+    domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -34,7 +33,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -94,12 +93,7 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
 fn pending_dispatch_to_default_agent() -> PendingDispatch {
     PendingDispatch {
         kind: DispatchKind::Task,
-        hint: DispatchHint {
-            strategy: DispatchStrategy::DirectDelegate,
-            preferred_agent_name: Some("default-llm-agent".to_string()),
-            required_skill_id: None,
-            agent_spawn_spec: None,
-        },
+        hint: DispatchHint::agent("default-llm-agent".to_string()),
     }
 }
 
@@ -305,31 +299,18 @@ fn empty_user_input_creates_task() {
 fn large_input_is_handled() {
     let runtime = Arc::new(Runtime::new().unwrap());
 
-    // EchoExecutor 区分 BrainDecision（返回 JSON 决策）与其他请求（返回文本）。
-    // TopLevelTask 经 user_message_to_task_system 创建时会附加 PendingDispatch(BrainLlm)，
-    // 需要走 BrainLlm 派发路径，故需启用 brain 并 spawn brain agent。
     struct EchoExecutor;
     impl AgentExecutor for EchoExecutor {
         fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-            match request.request_kind {
-                harness::domain::AgentRequestKind::BrainDecision => Box::pin(async move {
-                    Ok(AgentExecutionOutput {
-                        content: harness::domain::OutputContent::Text(
-                            r#"{"agent_name":"default-llm-agent","skill_name":null}"#.to_string(),
-                        ),
-                        reasoning_content: None,
-                    })
-                }),
-                _ => Box::pin(async move {
-                    Ok(AgentExecutionOutput {
-                        content: harness::domain::OutputContent::Text(format!(
-                            "processed {} chars",
-                            request.prompt.len()
-                        )),
-                        reasoning_content: None,
-                    })
-                }),
-            }
+            Box::pin(async move {
+                Ok(AgentExecutionOutput {
+                    content: harness::domain::OutputContent::Text(format!(
+                        "processed {} chars",
+                        request.prompt.len()
+                    )),
+                    reasoning_content: None,
+                })
+            })
         }
     }
     let executor: Arc<dyn AgentExecutor> = Arc::new(EchoExecutor);
@@ -338,10 +319,7 @@ fn large_input_is_handled() {
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
         HarnessConfig {
-            brain: Some(harness::systems::BrainConfig {
-                enabled: true,
-                fallback_agent: None,
-            }),
+            main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
             ..test_config()
         },
         runtime,
@@ -354,35 +332,6 @@ fn large_input_is_handled() {
     // Initialize
     app.update();
     spawn_default_agent(&mut app);
-    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    let brain_agent = Agent {
-        id: harness::domain::AgentId::new(),
-        profile: AgentProfile {
-            name: "brain".to_string(),
-            model: "gpt-4.1-mini".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["brain".to_string()],
-            description: "Brain Agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions::default(),
-        system_prompt: None,
-    };
-    let brain_id = brain_agent.id;
-    let brain_entity = app
-        .world_mut()
-        .spawn((brain_agent, LongTermMemory::default()))
-        .id();
-    // 经 spawn 后同步写 EntityIndex（模拟 spawn_agent 封装的索引维护），
-    // 供 dispatch_system 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
-    app.world_mut()
-        .resource_mut::<harness::ecs::EntityIndex>()
-        .agents
-        .insert(brain_id, brain_entity);
-
     // Create large input (100KB)
     let large_content = "x".repeat(100_000);
     input_tx

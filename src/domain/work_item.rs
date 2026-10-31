@@ -17,14 +17,6 @@ pub enum WorkItemType {
     Summarization,
     /// 评估工作项
     Evaluation,
-    /// 经验收集工作项
-    ExperienceCollection,
-    /// profile 生成工作项（孵化场景生成新 profile，更新场景评估并生成更新后 profile）
-    ProfileGeneration,
-    /// skill 更新工作项：由 skill-updater Agent 消费，产出 SkillUpdateOperation 列表
-    SkillUpdate,
-    /// skill 创建工作项：由 skill-creator Agent 消费，根据用户意图生成新 skill
-    SkillCreation,
     /// 经验检索工作项：由经验管理员判断经验库中哪些条目适用
     ExperienceLookup,
     /// 经验起草工作项：由经验管理员把会话试错过程整理为经验草稿
@@ -40,10 +32,6 @@ impl WorkItemType {
         match self {
             WorkItemType::Evaluation => "evaluation",
             WorkItemType::Summarization => "summarization",
-            WorkItemType::ExperienceCollection => "collect",
-            WorkItemType::SkillUpdate => "skill-updater",
-            WorkItemType::SkillCreation => "skill-creator",
-            WorkItemType::ProfileGeneration => "profile",
             WorkItemType::Execution => "execution",
             WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {
                 "experience-librarian"
@@ -85,8 +73,6 @@ pub enum WorkItemOrigin {
     MemoryCompaction,
     /// 评估
     Evaluation,
-    /// 经验收集
-    ExperienceCollection,
     /// 经验库（检索 / 起草）
     ExperienceLibrary,
 }
@@ -100,8 +86,6 @@ pub enum WorkItemWritebackTarget {
     ShortTermContext,
     /// 长期记忆
     LongTermMemory,
-    /// 经验收件箱
-    ExperienceInbox,
     /// 回送发起方（工具调用、任务收件箱或客户端草稿）
     Requester,
 }
@@ -159,8 +143,6 @@ pub struct WorkItem {
     pub id: Uuid,
     /// 关联的任务 ID
     pub task_id: TaskId,
-    /// 父任务 ID（经验收集用于溯源）
-    pub parent_task_id: Option<TaskId>,
     /// 工作类型
     pub work_type: WorkItemType,
     /// 输入
@@ -169,8 +151,6 @@ pub struct WorkItem {
     pub(crate) status: WorkItemStatus,
     /// 分配的 Agent（收窄为 crate 内可见：读取经 `assigned_agent()`，写入经 `assign`）
     pub(crate) assigned_agent: Option<AgentId>,
-    /// 原任务治理者（仅经验收集等场景使用）
-    pub governing_agent_id: Option<AgentId>,
     /// 来源
     pub origin: WorkItemOrigin,
     /// 写回目标
@@ -189,12 +169,10 @@ impl WorkItem {
         Self {
             id: Uuid::new_v4(),
             task_id,
-            parent_task_id: None,
             work_type,
             input,
             status: WorkItemStatus::Pending,
             assigned_agent: None,
-            governing_agent_id: None,
             origin,
             writeback_target,
         }
@@ -261,119 +239,6 @@ impl WorkItem {
             WorkItemOrigin::ExperienceLibrary,
             WorkItemWritebackTarget::Requester,
         )
-    }
-
-    /// 创建经验收集工作项
-    pub fn experience_collection(
-        task_id: TaskId,
-        prompt: String,
-        parent_task_id: Option<TaskId>,
-        conversation: Vec<ConversationMessage>,
-        tools: Vec<ToolDefinition>,
-        governing_agent_id: AgentId,
-    ) -> Self {
-        let context = WorkItemContext {
-            conversation: Some(conversation),
-            tools,
-            system_prompt: None,
-        };
-        let input = WorkItemInput { prompt, context };
-        let mut wi = Self::new(
-            task_id,
-            WorkItemType::ExperienceCollection,
-            input,
-            WorkItemOrigin::ExperienceCollection,
-            WorkItemWritebackTarget::ExperienceInbox,
-        );
-        wi.parent_task_id = parent_task_id;
-        wi.governing_agent_id = Some(governing_agent_id);
-        wi
-    }
-
-    /// 创建 profile 生成工作项
-    ///
-    /// `kind` 决定 system_prompt 内容（孵化 vs 更新）。
-    /// 实际的 kind 与 exception_count 通过 ExperienceStore 临时字段传递到 completion 阶段，
-    /// 因 WorkItem 结构不承载 profile 生成元数据。
-    pub fn profile_generation(
-        task_id: TaskId,
-        prompt: String,
-        conversation: Vec<ConversationMessage>,
-        tools: Vec<ToolDefinition>,
-        governing_agent_id: AgentId,
-        _kind: crate::domain::ProfileGenerationKind,
-    ) -> Self {
-        let context = WorkItemContext {
-            conversation: Some(conversation),
-            tools,
-            system_prompt: None,
-        };
-        let input = WorkItemInput { prompt, context };
-        let mut wi = Self::new(
-            task_id,
-            WorkItemType::ProfileGeneration,
-            input,
-            WorkItemOrigin::ExperienceCollection,
-            WorkItemWritebackTarget::ExperienceInbox,
-        );
-        wi.governing_agent_id = Some(governing_agent_id);
-        wi
-    }
-
-    /// 创建 skill 更新工作项
-    ///
-    /// 具体的 `SkillUpdateContext` 由调用方作为独立 Component 注入到同一 entity，
-    /// 不存储在 WorkItem 中。
-    pub fn skill_update(
-        task_id: TaskId,
-        prompt: String,
-        conversation: Vec<ConversationMessage>,
-        tools: Vec<ToolDefinition>,
-        governing_agent_id: AgentId,
-    ) -> Self {
-        let context = WorkItemContext {
-            conversation: Some(conversation),
-            tools,
-            system_prompt: None,
-        };
-        let input = WorkItemInput { prompt, context };
-        let mut wi = Self::new(
-            task_id,
-            WorkItemType::SkillUpdate,
-            input,
-            WorkItemOrigin::ExperienceCollection,
-            WorkItemWritebackTarget::ExperienceInbox,
-        );
-        wi.governing_agent_id = Some(governing_agent_id);
-        wi
-    }
-
-    /// 创建 skill 创建工作项
-    ///
-    /// 具体的 `SkillCreationContext` 由调用方作为独立 Component 注入到同一 entity，
-    /// 不存储在 WorkItem 中。multi_turn = true：skill-creator 需要多轮工具调用。
-    pub fn skill_creation(
-        task_id: TaskId,
-        prompt: String,
-        conversation: Vec<ConversationMessage>,
-        tools: Vec<ToolDefinition>,
-        governing_agent_id: AgentId,
-    ) -> Self {
-        let context = WorkItemContext {
-            conversation: Some(conversation),
-            tools,
-            system_prompt: None,
-        };
-        let input = WorkItemInput { prompt, context };
-        let mut wi = Self::new(
-            task_id,
-            WorkItemType::SkillCreation,
-            input,
-            WorkItemOrigin::ExperienceCollection,
-            WorkItemWritebackTarget::ExperienceInbox,
-        );
-        wi.governing_agent_id = Some(governing_agent_id);
-        wi
     }
 
     /// 标记为已分配
@@ -533,49 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn work_item_experience_collection_creation() {
-        use crate::domain::{ToolExecutorKind, ToolPermission, ToolSchema};
-
-        let task_id = crate::domain::TaskId::nil();
-        let parent_task_id = crate::domain::TaskId::new();
-        let tool = ToolDefinition {
-            name: "submit_experience_candidate".to_string(),
-            description: "submit experience candidate".to_string(),
-            parameters: ToolSchema::default(),
-            default_permission: ToolPermission::Allow,
-            executor: ToolExecutorKind::Builtin("submit_experience_candidate".to_string()),
-            required_tag: None,
-        };
-        let work_item = WorkItem::experience_collection(
-            task_id,
-            "summarize what we learned".to_string(),
-            Some(parent_task_id),
-            vec![ConversationMessage::User {
-                content: "user goal".to_string(),
-            }],
-            vec![tool],
-            crate::domain::AgentId::new(),
-        );
-
-        assert_eq!(work_item.work_type, WorkItemType::ExperienceCollection);
-        assert_eq!(work_item.origin, WorkItemOrigin::ExperienceCollection);
-        assert_eq!(
-            work_item.writeback_target,
-            WorkItemWritebackTarget::ExperienceInbox
-        );
-        assert_eq!(work_item.work_type.required_tag(), "collect");
-        // System prompt is now provided by agents.toml, not WorkItem
-        assert!(work_item.input.context.system_prompt.is_none());
-        assert_eq!(work_item.input.context.tools.len(), 1);
-        assert_eq!(
-            work_item.input.context.tools[0].name,
-            "submit_experience_candidate"
-        );
-        assert!(work_item.input.context.conversation.is_some());
-        assert_eq!(work_item.parent_task_id, Some(parent_task_id));
-    }
-
-    #[test]
     fn required_tag_evaluation() {
         assert_eq!(WorkItemType::Evaluation.required_tag(), "evaluation");
     }
@@ -583,21 +405,6 @@ mod tests {
     #[test]
     fn required_tag_summarization() {
         assert_eq!(WorkItemType::Summarization.required_tag(), "summarization");
-    }
-
-    #[test]
-    fn required_tag_experience_collection() {
-        assert_eq!(WorkItemType::ExperienceCollection.required_tag(), "collect");
-    }
-
-    #[test]
-    fn required_tag_skill_update() {
-        assert_eq!(WorkItemType::SkillUpdate.required_tag(), "skill-updater");
-    }
-
-    #[test]
-    fn required_tag_profile_generation() {
-        assert_eq!(WorkItemType::ProfileGeneration.required_tag(), "profile");
     }
 
     #[test]
@@ -615,10 +422,5 @@ mod tests {
             WorkItemType::ExperienceDraft.required_tag(),
             "experience-librarian"
         );
-    }
-
-    #[test]
-    fn required_tag_skill_creation() {
-        assert_eq!(WorkItemType::SkillCreation.required_tag(), "skill-creator");
     }
 }

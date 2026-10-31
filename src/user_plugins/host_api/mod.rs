@@ -6,7 +6,6 @@
 pub mod approval;
 pub mod entity_query;
 pub mod entity_write;
-pub mod experience;
 pub mod log;
 pub mod message;
 pub mod plugin_resource;
@@ -30,7 +29,6 @@ pub fn register_all(engine: &mut Engine, ctx: &PluginContext) {
     tool_control::register(engine, ctx.outcome.clone(), ctx.tool.clone());
     plugin_resource::register(engine, ctx.plugin_roots.clone());
     approval::register(engine, ctx.approval.clone());
-    experience::register(engine, ctx.experience.clone());
     skills_meta::register(engine, ctx.skills.clone());
     message::register(engine, ctx.message.clone());
     temp_resource::register(engine, ctx.temp_resource.clone());

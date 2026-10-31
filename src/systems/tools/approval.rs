@@ -10,14 +10,11 @@ use crate::{
     domain::{
         Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
         ApprovalResultMessage, BuiltinToolExecutors, ChatSession, EngineEvent, EventTarget,
-        ExecutionError, ExperienceStore, GrantMode, PendingExperienceHooks,
-        ProfileGenerationContext, SharedKnowledgeBase, ShortTermMemory, SkillCreationContext,
-        SkillUpdateContext, Task, TaskStatus, ToolCallingState, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
-        WaitingReason, WorkItem,
+        ExecutionError, GrantMode, ShortTermMemory, Task, TaskStatus, ToolCallingState,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
+        ToolReturnedHookPending, WaitingReason,
     },
     ecs::EntityIndex,
-    infrastructure::skills::SkillLoader,
     systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
@@ -105,36 +102,20 @@ pub fn approval_result_system(
     agents: Query<&mut Agent>,
     mut tasks: Query<(Entity, &mut Task)>,
     executors: Res<BuiltinToolExecutors>,
-    knowledge: Res<SharedKnowledgeBase>,
-    mut experience_store: ResMut<ExperienceStore>,
-    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     mut short_term_memories: Query<&mut ShortTermMemory>,
     chat_sessions: Query<&ChatSession>,
     approval_results: Query<(Entity, &ApprovalResultMessage)>,
     tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
-    // 合并 Context 查询为单个 SystemParam，规避 Bevy 单 system 16 参数上限。
-    context_queries: Query<(
-        Entity,
-        Option<&ProfileGenerationContext>,
-        Option<&SkillUpdateContext>,
-        Option<&SkillCreationContext>,
-        &WorkItem,
-    )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
+    // 合并 index / clock / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock 转发给 handle_tool_action；
     // frontend_registry 用于在 Approved 路径推送 ToolCallStarted 事件。
-    mut index_clock_loader_frontends: (
-        ResMut<EntityIndex>,
-        Res<Clock>,
-        Res<SkillLoader>,
-        Res<FrontendRegistry>,
-    ),
+    mut index_clock_frontends: (ResMut<EntityIndex>, Res<Clock>, Res<FrontendRegistry>),
 ) {
-    let index = &mut index_clock_loader_frontends.0;
-    let frontend_registry = &index_clock_loader_frontends.3;
+    let index = &mut index_clock_frontends.0;
+    let frontend_registry = &index_clock_frontends.2;
     for (entity, result) in &approval_results {
         // 查找对应的 Tool 执行请求
         let Some((request_entity, tool_request)) = tool_requests
@@ -286,8 +267,6 @@ pub fn approval_result_system(
                 }
 
                 let ctx = ToolContext {
-                    knowledge: &knowledge,
-                    experience_store: &experience_store,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
@@ -302,7 +281,6 @@ pub fn approval_result_system(
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
-                    current_skill_dir: None,
                 };
                 let action = executor.execute(&tool_request.tool_input, &ctx);
 
@@ -323,18 +301,12 @@ pub fn approval_result_system(
                             agents: &agents,
                             chat_sessions: &chat_sessions,
                             short_term_memories: &mut short_term_memories,
-                            context_queries: &context_queries,
-                            calling_states: &calling_states,
                         },
                         &mut ToolResources {
                             backend: &*backend,
-                            experience_store: &mut experience_store,
-                            pending_experience_hooks: &mut pending_experience_hooks,
-                            skill_loader: &index_clock_loader_frontends.2,
                             frontend_registry,
-                            clock: &index_clock_loader_frontends.1,
+                            clock: &index_clock_frontends.1,
                         },
-                        None,
                         &mut *index,
                     );
                 }
@@ -369,13 +341,7 @@ mod tests {
         world.insert_resource(Clock(Utc::now()));
         world.insert_resource(NativeProcessBackend::default());
         world.insert_resource(crate::domain::BuiltinToolExecutors::default());
-        world.insert_resource(crate::domain::SharedKnowledgeBase::default());
-        world.insert_resource(crate::domain::ExperienceStore::default());
-        world.insert_resource(crate::domain::PendingExperienceHooks::default());
         world.insert_resource(crate::ecs::EntityIndex::default());
-        world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
-            std::path::PathBuf::from("/nonexistent_skills_root"),
-        ));
         world.insert_resource(crate::contracts::FrontendRegistry { frontends: vec![] });
         world
     }
@@ -438,7 +404,6 @@ mod tests {
             pending_confirmation_id: Some(request_id),
             tool_call_id: None,
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         }
     }

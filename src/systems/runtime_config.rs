@@ -10,20 +10,16 @@ use crate::domain::{LoopControlConfig, MemoryConfig};
 use crate::llm::{LlmProviderConfig, LlmProviderKind};
 use crate::prelude::Resource;
 
-#[derive(Debug, Clone)]
-pub struct BrainConfig {
-    pub enabled: bool,
-    /// Brain 未能给出可用决策（LLM 失败、输出无法解析、选了不存在的 Agent）时直接派发的
-    /// Persistent Agent 名称；`None` 时任务直接失败（默认，保持"失败要显式"）
-    pub fallback_agent: Option<String>,
-}
+/// 主 Agent 的默认名称：用户任务直接交给它处理。
+pub const DEFAULT_MAIN_AGENT: &str = "default-llm-agent";
 
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub max_retries: u32,
     pub max_tool_iterations: u32,
     pub llm: LlmProviderConfig,
-    pub brain: Option<BrainConfig>,
+    /// 主 Agent 名称（`HARNESS_MAIN_AGENT`）：用户任务与未指定 Agent 的子任务直接交给它。
+    pub main_agent: String,
     /// 记忆压缩配置（token 阈值 / 摘要目标）
     pub memory: MemoryConfig,
     /// Agent loop 控制配置（自动拉起预算 / 通知合并 / 后台轮询）
@@ -80,18 +76,11 @@ impl HarnessConfig {
         }
         let llm = LlmProviderConfig::from_env("gpt-4.1-mini")?;
 
-        let brain =
-            if std::env::var("HARNESS_BRAIN_ENABLED").is_ok_and(|v| v.to_lowercase() == "true") {
-                Some(BrainConfig {
-                    enabled: true,
-                    fallback_agent: std::env::var("HARNESS_BRAIN_FALLBACK_AGENT")
-                        .ok()
-                        .map(|v| v.trim().to_string())
-                        .filter(|v| !v.is_empty()),
-                })
-            } else {
-                None
-            };
+        let main_agent = std::env::var("HARNESS_MAIN_AGENT")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| DEFAULT_MAIN_AGENT.to_string());
 
         let agents_config_path =
             std::env::var("HARNESS_AGENTS_CONFIG").unwrap_or_else(|_| "agents.toml".to_string());
@@ -113,7 +102,7 @@ impl HarnessConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5),
             llm,
-            brain,
+            main_agent,
             memory: MemoryConfig {
                 compression_threshold_tokens: std::env::var(
                     "HARNESS_MEMORY_COMPRESSION_THRESHOLD_TOKENS",
@@ -234,7 +223,7 @@ impl Default for HarnessConfig {
                 api_key: Some("test-api-key".to_string()),
                 api_base: None,
             },
-            brain: None,
+            main_agent: DEFAULT_MAIN_AGENT.to_string(),
             memory: MemoryConfig::default(),
             loop_control: LoopControlConfig::default(),
             agents_config_path: "agents.toml".to_string(),

@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::SessionBackend;
-use crate::domain::{AgentExecutionRequest, ChannelId, ExperienceCandidate, TaskId, ToolError};
+use crate::domain::{AgentExecutionRequest, ChannelId, TaskId, ToolError};
 use crate::domain::{ScheduleDefinition, ScheduleExpr, ScheduleSelector};
 
 // ============ 通道消息 ============
@@ -174,15 +174,6 @@ pub enum ToolEffect {
         task_id: TaskId,
         items: Vec<crate::domain::TodoItem>,
     },
-    /// 写入 skill 沙盒文件：由 write_skill_file 工具声明，commit_tool_effects_system 在主线程落账。
-    WriteSkillFile {
-        /// skill 沙盒目录（由 worker 在构造时嵌入，commit 直接使用）
-        sandbox_dir: std::path::PathBuf,
-        /// 相对沙盒路径
-        path: String,
-        /// 文件内容
-        content: String,
-    },
 }
 
 /// 效果待应用实体。ingest 收到 `Effect` payload 时 spawn，
@@ -222,10 +213,6 @@ pub struct OwnedToolContext {
     /// 从 `Res<NativeProcessBackend>` clone 一份填入；不需要 backend 的
     /// 工具保持 `None`。
     pub backend: Option<Arc<dyn SessionBackend>>,
-    /// 经验候选快照。`list_experience_candidates` 等需要读经验收件箱的工具
-    /// 由 dispatch 从 `Res<ExperienceStore>` 按 `task_id` 抓一份 cloned
-    /// 列表包成 `Arc<Vec<...>>` 填入；不需要的工具保持 `None`。
-    pub experience_candidates: Option<Arc<Vec<ExperienceCandidate>>>,
     /// 当前任务 ID。dispatch 从 `request.request.task_id` 取，供 worker
     /// 在日志或快照关联场景使用；不需要的工具保持 `None`。
     pub current_task_id: Option<TaskId>,
@@ -235,9 +222,6 @@ pub struct OwnedToolContext {
     /// 由 dispatch 从 `Task.origin_channel` 读取并注入。未显式指定 `output_channel`
     /// 时用作 fallback；不需要继承通道的工具保持 `None`。
     pub current_origin_channel: Option<ChannelId>,
-    /// ADR-006：当前 skill 更新上下文中的 skill 目录路径。
-    /// 仅在 skill-updater WorkItem 执行时填充。
-    pub current_skill_dir: Option<std::path::PathBuf>,
     /// 取消令牌。dispatch 创建并 clone 一份挂到 `InFlightToolCall.cancel`，
     /// 另一份放进本字段供 worker 在 `run_async` 内 `select!` 监听。
     pub cancel: CancellationToken,
@@ -250,11 +234,9 @@ impl Default for OwnedToolContext {
             tool_inflight_timeout_secs: 0,
             shell_default_exec_timeout_secs: 0,
             backend: None,
-            experience_candidates: None,
             current_task_id: None,
             current_agent_id: None,
             current_origin_channel: None,
-            current_skill_dir: None,
             cancel: CancellationToken::new(),
         }
     }
@@ -270,11 +252,9 @@ impl OwnedToolContext {
             tool_inflight_timeout_secs,
             shell_default_exec_timeout_secs: tool_inflight_timeout_secs,
             backend: None,
-            experience_candidates: None,
             current_task_id: None,
             current_agent_id: None,
             current_origin_channel: None,
-            current_skill_dir: None,
             cancel: CancellationToken::new(),
         }
     }

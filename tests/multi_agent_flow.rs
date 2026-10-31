@@ -30,7 +30,7 @@ fn multi_agent_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "tests/fixtures/test_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -87,7 +87,7 @@ fn loads_persistent_agents_from_config() {
         names.contains(&"default-llm-agent"),
         "should have default agent"
     );
-    assert!(names.contains(&"brain"), "should have brain agent");
+    assert!(names.contains(&"evaluator"), "should have evaluator agent");
 
     for agent in &agents {
         assert_eq!(agent.kind, AgentKind::Persistent);

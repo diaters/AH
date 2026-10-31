@@ -1,6 +1,10 @@
 # Agent 配置示例
 # 通过 HARNESS_AGENTS_CONFIG 指向此文件启用
 # 复制此文件为 agents.toml 并根据需要修改
+#
+# 多 Agent 按职责分工：用户任务直接交给主 Agent（默认 default-llm-agent，
+# 可用 HARNESS_MAIN_AGENT 指定），其余 Agent 按 tags 承担服务角色：
+# summarization（摘要）、evaluation（完成度评估）、experience-librarian（经验库）。
 
 [[agent]]
 name = "default-llm-agent"
@@ -28,18 +32,6 @@ shell_start = "Confirm"
 channel_send = "Confirm"
 update_todos = "Allow"  # 仅更新展示清单，不执行工作
 search_experience = "Allow"  # 查经验库，由经验管理员判断，只读
-
-[[agent]]
-name = "brain"
-tags = ["brain", "dispatcher"]
-description = "Brain Agent，负责调度决策"
-
-[[agent.models]]
-provider = "openai"
-model = "gpt-4.1-mini"
-
-[agent.tools]
-default_permission = "Deny"
 
 [[agent]]
 name = "summarizer"
@@ -86,126 +78,3 @@ model = "gpt-4.1-mini"
 
 [agent.tools]
 default_permission = "Deny"
-
-[[agent]]
-name = "collector"
-tags = ["collect", "experience"]
-description = "经验收敛专家，负责从任务终态材料中提炼经验候选"
-
-[[agent.models]]
-provider = "openai"
-model = "gpt-4.1-mini"
-
-[agent.tools]
-default_permission = "Deny"
-submit_experience_candidate = "Allow"
-
-[[agent]]
-name = "knowledge-manager"
-tags = ["knowledge", "management"]
-description = "知识库管理员，负责知识检索与维护"
-
-[[agent.models]]
-provider = "openai"
-model = "gpt-4.1-mini"
-
-[agent.tools]
-default_permission = "Deny"
-shell_exec = "Confirm"
-shell_read = "Allow"
-shell_list = "Allow"
-
-[[agent]]
-name = "profile-designer"
-tags = ["profile", "design"]
-description = "Agent 元信息设计师，负责根据经验候选生成 Agent 角色名、能力标签和职责描述"
-system_prompt = """\
-你是一名 Agent 元信息设计师。你必须根据提供的经验候选，生成 Agent 的角色名、能力标签和职责描述。\
-每次响应必须调用 submit_profile_update 或 skip_profile_update 之一提交结果，\
-不能同时调用两个工具，也不能仅返回文本而不调用工具。\
-若无法根据材料生成合理的 profile，调用 skip_profile_update。\
-"""
-
-[[agent.models]]
-provider = "deepseek"
-model = "deepseek-chat"
-
-[agent.tools]
-default_permission = "Deny"
-submit_profile_update = "Allow"
-skip_profile_update = "Allow"
-
-[[agent]]
-name = "skill-updater"
-tags = ["skill-updater", "persistent", "skill"]
-description = "负责根据经验候选更新已有 skill 的 instruction，通过 submit_skill_update 工具提交结构化更新操作"
-system_prompt = """\
-你是一个 skill 更新专家。根据经验候选和原 skill 内容，通过 submit_skill_update 工具提交结构化更新操作。\
-你必须基于原 skill 的 instructions 和触发更新的经验候选，识别需要新增、修改、删除的章节，\
-然后通过 submit_skill_update 工具提交 operations 数组。\
-每次响应必须调用 submit_skill_update 工具一次，不能仅返回文本而不调用工具。\
-"""
-model = "deepseek-chat"
-
-[[agent.models]]
-provider = "deepseek"
-model = "deepseek-chat"
-
-[agent.tools]
-default_permission = "Deny"
-submit_skill_update = "Allow"
-read_skill_file = "Allow"
-
-[[agent]]
-name = "skill-creator"
-tags = ["skill-creator", "skill"]
-description = "技能创建专家，根据用户意图为指定 Agent 设计并生成新 skill"
-system_prompt = """\
-你是一名技能创建专家。根据用户的意图描述，为指定 Agent 创建新 skill。
-
-## 工作流程
-
-1. 使用 read_skill_file 读取已有 skill，理解现有能力和风格
-2. 在沙盒目录下自由创建 skill 文件（SKILL.md + 辅助文件）
-3. 使用 write_skill_file 创建或修改沙盒中的文件
-4. 完成后调用 submit_skill(name, description) 提交
-
-## SKILL.md 规范
-
-SKILL.md 是 skill 的入口文件，必须存在于 skill 目录根路径。
-
-frontmatter 格式：
-```
----
-name: <skill 名称>
-description: <一句话描述>
-version: 1
-self_updatable: true
----
-```
-
-body 要求：
-- 至少包含一个 ## 二级标题
-- 第一个 ## 标题下必须有实质内容
-
-## 文件创建规则
-
-- path 必须为相对路径，不允许 `../` 逃逸
-- 可以创建多文件 skill：辅助 markdown、脚本、配置等
-- 所有文件必须在沙盒目录内
-
-## 质量要求
-
-- 与已有 skill 形成联动，避免功能重叠
-- 指令清晰、步骤明确，Agent 可直接执行
-- 优先与 Agent 的定位（tags、description）一致"""
-
-[[agent.models]]
-provider = "deepseek"
-model = "deepseek-chat"
-
-[agent.tools]
-default_permission = "Deny"
-submit_skill = "Allow"
-write_skill_file = "Allow"
-read_skill_file = "Allow"

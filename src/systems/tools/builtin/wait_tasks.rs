@@ -59,16 +59,12 @@ fn parse_wait_tasks_timeout(input: &serde_json::Value, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BuiltinTool, ExperienceStore, SharedKnowledgeBase};
+    use crate::domain::BuiltinTool;
     use uuid::Uuid;
 
     #[test]
     fn test_wait_tasks_tool_parsing() {
-        let knowledge = SharedKnowledgeBase::default();
-        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
-            knowledge: &knowledge,
-            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -78,7 +74,6 @@ mod tests {
             current_task_id: crate::domain::TaskId::nil(),
             current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
-            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 
@@ -105,11 +100,7 @@ mod tests {
 
     #[test]
     fn test_wait_tasks_default_timeout() {
-        let knowledge = SharedKnowledgeBase::default();
-        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
-            knowledge: &knowledge,
-            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -119,7 +110,6 @@ mod tests {
             current_task_id: crate::domain::TaskId::nil(),
             current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
-            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 
@@ -140,11 +130,7 @@ mod tests {
 
     #[test]
     fn test_wait_tasks_missing_task_ids() {
-        let knowledge = SharedKnowledgeBase::default();
-        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
-            knowledge: &knowledge,
-            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -154,7 +140,6 @@ mod tests {
             current_task_id: crate::domain::TaskId::nil(),
             current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
-            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 
@@ -168,11 +153,7 @@ mod tests {
 
     #[test]
     fn test_wait_tasks_empty_task_ids() {
-        let knowledge = SharedKnowledgeBase::default();
-        let experience_store = ExperienceStore::default();
         let ctx = ToolContext {
-            knowledge: &knowledge,
-            experience_store: &experience_store,
             default_wait_tasks_timeout_secs: 300,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
@@ -182,7 +163,6 @@ mod tests {
             current_task_id: crate::domain::TaskId::nil(),
             current_agent_id: crate::domain::AgentId::nil(),
             current_origin_channel: None,
-            current_skill_dir: None,
         };
         let executor = WaitTasksTool;
 

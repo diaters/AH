@@ -12,7 +12,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 原生客户端：HTTPS/WSS、配对鉴权、可靠同步、任务控制、审批问答、附件、自动化与 MeoW 通知；
   [HarmonyOS API 26 工作台](docs/client-channel.md) 已提供原生工程，真机验证与后续管理能力仍待完成
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
-- Brain 调度、Agent 配置加载与多 Agent 执行链路
+- 多 Agent 按职责分工：用户任务直接交给主 Agent（`HARNESS_MAIN_AGENT`，默认 `default-llm-agent`），
+  摘要员、evaluator、经验管理员与子任务执行为主 Agent 服务
 - `create_tasks` + `wait_tasks` 驱动的任务分解能力
 - 每个完整聊天通道只保留一个未结束的用户顶层任务，运行中消息引导该任务；
   `/stop` 保留会话，`/finish` 清理后释放名额；`/btw` 只在空通道创建新主题；内部子任务与输出型定时任务可并行
@@ -31,19 +32,11 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   一次性 exec 返回前清理同组后台后代，`command_succeeded` 独立标识命令成功；
   运行中的 exec 与会话都登记真实 Task / Agent 归属；
   Unix 生产入口由独立守护器实际启动命令，宿主正常退出或异常死亡后按实例回收受管进程组
-- 记忆治理：ShortTermMemory、LongTermMemory、SharedKnowledgeBase 三层收敛，
-  支持衰退淘汰与 JSON 文件持久化
-- 经验候选治理：两层分层汇聚模型，顶层治理后知识/技能落盘与孵化提案
-- Skill 一等公民与自更新：`SkillRegistry` Resource + Brain 派发时 LLM 整体决策输出
-  `{agent_name, skill_name?}`，候选 Agent 名下 skills 清单（`name + description + owner_agent_name`）
-  注入 Brain LLM prompt（按 agent 嵌套渲染）；
-  持久 Agent 直接吸收子任务经验（Skill → skill-updater WorkItem / Knowledge → 长期记忆）；
-  skill-updater Agent 通过 `submit_skill_update` 工具提交结构化 diff（8 种 operation：
-  二级/三级标题级 + `replace_body` 兜底，post-apply `validate_skill_structure` 校验），
-  `skill_update_completion_system` apply 到 SKILL.md 并备份历史版本；
-  `/skill <意图描述>` 命令由 skill-creator Agent 在沙盒中生成新 skill，用户确认后
-  rename 原子写回 Agent 的 Skill Package
-- 插件系统：Rhai 脚本扩展，20 个 hook 点，支持贡献工具、技能和 Agent
+- 记忆治理：ShortTermMemory、LongTermMemory 两层收敛，支持衰退淘汰与 JSON 文件持久化
+- 试错经验库：经验文件存于 `.harness/experience/`，由用户在客户端发起“总结经验”，
+  经验管理员（`experience-librarian`）负责检索与撰写，`search_experience` 与开局预查逐字回填经验原文
+- Skill：Agent 名下 `.harness/assets/agents/<agent>/skills/*/SKILL.md` 派发时注入系统提示
+- 插件系统：Rhai 脚本扩展，17 个 hook 点，支持贡献工具、技能和 Agent
 - 定时任务：Webhook / cron 信号触发；`schedule_task` 动态定时任务持久化保存，重启后恢复，
   错过的运行在 7 天内补跑最近一次，支持暂停、修改与立即运行；运行账本、真实通知回执、
   `reply` / `explicit` 策略、连续失败告警与恢复、`report_of` 健康上下文已实现
@@ -72,6 +65,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - `Evaluation` 保留独立语义层，但执行链路统一走 `WorkItem`
 - `spawn_agent` 工具已废弃并从 LLM 可调工具集中移除
 - `AgentExperience` 已删除，不再作为独立运行时概念保留
+- Brain 路由、自动经验收集/治理/孵化、`/remember` 共享知识库与 `/skill` 技能生成已移除
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
 
@@ -81,7 +75,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 用户输入
   -> Frontend / Signal
   -> Task
-  -> Dispatch / Brain
+  -> Dispatch（主 Agent / 服务角色）
   -> Agent Execution
   -> Tool Calls / WorkItems
   -> Response / Writeback

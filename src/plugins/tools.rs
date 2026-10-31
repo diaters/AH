@@ -5,7 +5,7 @@
 use crate::prelude::*;
 
 use crate::{
-    domain::{BuiltinToolExecutors, ExperienceStore, PendingExperienceHooks, SpaceToolRegistry},
+    domain::{BuiltinToolExecutors, SpaceToolRegistry},
     systems::{
         HarnessSet, NativeProcessBackend, async_tool_dispatch_system, cancel_monitor_system,
         channel_send_dispatch_system, check_waiting_tasks_system, commit_tool_effects_system,
@@ -28,8 +28,6 @@ impl Plugin for ToolRuntimePlugin {
         register_builtin_tools(&mut tool_registry, &mut tool_executors);
         app.insert_resource(tool_registry);
         app.insert_resource(tool_executors);
-        app.insert_resource(ExperienceStore::default());
-        app.insert_resource(PendingExperienceHooks::default());
         app.insert_resource(NativeProcessBackend::default());
 
         app.init_resource::<crate::systems::tools::WaitingIndex>();

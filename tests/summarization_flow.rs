@@ -9,10 +9,9 @@ use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
     domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
     domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
-    domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy, domain::ExecutorFuture,
-    domain::FrontendKind, domain::LongTermMemory, domain::PendingDispatch, domain::ShortTermMemory,
-    domain::Task, domain::TaskStatus, domain::WaitingReason, llm::ExecutorRegistry,
-    systems::HarnessConfig,
+    domain::DispatchHint, domain::DispatchKind, domain::ExecutorFuture, domain::FrontendKind,
+    domain::LongTermMemory, domain::PendingDispatch, domain::ShortTermMemory, domain::Task,
+    domain::TaskStatus, domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -45,18 +44,29 @@ impl AgentExecutor for SummarizationMockExecutor {
             match request.request_kind {
                 AgentRequestKind::Summarization => {
                     summarization_called.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text("这是一个测试摘要。".to_string()), reasoning_content: None })
+                    Ok(AgentExecutionOutput {
+                        content: harness::domain::OutputContent::Text(
+                            "这是一个测试摘要。".to_string(),
+                        ),
+                        reasoning_content: None,
+                    })
                 }
-                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(format!("response: {}", request.prompt)), reasoning_content: None }),
-                AgentRequestKind::BrainDecision => {
-                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"selected_agent_name":"default-llm-agent","delegate_prompt":"test","reasoning":"test"}"#.to_string()), reasoning_content: None })
-                }
-                AgentRequestKind::ToolExecution { .. } | AgentRequestKind::Experience => {
-                    Err(harness::domain::ExecutionError::Unknown("Not supported".to_string()))
-                }
-                AgentRequestKind::Evaluation => {
-                    Ok(AgentExecutionOutput { content: harness::domain::OutputContent::Text(r#"{"decision":"Continue","reasoning":"test"}"#.to_string()), reasoning_content: None })
-                }
+                AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput {
+                    content: harness::domain::OutputContent::Text(format!(
+                        "response: {}",
+                        request.prompt
+                    )),
+                    reasoning_content: None,
+                }),
+                AgentRequestKind::ToolExecution { .. } | AgentRequestKind::Experience => Err(
+                    harness::domain::ExecutionError::Unknown("Not supported".to_string()),
+                ),
+                AgentRequestKind::Evaluation => Ok(AgentExecutionOutput {
+                    content: harness::domain::OutputContent::Text(
+                        r#"{"decision":"Continue","reasoning":"test"}"#.to_string(),
+                    ),
+                    reasoning_content: None,
+                }),
             }
         })
     }
@@ -72,7 +82,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -188,12 +198,7 @@ fn task_completion_does_not_trigger_summarization() {
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::DirectDelegate,
-                    preferred_agent_name: Some("default-llm-agent".to_string()),
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::agent("default-llm-agent".to_string()),
             },
         ))
         .id();
@@ -312,12 +317,7 @@ fn summarization_preserves_terminal_task_status() {
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::DirectDelegate,
-                    preferred_agent_name: Some("default-llm-agent".to_string()),
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::agent("default-llm-agent".to_string()),
             },
         ))
         .id();
@@ -395,12 +395,7 @@ fn execution_populates_memory_but_does_not_trigger_summarization() {
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::DirectDelegate,
-                    preferred_agent_name: Some("default-llm-agent".to_string()),
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::agent("default-llm-agent".to_string()),
             },
         ))
         .id();

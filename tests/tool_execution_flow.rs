@@ -11,8 +11,8 @@ use harness::{
     NativeProcessBackend, app::build_harness_app, domain::Agent, domain::AgentCapabilities,
     domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentKind,
     domain::AgentProfile, domain::AgentRequestKind, domain::AgentToolPermissions,
-    domain::ChannelId, domain::EntryRole, domain::FrontendKind, domain::SharedKnowledgeBase,
-    domain::ShortTermMemory, domain::SpaceToolRegistry, domain::Task, domain::TaskStatus,
+    domain::ChannelId, domain::EntryRole, domain::FrontendKind, domain::ShortTermMemory,
+    domain::SpaceToolRegistry, domain::Task, domain::TaskStatus,
     domain::ToolConfirmationResponseMessage, domain::ToolDefinition,
     domain::ToolExecutionRequestMessage, domain::ToolExecutionResultMessage,
     domain::ToolExecutorKind, domain::ToolPermission, domain::ToolSchema, domain::WaitingReason,
@@ -173,7 +173,6 @@ fn allowed_tool_executes_directly() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -211,7 +210,6 @@ fn app_only_inserts_minimal_space_resources() {
     );
     let world = app.world();
 
-    assert!(world.contains_resource::<SharedKnowledgeBase>());
     assert!(world.contains_resource::<SpaceToolRegistry>());
     assert!(world.contains_resource::<NativeProcessBackend>());
 }
@@ -282,7 +280,6 @@ fn denied_tool_does_not_execute() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -374,7 +371,6 @@ fn confirm_tool_requires_user_confirmation() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -478,7 +474,6 @@ fn tool_call_is_recorded_to_short_term_memory() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -600,7 +595,6 @@ fn user_denies_tool_confirmation() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -711,7 +705,6 @@ fn user_allows_tool_once() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -886,7 +879,6 @@ fn child_agent_confirm_routes_to_parent() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -1021,7 +1013,6 @@ fn confirmation_denied_rejects_tool() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -1153,7 +1144,6 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 
@@ -1246,7 +1236,6 @@ fn user_allows_tool_always() {
         pending_confirmation_id: None,
         tool_call_id: None,
         pending_confirmation_options: None,
-        work_item_entity: None,
         confirmed_once: false,
     });
 

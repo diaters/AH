@@ -11,7 +11,6 @@ use super::{
     AgentExecutionRequest, AgentExecutionResult, AgentId, SignalSource, SummarizationTrigger,
     TaskId, TaskRoutingPolicy, TaskTrigger,
 };
-use crate::domain::SkillId;
 
 // ============ 信号与输入 ============
 
@@ -347,10 +346,6 @@ pub struct ToolExecutionRequestMessage {
     pub tool_call_id: Option<String>,
     /// 确认请求的选项列表（用于匹配用户响应，避免硬编码 default_options）
     pub pending_confirmation_options: Option<Vec<super::ConfirmationOption>>,
-    /// 关联的 WorkItem Entity（ECS 侧引用，用于将 SkillUpdateCompletedMessage
-    /// 等"工具产物"直接 insert 到 WorkItem entity 上，避免用 work_item_id 反查）。
-    /// 仅在同步侧使用，不跨异步边界（AgentExecutionRequest 跨异步边界，不应携带 Entity）。
-    pub work_item_entity: Option<Entity>,
     /// 用户已确认过本次执行（allow_once 路径）。
     ///
     /// 由 `tool_confirmation_result_system` 在 Async 工具确认后设置，
@@ -472,7 +467,7 @@ pub struct AgentSpawnRequestMessage {
 
 // ============ 子任务批次 ============
 
-/// create_tasks 工具调用后产出，触发父 Task 阻塞 + Brain 分发
+/// create_tasks 工具调用后产出，触发父 Task 阻塞 + 子任务派发
 #[derive(Debug, Clone, Component)]
 pub struct SubTaskBatchCreatedMessage {
     pub parent_task_id: TaskId,
@@ -576,46 +571,6 @@ impl OutputMessage {
             },
         }
     }
-}
-
-/// 经验收集完成消息：WorkItem 完成后触发汇聚与治理。
-#[derive(Debug, Clone, Component)]
-pub struct ExperienceCollectionCompletedMessage {
-    pub task_id: TaskId,
-    pub parent_task_id: Option<TaskId>,
-    pub agent_id: AgentId,
-    /// 原任务治理者，由请求链路显式传递。
-    pub governing_agent_id: AgentId,
-}
-
-/// skill 更新请求消息：由 route_persistent_agent_experience 或 governance 在 SkillUpdate destination 决议后 spawn，
-/// 由 skill_update_workitem_system 消费，构造 skill-updater WorkItem。
-#[derive(Debug, Clone, Component)]
-pub struct SkillUpdateRequestMessage {
-    pub task_id: TaskId,
-    pub skill_id: SkillId,
-    pub experience_candidate_id: uuid::Uuid,
-    pub governing_agent_id: AgentId,
-}
-
-/// /skill 命令触发的 skill 创建请求消息。
-///
-/// 由 command_parse_system spawn，由 skill_creation_workitem_system 消费，
-/// 构造 skill-creator WorkItem。
-#[derive(Debug, Clone, Component)]
-pub struct SkillCreationRequestMessage {
-    pub task_id: TaskId,
-    pub agent_id: AgentId,
-    pub agent_name: String,
-    pub intent: String,
-}
-
-/// skill 创建写回消息：用户确认后由 approval system insert 到 WorkItem entity，
-/// 由 skill_creation_writeback_system 消费执行 rename 写回。
-#[derive(Debug, Clone, Component)]
-pub struct SkillCreationWritebackMessage {
-    pub candidate_id: uuid::Uuid,
-    pub task_id: TaskId,
 }
 
 /// /reload-plugins 触发的重载请求消息。

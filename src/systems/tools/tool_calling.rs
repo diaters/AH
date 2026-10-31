@@ -14,7 +14,7 @@ use crate::{
         AgentExecutionResult, AgentId, AgentRequestKind, ConversationMessage, FailureReason,
         LlmToolCall, MessageDispatchedHookPending, OutputContent, Task, TaskId, TaskStatus,
         ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
+        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
     },
     ecs::EntityIndex,
 };
@@ -125,11 +125,10 @@ pub(crate) fn handle_tool_calls_response(
     reasoning_content: &Option<String>,
     now: chrono::DateTime<chrono::Utc>,
     max_tool_iterations: u32,
-    work_items: &Query<(Entity, &mut WorkItem)>,
 ) {
     // Check for existing ToolCallingState (follow-up iteration).
     // 按 (task_id, work_item_id) 严格匹配：避免误复用同 Task 下
-    // 其他 WorkItem 残留的 State（如 collector 残留被 skill-updater 误用）。
+    // 其他 WorkItem 残留的 State。
     let existing = find_calling_state(state_info, task.id, result.work_item_id);
     let assistant_text = result
         .result
@@ -313,14 +312,6 @@ pub(crate) fn handle_tool_calls_response(
     }
 
     // Spawn ToolExecutionRequestMessage for each call
-    // 反查 WorkItem entity：用于将 SkillUpdateCompletedMessage 等"工具产物"
-    // 直接 insert 到 WorkItem entity 上（替代用 work_item_id 反查）。
-    let work_item_entity: Option<Entity> = result.work_item_id.and_then(|wid| {
-        work_items
-            .iter()
-            .find(|(_, wi)| wi.id == wid)
-            .map(|(e, _)| e)
-    });
     for call in calls {
         let tool_input: serde_json::Value =
             serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null);
@@ -348,7 +339,6 @@ pub(crate) fn handle_tool_calls_response(
                 pending_confirmation_id: None,
                 tool_call_id: Some(call.id.clone()),
                 pending_confirmation_options: None,
-                work_item_entity,
                 confirmed_once: false,
             },
         ));

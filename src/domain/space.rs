@@ -4,98 +4,13 @@
 
 use std::collections::HashMap;
 
-use crate::prelude::{Component, Resource};
-use chrono::{DateTime, Utc};
+use crate::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentId, ChannelId, ExperienceStore, MemoryImportance, OwnedToolContext, SessionHandleId,
-    SessionInputRequest, SessionReadRequest, SessionStartRequest, SubTaskDefinition, TaskId,
-    ToolEffect, ToolError,
+    AgentId, ChannelId, OwnedToolContext, SessionHandleId, SessionInputRequest, SessionReadRequest,
+    SessionStartRequest, SubTaskDefinition, TaskId, ToolEffect, ToolError,
 };
-
-/// 共享知识审核状态。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum KnowledgeValidationStatus {
-    Candidate,
-    Approved,
-    Rejected,
-    Deprecated,
-}
-
-/// 共享知识来源。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum KnowledgeSource {
-    UserCommand,
-    BrainReview,
-    Migration,
-}
-
-/// 共享知识条目。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SharedKnowledgeEntry {
-    pub content: String,
-    pub kind: String,
-    pub scope_tags: Vec<String>,
-    pub importance: MemoryImportance,
-    pub created_at: DateTime<Utc>,
-    pub last_accessed_at: Option<DateTime<Utc>>,
-    pub reuse_count: u32,
-    pub confidence: f32,
-    pub validation_status: KnowledgeValidationStatus,
-    pub approved_by: Option<String>,
-    pub source: KnowledgeSource,
-}
-
-impl SharedKnowledgeEntry {
-    /// 创建用户显式确认的共享知识条目。
-    pub fn approved_from_user_input(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            kind: "fact".to_string(),
-            scope_tags: Vec::new(),
-            importance: MemoryImportance::High,
-            created_at: Utc::now(),
-            last_accessed_at: None,
-            reuse_count: 0,
-            confidence: 1.0,
-            validation_status: KnowledgeValidationStatus::Approved,
-            approved_by: Some("user:/remember".to_string()),
-            source: KnowledgeSource::UserCommand,
-        }
-    }
-
-    /// 创建待审核的共享知识候选条目。
-    pub fn candidate(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            kind: "fact".to_string(),
-            scope_tags: Vec::new(),
-            importance: MemoryImportance::Medium,
-            created_at: Utc::now(),
-            last_accessed_at: None,
-            reuse_count: 0,
-            confidence: 0.6,
-            validation_status: KnowledgeValidationStatus::Candidate,
-            approved_by: None,
-            source: KnowledgeSource::BrainReview,
-        }
-    }
-}
-
-/// 全局共享知识库。
-#[derive(Resource, Default)]
-pub struct SharedKnowledgeBase {
-    pub entries: Vec<SharedKnowledgeEntry>,
-}
-
-/// 待派发 `on_shared_knowledge_write` hook 的条目队列。
-///
-/// 由于 `SharedKnowledgeBase` 是 Resource 而非 Entity，无法附带 Component 标记，
-/// 因此使用此 scratch resource 作为写入事件队列。写入系统将条目推入此队列，
-/// companion 系统 `on_shared_knowledge_write_hook_system` 逐条派发 hook 后清空。
-#[derive(Resource, Default)]
-pub struct PendingKnowledgeWriteHooks(pub Vec<SharedKnowledgeEntry>);
 
 /// 全局工具注册表
 #[derive(Resource, Default)]
@@ -138,7 +53,7 @@ pub struct ToolDefinition {
     pub default_permission: ToolPermission,
     /// 执行器类型
     pub executor: ToolExecutorKind,
-    /// 执行所需的最小 tag（如 "brain"）
+    /// 执行所需的最小 tag（如 "evaluation"）
     #[serde(default)]
     pub required_tag: Option<String>,
 }
@@ -208,8 +123,6 @@ pub enum ToolAction {
     InputSession(SessionInputRequest),
     /// 停止 shell 会话
     StopSession(SessionHandleId),
-    /// 提交经验候选
-    SubmitExperienceCandidate(ExperienceCandidateSubmission),
     /// 请经验管理员检索经验库；结果在管理员回复后回填本次工具调用。
     SearchExperience { situation: String },
     /// 向 IM 通道发送消息
@@ -233,36 +146,6 @@ pub enum ToolAction {
         /// 已有对话的 handle（即子任务 task_id），不传表示开始新对话
         handle: Option<TaskId>,
     },
-    /// 提交 profile 更新（孵化场景生成新 profile，更新场景提议新 tags/description）
-    ///
-    /// 由 profile-designer Agent 调用，实际 profile 提取与 proposal 创建
-    /// 在 `profile_generation_completion_system`（任务 6）中完成。
-    SubmitProfileUpdate {
-        name: String,
-        tags: Vec<String>,
-        description: String,
-    },
-    /// 跳过 profile 更新（更新场景下 LLM 认为不需要更新）
-    SkipProfileUpdate,
-    /// 提交 skill 更新的结构化 diff 操作
-    ///
-    /// 由 skill-updater Agent 调用，实际的 skill 文件 apply 与 registry 刷新
-    /// 在 `skill_update_completion_system` 中完成。
-    ///
-    /// 仅承载 LLM 能决定的 `operations` 与 `rationale`；
-    /// `skill_id` / `base_version` / `new_version` 由 orchestrator 从
-    /// `SkillUpdateContext` 服务端权威注入，避免 LLM 臆造 skill_id。
-    SubmitSkillUpdate {
-        /// 结构化 diff 操作列表
-        operations: Vec<crate::domain::SkillUpdateOperation>,
-        /// 本次更新的理由说明
-        rationale: String,
-    },
-    /// 提交 skill 创建候选
-    ///
-    /// 由 skill-creator Agent 调用，实际的 skill 文件写入与 registry 刷新
-    /// 在后续任务中完成。
-    SubmitSkillCandidate { name: String, description: String },
     /// 向用户提出问题并等待开放文本回复。
     /// executor 只负责解析参数，问题呈现与等待状态由 orchestrator 完成。
     AskUser {
@@ -271,104 +154,8 @@ pub enum ToolAction {
     },
 }
 
-/// 经验候选提交数据
-#[derive(Debug, Clone)]
-pub struct ExperienceCandidateSubmission {
-    pub title: String,
-    pub kind: crate::domain::ExperienceKindHint,
-    pub content: Option<String>,
-    pub skill_description: Option<String>,
-    pub instructions: Option<String>,
-    pub file_refs: Vec<crate::domain::SkillFileRef>,
-}
-
-impl ExperienceCandidateSubmission {
-    /// 从 JSON 工具输入构造候选提交数据。
-    pub fn from_json(
-        _task_id: TaskId,
-        _agent_id: AgentId,
-        title: &str,
-        input: &serde_json::Value,
-    ) -> Result<Self, ToolError> {
-        let kind_str = input
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("knowledge");
-        let kind = match kind_str {
-            "skill" => crate::domain::ExperienceKindHint::Skill,
-            _ => crate::domain::ExperienceKindHint::Knowledge,
-        };
-
-        let content = input
-            .get("content")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let skill_description = input
-            .get("skill_description")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let instructions = input
-            .get("instructions")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let file_refs = input
-            .get("file_refs")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|item| {
-                        let path = item.get("path")?.as_str()?.to_string();
-                        let role_str = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
-                        let role = match role_str {
-                            "script" => crate::domain::SkillFileRole::Script,
-                            "reference" => crate::domain::SkillFileRole::Reference,
-                            "asset" => crate::domain::SkillFileRole::Asset,
-                            _ => {
-                                // 根据扩展名推断
-                                if path.ends_with(".sh") || path.ends_with(".py") {
-                                    crate::domain::SkillFileRole::Script
-                                } else if path.ends_with(".md") || path.ends_with(".txt") {
-                                    crate::domain::SkillFileRole::Reference
-                                } else {
-                                    crate::domain::SkillFileRole::Asset
-                                }
-                            }
-                        };
-                        Some(crate::domain::SkillFileRef { path, role })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(Self {
-            title: title.to_string(),
-            kind,
-            content,
-            skill_description,
-            instructions,
-            file_refs,
-        })
-    }
-}
-
-/// 经验合并请求消息：触发 LLM 对多个相似候选做去重合并。
-#[derive(Debug, Clone, Component)]
-pub struct ExperienceConsolidationRequestMessage {
-    pub task_id: TaskId,
-    pub parent_task_id: TaskId,
-    pub governing_agent_id: AgentId,
-    pub candidate_kind: crate::domain::ExperienceKindHint,
-    pub candidate_ids: Vec<uuid::Uuid>,
-}
-
 /// 内置 Tool 执行上下文
-pub struct ToolContext<'a> {
-    pub knowledge: &'a SharedKnowledgeBase,
-    /// 经验候选仓库
-    pub experience_store: &'a ExperienceStore,
+pub struct ToolContext {
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
     /// shell 工具默认返回的最新输出行数
@@ -391,9 +178,6 @@ pub struct ToolContext<'a> {
     pub current_agent_id: AgentId,
     /// 当前任务的 origin_channel，供 schedule_task 等工具继承输出通道
     pub current_origin_channel: Option<ChannelId>,
-    /// ADR-006：当前 skill 更新上下文中的 skill 目录路径。
-    /// 仅在 skill-updater WorkItem 执行时填充，供 read_skill_file 工具使用。
-    pub current_skill_dir: Option<std::path::PathBuf>,
 }
 
 /// 工具执行模式：双轨期 dispatch 分流依据。
@@ -525,15 +309,6 @@ pub struct AgentToolsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shared_knowledge_entry_from_user_is_approved() {
-        let entry =
-            SharedKnowledgeEntry::approved_from_user_input("Project docs are written in Chinese");
-
-        assert_eq!(entry.validation_status, KnowledgeValidationStatus::Approved);
-        assert_eq!(entry.source, KnowledgeSource::UserCommand);
-    }
 
     #[test]
     fn space_tool_registry_add_then_remove() {

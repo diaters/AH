@@ -6,8 +6,8 @@
 mod common;
 
 use common::mock_executor::{
-    BrainAwareEchoExecutor, CannedExecutor, DEFAULT_BRAIN_DECISION_JSON, EchoExecutor,
-    MockExecutor, NoOpExecutor, PanickingExecutor, PromptEchoExecutor, text_output,
+    CannedExecutor, EchoExecutor, FixedTextExecutor, MockExecutor, NoOpExecutor, PanickingExecutor,
+    PromptEchoExecutor, text_output,
 };
 use harness::{
     domain::AgentExecutionOutput, domain::AgentExecutionRequest, domain::AgentExecutor,
@@ -78,18 +78,8 @@ fn no_op_executor_returns_ok() {
 }
 
 #[test]
-fn brain_aware_executor_returns_json_for_brain_decision() {
-    let executor = BrainAwareEchoExecutor::new("echo reply");
-    let out = run(&executor, sample_request(AgentRequestKind::BrainDecision));
-    assert_eq!(
-        out.content,
-        OutputContent::Text(DEFAULT_BRAIN_DECISION_JSON.to_string())
-    );
-}
-
-#[test]
-fn brain_aware_executor_returns_fallback_for_other_kinds() {
-    let executor = BrainAwareEchoExecutor::new("echo reply");
+fn fixed_text_executor_returns_given_text() {
+    let executor = FixedTextExecutor::new("echo reply");
     let out = run(&executor, sample_request(AgentRequestKind::LlmCompletion));
     assert_eq!(out.content, OutputContent::Text("echo reply".to_string()));
 }

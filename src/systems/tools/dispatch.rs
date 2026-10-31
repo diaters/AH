@@ -11,15 +11,12 @@ use crate::{
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
         ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
-        ExperienceStore, PendingExperienceHooks, PermissionAction, PermissionAuditContext,
-        PermissionSource, ProfileGenerationContext, RuntimeGrants, ScheduledRun,
-        SharedKnowledgeBase, ShortTermMemory, SkillCreationContext, SkillUpdateContext,
-        SpaceToolRegistry, Task, TaskInitiator, ToolConfirmationRequestMessage, ToolContext,
-        ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason, WorkItem,
+        PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants, ScheduledRun,
+        ShortTermMemory, SpaceToolRegistry, Task, TaskInitiator, ToolConfirmationRequestMessage,
+        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
         resolve_tool_permission,
     },
     ecs::EntityIndex,
-    infrastructure::skills::SkillLoader,
     systems::HarnessSettings,
     systems::NativeProcessBackend,
 };
@@ -37,46 +34,32 @@ pub fn tool_dispatch_system(
     mut tasks: Query<(Entity, &mut Task)>,
     registry: Res<SpaceToolRegistry>,
     executors: Res<BuiltinToolExecutors>,
-    knowledge: Res<SharedKnowledgeBase>,
-    mut experience_store: ResMut<ExperienceStore>,
-    mut pending_experience_hooks: ResMut<PendingExperienceHooks>,
     agents: Query<&mut Agent>,
     mut short_term_memories: Query<&mut ShortTermMemory>,
     chat_sessions: Query<&ChatSession>,
     calling_states: Query<(Entity, &crate::domain::ToolCallingState)>,
     mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
-    // 合并 ProfileGenerationContext / SkillUpdateContext / SkillCreationContext 查询为单个 SystemParam，
-    // 规避 Bevy 单 system 16 参数上限；三者都是与 WorkItem 同 entity 的 Component，
-    // 通过 Option<&...> 区分（任一 WorkItem entity 至多只有其中之一）。
-    context_queries: Query<(
-        Entity,
-        Option<&ProfileGenerationContext>,
-        Option<&SkillUpdateContext>,
-        Option<&SkillCreationContext>,
-        &WorkItem,
-    )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
-    // 合并 index / clock / skill_loader / frontend_registry 为单 SystemParam，规避 Bevy 单 system 16 参数上限；
-    // index 用于 O(1) UUID 解析；clock/skill_loader 转发给 handle_tool_action；
+    // 合并 index / clock / frontend_registry 等为单 SystemParam，规避 Bevy 单 system 16 参数上限；
+    // index 用于 O(1) UUID 解析；clock 转发给 handle_tool_action；
     // frontend_registry 用于在 Allow 路径推送 ToolCallStarted 事件。
     // scheduled_runs 标记定时任务触发的 Task，用于无人值守判定。
-    mut index_clock_loader: (
+    mut index_clock_frontends: (
         ResMut<EntityIndex>,
         Res<Clock>,
-        Res<SkillLoader>,
         Res<FrontendRegistry>,
         Query<(), With<ScheduledRun>>,
         Option<Res<RuntimeGrants>>,
         Query<&TaskInitiator>,
     ),
 ) {
-    let index = &mut index_clock_loader.0;
-    let clock = &index_clock_loader.1;
-    let frontend_registry = &index_clock_loader.3;
-    let scheduled_runs = &index_clock_loader.4;
-    let runtime_grants = index_clock_loader.5.as_deref();
-    let initiators = &index_clock_loader.6;
+    let index = &mut index_clock_frontends.0;
+    let clock = &index_clock_frontends.1;
+    let frontend_registry = &index_clock_frontends.2;
+    let scheduled_runs = &index_clock_frontends.3;
+    let runtime_grants = index_clock_frontends.4.as_deref();
+    let initiators = &index_clock_frontends.5;
     for (entity, mut request) in &mut requests {
         if index
             .get_task(&request.request.task_id)
@@ -289,38 +272,7 @@ pub fn tool_dispatch_system(
                     tool_name,
                 );
 
-                let current_skill_dir = if let Some(wi_entity) = request.work_item_entity {
-                    if let Ok((_, _, _, creation_ctx, _)) = context_queries.get(wi_entity) {
-                        creation_ctx.map(|ctx| ctx.sandbox_dir.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                // Fallback: SkillUpdateContext uses skill_loader to resolve skill directory
-                let current_skill_dir = current_skill_dir.or_else(|| {
-                    if let Some(wi_entity) = request.work_item_entity {
-                        if let Ok((_, _, update_ctx, _, _)) = context_queries.get(wi_entity) {
-                            update_ctx.as_ref().map(|ctx| {
-                                index_clock_loader
-                                    .2
-                                    .skill_md_path(&ctx.skill_id)
-                                    .parent()
-                                    .map(|p| p.to_path_buf())
-                                    .unwrap_or_default()
-                            })
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                });
-
                 let ctx = ToolContext {
-                    knowledge: &knowledge,
-                    experience_store: &experience_store,
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
@@ -335,7 +287,6 @@ pub fn tool_dispatch_system(
                         .and_then(|e| tasks.get(e).ok())
                         .map(|(_, t)| t.origin_channel.clone())
                         .unwrap_or(None),
-                    current_skill_dir,
                 };
                 let action = executor.execute(&request.tool_input, &ctx);
 
@@ -345,7 +296,6 @@ pub fn tool_dispatch_system(
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                 {
-                    let parent_agent_id = agent.parent_id;
                     handle_tool_action(
                         &mut commands,
                         entity,
@@ -357,18 +307,12 @@ pub fn tool_dispatch_system(
                             agents: &agents,
                             chat_sessions: &chat_sessions,
                             short_term_memories: &mut short_term_memories,
-                            context_queries: &context_queries,
-                            calling_states: &calling_states,
                         },
                         &mut ToolResources {
                             backend: &*backend,
-                            experience_store: &mut experience_store,
-                            pending_experience_hooks: &mut pending_experience_hooks,
-                            skill_loader: &index_clock_loader.2,
                             frontend_registry,
-                            clock: &index_clock_loader.1,
+                            clock: &index_clock_frontends.1,
                         },
-                        parent_agent_id,
                         &mut *index,
                     );
                 }
@@ -679,8 +623,7 @@ mod tests {
         contracts::{Clock, FrontendRegistry},
         domain::{
             Agent, AgentCapabilities, AgentExecutionRequest, AgentKind, AgentProfile,
-            AgentRequestKind, AgentToolPermissions, BuiltinToolExecutors, ChannelId,
-            ExperienceStore, FrontendKind, PendingExperienceHooks, SharedKnowledgeBase,
+            AgentRequestKind, AgentToolPermissions, BuiltinToolExecutors, ChannelId, FrontendKind,
             SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage, ToolDefinition,
             ToolExecutionRequestMessage, ToolExecutorKind, ToolPermission, ToolSchema,
             WaitingReason,
@@ -697,9 +640,6 @@ mod tests {
         let mut world = World::new();
 
         // 注册必要资源
-        world.init_resource::<SharedKnowledgeBase>();
-        world.init_resource::<ExperienceStore>();
-        world.init_resource::<PendingExperienceHooks>();
         world.insert_resource(HarnessSettings(HarnessConfig::default()));
         world.insert_resource(NativeProcessBackend::default());
         world.insert_resource(Clock::default());
@@ -721,12 +661,6 @@ mod tests {
 
         // 该测试不会真正执行工具，执行器注册表可为空
         world.insert_resource(BuiltinToolExecutors::default());
-
-        // tool_dispatch_system 通过 tuple SystemParam (Res<Clock>, Res<SkillLoader>) 同时
-        // 引用 Clock 与 SkillLoader，必须 init SkillLoader 才能运行。
-        world.insert_resource(crate::infrastructure::skills::SkillLoader::new(
-            std::path::PathBuf::from("/nonexistent_skills_root"),
-        ));
 
         let task_id = crate::domain::TaskId::new();
         let agent_id = crate::domain::AgentId::new();
@@ -824,7 +758,6 @@ mod tests {
             pending_confirmation_id: None,
             tool_call_id: None,
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         }
     }

@@ -7,7 +7,6 @@ mod attachment;
 mod chat_session;
 mod command;
 mod confirmation;
-mod contribution;
 mod dispatch;
 mod error;
 mod evaluation;
@@ -29,11 +28,9 @@ pub use schedule_request::{ScheduleAction, ScheduleInput, ScheduleRequest};
 mod session;
 mod session_backend;
 mod signal_trigger;
-mod skill;
 mod space;
 mod summarization;
 mod task;
-mod task_experience;
 mod tool_async;
 mod tool_runtime;
 mod work_item;
@@ -146,20 +143,6 @@ pub use command::{ShutdownState, UserCommand};
 // confirmation
 pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource, GrantMode};
 
-// contribution
-pub use contribution::{
-    ExistingAgentProfile, ExperienceCandidate, ExperienceCandidatePayload,
-    ExperienceCandidateStatus, ExperienceCandidateStatus as ExperienceStatus,
-    ExperienceCollectionRequestMessage, ExperienceGovernanceDecision,
-    ExperienceGovernanceRequestMessage, ExperienceInbox, ExperienceInboxStatus, ExperienceKindHint,
-    ExperienceStore, ExperienceWritebackDestination, ExperienceWritebackRequestMessage,
-    GeneratedProfile, IncubationProposal, IncubationProposalStatus, MAX_PROFILE_EXCEPTIONS,
-    PendingExperienceHooks, ProfileGenerationCompletedMessage, ProfileGenerationContext,
-    ProfileGenerationKind, ProfileGenerationRequestMessage, SkillCreationContext, SkillFileRef,
-    SkillFileRole, SkillUpdateCompletedMessage, SkillUpdateContext, SkillUpdateOperation,
-    is_skill_new, sanitize_tags,
-};
-
 // error
 pub use error::{ExecutionError, FailureReason, ToolError};
 
@@ -198,10 +181,10 @@ pub use llm_provider::LlmProviderKind;
 
 // memory
 pub use memory::{
-    EntryMetadata, EntryRole, ExecutableMemoryEntry, LongTermMemory, LongTermMemoryEntry,
-    LtmEvictedHookPending, LtmWriteHookPending, MemoryConfig, MemoryEntry, MemoryImportance,
-    MemorySnapshot, ShortTermMemory, ToolCall, build_compress_text, compressible_group_indices,
-    estimate_tokens, render_tool_calls_summary, split_into_groups,
+    EntryMetadata, EntryRole, LongTermMemory, LongTermMemoryEntry, LtmEvictedHookPending,
+    LtmWriteHookPending, MemoryConfig, MemoryEntry, MemoryImportance, MemorySnapshot,
+    ShortTermMemory, ToolCall, build_compress_text, compressible_group_indices, estimate_tokens,
+    render_tool_calls_summary, split_into_groups,
 };
 
 // message
@@ -209,14 +192,12 @@ pub use message::{
     AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
     ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
     ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ClearTaskMessage,
-    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver,
-    ExperienceCollectionCompletedMessage, ExternalInput, FinishTaskMessage, InputReceiver,
-    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
-    ModelChainStateUpdate, ModelChainStateUpdateReceiver, OutputKind, OutputMessage,
-    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
-    SignalPayload, SkillCreationRequestMessage, SkillCreationWritebackMessage,
-    SkillUpdateRequestMessage, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver, ExternalInput,
+    FinishTaskMessage, InputReceiver, LlmResponseHookPending, MessageDispatchedHookPending,
+    MessageReceivedHookPending, ModelChainStateUpdate, ModelChainStateUpdateReceiver, OutputKind,
+    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
+    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
+    Signal, SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage, UserOutputMessage,
@@ -243,9 +224,6 @@ pub use signal_trigger::{
     EventTaskRoute, SignalSource, SignalTriggerRegistry, TaskTrigger, TriggersConfigPath,
 };
 
-// skill
-pub use skill::SkillId;
-
 // loop_control
 pub use loop_control::{
     AutoWakeBudget, BackgroundJob, BackgroundReportTurn, DeferredResult, InboxDeliveryMessage,
@@ -266,11 +244,9 @@ pub use session_backend::SessionBackend;
 
 // space
 pub use space::{
-    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, ExperienceCandidateSubmission,
-    ExperienceConsolidationRequestMessage, KnowledgeSource, KnowledgeValidationStatus,
-    PendingKnowledgeWriteHooks, SharedKnowledgeBase, SharedKnowledgeEntry, SpaceToolRegistry,
-    ToolAction, ToolActionKind, ToolContext, ToolDefinition, ToolExecutorKind, ToolFuture,
-    ToolPermission, ToolSchema, ToolWorkerOutput,
+    AgentToolsConfig, BuiltinTool, BuiltinToolExecutors, SpaceToolRegistry, ToolAction,
+    ToolActionKind, ToolContext, ToolDefinition, ToolExecutorKind, ToolFuture, ToolPermission,
+    ToolSchema, ToolWorkerOutput,
 };
 
 // summarization
@@ -292,9 +268,6 @@ pub use experience_library::{
     parse_lookup_decision, rank_by_overlap, render_lookup_result,
 };
 
-// task_experience
-pub use task_experience::{ExperienceKindFilter, TaskExperiencePolicy, TaskInjectedSkill};
-
 // tool_runtime
 pub use tool_runtime::ToolCallingState;
 
@@ -312,10 +285,7 @@ pub use work_item::{
 };
 
 // dispatch
-pub use dispatch::{
-    AgentSpawnSpec, AwaitingBrainDecision, DispatchHint, DispatchKind, DispatchStrategy,
-    PendingDispatch,
-};
+pub use dispatch::{AgentSpawnSpec, DispatchHint, DispatchKind, PendingDispatch};
 
 // workflow
 pub use workflow::{

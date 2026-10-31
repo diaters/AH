@@ -7,9 +7,9 @@ use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
     domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
-    domain::DispatchHint, domain::DispatchKind, domain::DispatchStrategy, domain::FrontendKind,
-    domain::LongTermMemory, domain::PendingDispatch, domain::Task, domain::TaskStatus,
-    llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::DispatchHint, domain::DispatchKind, domain::FrontendKind, domain::LongTermMemory,
+    domain::PendingDispatch, domain::Task, domain::TaskStatus, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -31,7 +31,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -99,20 +99,14 @@ fn completes_single_turn_conversation_flow() {
 
     // 创建一个 Ready 状态的任务（单轮场景）
     // 注：统一 dispatch_system 要求 Task 携带 PendingDispatch 才会派发，
-    // 这里附加 PendingDispatch(DirectDelegate) 直接委派给 default-llm-agent
-    // （test_config 中 brain: None，无法走 BrainLlm 路径）。
+    // 这里附加 PendingDispatch 直接委派给 default-llm-agent。
     let task = Task::from_user_input_ready("你好，Harness", 3, default_channel());
     app.world_mut().spawn((
         task,
         harness::domain::ShortTermMemory::default(),
         PendingDispatch {
             kind: DispatchKind::Task,
-            hint: DispatchHint {
-                strategy: DispatchStrategy::DirectDelegate,
-                preferred_agent_name: Some("default-llm-agent".to_string()),
-                required_skill_id: None,
-                agent_spawn_spec: None,
-            },
+            hint: DispatchHint::agent("default-llm-agent".to_string()),
         },
     ));
 

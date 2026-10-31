@@ -9,9 +9,9 @@ use crate::{
     contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResult, ChatSession, DispatchHint, DispatchKind,
-        DispatchStrategy, OutputContent, PendingDispatch, ShortTermMemory,
-        SummarizationRequestMessage, SummarizationTrigger, SystemOutputMessage, Task, TaskStatus,
-        WaitingReason, WorkItem, WorkItemType,
+        OutputContent, PendingDispatch, ShortTermMemory, SummarizationRequestMessage,
+        SummarizationTrigger, SystemOutputMessage, Task, TaskStatus, WaitingReason, WorkItem,
+        WorkItemType,
     },
     ecs::EntityIndex,
 };
@@ -57,12 +57,7 @@ pub(crate) fn summarization_dispatch_system(
             work_item,
             PendingDispatch {
                 kind: DispatchKind::WorkItem(WorkItemType::Summarization),
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::DirectDelegate,
-                    preferred_agent_name: None,
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::default(),
             },
         ));
 

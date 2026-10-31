@@ -11,7 +11,6 @@ use super::{AgentId, TaskId, ToolDefinition};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentRequestKind {
     LlmCompletion,
-    BrainDecision,
     ToolExecution {
         tool_name: String,
     },

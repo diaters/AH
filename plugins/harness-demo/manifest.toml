@@ -3,7 +3,7 @@ name = "Harness Demo Plugin"
 version = "0.1.0"
 api_version = 1
 author = "Harness Team"
-description = "示例插件：演示插件系统全部功能，包括 21 个 hook 点、工具、技能、Agent 与命令"
+description = "示例插件：演示插件系统全部功能，包括 17 个 hook 点、工具、技能、Agent 与命令"
 
 # ── Hooks ──────────────────────────────────────────────────────────────
 
@@ -66,22 +66,6 @@ script = "hooks/on_long_term_memory_write.rhai"
 [[hooks]]
 event = "on_long_term_memory_evicted"
 script = "hooks/on_long_term_memory_evicted.rhai"
-
-[[hooks]]
-event = "on_shared_knowledge_write"
-script = "hooks/on_shared_knowledge_write.rhai"
-
-[[hooks]]
-event = "on_experience_candidate_submitted"
-script = "hooks/on_experience_candidate_submitted.rhai"
-
-[[hooks]]
-event = "on_experience_candidate_approved"
-script = "hooks/on_experience_candidate_approved.rhai"
-
-[[hooks]]
-event = "on_experience_candidate_rejected"
-script = "hooks/on_experience_candidate_rejected.rhai"
 
 [[hooks]]
 event = "on_approval_requested"

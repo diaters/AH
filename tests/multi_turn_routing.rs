@@ -2,7 +2,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::mock_executor::BrainAwareEchoExecutor;
+use common::mock_executor::FixedTextExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
@@ -25,37 +25,11 @@ fn test_config() -> HarnessConfig {
     HarnessConfig::default()
 }
 
-/// Helper: spawn brain + default-llm-agent（统一 dispatch 架构要求）
+/// Helper: spawn default-llm-agent（主 Agent）
 ///
 /// 同时写入 `EntityIndex.agents`，模拟 `spawn_agent` 封装的索引维护，
 /// 供 `dispatch_system` 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
 fn spawn_default_agents(app: &mut bevy_app::App) {
-    let brain_agent = Agent {
-        id: harness::domain::AgentId::new(),
-        profile: AgentProfile {
-            name: "brain".to_string(),
-            model: "gpt-4.1-mini".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["brain".to_string()],
-            description: "Brain Agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions::default(),
-        system_prompt: None,
-    };
-    let brain_id = brain_agent.id;
-    let brain_entity = app
-        .world_mut()
-        .spawn((brain_agent, LongTermMemory::default()))
-        .id();
-    app.world_mut()
-        .resource_mut::<EntityIndex>()
-        .agents
-        .insert(brain_id, brain_entity);
-
     let default_agent = Agent {
         id: harness::domain::AgentId::new(),
         profile: AgentProfile {
@@ -86,7 +60,7 @@ fn spawn_default_agents(app: &mut bevy_app::App) {
 #[test]
 fn user_input_creates_new_task_when_no_waiting_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -120,7 +94,7 @@ fn user_input_creates_new_task_when_no_waiting_task() {
 #[test]
 fn user_input_continues_waiting_task() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -189,7 +163,7 @@ fn user_input_continues_waiting_task() {
 #[test]
 fn evaluation_triggered_on_turn_limit() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -288,7 +262,7 @@ fn evaluation_triggered_on_turn_limit() {
 #[test]
 fn multiple_waiting_user_tasks_reject_ambiguous_routing() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -364,7 +338,7 @@ fn multiple_waiting_user_tasks_reject_ambiguous_routing() {
 #[test]
 fn finish_command_ends_multi_turn_conversation() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -425,10 +399,8 @@ fn finish_command_ends_multi_turn_conversation() {
 
 fn conversation_fixture() -> (bevy_app::App, crossbeam_channel::Sender<ExternalInput>) {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let registry = ExecutorRegistry::from_single_executor(
-        Arc::new(BrainAwareEchoExecutor::new("echo")),
-        "default",
-    );
+    let registry =
+        ExecutorRegistry::from_single_executor(Arc::new(FixedTextExecutor::new("echo")), "default");
     let (tx, rx) = unbounded();
     let mut app = build_harness_app(
         test_config(),

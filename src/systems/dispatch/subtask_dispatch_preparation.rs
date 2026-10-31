@@ -13,8 +13,8 @@ use tracing::{debug, trace};
 use crate::{
     contracts::Clock,
     domain::{
-        AgentSpawnSpec, BatchTaskState, DispatchHint, DispatchKind, DispatchStrategy,
-        PendingDispatch, SubTaskBatchState, SubTaskConfig, Task, TaskStatus,
+        AgentSpawnSpec, BatchTaskState, DispatchHint, DispatchKind, PendingDispatch,
+        SubTaskBatchState, SubTaskConfig, Task, TaskStatus,
     },
 };
 
@@ -115,13 +115,11 @@ pub fn subtask_dispatch_preparation_system(
             parent_agent_id: Some(config.parent_agent_id),
         };
 
-        // 5. 附加 PendingDispatch（走 BrainLlm 策略）
+        // 5. 附加 PendingDispatch（交给主 Agent；主 Agent 不存在时按 spawn_spec 生成子 Agent）
         commands.entity(entity).insert(PendingDispatch {
             kind: DispatchKind::Task,
             hint: DispatchHint {
-                strategy: DispatchStrategy::BrainLlm,
                 preferred_agent_name: None,
-                required_skill_id: None,
                 agent_spawn_spec: Some(spawn_spec),
             },
         });

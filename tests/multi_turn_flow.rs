@@ -2,18 +2,17 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use common::mock_executor::BrainAwareEchoExecutor;
+use common::mock_executor::FixedTextExecutor;
 use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
     domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
     domain::AgentToolPermissions, domain::ChannelId, domain::DispatchHint, domain::DispatchKind,
-    domain::DispatchStrategy, domain::EntryRole, domain::ExecutorFuture,
-    domain::ExperienceCollectionRequestMessage, domain::FrontendKind, domain::LongTermMemory,
+    domain::EntryRole, domain::ExecutorFuture, domain::FrontendKind, domain::LongTermMemory,
     domain::PendingDispatch, domain::ShortTermMemory, domain::Task, domain::TaskRoutingPolicy,
-    domain::TaskStatus, domain::WaitingReason, domain::WorkItem, ecs::EntityIndex,
-    llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::TaskStatus, domain::WaitingReason, ecs::EntityIndex, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -35,10 +34,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: Some(harness::systems::BrainConfig {
-            enabled: true,
-            fallback_agent: None,
-        }),
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -66,33 +62,6 @@ fn test_config() -> HarnessConfig {
 /// 同时写入 `EntityIndex.agents`，模拟 `spawn_agent` 封装的索引维护，
 /// 供 `dispatch_system` 等 O(1) 解析 AgentId → Entity（ADR-005 §3 阶段 2）。
 fn spawn_default_agent(app: &mut bevy_app::App) {
-    // Brain agent（与 default-llm-agent 共存，供 BrainLlm 派发路径查找）
-    let brain_agent = Agent {
-        id: harness::domain::AgentId::new(),
-        profile: AgentProfile {
-            name: "brain".to_string(),
-            model: "gpt-4.1-mini".to_string(),
-        },
-        capabilities: AgentCapabilities {
-            tags: vec!["brain".to_string()],
-            description: "Brain Agent".to_string(),
-        },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
-        tool_permissions: AgentToolPermissions::default(),
-        system_prompt: None,
-    };
-    let brain_id = brain_agent.id;
-    let brain_entity = app
-        .world_mut()
-        .spawn((brain_agent, LongTermMemory::default()))
-        .id();
-    app.world_mut()
-        .resource_mut::<EntityIndex>()
-        .agents
-        .insert(brain_id, brain_entity);
-
     let default_agent = Agent {
         id: harness::domain::AgentId::new(),
         profile: AgentProfile {
@@ -147,7 +116,7 @@ fn run_until_settled(app: &mut App, frames: usize) {
 #[test]
 fn multi_turn_task_lifecycle() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -228,7 +197,7 @@ fn multi_turn_task_lifecycle() {
 #[test]
 fn short_term_memory_tracks_turns() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -290,7 +259,7 @@ fn short_term_memory_tracks_turns() {
 #[test]
 fn agent_has_long_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -342,161 +311,9 @@ fn agent_has_long_term_memory() {
 }
 
 #[test]
-fn agent_termination_does_not_auto_collect_experience() {
-    let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
-    let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
-    let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor_registry,
-        input_rx,
-        vec![],
-        harness::channels::ChannelManager::empty().0,
-    );
-
-    // Initialize the app first
-    app.update();
-    spawn_default_agent(&mut app);
-
-    // Create parent agent with memory
-    let parent_id = harness::domain::AgentId::new();
-    let parent_entity = app
-        .world_mut()
-        .spawn((
-            Agent {
-                id: parent_id,
-                profile: AgentProfile {
-                    name: "parent".to_string(),
-                    model: "gpt-4".to_string(),
-                },
-                capabilities: AgentCapabilities {
-                    tags: vec!["general".to_string()],
-                    description: "parent agent".to_string(),
-                },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
-                tool_permissions: AgentToolPermissions::default(),
-                system_prompt: None,
-            },
-            LongTermMemory::default(),
-        ))
-        .id();
-    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
-    app.world_mut()
-        .resource_mut::<EntityIndex>()
-        .agents
-        .insert(parent_id, parent_entity);
-
-    // Create child task-scoped agent
-    let child_id = harness::domain::AgentId::new();
-    let task_id = harness::domain::TaskId::new();
-    let child_entity = app
-        .world_mut()
-        .spawn((
-            Agent {
-                id: child_id,
-                profile: AgentProfile {
-                    name: "child".to_string(),
-                    model: "gpt-4".to_string(),
-                },
-                capabilities: AgentCapabilities {
-                    tags: vec!["general".to_string()],
-                    description: "child agent".to_string(),
-                },
-                kind: AgentKind::TaskScoped,
-                parent_id: Some(parent_id),
-                bound_task_id: Some(task_id),
-                tool_permissions: AgentToolPermissions::default(),
-                system_prompt: None,
-            },
-            LongTermMemory::default(),
-        ))
-        .id();
-    // 测试夹具绕过 spawn_agent 封装直接 spawn，需手动写入 EntityIndex
-    app.world_mut()
-        .resource_mut::<EntityIndex>()
-        .agents
-        .insert(child_id, child_entity);
-
-    // Create a task for the terminated message to reference
-    let mut task = Task::from_user_input("test task", 3, default_channel());
-    task.id = task_id;
-    task.creator = parent_id;
-    task.delegate = Some(child_id);
-    task.input_summary = "test".to_string();
-    task.mark_done("completed", chrono::Utc::now());
-    let task_entity = app.world_mut().spawn(task).id();
-    // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
-    app.world_mut()
-        .resource_mut::<EntityIndex>()
-        .tasks
-        .insert(task_id, task_entity);
-
-    // Trigger termination by spawning TaskTerminatedMessage
-    app.world_mut()
-        .spawn(harness::domain::TaskTerminatedMessage { task_id });
-
-    let terminated_before = app
-        .world_mut()
-        .query::<&harness::domain::TaskTerminatedMessage>()
-        .iter(app.world())
-        .count();
-    assert_eq!(terminated_before, 1, "TaskTerminatedMessage should exist");
-
-    let task_before = app
-        .world_mut()
-        .query::<&Task>()
-        .iter(app.world())
-        .find(|t| t.id == task_id)
-        .map(|t| (t.status().clone(), t.delegate));
-
-    // 运行一帧，让 Execution 阶段的经验收集触发系统处理 TaskTerminatedMessage
-    app.update();
-
-    let terminated_after = app
-        .world_mut()
-        .query::<&harness::domain::TaskTerminatedMessage>()
-        .iter(app.world())
-        .count();
-
-    // 经验改为用户主动总结：任务终止后不应再生成经验收集请求或 WorkItem。
-    let collection_requests = app
-        .world_mut()
-        .query::<&ExperienceCollectionRequestMessage>()
-        .iter(app.world())
-        .count();
-    let work_items = app
-        .world_mut()
-        .query::<&WorkItem>()
-        .iter(app.world())
-        .filter(|w| {
-            matches!(
-                w.work_type,
-                harness::domain::WorkItemType::ExperienceCollection
-            )
-        })
-        .count();
-
-    assert!(
-        collection_requests == 0 && work_items == 0,
-        "task termination must not auto-trigger experience collection: requests={}, work_items={}; terminated_after={}; task_before={:?}",
-        collection_requests,
-        work_items,
-        terminated_after,
-        task_before
-    );
-
-    // 继续运行多帧，确保系统稳定处理
-    run_until_settled(&mut app, 9);
-}
-
-#[test]
 fn multi_turn_memory_records_user_and_assistant() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -552,7 +369,7 @@ fn multi_turn_memory_records_user_and_assistant() {
 #[test]
 fn multi_turn_full_conversation_flow() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -665,10 +482,8 @@ fn prompt_includes_conversation_history() {
     app.update();
     spawn_default_agent(&mut app);
 
-    // 创建带历史对话的任务并附加 PendingDispatch(BrainLlm)
-    // 老的 brain_dispatch_system 兜底路径已移除，TopLevelTask 必须通过
-    // PendingDispatch 流入 dispatch_system 才能触发 Brain LLM 调用。
-    // Brain LLM 的 prompt 由 build_prompt_with_history 构造，会注入 [Conversation history]。
+    // 创建带历史对话的任务并附加 PendingDispatch（交给主 Agent），
+    // 派发 prompt 由 build_prompt_with_context 构造，会注入 [Conversation history]。
     let task_id = harness::domain::TaskId::new();
     let mut task = Task::from_user_input("current question", 3, default_channel());
     task.id = task_id;
@@ -689,12 +504,7 @@ fn prompt_includes_conversation_history() {
             },
             PendingDispatch {
                 kind: DispatchKind::Task,
-                hint: DispatchHint {
-                    strategy: DispatchStrategy::BrainLlm,
-                    preferred_agent_name: None,
-                    required_skill_id: None,
-                    agent_spawn_spec: None,
-                },
+                hint: DispatchHint::main_agent(),
             },
         ))
         .id();
@@ -736,7 +546,7 @@ fn prompt_includes_conversation_history() {
 #[test]
 fn initial_user_input_recorded_in_short_term_memory() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -797,7 +607,7 @@ fn initial_user_input_recorded_in_short_term_memory() {
 #[test]
 fn three_turn_conversation_maintains_correct_order() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(
@@ -1008,7 +818,7 @@ fn second_dispatch_prompt_includes_correct_history() {
 #[test]
 fn task_content_updates_on_continue() {
     let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(BrainAwareEchoExecutor::new("echo response"));
+    let executor: Arc<dyn AgentExecutor> = Arc::new(FixedTextExecutor::new("echo response"));
     let executor_registry = ExecutorRegistry::from_single_executor(executor.clone(), "default");
     let (_input_tx, input_rx) = unbounded();
     let mut app = build_harness_app(

@@ -1468,7 +1468,7 @@ mod tests {
             target: EventTarget::Broadcast,
             request_id,
             agent_name: "agent".to_string(),
-            tool_name: "experience_governance".to_string(),
+            tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({}),
             options: vec![
                 ApprovalOption {

@@ -11,7 +11,7 @@ use harness::{
     },
     ecs::EntityIndex,
     llm::ExecutorRegistry,
-    systems::{BrainConfig, HarnessConfig},
+    systems::HarnessConfig,
 };
 use serde_json::{Value, json};
 use std::{
@@ -21,7 +21,7 @@ use std::{
 };
 use uuid::Uuid;
 
-/// HTTPS 命令 → 统一输入 → Brain/Agent（mock provider）→ 原生事件 → HTTPS 快照。
+/// HTTPS 命令 → 统一输入 → 主 Agent（mock provider）→ 原生事件 → HTTPS 快照。
 /// 不使用真实 provider，也不把 mock 回复当作真机或真实模型验收。
 #[test]
 fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
@@ -67,7 +67,7 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
         .build()
         .unwrap();
     let url = format!("https://localhost:{}", server.address.port());
-    let executor = Arc::new(common::mock_executor::BrainAwareEchoExecutor::new(
+    let executor = Arc::new(common::mock_executor::FixedTextExecutor::new(
         "client runtime reply",
     ));
     let (manager, channel_task, frontends) = {
@@ -80,10 +80,7 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
             .join("no-agents.toml")
             .to_string_lossy()
             .into_owned(),
-        brain: Some(BrainConfig {
-            enabled: true,
-            fallback_agent: None,
-        }),
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         ..Default::default()
     };
     let mut app = build_harness_app(
@@ -99,36 +96,31 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
     );
     app.insert_resource(schedule_store.clone());
     app.update();
-    for (name, tags) in [
-        ("brain", vec!["brain"]),
-        ("default-llm-agent", vec!["default", "llm"]),
-    ] {
-        let agent = Agent {
-            id: harness::domain::AgentId::new(),
-            profile: AgentProfile {
-                name: name.into(),
-                model: "mock".into(),
-            },
-            capabilities: AgentCapabilities {
-                tags: tags.into_iter().map(String::from).collect(),
-                description: name.into(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        };
-        let id = agent.id;
-        let entity = app
-            .world_mut()
-            .spawn((agent, LongTermMemory::default()))
-            .id();
-        app.world_mut()
-            .resource_mut::<EntityIndex>()
-            .agents
-            .insert(id, entity);
-    }
+    let agent = Agent {
+        id: harness::domain::AgentId::new(),
+        profile: AgentProfile {
+            name: "default-llm-agent".into(),
+            model: "mock".into(),
+        },
+        capabilities: AgentCapabilities {
+            tags: vec!["default".into(), "llm".into()],
+            description: "default-llm-agent".into(),
+        },
+        kind: AgentKind::Persistent,
+        parent_id: None,
+        bound_task_id: None,
+        tool_permissions: AgentToolPermissions::default(),
+        system_prompt: None,
+    };
+    let id = agent.id;
+    let entity = app
+        .world_mut()
+        .spawn((agent, LongTermMemory::default()))
+        .id();
+    app.world_mut()
+        .resource_mut::<EntityIndex>()
+        .agents
+        .insert(id, entity);
     let command = json!({"operation":"send_text","command_id":Uuid::new_v4(),"session_id":session,"content":"test native client path"});
     let receipt: Value = runtime.block_on(async {
         http.post(format!("{url}/v1/commands"))

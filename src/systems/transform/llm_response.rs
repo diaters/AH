@@ -2,7 +2,7 @@
 //!
 //! 纯路由 + Task 级通用 LLM 响应处理：
 //! - WorkItem 结果按知识域分派到各领域模块（评估 → `evaluation`、摘要 →
-//!   `summarization`、经验收集/画像/skill → `experience`）
+//!   `summarization`；经验库管理员回复由 `experience_library` 处理）
 //! - Task 级通用路径（文本 / 错误重试）在本模块处理
 //! - 工具调用循环编排（ToolCalls 分支）见 `systems/tools/tool_calling.rs`
 
@@ -13,18 +13,13 @@ use crate::{
     contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionResultMessage, AgentRequestKind, ChatRoundReadyMessage,
-        ChatSession, DeferredResult, EntryMetadata, EntryRole, ExperienceStore, FailureReason,
-        MemoryConfig, OutputContent, OwnedJobs, ProfileGenerationContext, ShortTermMemory,
-        SkillCreationContext, Task, TaskInbox, TaskStatus, ToolCallingState, UserOutputMessage,
-        WaitingReason, WorkItem, WorkItemType,
+        ChatSession, DeferredResult, EntryMetadata, EntryRole, FailureReason, MemoryConfig,
+        OutputContent, OwnedJobs, ShortTermMemory, Task, TaskInbox, TaskStatus, ToolCallingState,
+        UserOutputMessage, WaitingReason, WorkItem, WorkItemType,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
     systems::evaluation::handle_evaluation_work_item_result,
-    systems::experience::{
-        handle_experience_collection_llm_response, handle_profile_generation_llm_response,
-        handle_skill_creation_llm_response, handle_skill_update_llm_response,
-    },
     systems::summarization::handle_summarization_work_item_result,
     systems::tools::{CallingStateInfo, find_calling_state},
 };
@@ -79,10 +74,7 @@ pub fn llm_response_system(
     inboxes: Query<&TaskInbox>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     calling_states: Query<(Entity, &ToolCallingState)>,
-    mut work_items: Query<(Entity, &mut WorkItem)>,
-    mut experience_store: ResMut<ExperienceStore>,
-    profile_contexts: Query<&ProfileGenerationContext>,
-    skill_creation_contexts: Query<&SkillCreationContext>,
+    work_items: Query<(Entity, &WorkItem)>,
 ) {
     // Pre-collect ToolCallingState info to avoid mutable borrow conflicts
     let state_info: Vec<CallingStateInfo> = calling_states
@@ -143,59 +135,6 @@ pub fn llm_response_system(
                         );
                         continue;
                     }
-                    // handler 返回 true 表示响应已被领域消费；false 表示响应形态
-                    // 未被识别（如纯文本），fall through 到 `_ => {}` 走 task 级通用路径。
-                    WorkItemType::ExperienceCollection
-                        if handle_experience_collection_llm_response(
-                            &mut commands,
-                            &experience_store,
-                            &mut work_items,
-                            entity,
-                            work_item_entity,
-                            &work_item,
-                            result,
-                        ) =>
-                    {
-                        continue;
-                    }
-                    WorkItemType::ProfileGeneration
-                        if handle_profile_generation_llm_response(
-                            &mut commands,
-                            &experience_store,
-                            &profile_contexts,
-                            entity,
-                            work_item_entity,
-                            &work_item,
-                            result,
-                        ) =>
-                    {
-                        continue;
-                    }
-                    WorkItemType::SkillUpdate
-                        if handle_skill_update_llm_response(
-                            &mut commands,
-                            entity,
-                            work_item_entity,
-                            &work_item,
-                            result,
-                        ) =>
-                    {
-                        continue;
-                    }
-                    WorkItemType::SkillCreation
-                        if handle_skill_creation_llm_response(
-                            &mut commands,
-                            &mut experience_store,
-                            &skill_creation_contexts,
-                            &mut work_items,
-                            entity,
-                            work_item_entity,
-                            &work_item,
-                            result,
-                        ) =>
-                    {
-                        continue;
-                    }
                     _ => {}
                 }
             } else {
@@ -212,20 +151,9 @@ pub fn llm_response_system(
             }
         }
 
-        // 非 LlmCompletion 的结果仅放行 BrainDecision+ToolCalls（让 tool calling 循环处理）
+        // 非 LlmCompletion 的结果不进入 task 级通用处理
         if result.request_kind != AgentRequestKind::LlmCompletion {
-            let is_brain_tool_calls = result.request_kind == AgentRequestKind::BrainDecision
-                && matches!(
-                    &result.result,
-                    Ok(AgentExecutionOutput {
-                        content: OutputContent::ToolCalls(_)
-                            | OutputContent::ToolCallsWithText { .. },
-                        ..
-                    })
-                );
-            if !is_brain_tool_calls {
-                continue;
-            }
+            continue;
         }
 
         for (task_entity, mut task, mut short_term, chat_session) in &mut tasks {
@@ -400,7 +328,7 @@ pub fn llm_response_system(
                     ..
                 }) => {
                     // 进度文字与工具属于同一次响应：输出文字，但不走纯文字的完成/等待用户分支。
-                    // Brain 和 WorkItem 的内部输出不作为原任务的用户反馈。
+                    // WorkItem 的内部输出不作为原任务的用户反馈。
                     if result.request_kind == AgentRequestKind::LlmCompletion
                         && result.work_item_id.is_none()
                         && let Some(text) =
@@ -428,7 +356,6 @@ pub fn llm_response_system(
                         reasoning_content,
                         clock.0,
                         settings.0.max_tool_iterations,
-                        &work_items,
                     );
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {
@@ -552,7 +479,6 @@ mod tests {
             app.init_resource::<Clock>();
             app.init_resource::<MemoryConfig>();
             app.init_resource::<crate::domain::TaskEvaluationConfig>();
-            app.init_resource::<ExperienceStore>();
             app.insert_resource(HarnessSettings::default_test());
             app.init_resource::<EntityIndex>();
             app.add_systems(Update, llm_response_system);

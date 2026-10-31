@@ -83,7 +83,7 @@ fn load_persistent_agents(
 ) {
     let config_path = &settings.0.agents_config_path;
 
-    let config = match crate::infrastructure::incubation::agent_registry::load_agent_config(
+    let config = match crate::infrastructure::agents_config::load_agent_config(
         std::path::Path::new(config_path),
     ) {
         Ok(Some(config)) => config,
@@ -119,19 +119,6 @@ fn load_persistent_agents(
             );
             return;
         }
-    }
-
-    // 预防性检查：profile-designer Agent 是否存在（孵化流程依赖此 Agent）
-    let has_profile_designer = config
-        .agent
-        .iter()
-        .any(|e| e.tags.iter().any(|t| t == "profile") || e.name == "profile-designer");
-    if !has_profile_designer {
-        warn!(
-            event = "ProfileDesignerAgentMissing",
-            "profile-designer Agent not found in agents.toml; \
-             incubation flow will fail until a profile-designer Agent is configured"
-        );
     }
 
     // 收集插件贡献的 Agent 名称，一并检查重复

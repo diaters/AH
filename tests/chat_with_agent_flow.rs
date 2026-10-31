@@ -33,7 +33,7 @@ fn test_config() -> HarnessConfig {
             api_key: Some("test-api-key".to_string()),
             api_base: None,
         },
-        brain: None,
+        main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
         max_tool_iterations: 5,
@@ -173,7 +173,6 @@ fn chat_with_agent_creates_chat_subtask() {
             pending_confirmation_id: None,
             tool_call_id: Some("call_chat_1".to_string()),
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         });
 
@@ -338,7 +337,6 @@ fn chat_with_agent_multi_round_via_handle() {
             pending_confirmation_id: None,
             tool_call_id: Some("call_round_1".to_string()),
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         });
 
@@ -382,7 +380,6 @@ fn chat_with_agent_multi_round_via_handle() {
             pending_confirmation_id: None,
             tool_call_id: Some("call_round_2".to_string()),
             pending_confirmation_options: None,
-            work_item_entity: None,
             confirmed_once: false,
         });
 

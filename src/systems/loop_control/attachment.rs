@@ -6,7 +6,7 @@
 //!   `ToolCallingState.conversation` 与 `ShortTermMemory`；
 //! - 新一轮首个请求回填进度清单快照（不写 STM，见 ADR-007）。
 //!
-//! 只处理任务级 `LlmCompletion` 请求；摘要、评估、Brain 决策与 WorkItem 请求不受影响。
+//! 只处理任务级 `LlmCompletion` 请求；摘要、评估与 WorkItem 请求不受影响。
 
 use tracing::debug;
 
