@@ -54,8 +54,13 @@ pub fn run_admin_command() -> anyhow::Result<bool> {
         &addresses,
     );
     println!("{}", tls::terminal_qr(&link)?);
+    let qr_path = tls::write_qr_svg(&config, &link)?;
     println!(
         "用 Harness 客户端扫码，或复制下面的配对链接（300 秒内有效，仅可使用一次）：\n\n{link}\n"
+    );
+    println!(
+        "终端配色或字体导致扫不出时，打开二维码文件再扫：{}",
+        qr_path.display()
     );
     println!("addresses={}", addresses.join(","));
     Ok(true)

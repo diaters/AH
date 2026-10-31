@@ -175,13 +175,12 @@ impl Store {
         }
         #[cfg(unix)]
         fs::File::open(parent)?.sync_all()?;
-        let result = self.change(|state| {
+        // 状态提交失败可能发生在 rename 后；保留数据以免损坏已提交记录。
+        self.change(|state| {
             state.files.insert(id, file.clone());
             append_event(state, session, "file_added", serde_json::to_value(&file)?);
             Ok(file)
-        });
-        // 状态提交失败可能发生在 rename 后；保留数据以免损坏已提交记录。
-        result
+        })
     }
     pub(crate) fn file_markers(
         &self,

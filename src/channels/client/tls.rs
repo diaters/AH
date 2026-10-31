@@ -215,15 +215,28 @@ pub fn pairing_link(
     link
 }
 
-/// 终端二维码；使用半高块字符，深色终端下以反色保证可扫描。
+/// 终端二维码，按正色输出：浅色终端下为白底黑码，静区留白。
+/// 反色会把静区画成实心黑边，浅色终端与多数扫码器都无法识别；
+/// 深色终端改用 [`write_qr_svg`] 写出的文件扫码。
 pub fn terminal_qr(text: &str) -> anyhow::Result<String> {
     let code = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::L)?;
     Ok(code
         .render::<qrcode::render::unicode::Dense1x2>()
-        .dark_color(qrcode::render::unicode::Dense1x2::Light)
-        .light_color(qrcode::render::unicode::Dense1x2::Dark)
         .quiet_zone(true)
         .build())
+}
+
+/// 与终端字体、配色无关的二维码文件，供预览后扫码。
+pub fn write_qr_svg(config: &ClientConfig, text: &str) -> anyhow::Result<PathBuf> {
+    let code = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::M)?;
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .quiet_zone(true)
+        .min_dimensions(360, 360)
+        .build();
+    let path = managed_dir(config).join("pair-qr.svg");
+    fs::write(&path, svg).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -293,5 +306,32 @@ mod tests {
         let v6 = pairing_link(id, "abc", None, &["[fd00::1]:9443".into()]);
         assert!(v6.ends_with("&a=%5Bfd00::1%5D:9443"));
         assert!(terminal_qr(&link).unwrap().lines().count() > 10);
+    }
+
+    #[test]
+    fn terminal_qr_keeps_quiet_zone_blank() {
+        let link = pairing_link(
+            uuid::Uuid::nil(),
+            "abc",
+            None,
+            &["192.168.1.11:9443".into()],
+        );
+        let qr = terminal_qr(&link).unwrap();
+        // 静区必须是空白；渲染成块字符会得到实心黑框，浅色终端下无法定位。
+        let first = qr.lines().next().unwrap();
+        assert!(first.trim().is_empty(), "quiet zone: {first:?}");
+        assert!(
+            qr.lines()
+                .any(|line| line.contains('█') || line.contains('▀') || line.contains('▄'))
+        );
+    }
+
+    #[test]
+    fn qr_svg_is_written_next_to_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_qr_svg(&config(dir.path()), "harness://pair?i=test").unwrap();
+        assert_eq!(path, dir.path().join("pair-qr.svg"));
+        let svg = fs::read_to_string(&path).unwrap();
+        assert!(svg.contains("<svg"), "unexpected svg output");
     }
 }
