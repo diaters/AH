@@ -1,13 +1,16 @@
 //! Unix 实例级进程服务。控制 RPC 与专用 lifeline 分离；仅服务进程创建实际命令。
+//!
+//! 单次 RPC 变慢只让该次调用失败；只有连接损坏、服务退出或长时间无任何回应才关停该代服务，
+//! 关停会回收该代全部受管进程，随后的调用按间隔重启新一代服务，旧会话记为丢失。
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{self, Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::{net::UnixStream, process::CommandExt},
     },
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -22,10 +25,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::{NativeProcessBackend, audit::ProcessLog};
+use super::{
+    NativeProcessBackend,
+    audit::ProcessLog,
+    native::{LostSessions, is_active},
+};
 use crate::domain::{
-    SessionBackend, SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest,
-    TaskId,
+    SessionBackend, SessionHandle, SessionHandleId, SessionInputRequest, SessionReadRequest,
+    SessionStartRequest, SessionSummary, TaskId,
 };
 use tracing::{error, info, warn};
 
@@ -37,7 +44,15 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REQUESTS: usize = 64;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const RPC_COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
+/// 停止需要 TERM 宽限、强杀与输出 drain，给足完成时间，避免清理已成功却被报告为失败。
+const STOP_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
+/// 有未回应请求且持续这么久收不到任何帧，才判定服务卡死；瞬时系统停顿不应杀掉全部进程。
+const HUNG_AFTER: Duration = Duration::from_secs(30);
+/// 服务端回复写入期限；宿主存活由 lifeline 判定，宿主短暂停顿不应让服务端断开连接。
+const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 相邻两次重启尝试的最小间隔，防止服务反复崩溃时形成重启风暴。
+const RESTART_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Serialize, Deserialize)]
 pub(super) enum Operation {
@@ -55,6 +70,34 @@ pub(super) enum Operation {
     Cancel(u64),
 }
 
+impl Operation {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Exec(_) => "exec",
+            Self::Start(_) => "start",
+            Self::Read(_) => "read",
+            Self::List => "list",
+            Self::Input(_) => "input",
+            Self::Stop(_) => "stop",
+            Self::ListTask(_) => "list_task",
+            Self::AssertOwner(..) => "assert_owner",
+            Self::StopTask(_) => "stop_task",
+            Self::PollOutput => "poll_output",
+            Self::AckOutput(..) => "ack_output",
+            Self::Cancel(_) => "cancel",
+        }
+    }
+
+    /// 长 exec 的完成由业务 timeout / cancel 决定；其他 RPC 有覆盖排队、发送和接收的期限。
+    fn completion_timeout(&self) -> Option<Duration> {
+        match self {
+            Self::Exec(_) => None,
+            Self::Stop(_) | Self::StopTask(_) => Some(STOP_COMPLETION_TIMEOUT),
+            _ => Some(RPC_COMPLETION_TIMEOUT),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Request {
     id: u64,
@@ -69,14 +112,44 @@ struct Response {
 
 type Reply = Result<Value, String>;
 
+/// `Request` 只影响本次调用，服务继续可用；`Fatal` 表示该代连接已关停。
+enum CallError {
+    Request(String),
+    Fatal(String),
+}
+
+enum SendError {
+    /// 一个字节都未写出，帧流仍然完整。
+    NotSent(String),
+    /// 连接断开或写出半帧，帧流不可再复用。
+    Broken(String),
+}
+
 struct ClientState {
     failed: AtomicBool,
     closing: AtomicBool,
     pending: Mutex<HashMap<u64, mpsc::SyncSender<Reply>>>,
+    /// 首个导致失效的原因，供重启日志与丢失会话说明使用。
+    failure: Mutex<Option<String>>,
+    /// 自某个请求超时以来一直没有收到任何帧的起点；收到任意帧即清除。
+    stalled_since: Mutex<Option<Instant>>,
 }
 
 impl ClientState {
+    fn new() -> Self {
+        Self {
+            failed: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
+            pending: Mutex::new(HashMap::new()),
+            failure: Mutex::new(None),
+            stalled_since: Mutex::new(None),
+        }
+    }
+
     fn fail(&self, error: &str) {
+        if let Ok(mut failure) = self.failure.lock() {
+            failure.get_or_insert_with(|| error.to_string());
+        }
         self.failed.store(true, Ordering::SeqCst);
         if let Ok(mut pending) = self.pending.lock() {
             for (_, sender) in pending.drain() {
@@ -84,25 +157,56 @@ impl ClientState {
             }
         }
     }
+
+    fn failure(&self) -> String {
+        self.failure
+            .lock()
+            .ok()
+            .and_then(|failure| failure.clone())
+            .unwrap_or_else(|| "process supervisor connection closed".to_string())
+    }
+
+    fn note_frame(&self) {
+        if let Ok(mut stalled) = self.stalled_since.lock() {
+            *stalled = None;
+        }
+    }
+
+    /// 记录一次未获回应的请求；返回是否已持续 `HUNG_AFTER` 没有任何帧。
+    fn note_timeout(&self, waiting_since: Instant, now: Instant) -> bool {
+        let Ok(mut stalled) = self.stalled_since.lock() else {
+            return true;
+        };
+        let since = *stalled.get_or_insert(waiting_since);
+        now.saturating_duration_since(since) >= HUNG_AFTER
+    }
+
+    fn forget(&self, id: u64) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(&id);
+        }
+    }
 }
 
-pub(super) struct SupervisorClient {
+/// 单代服务连接：一个服务进程、一条 RPC 与一条 lifeline。
+struct Connection {
     writer: Mutex<UnixStream>,
     // 无 reader / worker 线程持有此端点；主运行时可不等待 clone 释放而显式关闭。
     lifeline: Mutex<Option<UnixStream>>,
     child: Mutex<Child>,
+    pid: u32,
     state: Arc<ClientState>,
     next_id: AtomicU64,
     shutdown: Mutex<Option<Result<(), String>>>,
     log: Option<ProcessLog>,
 }
 
-impl SupervisorClient {
-    pub(super) fn launch(executable: &Path, log_path: Option<&Path>) -> Result<Self, String> {
-        let log = log_path
-            .map(ProcessLog::open)
-            .transpose()
-            .map_err(error_text)?;
+impl Connection {
+    fn launch(
+        executable: &Path,
+        log_path: Option<&Path>,
+        log: Option<ProcessLog>,
+    ) -> Result<Self, String> {
         let (rpc, service_rpc) = UnixStream::pair().map_err(error_text)?;
         let (lifeline, service_lifeline) = UnixStream::pair().map_err(error_text)?;
         // 先复制到固定目标 fd 以上，避免 dup2 时覆盖尚未复制的来源。
@@ -166,11 +270,7 @@ impl SupervisorClient {
             let _ = child.wait();
             return Err(error.to_string());
         }
-        let state = Arc::new(ClientState {
-            failed: AtomicBool::new(false),
-            closing: AtomicBool::new(false),
-            pending: Mutex::new(HashMap::new()),
-        });
+        let state = Arc::new(ClientState::new());
         let reader_state = Arc::clone(&state);
         let reader_log = log.clone();
         let supervisor_pid = child.id();
@@ -198,6 +298,8 @@ impl SupervisorClient {
                         break;
                     }
                 };
+                // 任何帧（包括调用方已放弃的迟到回复）都证明服务仍在运转。
+                reader_state.note_frame();
                 let sender = reader_state
                     .pending
                     .lock()
@@ -212,6 +314,7 @@ impl SupervisorClient {
             writer: Mutex::new(rpc),
             lifeline: Mutex::new(Some(lifeline)),
             child: Mutex::new(child),
+            pid: supervisor_pid,
             state,
             next_id: AtomicU64::new(1),
             shutdown: Mutex::new(None),
@@ -219,77 +322,98 @@ impl SupervisorClient {
         })
     }
 
-    pub(super) fn call<T: DeserializeOwned>(
+    fn usable(&self) -> bool {
+        !self.state.failed.load(Ordering::SeqCst) && !self.state.closing.load(Ordering::SeqCst)
+    }
+
+    fn call(
         &self,
         operation: Operation,
         cancel: Option<CancellationToken>,
-    ) -> Result<T, String> {
-        if self.state.failed.load(Ordering::SeqCst) || self.state.closing.load(Ordering::SeqCst) {
-            return Err("process supervisor is unavailable or shutting down".to_string());
+    ) -> Result<Value, CallError> {
+        if !self.usable() {
+            return Err(CallError::Fatal(
+                "process supervisor is unavailable or shutting down".to_string(),
+            ));
         }
-        // 长 exec 的完成由业务 timeout / cancel 决定；其他 RPC 共用覆盖排队、发送和接收的期限。
-        let mut deadline = (!matches!(operation, Operation::Exec(_)))
-            .then(|| Instant::now() + RPC_COMPLETION_TIMEOUT);
+        let label = operation.label();
+        let mut waiting_since = Instant::now();
+        let mut deadline = operation
+            .completion_timeout()
+            .map(|timeout| waiting_since + timeout);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = mpsc::sync_channel(1);
         {
-            let mut pending = self
-                .state
-                .pending
-                .lock()
-                .map_err(|_| "supervisor pending map poisoned")?;
+            let mut pending = self.state.pending.lock().map_err(|_| {
+                CallError::Fatal(self.fail_closed("supervisor pending map poisoned"))
+            })?;
             if pending.len() >= MAX_REQUESTS {
-                return Err("process supervisor request capacity exceeded".to_string());
+                return Err(CallError::Request(
+                    "process supervisor request capacity exceeded".to_string(),
+                ));
             }
             pending.insert(id, sender);
         }
-        if let Err(error) = self.send(
+        self.send(
+            id,
             &Request { id, operation },
             deadline.unwrap_or_else(|| Instant::now() + IO_TIMEOUT),
-        ) {
-            return Err(self.fail_closed_after_cleanup(&error));
-        }
+        )?;
         let mut cancelled = false;
         loop {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                return Err(self.fail_closed_after_cleanup("process supervisor RPC timed out"));
+                // 宿主线程自身被挂起时回复可能早已到达；先取走再判定超时。
+                if let Ok(reply) = receiver.try_recv() {
+                    return self.reply(reply);
+                }
+                self.state.forget(id);
+                if self.state.note_timeout(waiting_since, Instant::now()) {
+                    return Err(CallError::Fatal(self.fail_closed(&format!(
+                        "process supervisor sent no response for {}s",
+                        HUNG_AFTER.as_secs()
+                    ))));
+                }
+                return Err(CallError::Request(format!(
+                    "process supervisor {label} RPC timed out; request abandoned with unknown outcome, service kept running"
+                )));
             }
             if !cancelled && cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
-                let cancel_deadline = Instant::now() + RPC_COMPLETION_TIMEOUT;
-                if let Err(error) = self.send(
+                waiting_since = Instant::now();
+                let cancel_deadline = waiting_since + RPC_COMPLETION_TIMEOUT;
+                self.send(
+                    id,
                     &Request {
                         id: 0,
                         operation: Operation::Cancel(id),
                     },
                     cancel_deadline,
-                ) {
-                    return Err(self.fail_closed_after_cleanup(&error));
-                }
+                )?;
                 deadline = Some(cancel_deadline);
                 cancelled = true;
             }
             match receiver.recv_timeout(Duration::from_millis(10)) {
-                Ok(Ok(reply)) => {
-                    return serde_json::from_value(reply).map_err(|error| {
-                        self.fail_closed_after_cleanup(&format!(
-                            "invalid process supervisor response: {error}"
-                        ))
-                    });
-                }
-                Ok(Err(error)) if self.state.failed.load(Ordering::SeqCst) => {
-                    return Err(self.fail_closed_after_cleanup(&error));
-                }
-                Ok(Err(error)) => return Err(error),
+                Ok(reply) => return self.reply(reply),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(self
-                        .fail_closed_after_cleanup("process supervisor response channel closed"));
+                    return Err(CallError::Fatal(
+                        self.fail_closed("process supervisor response channel closed"),
+                    ));
                 }
             }
         }
     }
 
-    fn fail_closed_after_cleanup(&self, error: &str) -> String {
+    fn reply(&self, reply: Reply) -> Result<Value, CallError> {
+        match reply {
+            Ok(value) => Ok(value),
+            Err(error) if self.state.failed.load(Ordering::SeqCst) => {
+                Err(CallError::Fatal(self.fail_closed(&error)))
+            }
+            Err(error) => Err(CallError::Request(error)),
+        }
+    }
+
+    fn fail_closed(&self, error: &str) -> String {
         self.state.fail(error);
         match self.shutdown() {
             Ok(()) => format!("{error}; all instance processes stopped"),
@@ -299,12 +423,31 @@ impl SupervisorClient {
         }
     }
 
-    fn send(&self, request: &Request, deadline: Instant) -> Result<(), String> {
-        let bytes = encode_frame(request)?;
-        // 不能在 writer Mutex::lock 上无限排队；绝对期限也覆盖部分写入的多次系统调用。
-        let mut writer = writer_before_deadline(&self.writer, deadline)?;
-        write_before_deadline(&mut writer, &(bytes.len() as u32).to_be_bytes(), deadline)?;
-        write_before_deadline(&mut writer, &bytes, deadline)
+    fn send(&self, id: u64, request: &Request, deadline: Instant) -> Result<(), CallError> {
+        let attempt = (|| {
+            let bytes = encode_frame(request).map_err(SendError::NotSent)?;
+            let mut frame = Vec::with_capacity(bytes.len() + 4);
+            frame.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            frame.extend_from_slice(&bytes);
+            // 不能在 writer Mutex::lock 上无限排队；绝对期限也覆盖部分写入的多次系统调用。
+            let mut writer =
+                writer_before_deadline(&self.writer, deadline).map_err(SendError::NotSent)?;
+            write_before_deadline(&mut writer, &frame, deadline).map_err(|failure| {
+                if failure.written == 0 && failure.timed_out {
+                    SendError::NotSent(failure.error)
+                } else {
+                    SendError::Broken(failure.error)
+                }
+            })
+        })();
+        match attempt {
+            Ok(()) => Ok(()),
+            Err(SendError::NotSent(error)) => {
+                self.state.forget(id);
+                Err(CallError::Request(error))
+            }
+            Err(SendError::Broken(error)) => Err(CallError::Fatal(self.fail_closed(&error))),
+        }
     }
 
     fn close_lifeline(&self) {
@@ -313,7 +456,7 @@ impl SupervisorClient {
         }
     }
 
-    pub(super) fn shutdown(&self) -> Result<(), String> {
+    fn shutdown(&self) -> Result<(), String> {
         let mut result = self
             .shutdown
             .lock()
@@ -353,6 +496,263 @@ impl SupervisorClient {
     }
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+struct Slot {
+    connection: Option<Arc<Connection>>,
+    generation: u64,
+    /// 最近一次重启尝试；首次重启立即进行，之后按间隔限流。
+    restarted_at: Option<Instant>,
+    closed: bool,
+    shutdown: Option<Result<(), String>>,
+    /// 当前代启动且尚未观察到结束的会话；该代失效时整体转入丢失记录。
+    sessions: HashSet<SessionHandleId>,
+}
+
+/// 宿主侧进程服务句柄：转发 RPC，在服务失效后按间隔重启新一代服务。
+pub(super) struct SupervisorClient {
+    executable: PathBuf,
+    log_path: Option<PathBuf>,
+    log: Option<ProcessLog>,
+    slot: Mutex<Slot>,
+    lost: Arc<Mutex<LostSessions>>,
+}
+
+/// 调用成功后需要同步到会话登记的信息；`Operation` 发送时被移走，故先行提取。
+enum Observation {
+    None,
+    Started,
+    Read(SessionHandleId),
+    Stopped(SessionHandleId),
+    StoppedTask,
+}
+
+impl SupervisorClient {
+    pub(super) fn launch(
+        executable: &Path,
+        log_path: Option<&Path>,
+        lost: Arc<Mutex<LostSessions>>,
+    ) -> Result<Self, String> {
+        let log = log_path
+            .map(ProcessLog::open)
+            .transpose()
+            .map_err(error_text)?;
+        let connection = Connection::launch(executable, log_path, log.clone())?;
+        Ok(Self {
+            executable: executable.to_path_buf(),
+            log_path: log_path.map(Path::to_path_buf),
+            log,
+            slot: Mutex::new(Slot {
+                connection: Some(Arc::new(connection)),
+                generation: 1,
+                restarted_at: None,
+                closed: false,
+                shutdown: None,
+                sessions: HashSet::new(),
+            }),
+            lost,
+        })
+    }
+
+    pub(super) fn call<T: DeserializeOwned>(
+        &self,
+        operation: Operation,
+        cancel: Option<CancellationToken>,
+    ) -> Result<T, String> {
+        let label = operation.label();
+        let observation = match &operation {
+            Operation::Start(_) => Observation::Started,
+            Operation::Read(request) => Observation::Read(request.handle_id),
+            Operation::Stop(id) => Observation::Stopped(*id),
+            Operation::StopTask(_) => Observation::StoppedTask,
+            _ => Observation::None,
+        };
+        let (connection, generation) = self.connection()?;
+        match connection.call(operation, cancel) {
+            Ok(value) => {
+                self.observe(observation, &value, generation);
+                serde_json::from_value(value)
+                    .map_err(|error| format!("invalid process supervisor response: {error}"))
+            }
+            Err(CallError::Request(error)) => Err(error),
+            Err(CallError::Fatal(error)) => {
+                if let Ok(mut slot) = self.slot.lock() {
+                    self.retire(&mut slot, &connection, label);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// 返回可用的当前代连接；当前代已失效时记录并按间隔重启。
+    fn connection(&self) -> Result<(Arc<Connection>, u64), String> {
+        let mut slot = self
+            .slot
+            .lock()
+            .map_err(|_| "supervisor slot mutex poisoned")?;
+        if slot.closed {
+            return Err("process supervisor is shut down".to_string());
+        }
+        if let Some(connection) = slot.connection.clone() {
+            if connection.usable() {
+                return Ok((connection, slot.generation));
+            }
+            // 读取线程发现连接断开时没有调用方在场；在这里补做关停与登记。
+            let _ = connection.shutdown();
+            self.retire(&mut slot, &connection, "connection_lost");
+        }
+        if let Some(wait) = slot
+            .restarted_at
+            .and_then(|at| RESTART_INTERVAL.checked_sub(at.elapsed()))
+        {
+            return Err(format!(
+                "process supervisor failed and is restarting; retry after {}ms",
+                wait.as_millis()
+            ));
+        }
+        slot.restarted_at = Some(Instant::now());
+        let generation = slot.generation + 1;
+        match Connection::launch(&self.executable, self.log_path.as_deref(), self.log.clone()) {
+            Ok(connection) => {
+                let connection = Arc::new(connection);
+                warn!(
+                    event = "ProcessSupervisorRestarted",
+                    generation,
+                    supervisor_pid = connection.pid,
+                    "process service restarted after failure"
+                );
+                self.audit(
+                    "ProcessSupervisorRestarted",
+                    serde_json::json!({
+                        "generation": generation, "supervisor_pid": connection.pid,
+                        "message": "process service restarted after failure",
+                    }),
+                );
+                slot.generation = generation;
+                slot.connection = Some(Arc::clone(&connection));
+                Ok((connection, generation))
+            }
+            Err(error) => {
+                error!(event = "ProcessSupervisorRestartFailed", generation, error_type = "Spawn",
+                    error = %error, "process service restart failed");
+                self.audit(
+                    "ProcessSupervisorRestartFailed",
+                    serde_json::json!({
+                        "generation": generation, "error_type": "Spawn", "error": error,
+                        "message": "process service restart failed",
+                    }),
+                );
+                Err(format!("process supervisor restart failed: {error}"))
+            }
+        }
+    }
+
+    /// 让已关停的一代退出服务：记录原因并把其会话转为丢失。对同一代幂等。
+    fn retire(&self, slot: &mut Slot, connection: &Arc<Connection>, operation: &str) {
+        if !slot
+            .connection
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, connection))
+        {
+            return;
+        }
+        slot.connection = None;
+        let reason = connection.state.failure();
+        let lost_sessions = slot.sessions.len();
+        error!(
+            event = "ProcessSupervisorFailed",
+            generation = slot.generation,
+            supervisor_pid = connection.pid,
+            operation,
+            lost_sessions,
+            error_type = "ProcessBackend",
+            error = %reason,
+            "process service failed; its managed processes were stopped and it will be restarted"
+        );
+        self.audit(
+            "ProcessSupervisorFailed",
+            serde_json::json!({
+                "generation": slot.generation, "supervisor_pid": connection.pid,
+                "operation": operation, "lost_sessions": lost_sessions,
+                "error_type": "ProcessBackend", "error": reason,
+                "message": "process service failed; its managed processes were stopped",
+            }),
+        );
+        if let Ok(mut lost) = self.lost.lock() {
+            for id in slot.sessions.drain() {
+                lost.insert(id, reason.clone());
+            }
+        }
+    }
+
+    fn observe(&self, observation: Observation, value: &Value, generation: u64) {
+        let Ok(mut slot) = self.slot.lock() else {
+            return;
+        };
+        match observation {
+            Observation::None => {}
+            Observation::Started => {
+                let Ok(handle) = serde_json::from_value::<SessionHandle>(value.clone()) else {
+                    return;
+                };
+                if slot.generation == generation && slot.connection.is_some() {
+                    slot.sessions.insert(handle.handle_id);
+                } else if let Ok(mut lost) = self.lost.lock() {
+                    // 启动回复到达前该代已失效：会话已随该代被回收。
+                    lost.insert(
+                        handle.handle_id,
+                        "process supervisor failed right after start".to_string(),
+                    );
+                }
+            }
+            Observation::Read(id) => {
+                if serde_json::from_value::<SessionSummary>(value.clone())
+                    .is_ok_and(|summary| !is_active(summary.status))
+                {
+                    slot.sessions.remove(&id);
+                }
+            }
+            Observation::Stopped(id) => {
+                slot.sessions.remove(&id);
+            }
+            Observation::StoppedTask => {
+                if let Ok(ids) = serde_json::from_value::<Vec<SessionHandleId>>(value.clone()) {
+                    for id in ids {
+                        slot.sessions.remove(&id);
+                    }
+                }
+            }
+        }
+    }
+
+    fn audit(&self, event: &str, fields: Value) {
+        if let Some(log) = &self.log {
+            log.event(event, fields);
+        }
+    }
+
+    pub(super) fn shutdown(&self) -> Result<(), String> {
+        let mut slot = self
+            .slot
+            .lock()
+            .map_err(|_| "supervisor slot mutex poisoned")?;
+        if let Some(result) = slot.shutdown.as_ref() {
+            return result.clone();
+        }
+        slot.closed = true;
+        let outcome = slot
+            .connection
+            .take()
+            .map_or(Ok(()), |connection| connection.shutdown());
+        slot.shutdown = Some(outcome.clone());
+        outcome
+    }
+}
+
 impl Drop for SupervisorClient {
     fn drop(&mut self) {
         let _ = self.shutdown();
@@ -377,22 +777,46 @@ fn writer_before_deadline(
     }
 }
 
+struct WriteFailure {
+    written: usize,
+    timed_out: bool,
+    error: String,
+}
+
 fn write_before_deadline(
     stream: &mut UnixStream,
-    mut bytes: &[u8],
+    bytes: &[u8],
     deadline: Instant,
-) -> Result<(), String> {
-    while !bytes.is_empty() {
+) -> Result<(), WriteFailure> {
+    let mut written = 0;
+    let fail = |written, timed_out, error: String| WriteFailure {
+        written,
+        timed_out,
+        error,
+    };
+    while written < bytes.len() {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| "process supervisor RPC send timed out".to_string())?;
+            .ok_or_else(|| {
+                fail(
+                    written,
+                    true,
+                    "process supervisor RPC send timed out".into(),
+                )
+            })?;
         stream
             .set_write_timeout(Some(remaining))
-            .map_err(error_text)?;
-        match stream.write(bytes) {
-            Ok(0) => return Err("process supervisor connection closed during send".to_string()),
-            Ok(written) => bytes = &bytes[written..],
+            .map_err(|error| fail(written, false, error.to_string()))?;
+        match stream.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(fail(
+                    written,
+                    false,
+                    "process supervisor connection closed during send".into(),
+                ));
+            }
+            Ok(count) => written += count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error)
                 if matches!(
@@ -400,9 +824,13 @@ fn write_before_deadline(
                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 ) =>
             {
-                return Err("process supervisor RPC send timed out".to_string());
+                return Err(fail(
+                    written,
+                    true,
+                    "process supervisor RPC send timed out".into(),
+                ));
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(fail(written, false, error.to_string())),
         }
     }
     Ok(())
@@ -449,7 +877,7 @@ pub fn run_internal() -> Result<(), String> {
         host_pid = unsafe { libc::getppid() },
         "process service started"
     );
-    rpc.set_write_timeout(Some(IO_TIMEOUT))
+    rpc.set_write_timeout(Some(RESPONSE_WRITE_TIMEOUT))
         .map_err(error_text)?;
     write_frame(
         &mut rpc,
@@ -496,21 +924,15 @@ pub fn run_internal() -> Result<(), String> {
             }
             operation => {
                 if active.load(Ordering::SeqCst) >= MAX_REQUESTS {
-                    // 控制循环不能排队等待工作线程持有的响应锁，否则背压会阻塞 lifeline。
-                    let Ok(mut response_writer) = writer.try_lock() else {
-                        break "response_backpressure";
-                    };
-                    if write_frame(
-                        &mut *response_writer,
-                        &Response {
-                            id: request.id,
-                            result: Err("process supervisor worker capacity exceeded".to_string()),
-                        },
-                    )
-                    .is_err()
-                    {
-                        break "response_write_failed";
-                    }
+                    // 控制循环不能等待响应写入，否则背压会阻塞 lifeline；宿主最多 64 个待回应请求。
+                    let rejection_writer = Arc::clone(&writer);
+                    thread::spawn(move || {
+                        send_response(
+                            &rejection_writer,
+                            request.id,
+                            Err("process supervisor worker capacity exceeded".to_string()),
+                        );
+                    });
                     continue;
                 }
                 active.fetch_add(1, Ordering::SeqCst);
@@ -692,6 +1114,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn transient_timeouts_are_tolerated_until_no_frame_arrives_for_the_hung_window() {
+        let state = ClientState::new();
+        let start = Instant::now();
+        assert!(!state.note_timeout(start, start + RPC_COMPLETION_TIMEOUT));
+        // 后续超时以最早未获回应的时刻计算，持续无帧才判定卡死。
+        let later = start + Duration::from_secs(20);
+        assert!(!state.note_timeout(later, later + RPC_COMPLETION_TIMEOUT));
+        assert!(state.note_timeout(start + Duration::from_secs(28), start + HUNG_AFTER));
+    }
+
+    #[test]
+    fn any_frame_resets_the_stall_window() {
+        let state = ClientState::new();
+        let start = Instant::now();
+        assert!(!state.note_timeout(start, start + RPC_COMPLETION_TIMEOUT));
+        state.note_frame();
+        let later = start + Duration::from_secs(29);
+        assert!(!state.note_timeout(later, later + RPC_COMPLETION_TIMEOUT));
+    }
+
+    #[test]
+    fn first_failure_reason_is_kept_for_lost_session_reports() {
+        let state = ClientState::new();
+        state.fail("supervisor sent no response");
+        state.fail("process supervisor unavailable: eof");
+        assert_eq!(state.failure(), "supervisor sent no response");
+    }
+
+    #[test]
     fn writer_queue_has_a_deadline_even_when_another_request_holds_the_lock() {
         let (socket, _peer) = UnixStream::pair().unwrap();
         let writer = Mutex::new(socket);
@@ -715,13 +1166,16 @@ mod tests {
     fn socket_backpressure_obeys_the_same_absolute_send_deadline() {
         let (mut writer, _peer) = UnixStream::pair().unwrap();
         let started = Instant::now();
-        let error = write_before_deadline(
+        let failure = write_before_deadline(
             &mut writer,
             &vec![0; MAX_FRAME_BYTES],
             started + Duration::from_millis(50),
         )
-        .unwrap_err();
-        assert!(error.contains("timed out"));
+        .err()
+        .unwrap();
+        assert!(failure.timed_out && failure.error.contains("timed out"));
+        // 已写出部分字节的超时属于半帧，调用方必须按连接损坏处理。
+        assert!(failure.written > 0);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 

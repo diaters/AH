@@ -94,6 +94,35 @@ impl PendingSessionEvents {
 
 type OutputEventQueues = Arc<Mutex<HashMap<SessionHandleId, PendingSessionEvents>>>;
 
+const MAX_LOST_SESSIONS: usize = 1024;
+/// shell_input 写入期限，短于 RPC 完成期限；不读 stdin 的进程不能让写入无限阻塞。
+const INPUT_WRITE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// 因进程服务失效而被回收的会话及原因；正常结束的会话不进入此记录。
+#[derive(Debug, Default)]
+pub(super) struct LostSessions {
+    reasons: HashMap<SessionHandleId, String>,
+    order: VecDeque<SessionHandleId>,
+}
+
+impl LostSessions {
+    pub(super) fn insert(&mut self, id: SessionHandleId, reason: String) {
+        if self.reasons.insert(id, reason).is_none() {
+            self.order.push_back(id);
+        }
+        while self.order.len() > MAX_LOST_SESSIONS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.reasons.remove(&oldest);
+            }
+        }
+    }
+}
+
+/// 与 `get_status` 的错误文本对应；调用方据此区分"会话已结束被淘汰"与其他后端错误。
+pub fn is_session_not_found(error: &str) -> bool {
+    error.starts_with("session ") && error.ends_with(" not found")
+}
+
 #[derive(Debug, Clone)]
 struct SessionOutputBuffer {
     chunks: VecDeque<String>,
@@ -146,6 +175,7 @@ pub struct NativeProcessBackend {
     lifecycle: Arc<BackendLifecycle>,
     #[cfg(unix)]
     supervisor: Option<Arc<super::supervisor::SupervisorClient>>,
+    lost_sessions: Arc<Mutex<LostSessions>>,
     /// exec 与 shell_start 的输出读取线程，结束时限时读取管道中的剩余输出。
     readers: Arc<Mutex<HashMap<SessionHandleId, Vec<thread::JoinHandle<()>>>>>,
 }
@@ -167,6 +197,7 @@ impl Default for NativeProcessBackend {
         Self {
             #[cfg(unix)]
             supervisor: None,
+            lost_sessions: Arc::default(),
             sessions: Arc::default(),
             runtimes: Arc::default(),
             output_events: Arc::default(),
@@ -314,7 +345,10 @@ impl SessionBackend for NativeProcessBackend {
     fn read_session(&self, request: SessionReadRequest) -> Result<SessionSummary, String> {
         #[cfg(unix)]
         if let Some(supervisor) = &self.supervisor {
-            return supervisor.call(super::supervisor::Operation::Read(request), None);
+            let handle_id = request.handle_id;
+            return supervisor
+                .call(super::supervisor::Operation::Read(request), None)
+                .map_err(|error| self.explain_lost(handle_id, error));
         }
 
         self.refresh_session_state(request.handle_id)?;
@@ -378,10 +412,7 @@ impl SessionBackend for NativeProcessBackend {
             } else {
                 request.input.clone()
             };
-            stdin
-                .write_all(payload.as_bytes())
-                .map_err(|error| error.to_string())?;
-            stdin.flush().map_err(|error| error.to_string())?;
+            write_input(&mut stdin, payload.as_bytes())?;
         }
 
         self.set_interaction_state(request.handle_id, SessionInteractionState::Idle)?;
@@ -400,7 +431,9 @@ impl SessionBackend for NativeProcessBackend {
     fn stop_session(&self, handle_id: SessionHandleId) -> Result<SessionHandle, String> {
         #[cfg(unix)]
         if let Some(supervisor) = &self.supervisor {
-            return supervisor.call(super::supervisor::Operation::Stop(handle_id), None);
+            return supervisor
+                .call(super::supervisor::Operation::Stop(handle_id), None)
+                .map_err(|error| self.explain_lost(handle_id, error));
         }
 
         let _scope = self.session_span(handle_id).entered();
@@ -625,10 +658,23 @@ impl NativeProcessBackend {
     /// 创建本实例独占的进程服务；失败直接返回，不降级为本地启动。
     #[cfg(unix)]
     pub fn supervised(executable: impl AsRef<std::path::Path>) -> Result<Self, String> {
-        let supervisor = super::supervisor::SupervisorClient::launch(executable.as_ref(), None)?;
+        Self::launch_supervisor(executable.as_ref(), None)
+    }
+
+    #[cfg(unix)]
+    fn launch_supervisor(
+        executable: &std::path::Path,
+        log_path: Option<&std::path::Path>,
+    ) -> Result<Self, String> {
+        let backend = Self::default();
+        let supervisor = super::supervisor::SupervisorClient::launch(
+            executable,
+            log_path,
+            Arc::clone(&backend.lost_sessions),
+        )?;
         Ok(Self {
             supervisor: Some(Arc::new(supervisor)),
-            ..Self::default()
+            ..backend
         })
     }
 
@@ -638,12 +684,7 @@ impl NativeProcessBackend {
         executable: impl AsRef<std::path::Path>,
         log_path: &std::path::Path,
     ) -> Result<Self, String> {
-        let supervisor =
-            super::supervisor::SupervisorClient::launch(executable.as_ref(), Some(log_path))?;
-        Ok(Self {
-            supervisor: Some(Arc::new(supervisor)),
-            ..Self::default()
-        })
+        Self::launch_supervisor(executable.as_ref(), Some(log_path))
     }
 
     pub fn supervised_current_exe_with_log(log_path: &std::path::Path) -> Result<Self, String> {
@@ -792,6 +833,33 @@ impl NativeProcessBackend {
         );
 
         Ok(handle)
+    }
+
+    /// 会话因进程服务失效被回收时返回原因；正常结束或从未登记的会话返回 `None`。
+    pub fn lost_session_reason(&self, handle_id: SessionHandleId) -> Option<String> {
+        self.lost_sessions
+            .lock()
+            .ok()?
+            .reasons
+            .get(&handle_id)
+            .cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_session_lost(&self, handle_id: SessionHandleId, reason: &str) {
+        if let Ok(mut lost) = self.lost_sessions.lock() {
+            lost.insert(handle_id, reason.to_string());
+        }
+    }
+
+    /// 已丢失会话的后端错误补充真实原因，避免 LLM 只看到"会话不存在"。
+    fn explain_lost(&self, handle_id: SessionHandleId, error: String) -> String {
+        match self.lost_session_reason(handle_id) {
+            Some(reason) => format!(
+                "session {handle_id} was stopped because the process service failed and restarted ({reason}); start it again if still needed"
+            ),
+            None => error,
+        }
     }
 
     /// 幂等关停所有已注册进程；所有 clone 立即拒绝后续 spawn。
@@ -1127,7 +1195,7 @@ impl NativeProcessBackend {
 }
 
 /// 会话是否仍在运行（未进入结束状态）。
-fn is_active(status: SessionStatus) -> bool {
+pub(super) fn is_active(status: SessionStatus) -> bool {
     matches!(
         status,
         SessionStatus::Starting | SessionStatus::Running | SessionStatus::WaitingForInput
@@ -1243,6 +1311,57 @@ fn kill_process_tree(child: &mut Child) {
         );
     }
     let _ = child.kill();
+}
+
+/// 在期限内写完输入；进程不读 stdin 导致管道写满时返回错误而不是阻塞服务线程。
+fn write_input(stdin: &mut ChildStdin, payload: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = stdin.as_raw_fd();
+        // SAFETY: fd 由 ChildStdin 持有且在本函数内有效；只增加 O_NONBLOCK 标志。
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let deadline = Instant::now() + INPUT_WRITE_TIMEOUT;
+        let mut written = 0;
+        while written < payload.len() {
+            match stdin.write(&payload[written..]) {
+                Ok(0) => return Err("stdin closed while writing input".to_string()),
+                Ok(count) => written += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(format!(
+                            "stdin did not accept input within {}ms ({written} of {} bytes written); the process is not reading its input",
+                            INPUT_WRITE_TIMEOUT.as_millis(),
+                            payload.len()
+                        ));
+                    }
+                    let mut poll = libc::pollfd {
+                        fd,
+                        events: libc::POLLOUT,
+                        revents: 0,
+                    };
+                    let timeout = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+                    // SAFETY: 单个 pollfd 有效；仅等待可写或期限到达。
+                    unsafe { libc::poll(&mut poll, 1, timeout) };
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        stdin
+            .write_all(payload)
+            .map_err(|error| error.to_string())?;
+        stdin.flush().map_err(|error| error.to_string())
+    }
 }
 
 /// 在宽限期内等待输出读取线程结束；超时的线程被分离（后台进程仍持有管道时）。
@@ -1835,6 +1954,39 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn input_to_a_process_that_never_reads_has_a_deadline_and_keeps_it_running() {
+        use crate::domain::SessionInputRequest;
+        let backend = NativeProcessBackend::default();
+        let handle = backend
+            .start_session(exec_request("exec sleep 120", None))
+            .unwrap();
+        let started = Instant::now();
+        let error = backend
+            .input_session(SessionInputRequest {
+                handle_id: handle.handle_id,
+                input: "x".repeat(1024 * 1024),
+                append_newline: false,
+            })
+            .unwrap_err();
+        assert!(error.contains("did not accept input"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(is_active(
+            backend.get_status(handle.handle_id).unwrap().status
+        ));
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn not_found_classifier_matches_status_lookup_errors() {
+        let backend = NativeProcessBackend::default();
+        let error = backend.get_status(SessionHandleId::new()).unwrap_err();
+        assert!(is_session_not_found(&error));
+        assert!(!is_session_not_found(
+            "process supervisor read RPC timed out"
+        ));
+    }
+
     #[test]
     fn stop_forces_term_ignoring_process_within_bound() {
         let backend = NativeProcessBackend::default();
