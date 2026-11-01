@@ -115,6 +115,8 @@ pub struct Client {
     pub(super) changed: watch::Sender<u64>,
     /// 经验库；未注入时客户端不提供经验总结与管理。
     pub(super) experience: Option<crate::contracts::SharedExperienceLibrary>,
+    /// 审批方式；未注入时客户端不提供审批模式切换。
+    pub(super) approval: Option<crate::domain::ApprovalSetting>,
 }
 
 impl Client {
@@ -130,6 +132,7 @@ impl Client {
             input,
             changed,
             experience: None,
+            approval: None,
         }
     }
 
@@ -139,6 +142,12 @@ impl Client {
         library: crate::contracts::SharedExperienceLibrary,
     ) -> Self {
         self.experience = Some(library);
+        self
+    }
+
+    /// 启用审批模式查看与切换（与运行时共享同一设置）。
+    pub fn with_approval_setting(mut self, setting: crate::domain::ApprovalSetting) -> Self {
+        self.approval = Some(setting);
         self
     }
 

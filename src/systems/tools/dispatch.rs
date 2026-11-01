@@ -18,8 +18,8 @@ use crate::{
         resolve_tool_permission,
     },
     ecs::EntityIndex,
-    systems::HarnessSettings,
     systems::NativeProcessBackend,
+    systems::{ApprovalMode, HarnessSettings},
 };
 
 use super::approval_gate::task_grant_scope;
@@ -172,13 +172,25 @@ pub fn tool_dispatch_system(
             },
             initiators,
         );
-        let (permission, source) = resolve_tool_permission(
+        let (mut permission, source) = resolve_tool_permission(
             agent,
             &tool_name,
             Some(&registry),
             runtime_grants,
             scope.as_ref(),
         );
+        if permission == ToolPermission::Confirm
+            && settings.0.approval_mode.get() == ApprovalMode::AllowAll
+        {
+            info!(
+                event = "ToolAutoApproved",
+                tool_name = %tool_name,
+                agent_id = %agent.id,
+                task_id = %request.request.task_id,
+                "approval mode allow_all: confirm tool approved without asking"
+            );
+            permission = ToolPermission::Allow;
+        }
 
         // 预先提取 output_channel 供 PermissionAudit 使用（避免在三个 match 分支
         // 中各做一次 task 查询）。clone 后是 owned 值，无 borrow 约束。
@@ -368,6 +380,10 @@ pub fn tool_dispatch_system(
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
                     .is_some_and(|(_, task)| is_supervised_subtask(task, None));
+                // supervisor 模式下，任务级调用（含主 Agent）同样先交 watchdog 审批。
+                let supervised = supervised
+                    || (settings.0.approval_mode.get() == ApprovalMode::Supervisor
+                        && request.request.work_item_id.is_none());
                 let parent_approval = (supervised && escalated.is_none())
                     .then(|| {
                         agents

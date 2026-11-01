@@ -92,6 +92,10 @@ pub fn router(client: Client) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/devices", get(devices))
         .route("/v1/diagnostics", get(diagnostics))
+        .route(
+            "/v1/approval-mode",
+            get(approval_mode).put(set_approval_mode),
+        )
         .route("/v1/devices/:id", delete(revoke))
         .route("/v1/snapshot", get(snapshot))
         .route("/v1/events", get(events))
@@ -240,6 +244,9 @@ async fn capabilities(
     if client.experience.is_some() {
         operations.push("experiences.manage");
     }
+    if client.approval.is_some() {
+        operations.push("approval_mode.manage");
+    }
     Ok(Json(
         json!({"protocol_version":1,"instance_id":store.instance_id(),"instance_name":client.config.instance_name,
         "device_id":device.id,"user_id":device.user_id,
@@ -247,6 +254,44 @@ async fn capabilities(
         "event_retention":super::store::EVENT_RETENTION,"task_restart_recovery":false,"meow_enabled":client.config.meow.as_ref().is_some_and(|c|c.recipients.contains_key(&device.user_id)),
         "delivery_receipt":"server_persisted","command_receipt":"queued_is_not_consumed"}),
     ))
+}
+
+fn approval_json(client: &Client) -> Result<Json<Value>, ClientError> {
+    let setting = client.approval.as_ref().ok_or(ClientError::NotFound)?;
+    Ok(Json(json!({"mode":setting.get().as_str()})))
+}
+
+async fn approval_mode(
+    State(client): State<Client>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ClientError> {
+    authenticate(&client, &headers)?;
+    approval_json(&client)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovalModeRequest {
+    mode: String,
+}
+
+async fn set_approval_mode(
+    State(client): State<Client>,
+    headers: HeaderMap,
+    Json(request): Json<ApprovalModeRequest>,
+) -> Result<Json<Value>, ClientError> {
+    let device = authenticate(&client, &headers)?;
+    let setting = client.approval.as_ref().ok_or(ClientError::NotFound)?;
+    let mode = crate::domain::ApprovalMode::parse(&request.mode)
+        .ok_or(ClientError::Invalid("unknown approval mode"))?;
+    setting.set(mode);
+    tracing::info!(
+        event = "ApprovalModeChanged",
+        mode = mode.as_str(),
+        device_id = %device.id,
+        "客户端切换审批模式"
+    );
+    approval_json(&client)
 }
 
 async fn devices(

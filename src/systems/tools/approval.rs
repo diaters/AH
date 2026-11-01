@@ -58,10 +58,15 @@ pub fn approval_dispatch_system(
             .and_then(|e| tasks.get(e).ok())
             .map(|(parent, _)| truncate_chars(&parent.content, 400))
             .unwrap_or_default();
-        let subject_label = if task.input_summary.is_empty() {
-            format!("子任务 {}", task.id)
+        let kind = if task.parent_task_id.is_some() {
+            "子任务"
         } else {
-            format!("子任务「{}」", task.input_summary)
+            "任务"
+        };
+        let subject_label = if task.input_summary.is_empty() {
+            format!("{kind} {}", task.id)
+        } else {
+            format!("{kind}「{}」", task.input_summary)
         };
         let recent: Vec<String> = calling
             .iter()
@@ -107,7 +112,7 @@ pub fn approval_dispatch_system(
                 request_id: request.request_id,
                 source_task_id: request.source_task_id,
                 approval_task_id: request.approval_task_id,
-                owner_task_id: task.parent_task_id,
+                owner_task_id: task.parent_task_id.or(Some(task.id)),
                 tool_name: request.tool_name.clone(),
                 subject_label,
             },

@@ -82,9 +82,88 @@ pub enum ApprovalDecision {
     Rejected,
 }
 
+/// 需要确认的工具调用由谁批准。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApprovalMode {
+    /// 全部交给用户手动确认（批次子任务仍先由 watchdog 审批）。
+    Manual,
+    /// 先由 watchdog Agent 审批：明确安全则批准、越权则拒绝，拿不准才升级给用户。
+    #[default]
+    Supervisor,
+    /// 直接批准所有需要确认的调用，不再询问（显式 Deny 仍然拒绝）。
+    AllowAll,
+}
+
+impl ApprovalMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "manual" => Some(Self::Manual),
+            "supervisor" => Some(Self::Supervisor),
+            "allow_all" => Some(Self::AllowAll),
+            _ => None,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::Manual => 0,
+            Self::Supervisor => 1,
+            Self::AllowAll => 2,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Supervisor => "supervisor",
+            Self::AllowAll => "allow_all",
+        }
+    }
+}
+
+/// 运行期可调的审批方式：配置、运行时与客户端通道共享同一份，客户端切换后立即生效。
+#[derive(Debug, Clone)]
+pub struct ApprovalSetting(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl ApprovalSetting {
+    pub fn new(mode: ApprovalMode) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            mode.as_u8(),
+        )))
+    }
+
+    pub fn get(&self) -> ApprovalMode {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => ApprovalMode::Manual,
+            2 => ApprovalMode::AllowAll,
+            _ => ApprovalMode::Supervisor,
+        }
+    }
+
+    pub fn set(&self, mode: ApprovalMode) {
+        self.0
+            .store(mode.as_u8(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_mode_parse_default_and_shared_setting() {
+        assert_eq!(ApprovalMode::default(), ApprovalMode::Supervisor);
+        assert_eq!(ApprovalMode::parse(" Manual "), Some(ApprovalMode::Manual));
+        assert_eq!(
+            ApprovalMode::parse("allow_all"),
+            Some(ApprovalMode::AllowAll)
+        );
+        assert_eq!(ApprovalMode::parse("yolo"), None);
+        let setting = ApprovalSetting::new(ApprovalMode::Manual);
+        let shared = setting.clone();
+        shared.set(ApprovalMode::AllowAll);
+        assert_eq!(setting.get(), ApprovalMode::AllowAll);
+    }
 
     #[test]
     fn deny_options_cover_feedback_flow() {

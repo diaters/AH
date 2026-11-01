@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 
-use crate::domain::{LoopControlConfig, MemoryConfig};
+use crate::domain::{ApprovalMode, ApprovalSetting, LoopControlConfig, MemoryConfig};
 use crate::llm::{LlmProviderConfig, LlmProviderKind};
 use crate::prelude::Resource;
 
@@ -22,8 +22,24 @@ pub const DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS: u32 = 10;
 /// 批次子任务运行时长安全熔断的默认值（秒）：4 小时。
 pub const DEFAULT_SUBTASK_MAX_RUNTIME_SECS: u64 = 4 * 3600;
 
+fn approval_mode_from_env() -> ApprovalMode {
+    let Ok(value) = std::env::var("HARNESS_APPROVAL_MODE") else {
+        return ApprovalMode::default();
+    };
+    ApprovalMode::parse(&value).unwrap_or_else(|| {
+        tracing::warn!(
+            event = "InvalidApprovalMode",
+            value = %value,
+            "HARNESS_APPROVAL_MODE 取值应为 manual / supervisor / allow_all，已回退默认 supervisor"
+        );
+        ApprovalMode::default()
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
+    /// 工具确认的审批方式；初值取自 `HARNESS_APPROVAL_MODE`，客户端可在运行期切换。
+    pub approval_mode: ApprovalSetting,
     pub max_retries: u32,
     /// 用户顶层任务单轮的工具调用预算；批次子任务不受此约束，由 watchdog 监督。
     pub max_tool_iterations: u32,
@@ -103,6 +119,7 @@ impl HarnessConfig {
             std::env::var("HARNESS_AGENTS_CONFIG").unwrap_or_else(|_| "agents.toml".to_string());
 
         Ok(Self {
+            approval_mode: ApprovalSetting::new(approval_mode_from_env()),
             schedule_failure_alert_threshold: std::env::var(
                 "HARNESS_SCHEDULE_FAILURE_ALERT_THRESHOLD",
             )
@@ -248,6 +265,8 @@ impl HarnessConfig {
 impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
+            // 测试构造器保持手动确认，避免无关用例依赖 watchdog Agent；生产默认见 `from_env`。
+            approval_mode: ApprovalSetting::new(ApprovalMode::Manual),
             max_retries: 3,
             max_tool_iterations: 5,
             subtask_checkpoint_iterations: DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,

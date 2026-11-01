@@ -124,12 +124,12 @@ pub fn build_approval_prompt(input: &ApprovalReviewInput<'_>) -> String {
         input.declared_tools.join(", ")
     };
     let mut prompt = format!(
-        "你是 Harness 的 watchdog，此刻作为子任务的审批者：子任务请求调用一个需要确认的工具，由你代替用户判断是否放行。\n\
+        "你是 Harness 的 watchdog，此刻作为审批者：任务（或子任务）请求调用一个需要确认的工具，由你代替用户判断是否放行。\n\
 原则：\n\
-- approve：工具在主 Agent 声明的授权范围内，且本次调用直接服务于子任务目标、影响可控。\n\
+- approve：本次调用直接服务于任务目标、影响可控；子任务还须在主 Agent 声明的授权范围内，顶层任务没有声明范围，以用户请求为准。\n\
 - reject：调用与目标无关、明显越权或有害；reason 写清原因，它会作为工具结果交给子任务。\n\
 - escalate：涉及不可逆的破坏性操作（删除数据、强推、对外发布、付费等）、访问敏感凭据，或你无法确定时，交给用户确认。\n\n\
-## {}\n- 所属任务目标：{}\n- 子任务目标：{}\n- 主 Agent 声明的授权范围：{}\n- 请求的工具：{}\n- 调用参数：\n```\n{}\n```\n",
+## {}\n- 所属任务目标：{}（顶层任务为空）\n- 当前任务目标：{}\n- 主 Agent 声明的授权范围：{}\n- 请求的工具：{}\n- 调用参数：\n```\n{}\n```\n",
         input.subject_label,
         input.parent_goal,
         input.subtask_goal,
@@ -138,7 +138,7 @@ pub fn build_approval_prompt(input: &ApprovalReviewInput<'_>) -> String {
         input.tool_input,
     );
     if !input.recent.is_empty() {
-        prompt.push_str("- 子任务最近对话：\n```\n");
+        prompt.push_str("- 最近对话：\n```\n");
         for line in input.recent {
             prompt.push_str(line);
             prompt.push('\n');
