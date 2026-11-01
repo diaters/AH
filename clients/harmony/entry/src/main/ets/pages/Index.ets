@@ -483,9 +483,18 @@ struct Index {
     try { fileIo.unlinkSync(pending.local_path); }
     catch (_) { this.status = '已清除本地重试，缓存文件清理失败；服务器文件未删除'; }
   }
+  // 附件属于具体会话；新任务在选好文件后先建会话，再上传，与首次发送的建会话方式一致。
+  private async createSessionForUpload(): Promise<void> {
+    const text = this.draft;
+    const command: CommandDto = { operation: 'create_session', command_id: util.generateRandomUUID(), title: text.trim().split('\n')[0].substring(0, 24) || '新的任务' };
+    const receipt = await this.connection.command(command);
+    if (receipt.status === 'rejected' || !receipt.session_id) { throw new Error(`创建任务失败：${receipt.result_code ?? ''}`); }
+    this.select(receipt.session_id);
+    this.draft = text; this.save(`draft:${receipt.session_id}`, text); this.save('draft:', '');
+    await this.refresh();
+  }
   private async uploadFile(retry: boolean): Promise<void> {
     if (this.busy) { return; }
-    if (!this.selected) { this.status = '先发送第一条消息创建任务，再添加附件'; return; }
     this.busy = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -501,6 +510,7 @@ struct Index {
           bytes = new ArrayBuffer(size);
           if (fileIo.readSync(source.fd, bytes) !== size) { throw new Error('读取文件不完整，请重新选择'); }
         } finally { fileIo.closeSync(source); }
+        if (!this.selected) { await this.createSessionForUpload(); if (!this.selected) { return; } }
         const id = util.generateRandomUUID();
         const local = `${context.filesDir}/pending-upload-${id}`;
         const cache = fileIo.openSync(local, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
