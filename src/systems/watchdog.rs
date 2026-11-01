@@ -390,6 +390,7 @@ pub fn watchdog_response_system(
     mut ledger: ResMut<WatchdogLedger>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
     work_items: Query<(Entity, &WorkItem, Option<&WatchdogReviewOrigin>)>,
+    jobs: Query<&BackgroundJob>,
     mut tasks: Query<&mut Task>,
 ) {
     let now = clock.0;
@@ -443,6 +444,24 @@ pub fn watchdog_response_system(
                 push_history(entry, now, "continue", "未给出决策");
                 continue;
             };
+            // 巡检期间对象可能已结束（后台调用完成、子任务终态）；按旧证据处置会误报"仍在运行"。
+            let still_active = match subject.key {
+                WatchdogSubjectKey::ToolJob(job_id) => jobs.iter().any(|job| job.id == job_id),
+                WatchdogSubjectKey::SubTask(task_id) => index
+                    .get_task(&task_id)
+                    .and_then(|e| tasks.get(e).ok())
+                    .is_some_and(|task| !task.status.is_terminal()),
+            };
+            if !still_active {
+                debug!(
+                    event = "WatchdogDecisionDiscarded",
+                    subject = ?subject.key,
+                    owner_task_id = %subject.owner_task_id,
+                    action = decision.action.as_str(),
+                    "watchdog subject finished during review; decision discarded"
+                );
+                continue;
+            }
             let mut action = decision.action;
             let mut guidance = decision.guidance.clone();
             if action == WatchdogAction::Retry && entry.retries >= MAX_RETRIES {

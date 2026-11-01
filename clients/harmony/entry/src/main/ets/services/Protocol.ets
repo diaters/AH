@@ -44,7 +44,7 @@ export interface NotificationDto {
 }
 export interface ClientFileDto { id: string; session_id: string; name: string; size: number; sha256: string; kind: string; source: string; }
 export interface PendingUploadDto { instance_id: string; id: string; session_id: string; name: string; local_path: string; }
-export interface ObservationDto { sequence?: number; kind: string; task_id: string; tool_name: string; agent_name: string; action?: string; source?: string; context?: string; input_summary?: string; output?: string; success?: boolean; truncated?: boolean; late_result?: boolean; }
+export interface ObservationDto { sequence?: number; kind: string; task_id: string; tool_name: string; agent_name: string; action?: string; source?: string; context?: string; input_summary?: string; output?: string; success?: boolean; truncated?: boolean; late_result?: boolean; background?: string; }
 export interface SnapshotDto {
   instance_id: string; cursor: number; sessions: SessionDto[]; automation: AutomationDto;
   notifications: NotificationDto[]; notifications_truncated: boolean; notification_overflow: number;
@@ -70,3 +70,11 @@ export interface DiagnosticsDto {
 }
 export interface TodoDto {content: string; status: string;}
 export interface ProgressDto {task_id?: string; batch_id?: string; items?: TodoDto[]; pending?: number; completed?: number; total?: number;}
+
+// 工具结果的阶段文案：转后台的合成结果与后台调用的真实结果分开标注。
+export function observationOutcome(observation: ObservationDto, done: string, failed: string): string {
+  if (observation.background === 'started') { return '转入后台'; }
+  if (observation.background === 'stopped') { return '后台已停止'; }
+  if (observation.background === 'finished') { return observation.success ? '后台完成' : '后台失败'; }
+  return observation.success ? done : failed;
+}

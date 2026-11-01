@@ -60,6 +60,12 @@ pub fn tool_result_system(
                     Err(error) => error.to_string(),
                 };
                 let truncated = output.chars().count() > 12800;
+                // 转后台合成结果（工具调用或 wait_tasks）：真实结果稍后单独推送。
+                let background = result
+                    .tool_output
+                    .as_ref()
+                    .is_ok_and(|v| v["status"] == "running_in_background")
+                    .then_some("started");
                 let event = crate::domain::EngineEvent::ToolCallCompleted {
                     target: crate::domain::EventTarget::Directed(vec![channel.clone()]),
                     task_id: task.id,
@@ -74,6 +80,7 @@ pub fn tool_result_system(
                     output: output.chars().take(12800).collect(),
                     truncated,
                     late_result: task.status().is_terminal(),
+                    background,
                 };
                 for frontend in registry
                     .frontends

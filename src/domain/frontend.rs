@@ -164,6 +164,9 @@ pub enum EngineEvent {
         output: String,
         truncated: bool,
         late_result: bool,
+        /// 后台阶段：`started`（超时转后台，结果稍后送达）、`finished`（后台调用的真实结果）、
+        /// `stopped`（后台调用被停止或被重试取代）；前台调用为 `None`。
+        background: Option<&'static str>,
     },
     /// 权限过滤后的客户端自动化视图，不携带 ECS 内部实体。
     AutomationSnapshot {

@@ -351,6 +351,55 @@ fn watchdog_retries_background_tool_call_with_same_input() {
     let _ = std::fs::remove_file(&marker);
 }
 
+/// 巡检进行中后台调用已结束：迟到的 notify_owner 决策被丢弃，不再提醒"仍在运行"。
+#[test]
+fn watchdog_discards_decision_for_job_finished_during_review() {
+    let mut h = start(
+        Box::new(|request| {
+            if mentions(request, "<task-notification") {
+                Turn::now(OutputContent::Text("收到结果".into()))
+            } else if has_tool_result(request) {
+                Turn::now(OutputContent::Text("等待后台命令".into()))
+            } else {
+                Turn::now(shell_call("call_short", "sleep 3; echo finished-ok"))
+            }
+        }),
+        // 回复慢于命令结束，决策到达时作业已退役。
+        Box::new(|_| Turn {
+            delay: Duration::from_secs(4),
+            ..decisions("notify_owner", r#""guidance":"停止该作业","#)
+        }),
+    );
+    let requests = h.requests.clone();
+    let prompts = h.watchdog_prompts.clone();
+    assert!(
+        update_until(&mut h.app, 400, |_| {
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| mentions(r, "finished-ok"))
+        }),
+        "background result should be delivered"
+    );
+    assert!(
+        !prompts.lock().unwrap().is_empty(),
+        "review was dispatched while the job was still running"
+    );
+    // 等待迟到的巡检回复落地。
+    let deadline = std::time::Instant::now() + Duration::from_secs(6);
+    while std::time::Instant::now() < deadline {
+        tick(&mut h.app);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let all = h.requests.lock().unwrap().clone();
+    assert!(
+        !all.iter()
+            .any(|r| mentions(r, "<task-notification source=\"watchdog\"")),
+        "stale watchdog decision must not wake the owner"
+    );
+}
+
 /// 子任务缺乏进展：watchdog 把调整建议注入子任务的下一次请求。
 #[test]
 fn watchdog_adjust_injects_guidance_into_sub_task() {

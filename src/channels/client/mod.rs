@@ -162,10 +162,11 @@ impl Client {
                 output,
                 truncated,
                 late_result,
+                background,
                 ..
             } => (
                 "tool_completed",
-                json!({"task_id":task_id,"call_id":call_id,"agent_name":agent_name,"tool_name":tool_name,"success":success,"output":output,"truncated":truncated,"late_result":late_result}),
+                json!({"task_id":task_id,"call_id":call_id,"agent_name":agent_name,"tool_name":tool_name,"success":success,"output":output,"truncated":truncated,"late_result":late_result,"background":background}),
             ),
             EngineEvent::AutomationSnapshot { snapshot, .. } => ("automation", snapshot.clone()),
             EngineEvent::ExperienceDraftUpdated {

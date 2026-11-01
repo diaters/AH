@@ -73,6 +73,15 @@ struct Harness {
 }
 
 fn start(script: Script, multi_turn: bool) -> Harness {
+    start_with(script, multi_turn, vec![], channel())
+}
+
+fn start_with(
+    script: Script,
+    multi_turn: bool,
+    frontends: Vec<Box<dyn harness::domain::Frontend>>,
+    channel: ChannelId,
+) -> Harness {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let executor: Arc<dyn AgentExecutor> = Arc::new(Scripted {
         script,
@@ -89,7 +98,7 @@ fn start(script: Script, multi_turn: bool) -> Harness {
         Arc::new(Runtime::new().unwrap()),
         ExecutorRegistry::from_single_executor(executor, "default"),
         input_rx,
-        vec![],
+        frontends,
         harness::channels::ChannelManager::empty().0,
     );
     app.update();
@@ -132,9 +141,9 @@ fn start(script: Script, multi_turn: bool) -> Harness {
     assert_eq!(tools.len(), 2);
 
     let mut task = if multi_turn {
-        Task::from_user_input("build it", 3, channel())
+        Task::from_user_input("build it", 3, channel.clone())
     } else {
-        Task::from_user_input_ready("build it", 3, channel())
+        Task::from_user_input_ready("build it", 3, channel.clone())
     };
     task.mark_waiting_for_agent(agent_id, chrono::Utc::now());
     let task_id = task.id;
@@ -417,4 +426,71 @@ fn stop_command_keeps_backgrounded_call_running() {
         }),
         "backgrounded call must survive /stop and deliver its result"
     );
+}
+
+struct ClientRecorder(Arc<Mutex<Vec<harness::domain::EngineEvent>>>);
+
+impl harness::domain::Frontend for ClientRecorder {
+    fn kind(&self) -> FrontendKind {
+        FrontendKind::Client
+    }
+    fn push_event(&self, event: harness::domain::EngineEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+    fn poll_actions(&self) -> Vec<harness::domain::UserAction> {
+        vec![]
+    }
+}
+
+/// 客户端执行记录：转后台时收到 started，后台结束时收到同一调用的真实结果 finished。
+#[test]
+fn client_observes_background_start_and_final_result() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client_channel = ChannelId {
+        frontend: FrontendKind::Client,
+        user_id: "alice".into(),
+        thread_id: Some("session".into()),
+    };
+    let mut h = start_with(
+        Box::new(|request, _| {
+            if mentions(request, "<task-notification") {
+                OutputContent::Text("完成".into())
+            } else if !tool_results(request).is_empty() {
+                OutputContent::Text("等待后台命令".into())
+            } else {
+                shell_call("call_bg", "sleep 2; echo client-visible")
+            }
+        }),
+        true,
+        vec![Box::new(ClientRecorder(events.clone()))],
+        client_channel,
+    );
+    let recorded = events.clone();
+    let phases = move || -> Vec<(Option<&'static str>, String)> {
+        recorded
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                harness::domain::EngineEvent::ToolCallCompleted {
+                    call_id,
+                    background,
+                    output,
+                    ..
+                } if call_id.as_deref() == Some("call_bg") => Some((*background, output.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    let check = phases.clone();
+    assert!(
+        update_until(&mut h.app, 300, |_| check().len() >= 2),
+        "client should see both background phases, got {:?}",
+        phases()
+    );
+    let seen = phases();
+    assert_eq!(seen[0].0, Some("started"));
+    assert!(seen[0].1.contains("running_in_background"));
+    assert_eq!(seen[1].0, Some("finished"));
+    assert!(seen[1].1.contains("client-visible"));
 }
