@@ -22,8 +22,47 @@ pub const DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS: u32 = 10;
 /// 批次子任务运行时长安全熔断的默认值（秒）：4 小时。
 pub const DEFAULT_SUBTASK_MAX_RUNTIME_SECS: u64 = 4 * 3600;
 
+/// 需要确认的工具调用由谁批准。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApprovalMode {
+    /// 全部交给用户手动确认（批次子任务仍先由 watchdog 审批）。
+    Manual,
+    /// 先由 watchdog Agent 审批：明确安全则批准、越权则拒绝，拿不准才升级给用户。
+    #[default]
+    Supervisor,
+    /// 直接批准所有需要确认的调用，不再询问（显式 Deny 仍然拒绝）。
+    AllowAll,
+}
+
+impl ApprovalMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "manual" => Some(Self::Manual),
+            "supervisor" => Some(Self::Supervisor),
+            "allow_all" => Some(Self::AllowAll),
+            _ => None,
+        }
+    }
+
+    fn from_env() -> Self {
+        let Ok(value) = std::env::var("HARNESS_APPROVAL_MODE") else {
+            return Self::default();
+        };
+        Self::parse(&value).unwrap_or_else(|| {
+            tracing::warn!(
+                event = "InvalidApprovalMode",
+                value = %value,
+                "HARNESS_APPROVAL_MODE 取值应为 manual / supervisor / allow_all，已回退默认 supervisor"
+            );
+            Self::default()
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
+    /// 工具确认的审批方式（`HARNESS_APPROVAL_MODE`）。
+    pub approval_mode: ApprovalMode,
     pub max_retries: u32,
     /// 用户顶层任务单轮的工具调用预算；批次子任务不受此约束，由 watchdog 监督。
     pub max_tool_iterations: u32,
@@ -103,6 +142,7 @@ impl HarnessConfig {
             std::env::var("HARNESS_AGENTS_CONFIG").unwrap_or_else(|_| "agents.toml".to_string());
 
         Ok(Self {
+            approval_mode: ApprovalMode::from_env(),
             schedule_failure_alert_threshold: std::env::var(
                 "HARNESS_SCHEDULE_FAILURE_ALERT_THRESHOLD",
             )
@@ -248,6 +288,8 @@ impl HarnessConfig {
 impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
+            // 测试构造器保持手动确认，避免无关用例依赖 watchdog Agent；生产默认见 `from_env`。
+            approval_mode: ApprovalMode::Manual,
             max_retries: 3,
             max_tool_iterations: 5,
             subtask_checkpoint_iterations: DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
@@ -300,6 +342,17 @@ impl HarnessSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_mode_parse_and_default() {
+        assert_eq!(ApprovalMode::default(), ApprovalMode::Supervisor);
+        assert_eq!(ApprovalMode::parse(" Manual "), Some(ApprovalMode::Manual));
+        assert_eq!(
+            ApprovalMode::parse("allow_all"),
+            Some(ApprovalMode::AllowAll)
+        );
+        assert_eq!(ApprovalMode::parse("yolo"), None);
+    }
 
     #[test]
     fn config_defaults_for_poll_intervals() {

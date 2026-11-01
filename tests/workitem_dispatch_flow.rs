@@ -32,6 +32,7 @@ impl AgentExecutor for MockExecutor {
 
 fn test_config() -> HarnessConfig {
     HarnessConfig {
+        approval_mode: harness::systems::ApprovalMode::Manual,
         memory: harness::domain::MemoryConfig::default(),
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {

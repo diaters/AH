@@ -156,7 +156,9 @@ pub fn async_tool_dispatch_system(
                 runtime_grants,
                 scope.as_ref(),
             );
-            if matches!(permission, ToolPermission::Confirm) {
+            if matches!(permission, ToolPermission::Confirm)
+                && settings.0.approval_mode != crate::systems::ApprovalMode::AllowAll
+            {
                 continue; // 需要确认 → 留给 sync 路径设置 confirmation
             }
         }

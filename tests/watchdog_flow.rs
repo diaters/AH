@@ -19,7 +19,7 @@ use harness::{
         ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolPermission,
     },
     llm::ExecutorRegistry,
-    systems::HarnessConfig,
+    systems::{ApprovalMode, HarnessConfig},
 };
 use tokio::runtime::Runtime;
 
@@ -949,5 +949,142 @@ fn supervisor_escalates_sub_task_confirm_tool_to_user() {
         prompts.iter().filter(|p| p.contains("审批者")).count(),
         1,
         "escalated request must not loop back to the supervisor"
+    );
+}
+
+fn top_level_shell(request: &AgentExecutionRequest) -> Turn {
+    if tool_result_mentions(request, "top-run") {
+        return Turn::now(OutputContent::Text("主任务命令已执行".into()));
+    }
+    if tool_result_mentions(request, "监督者拒绝") {
+        return Turn::now(OutputContent::Text("主任务被拒绝".into()));
+    }
+    Turn::now(shell_call("call_top", "echo top-run"))
+}
+
+fn with_mode(mode: ApprovalMode) -> impl FnOnce(&mut HarnessConfig) {
+    move |config| config.approval_mode = mode
+}
+
+fn watchdog_replying(decision: &'static str) -> Script {
+    Box::new(move |request| {
+        if request.prompt.contains("审批者") {
+            approval_reply(decision, "依据")
+        } else {
+            decisions("continue", "")
+        }
+    })
+}
+
+fn main_replied(requests: &Arc<Mutex<Vec<AgentExecutionRequest>>>, needle: &str) -> bool {
+    requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| tool_result_mentions(r, needle))
+}
+
+/// supervisor 模式：主 Agent 的确认请求同样先交 watchdog，批准后真实执行。
+#[test]
+fn supervisor_mode_approves_top_level_confirm_tool() {
+    let mut h = start_with(
+        Box::new(top_level_shell),
+        watchdog_replying("approve"),
+        with_mode(ApprovalMode::Supervisor),
+    );
+    require_confirm_for_shell(&mut h.app);
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 500, |_| main_replied(
+        &requests, "top-run"
+    )));
+    let prompts = h.watchdog_prompts.lock().unwrap();
+    let approval = prompts
+        .iter()
+        .find(|p| p.contains("审批者"))
+        .expect("watchdog reviews the top-level request");
+    assert!(!approval.contains("子任务 ") && !approval.contains("子任务「"));
+    assert!(approval.contains("echo top-run"));
+}
+
+/// supervisor 模式：watchdog 拒绝时原因回填给主 Agent，工具不执行。
+#[test]
+fn supervisor_mode_rejects_top_level_confirm_tool() {
+    let mut h = start_with(
+        Box::new(top_level_shell),
+        watchdog_replying("reject"),
+        with_mode(ApprovalMode::Supervisor),
+    );
+    require_confirm_for_shell(&mut h.app);
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 500, |_| main_replied(
+        &requests,
+        "监督者拒绝：依据"
+    )));
+    assert!(!main_replied(&requests, "top-run\\n"));
+}
+
+/// supervisor 模式：watchdog 升级后转为用户确认，且不再回到 watchdog。
+#[test]
+fn supervisor_mode_escalates_top_level_to_user() {
+    let mut h = start_with(
+        Box::new(top_level_shell),
+        watchdog_replying("escalate"),
+        with_mode(ApprovalMode::Supervisor),
+    );
+    require_confirm_for_shell(&mut h.app);
+    assert!(update_until(&mut h.app, 500, |app| {
+        app.world_mut().query::<&Task>().iter(app.world()).any(|t| {
+            t.parent_task_id.is_none()
+                && t.status() == &TaskStatus::Waiting(harness::domain::WaitingReason::User)
+                && t.pending_confirmation_id.is_some()
+        })
+    }));
+    let prompts = h.watchdog_prompts.lock().unwrap();
+    assert_eq!(prompts.iter().filter(|p| p.contains("审批者")).count(), 1);
+}
+
+/// manual 模式：主 Agent 直接等待用户，不打扰 watchdog。
+#[test]
+fn manual_mode_top_level_waits_for_user_without_watchdog() {
+    let mut h = start_with(
+        Box::new(top_level_shell),
+        watchdog_replying("approve"),
+        with_mode(ApprovalMode::Manual),
+    );
+    require_confirm_for_shell(&mut h.app);
+    assert!(update_until(&mut h.app, 500, |app| {
+        app.world_mut()
+            .query::<&Task>()
+            .iter(app.world())
+            .any(|t| t.parent_task_id.is_none() && t.pending_confirmation_id.is_some())
+    }));
+    assert!(
+        !h.watchdog_prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("审批者"))
+    );
+}
+
+/// allow_all 模式：无需 watchdog 与用户，工具直接执行。
+#[test]
+fn allow_all_mode_runs_confirm_tool_directly() {
+    let mut h = start_with(
+        Box::new(top_level_shell),
+        watchdog_replying("reject"),
+        with_mode(ApprovalMode::AllowAll),
+    );
+    require_confirm_for_shell(&mut h.app);
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 500, |_| main_replied(
+        &requests, "top-run"
+    )));
+    assert!(
+        !h.watchdog_prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("审批者"))
     );
 }
