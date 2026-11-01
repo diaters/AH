@@ -6,7 +6,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
-  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, isDenyOption, observationOutcome } from '../services/Protocol';
+  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, formatLocalTime, isDenyOption, observationOutcome } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
@@ -1461,7 +1461,7 @@ struct Index {
               .onChange(() => { this.togglePlan(plan); })
           } else { Text('已归档').caption() }
         }.width('100%')
-        Text(`${plan.schedule}${plan.next_trigger ? ` · 下次 ${plan.next_trigger}` : ''}`).caption().copyOption(CopyOptions.LocalDevice)
+        Text(`${plan.schedule}${plan.next_trigger ? ` · 下次 ${formatLocalTime(plan.next_trigger)}` : ''}`).caption().copyOption(CopyOptions.LocalDevice)
         Text(plan.content).fontSize(14).fontColor('#4A4840').maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
         if (plan.health.alerting) { Text(`连续失败 ${plan.health.consecutive_failures} 次`).fontSize(12).fontColor(Theme.danger) }
         Row({ space: 16 }) {
