@@ -6,7 +6,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
-  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, isDenyOption, observationOutcome } from '../services/Protocol';
+  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, formatLocalTime, isDenyOption, observationOutcome } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
@@ -991,13 +991,31 @@ struct Index {
   private isProcessExpanded(row: ConversationRow): boolean {
     return this.processExpanded[row.key] ?? !row.complete;
   }
+  // 工具输入与输出默认折叠，点击调用行展开；与过程折叠共用 processExpanded，键带序号区分。
+  private toolKey(row: ConversationRow, entry: ProcessEntry): string { return `${row.key}#${entry.sequence}`; }
+  private isToolExpanded(row: ConversationRow, entry: ProcessEntry): boolean {
+    return this.processExpanded[this.toolKey(row, entry)] ?? false;
+  }
+  private hasToolDetail(observation: ObservationDto | undefined): boolean {
+    return !!observation && !!(observation.input_summary || observation.output || observation.truncated || observation.late_result);
+  }
+  private toggleTool(row: ConversationRow, entry: ProcessEntry): void {
+    const next: Record<string, boolean> = {};
+    for (const key of Object.keys(this.processExpanded)) { next[key] = this.processExpanded[key]; }
+    next[this.toolKey(row, entry)] = !this.isToolExpanded(row, entry);
+    this.processExpanded = next;
+  }
   @Builder private process(row: ConversationRow) {
     Column({ space: 10 }) {
-      Row({ space: 8 }) {
-        Text(this.isProcessExpanded(row) ? '⌄' : '›').fontSize(18).fontColor(Theme.secondary)
+      Row({ space: 6 }) {
+        SymbolGlyph(this.isProcessExpanded(row) ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+          .fontSize(12).fontColor([Theme.secondary])
         Text(row.complete ? '执行过程' : '正在执行').fontSize(13).fontColor(Theme.secondary).fontWeight(FontWeight.Medium)
-        Text(`${row.entries?.length ?? 0} 条记录`).caption()
-      }.width('100%').onClick(() => {
+        Text(`${row.entries?.length ?? 0}`).fontSize(12).fontColor(Theme.secondary)
+          .padding({ left: 6, right: 6 }).borderRadius(8).backgroundColor(Theme.selected)
+      }.padding({ left: 10, right: 10, top: 5, bottom: 5 }).borderRadius(14)
+      .backgroundColor(Theme.sidebar).border({ width: 1, color: Theme.line })
+      .onClick(() => {
         const next: Record<string, boolean> = {};
         for (const key of Object.keys(this.processExpanded)) { next[key] = this.processExpanded[key]; }
         next[row.key] = !this.isProcessExpanded(row);
@@ -1010,12 +1028,20 @@ struct Index {
               .width('100%').alignItems(HorizontalAlign.Start)
           } else if (entry.observation) {
             Column({ space: 4 }) {
-              Text(`${entry.observation.agent_name} · ${entry.observation.tool_name} · ${entry.observation.kind === 'tool_started' ? '调用' : observationOutcome(entry.observation, '完成', '失败')}`)
-                .fontSize(13).fontColor(Theme.secondary)
-              if (entry.observation.input_summary) { Text(entry.observation.input_summary).fontSize(12).fontColor(Theme.secondary).copyOption(CopyOptions.LocalDevice) }
-              if (entry.observation.output) { Text(entry.observation.output).fontSize(12).fontColor(Theme.secondary).fontFamily('monospace').copyOption(CopyOptions.LocalDevice) }
-              if (entry.observation.truncated) { Text('输出已截断').caption() }
-              if (entry.observation.late_result) { Text('任务结束后的返回').caption() }
+              Row({ space: 4 }) {
+                Text(`${entry.observation.agent_name} · ${entry.observation.tool_name} · ${entry.observation.kind === 'tool_started' ? '调用' : observationOutcome(entry.observation, '完成', '失败')}`)
+                  .fontSize(13).fontColor(Theme.secondary).flexShrink(1)
+                if (this.hasToolDetail(entry.observation)) {
+                  SymbolGlyph(this.isToolExpanded(row, entry) ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+                    .fontSize(11).fontColor([Theme.faint])
+                }
+              }.onClick(() => { if (this.hasToolDetail(entry.observation)) { this.toggleTool(row, entry); } })
+              if (this.isToolExpanded(row, entry)) {
+                if (entry.observation.input_summary) { Text(entry.observation.input_summary).fontSize(12).fontColor(Theme.secondary).copyOption(CopyOptions.LocalDevice) }
+                if (entry.observation.output) { Text(entry.observation.output).fontSize(12).fontColor(Theme.secondary).fontFamily('monospace').copyOption(CopyOptions.LocalDevice) }
+                if (entry.observation.truncated) { Text('输出已截断').caption() }
+                if (entry.observation.late_result) { Text('任务结束后的返回').caption() }
+              }
             }.width('100%').alignItems(HorizontalAlign.Start)
           }
         }, (entry: ProcessEntry) => `${entry.sequence}`)
@@ -1445,7 +1471,7 @@ struct Index {
               .onChange(() => { this.togglePlan(plan); })
           } else { Text('已归档').caption() }
         }.width('100%')
-        Text(`${plan.schedule}${plan.next_trigger ? ` · 下次 ${plan.next_trigger}` : ''}`).caption().copyOption(CopyOptions.LocalDevice)
+        Text(`${plan.schedule}${plan.next_trigger ? ` · 下次 ${formatLocalTime(plan.next_trigger)}` : ''}`).caption().copyOption(CopyOptions.LocalDevice)
         Text(plan.content).fontSize(14).fontColor('#4A4840').maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
         if (plan.health.alerting) { Text(`连续失败 ${plan.health.consecutive_failures} 次`).fontSize(12).fontColor(Theme.danger) }
         Row({ space: 16 }) {
