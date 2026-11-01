@@ -83,3 +83,11 @@ export function observationOutcome(observation: ObservationDto, done: string, fa
   if (observation.background === 'finished') { return observation.success ? '后台完成' : '后台失败'; }
   return observation.success ? done : failed;
 }
+
+// 服务端下发 UTC（RFC 3339），按设备本地时区显示；无法解析时原样返回。
+export function formatLocalTime(value: string): string {
+  const date = new Date(value);
+  if (isNaN(date.getTime())) { return value; }
+  const two = (n: number): string => `${n}`.padStart(2, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
+}
