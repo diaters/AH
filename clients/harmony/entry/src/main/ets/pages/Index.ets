@@ -6,7 +6,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
-  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, observationOutcome } from '../services/Protocol';
+  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, isDenyOption, observationOutcome } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
@@ -557,6 +557,9 @@ struct Index {
     for (const existing of Object.keys(this.approvalFeedback)) { next[existing] = this.approvalFeedback[existing]; }
     next[key] = value; this.approvalFeedback = next; this.save(key, value);
   }
+  private hasDenyOption(request: ApprovalDto): boolean {
+    return request.options.some((option: ApprovalOptionDto) => isDenyOption(option.id));
+  }
   private async loadManagement(): Promise<void> {
     if (!this.connected || this.busy) { return; } this.busy = true;
     try { this.devices = (await this.connection.devices()).devices; this.diagnostics = this.connection.supports('diagnostics.read') ? await this.connection.diagnostics() : undefined; }
@@ -571,7 +574,11 @@ struct Index {
   }
   private approve(request: ApprovalDto, option: string): void {
     const command: CommandDto = { operation: 'respond_approval', command_id: util.generateRandomUUID(), session_id: this.selected,
-      request_id: request.request_id, expected_version: request.version, option_id: option, feedback: this.feedback(request) };
+      request_id: request.request_id, expected_version: request.version, option_id: option };
+    // 说明只在拒绝时对 Agent 有意义（运行时仅拒绝分支读取 feedback），
+    // 允许时不发送，避免把无效输入当作已生效的沟通。
+    const note = isDenyOption(option) ? this.feedback(request).trim() : '';
+    if (note.length > 0) { command.feedback = note; }
     this.submit(command);
   }
   private manageSchedule(action: ScheduleActionDto): void {
@@ -989,8 +996,6 @@ struct Index {
         }
         if (request.claimed) { Text('已提交，等待运行时校验').caption() }
         else {
-          TextInput({ placeholder: '附加说明（可选）', text: this.feedback(request) }).height(36).fontSize(13).backgroundColor(Theme.page)
-            .onChange((value: string) => { this.editFeedback(request, value); })
           Flex({ wrap: FlexWrap.Wrap }) {
             ForEach(request.options, (option: ApprovalOptionDto, index: number) => {
               Button(option.label).ghost()
@@ -999,6 +1004,10 @@ struct Index {
                 .enabled(this.connected && !this.busy && !this.hasPending && this.connection.supports('approvals.respond'))
                 .onClick(() => { this.approve(request, option.id); })
             })
+          }
+          if (this.hasDenyOption(request)) {
+            TextInput({ placeholder: '拒绝理由（可选，会转达给 Agent）', text: this.feedback(request) }).height(36).fontSize(13).backgroundColor(Theme.page)
+              .onChange((value: string) => { this.editFeedback(request, value); })
           }
         }
       }.card().backgroundColor(Theme.warnSoft).border({ width: 0, radius: 14 })

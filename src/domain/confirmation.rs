@@ -61,8 +61,12 @@ impl ConfirmationOption {
     }
 
     /// 判断是否为拒绝选项
+    ///
+    /// 除默认的 `deny` 外，各通道「拒绝并反馈」选项 `reject_with_feedback` 同样是
+    /// 拒绝——用户先选它再填理由。它必须在这里归类，否则会落进调用方"其余选项
+    /// 即批准"的分支，把带理由的拒绝当成允许并直接执行工具。
     pub fn is_deny(&self) -> bool {
-        self.id == "deny"
+        matches!(self.id.as_str(), "deny" | "reject_with_feedback")
     }
 
     /// 获取默认选项列表
@@ -76,4 +80,29 @@ impl ConfirmationOption {
 pub enum ApprovalDecision {
     Approved,
     Rejected,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deny_options_cover_feedback_flow() {
+        assert!(ConfirmationOption::deny().is_deny());
+        assert!(
+            ConfirmationOption {
+                id: "reject_with_feedback".to_string(),
+                label: "Deny with reason".to_string(),
+                mode: GrantMode::Once,
+            }
+            .is_deny(),
+            "拒绝并反馈选项必须归为拒绝，否则会被调用方当成批准执行工具"
+        );
+    }
+
+    #[test]
+    fn allow_options_are_not_deny() {
+        assert!(!ConfirmationOption::allow_once().is_deny());
+        assert!(!ConfirmationOption::allow_always().is_deny());
+    }
 }
