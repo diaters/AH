@@ -6,7 +6,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
-  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto } from '../services/Protocol';
+  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, observationOutcome } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
@@ -941,7 +941,7 @@ struct Index {
               .width('100%').alignItems(HorizontalAlign.Start)
           } else if (entry.observation) {
             Column({ space: 4 }) {
-              Text(`${entry.observation.agent_name} · ${entry.observation.tool_name} · ${entry.observation.kind === 'tool_started' ? '调用' : entry.observation.success ? '完成' : '失败'}`)
+              Text(`${entry.observation.agent_name} · ${entry.observation.tool_name} · ${entry.observation.kind === 'tool_started' ? '调用' : observationOutcome(entry.observation, '完成', '失败')}`)
                 .fontSize(13).fontColor(Theme.secondary)
               if (entry.observation.input_summary) { Text(entry.observation.input_summary).fontSize(12).fontColor(Theme.secondary).copyOption(CopyOptions.LocalDevice) }
               if (entry.observation.output) { Text(entry.observation.output).fontSize(12).fontColor(Theme.secondary).fontFamily('monospace').copyOption(CopyOptions.LocalDevice) }
@@ -1314,13 +1314,13 @@ struct Index {
     ForEach((this.current()?.observations ?? []).slice().reverse(), (item: ObservationDto) => {
       Column({ space: 4 }) {
         Row({ space: 8 }) {
-          Circle().width(6).height(6).fill(item.kind === 'tool_started' ? Theme.faint : item.kind === 'permission_audit' ? Theme.warn :
+          Circle().width(6).height(6).fill(item.kind === 'tool_started' || item.background === 'started' ? Theme.faint : item.kind === 'permission_audit' ? Theme.warn :
             item.success ? Theme.accent : Theme.danger)
           Text(`${item.tool_name}`).fontSize(13).fontColor(Theme.text).fontWeight(FontWeight.Medium)
           Text(item.agent_name).caption()
         }
         Text(item.kind === 'permission_audit' ? `权限：${item.action ?? ''} ${item.context ?? ''}` : item.kind === 'tool_started' ? '开始调用' :
-          item.success ? '返回成功' : '返回错误').caption()
+          observationOutcome(item, '返回成功', '返回错误')).caption()
         if (item.input_summary) { Text(item.input_summary).fontSize(12).fontColor('#4A4840').maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis }) }
         if (item.output) {
           Text(item.output).fontSize(12).fontFamily('monospace').fontColor('#4A4840').maxLines(10).textOverflow({ overflow: TextOverflow.Ellipsis })

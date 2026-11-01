@@ -28,12 +28,16 @@ use crate::triggers::scheduled_task::SchedulerState;
 ///
 /// 已转后台的调用（带 `BackgroundedToolCall`）不再回填工具循环：结果作为
 /// `<task-notification>` 投递到所属任务收件箱，由空闲唤醒开启新的一轮。
+#[allow(clippy::too_many_arguments)]
 pub fn ingest_tool_results_system(
     mut commands: Commands,
     clock: Option<Res<crate::contracts::Clock>>,
     mut receiver: ResMut<ToolResultReceiver>,
     pending: Query<(Entity, &ToolRequestPending, Option<&BackgroundedToolCall>)>,
     wake: Option<Res<crate::contracts::RuntimeWake>>,
+    registry: Option<Res<crate::contracts::FrontendRegistry>>,
+    index: Option<Res<crate::ecs::EntityIndex>>,
+    observers: (Query<&crate::domain::Task>, Query<&crate::domain::Agent>),
 ) {
     let now = clock.map_or_else(chrono::Utc::now, |clock| clock.0);
     for _ in 0..256 {
@@ -55,6 +59,18 @@ pub fn ingest_tool_results_system(
                 };
                 match backgrounded {
                     Some(backgrounded) => {
+                        if let (Some(registry), Some(index)) =
+                            (registry.as_deref(), index.as_deref())
+                        {
+                            push_background_observation(
+                                registry,
+                                index,
+                                &observers,
+                                pending,
+                                backgrounded,
+                                &output,
+                            );
+                        }
                         deliver_background_result(&mut commands, pending, backgrounded, output, now)
                     }
                     None => spawn_tool_result_message(&mut commands, pending, output),
@@ -142,6 +158,64 @@ fn deliver_background_result(
             received_at: now,
         },
     });
+}
+
+/// 客户端执行记录：后台调用的真实结果（合成的转后台结果已由 `tool_result_system` 推送）。
+fn push_background_observation(
+    registry: &crate::contracts::FrontendRegistry,
+    index: &crate::ecs::EntityIndex,
+    (tasks, agents): &(Query<&crate::domain::Task>, Query<&crate::domain::Agent>),
+    pending: &ToolRequestPending,
+    backgrounded: &BackgroundedToolCall,
+    output: &Result<serde_json::Value, crate::domain::ToolError>,
+) {
+    use crate::domain::FrontendKind;
+    let request = &pending.original_request;
+    let Some(task) = index
+        .get_task(&request.task_id)
+        .and_then(|e| tasks.get(e).ok())
+    else {
+        return;
+    };
+    let Some(channel) = task
+        .routing_policy
+        .output_channel()
+        .filter(|c| c.frontend == FrontendKind::Client)
+        .cloned()
+    else {
+        return;
+    };
+    let text = match output {
+        Ok(value) => value.to_string(),
+        Err(error) => error.to_string(),
+    };
+    let event = crate::domain::EngineEvent::ToolCallCompleted {
+        target: crate::domain::EventTarget::Directed(vec![channel]),
+        task_id: task.id,
+        call_id: Some(pending.tool_call_id.clone()),
+        agent_name: index
+            .get_agent(&request.agent_id)
+            .and_then(|e| agents.get(e).ok())
+            .map(|a| a.profile.name.clone())
+            .unwrap_or_else(|| request.agent_id.to_string()),
+        tool_name: pending.tool_name.clone(),
+        success: output.is_ok(),
+        truncated: text.chars().count() > 12800,
+        output: text.chars().take(12800).collect(),
+        late_result: task.status().is_terminal(),
+        background: Some(if backgrounded.silent {
+            "stopped"
+        } else {
+            "finished"
+        }),
+    };
+    for frontend in registry
+        .frontends
+        .iter()
+        .filter(|f| f.kind() == FrontendKind::Client)
+    {
+        frontend.push_event(event.clone());
+    }
 }
 
 /// 保留 UTF-8 边界上的尾部（命令输出的结论通常在末尾）。

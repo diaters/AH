@@ -858,6 +858,7 @@ async fn conversation_records_progress_tools_and_response_in_order() {
         output: "ok".into(),
         truncated: false,
         late_result: false,
+        background: None,
     });
     f.client.push_event(EngineEvent::AgentOutput {
         target,
