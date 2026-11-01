@@ -21,6 +21,8 @@ pub enum WorkItemType {
     ExperienceLookup,
     /// 经验起草工作项：由经验管理员把会话试错过程整理为经验草稿
     ExperienceDraft,
+    /// Watchdog 巡检：判断后台工具调用与子任务是否取得实质进展
+    WatchdogReview,
 }
 
 impl WorkItemType {
@@ -36,6 +38,7 @@ impl WorkItemType {
             WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {
                 "experience-librarian"
             }
+            WorkItemType::WatchdogReview => crate::domain::WATCHDOG_TAG,
         }
     }
 }
@@ -75,6 +78,8 @@ pub enum WorkItemOrigin {
     Evaluation,
     /// 经验库（检索 / 起草）
     ExperienceLibrary,
+    /// Watchdog 巡检
+    Watchdog,
 }
 
 /// 工作项写回目标
@@ -237,6 +242,17 @@ impl WorkItem {
             work_type,
             WorkItemInput::new(prompt),
             WorkItemOrigin::ExperienceLibrary,
+            WorkItemWritebackTarget::Requester,
+        )
+    }
+
+    /// 创建 watchdog 巡检工作项，单轮无工具。
+    pub fn watchdog_review(task_id: TaskId, prompt: String) -> Self {
+        Self::new(
+            task_id,
+            WorkItemType::WatchdogReview,
+            WorkItemInput::new(prompt),
+            WorkItemOrigin::Watchdog,
             WorkItemWritebackTarget::Requester,
         )
     }

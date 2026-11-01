@@ -274,6 +274,7 @@ pub fn tool_dispatch_system(
 
                 let ctx = ToolContext {
                     default_wait_tasks_timeout_secs: settings.0.default_wait_tasks_timeout_secs,
+                    tool_background_after_secs: settings.0.tool_background_after_secs,
                     shell_default_tail_lines: settings.0.shell_default_tail_lines,
                     shell_max_tail_lines: settings.0.shell_max_tail_lines,
                     shell_default_exec_timeout_secs: settings.0.shell_default_exec_timeout_secs,

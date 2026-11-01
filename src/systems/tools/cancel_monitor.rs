@@ -19,27 +19,35 @@
 use crate::prelude::*;
 use tracing::debug;
 
-use crate::domain::{InFlightToolCall, StopRequested, Task, ToolRequestPending};
+use crate::domain::{
+    BackgroundedToolCall, InFlightToolCall, StopRequested, Task, ToolRequestPending,
+};
 
 /// cancel_monitor system：扫挂起实体，若其父任务已终态则触发取消。
 ///
 /// 终态判定：`Task::status.is_terminal()`（`Done` 或 `Failed(_)`）。
 /// 父任务实体找不到（已 despawn）同样视同终态——任务已不存在，工具结果无消费方。
-/// 父任务带 `StopRequested`（用户 `/stop` 中断当前回合）同样触发取消。
+/// 父任务带 `StopRequested`（用户 `/stop` 中断当前回合）同样触发取消；
+/// 已转后台的调用不属于当前回合，`/stop` 不取消它，只在所属任务终态时取消。
 pub fn cancel_monitor_system(
     mut commands: Commands,
     index: Res<crate::ecs::EntityIndex>,
     tasks: Query<(&Task, Has<StopRequested>)>,
-    pending_inflight: Query<(Entity, &ToolRequestPending, &InFlightToolCall)>,
+    pending_inflight: Query<(
+        Entity,
+        &ToolRequestPending,
+        &InFlightToolCall,
+        Has<BackgroundedToolCall>,
+    )>,
 ) {
-    for (entity, pending, in_flight) in &pending_inflight {
+    for (entity, pending, in_flight, backgrounded) in &pending_inflight {
         let task_id = pending.original_request.task_id;
 
         // 查父任务：找不到（已 despawn）或已终态 → 取消
         let should_cancel = index
             .get_task(&task_id)
             .and_then(|entity| tasks.get(entity).ok())
-            .map(|(t, stop_requested)| t.status.is_terminal() || stop_requested)
+            .map(|(t, stop_requested)| t.status.is_terminal() || (stop_requested && !backgrounded))
             .unwrap_or(true);
 
         if !should_cancel {

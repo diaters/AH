@@ -4,7 +4,7 @@ use crate::prelude::*;
 use crate::systems::demand::DemandSchedule;
 use crate::{
     contracts::Clock,
-    domain::{Task, TaskId, WaitingForTasksInfo},
+    domain::{BackgroundJob, JobOwner, JobSource, Task, TaskId, WaitingForTasksInfo},
     ecs::EntityIndex,
 };
 use std::collections::{HashMap, HashSet};
@@ -51,6 +51,7 @@ pub fn check_waiting_tasks_system(
     schedule: Option<Res<DemandSchedule>>,
     mut waiting_index: ResMut<WaitingIndex>,
     mut removed: RemovedComponents<WaitingForTasksInfo>,
+    jobs: Query<(Entity, &BackgroundJob, &JobOwner)>,
 ) {
     for entity in removed.read() {
         waiting_index.remove(entity);
@@ -98,6 +99,18 @@ pub fn check_waiting_tasks_system(
         if timed_out || all_terminal {
             let results = collect_task_results(&info.target_task_ids, &all_tasks, &index);
             spawn_wait_result_message(&mut commands, task.id, info, results, timed_out);
+            // 结果已经由 wait_tasks 返回：被完整覆盖的批次作业随之退役，避免重复通知。
+            // 超时（仍有子任务在跑）时作业保留，完成后照常通知。
+            if all_terminal {
+                for (job_entity, job, owner) in &jobs {
+                    if owner.0 == entity
+                        && let JobSource::SubTaskBatch { task_ids, .. } = &job.source
+                        && task_ids.iter().all(|id| info.target_task_ids.contains(id))
+                    {
+                        commands.entity(job_entity).try_despawn();
+                    }
+                }
+            }
             waiting_index.remove(entity);
             commands.entity(entity).remove::<WaitingForTasksInfo>();
         }

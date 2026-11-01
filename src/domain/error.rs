@@ -126,6 +126,8 @@ pub enum FailureReason {
     QuotaExhausted,
     AgentError,
     UserCancelled,
+    /// watchdog 判断无实质进展或偏离目标后取消。
+    WatchdogCancelled,
     Unknown,
 }
 

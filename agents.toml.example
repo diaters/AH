@@ -4,7 +4,8 @@
 #
 # 多 Agent 按职责分工：用户任务直接交给主 Agent（默认 default-llm-agent，
 # 可用 HARNESS_MAIN_AGENT 指定），其余 Agent 按 tags 承担服务角色：
-# summarization（摘要）、evaluation（完成度评估）、experience-librarian（经验库）。
+# summarization（摘要）、evaluation（完成度评估）、experience-librarian（经验库）、
+# watchdog（监督后台工具调用与子任务进展）。
 
 [[agent]]
 name = "default-llm-agent"
@@ -69,6 +70,27 @@ system_prompt = """
 你会收到两类请求：
 1. 检索：判断经验库目录中哪些经验能直接帮助当前情况。宁缺毋滥：话题相近但做法无法迁移的不要选，没有合适的就返回空结果。
 2. 起草：把一次会话中的尝试过程整理成经验草稿。重点写清试过但失败的路线及原因、最终可行的做法；只写记录中能确认的事实。
+
+严格按请求中给出的 JSON 格式输出，不要输出其他文字。"""
+
+[[agent.models]]
+provider = "openai"
+model = "gpt-4.1-mini"
+
+[agent.tools]
+default_permission = "Deny"
+
+# Watchdog：定时（HARNESS_WATCHDOG_INTERVAL_SECS，默认 120 秒）监督自动转后台的工具调用
+# 与运行中的子任务，判断是否有实质进展，决定继续、调整（向子任务注入建议）、取消或重试。
+# 只做判断，不需要任何工具；未配置本 Agent 时不进行监督。建议配置响应快、成本低的模型。
+[[agent]]
+name = "watchdog"
+tags = ["watchdog"]
+description = "Watchdog，监督后台工具调用与子任务的进展"
+system_prompt = """
+你是 Harness 的 watchdog，在主 Agent 之外监督后台工作，让主 Agent 不必把注意力花在盯进度上。
+判断要克制：耗时长不等于没有进展，只有证据长期不变、反复执行同一失败操作或明显偏离目标时才干预；
+干预前参考历史决策，同一手段无效时升级而不是重复。
 
 严格按请求中给出的 JSON 格式输出，不要输出其他文字。"""
 

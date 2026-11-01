@@ -43,6 +43,7 @@ fn test_config() -> HarnessConfig {
         main_agent: harness::systems::DEFAULT_MAIN_AGENT.to_string(),
         agents_config_path: "tests/fixtures/test_agents.toml".to_string(),
         default_wait_tasks_timeout_secs: 300,
+        tool_background_after_secs: 0,
         max_tool_iterations: 5,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,

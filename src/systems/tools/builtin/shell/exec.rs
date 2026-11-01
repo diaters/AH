@@ -40,6 +40,11 @@ impl BuiltinTool for ShellExecTool {
         ToolActionKind::Async
     }
 
+    /// 长构建、测试等命令超过前台预算后转后台，进程继续运行，结果以通知送达。
+    fn backgroundable(&self) -> bool {
+        true
+    }
+
     /// `exec_timeout_secs + 30s margin`——sweeper 必须晚于业务超时，
     /// 否则 worker 还在跑业务超时就被 sweeper 兜底摘掉。
     fn max_duration(&self, input: &serde_json::Value, tool_inflight_timeout_secs: u64) -> Duration {

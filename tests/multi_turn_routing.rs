@@ -586,6 +586,7 @@ fn finished_task_holds_channel_until_pending_worker_acknowledges_cleanup() {
         .spawn(ToolRequestPending {
             tool_call_id: "cleanup-pending".into(),
             tool_name: "shell_exec".into(),
+            tool_input: serde_json::Value::Null,
             original_request: Arc::new(AgentExecutionRequest {
                 task_id: old,
                 agent_id: harness::domain::AgentId::new(),
@@ -654,6 +655,7 @@ fn clear_holds_channel_until_pending_worker_acknowledges_cleanup() {
         .spawn(ToolRequestPending {
             tool_call_id: "cleanup-pending".into(),
             tool_name: "shell_exec".into(),
+            tool_input: serde_json::Value::Null,
             original_request: Arc::new(AgentExecutionRequest {
                 task_id: old,
                 agent_id: harness::domain::AgentId::new(),

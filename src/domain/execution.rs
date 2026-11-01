@@ -18,6 +18,8 @@ pub enum AgentRequestKind {
     Evaluation,
     /// 经验管理员请求（检索 / 起草）：不改变所属任务状态。
     Experience,
+    /// Watchdog 巡检请求：不改变被监督任务的状态。
+    Watchdog,
 }
 
 /// LLM 返回的 Tool 调用

@@ -31,6 +31,9 @@ pub struct LoopControlConfig {
     pub notification_coalesce_ms: u64,
     /// 后台 shell 会话状态轮询间隔（毫秒）
     pub background_poll_ms: u64,
+    /// Watchdog 巡检间隔（秒）：后台工具调用与子任务运行超过该时长后，
+    /// 每隔该时长由 watchdog Agent 判断一次是否有实质进展。0 表示关闭。
+    pub watchdog_interval_secs: u64,
 }
 
 impl Default for LoopControlConfig {
@@ -40,6 +43,7 @@ impl Default for LoopControlConfig {
             auto_wake_window_secs: 10,
             notification_coalesce_ms: 300,
             background_poll_ms: 500,
+            watchdog_interval_secs: 120,
         }
     }
 }
@@ -65,6 +69,11 @@ pub enum InboxItem {
         content: String,
         received_at: DateTime<Utc>,
     },
+    /// Watchdog 对当前任务执行策略的调整意见。
+    WatchdogGuidance {
+        content: String,
+        received_at: DateTime<Utc>,
+    },
 }
 
 impl InboxItem {
@@ -72,7 +81,8 @@ impl InboxItem {
         match self {
             Self::UserSteer { received_at, .. }
             | Self::TaskNotification { received_at, .. }
-            | Self::ExperienceHint { received_at, .. } => *received_at,
+            | Self::ExperienceHint { received_at, .. }
+            | Self::WatchdogGuidance { received_at, .. } => *received_at,
         }
     }
 
@@ -103,6 +113,9 @@ impl InboxItem {
             Self::ExperienceHint { content, .. } => {
                 format!("<experience_hint>\n{content}\n</experience_hint>")
             }
+            Self::WatchdogGuidance { content, .. } => format!(
+                "<watchdog_guidance>\n[监督者观察到你的执行缺少实质进展，以下是调整建议，请据此修正策略后继续]\n{content}\n</watchdog_guidance>"
+            ),
         }
     }
 }
@@ -327,6 +340,11 @@ pub enum JobSource {
         batch_id: Uuid,
         task_ids: Vec<TaskId>,
     },
+    /// 超时自动转后台的工具调用；结果由 ingest 投递，作业随之退役。
+    ToolCall {
+        tool_call_id: String,
+        tool_name: String,
+    },
 }
 
 impl JobSource {
@@ -334,6 +352,7 @@ impl JobSource {
         match self {
             Self::Shell { .. } => "shell",
             Self::SubTaskBatch { .. } => "subtasks",
+            Self::ToolCall { .. } => "tool",
         }
     }
 }
@@ -345,8 +364,42 @@ pub struct BackgroundJob {
     pub owner_task_id: TaskId,
     pub source: JobSource,
     pub started_at: DateTime<Utc>,
-    /// 被 `wait_tasks` 显式等待时置位，完成后不再单独发通知
+    /// 完成时父任务正被 `wait_tasks` 显式等待，结果经工具返回，不再单独发通知。
+    ///
+    /// 每次轮询按当前等待状态重新计算：`wait_tasks` 超时转后台后批次恢复通知。
     pub claimed: bool,
+}
+
+/// 后台作业控制请求：`stop_background_job` 工具与 watchdog 共用的唯一控制入口，
+/// 由 `background_job_control_system` 消费。
+#[derive(Debug, Clone, Component)]
+pub struct BackgroundJobControl {
+    pub job_id: Uuid,
+    pub action: JobControlAction,
+    pub origin: JobControlOrigin,
+}
+
+/// 后台作业控制动作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobControlAction {
+    /// 停止作业：取消后台工具调用 / 取消批次内未完成子任务 / 停止 shell 会话。
+    Stop,
+    /// 以相同入参重新执行后台工具调用（仅 `JobSource::ToolCall`）。
+    Retry,
+}
+
+/// 控制请求来源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobControlOrigin {
+    /// Agent 经 `stop_background_job` 发起：只能控制本任务登记的作业，结果回填工具调用，
+    /// 被停止的作业不再通知。
+    Agent {
+        task_id: TaskId,
+        agent_id: super::AgentId,
+        tool_call_id: String,
+    },
+    /// Watchdog 判定：附原因，作业结束时照常通知所属任务并说明原因。
+    Watchdog { reason: String },
 }
 
 /// 后台任务 → 所属 Task 实体的关系。

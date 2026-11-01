@@ -155,6 +155,7 @@ pub fn dispatch_system(
             WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {
                 AgentRequestKind::Experience
             }
+            WorkItemType::WatchdogReview => AgentRequestKind::Watchdog,
             _ => AgentRequestKind::LlmCompletion,
         };
 

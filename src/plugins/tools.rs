@@ -10,8 +10,8 @@ use crate::{
         HarnessSet, NativeProcessBackend, async_tool_dispatch_system, cancel_monitor_system,
         channel_send_dispatch_system, check_waiting_tasks_system, commit_tool_effects_system,
         ingest_tool_results_system, on_tool_called_hook_system, on_tool_returned_hook_system,
-        register_builtin_tools, sweep_inflight_tool_calls, tool_dispatch_system,
-        tool_result_system,
+        register_builtin_tools, sweep_inflight_tool_calls, tool_auto_background_system,
+        tool_dispatch_system, tool_result_system,
     },
 };
 
@@ -61,6 +61,11 @@ impl Plugin for ToolRuntimePlugin {
                 ingest_tool_results_system
                     .in_set(HarnessSet::Transform)
                     .before(on_tool_returned_hook_system),
+                // 先于 ingest：同帧转后台的调用，其真实结果按后台通知落地，与合成结果一致；
+                // 反序则 ingest 先 despawn 挂起实体，转后台的 insert 会落空。
+                tool_auto_background_system
+                    .in_set(HarnessSet::Transform)
+                    .before(ingest_tool_results_system),
                 // on_tool_returned 观察 hook companion 系统：在 tool_result_system 之前派发 hook，
                 // 若插件调用 tool_set_result 则替换 tool_output，原始输出保留在审计字段。
                 on_tool_returned_hook_system

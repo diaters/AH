@@ -25,6 +25,7 @@ impl Plugin for LoopControlPlugin {
         app.init_resource::<LoopControlConfig>();
         app.init_resource::<InflightLlmRequests>();
         app.init_resource::<MonitorDeliveries>();
+        app.init_resource::<crate::systems::watchdog::WatchdogLedger>();
 
         app.add_systems(
             Update,
@@ -58,6 +59,15 @@ impl Plugin for LoopControlPlugin {
                 background_job_monitor_system
                     .in_set(HarnessSet::Transform)
                     .before(inbox_ingest_system),
+                crate::systems::background_job_control_system
+                    .in_set(HarnessSet::Transform)
+                    .before(background_job_monitor_system),
+                // Watchdog：定时巡检派发判断，回复落地为作业控制 / 收件箱投递。
+                crate::systems::watchdog::watchdog_tick_system.in_set(HarnessSet::Maintenance),
+                // 回复晚于 llm_response；产生的作业控制与投递在下一帧消费（均会唤醒主循环）。
+                crate::systems::watchdog::watchdog_response_system
+                    .in_set(HarnessSet::Transform)
+                    .after(llm_response_system),
                 // 收件箱积压数量同步到前端（所有 drain 出口之后）
                 inbox_status_sync_system.in_set(HarnessSet::Output),
                 // 终态清理：保证终态 Task 不留存活后台任务

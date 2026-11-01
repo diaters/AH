@@ -123,6 +123,8 @@ pub enum ToolAction {
     InputSession(SessionInputRequest),
     /// 停止 shell 会话
     StopSession(SessionHandleId),
+    /// 停止本任务登记的后台作业（转后台的工具调用 / 子任务批次 / shell 会话）。
+    StopBackgroundJob { job_id: uuid::Uuid },
     /// 请经验管理员检索经验库；结果在管理员回复后回填本次工具调用。
     SearchExperience { situation: String },
     /// 向 IM 通道发送消息
@@ -158,6 +160,8 @@ pub enum ToolAction {
 pub struct ToolContext {
     /// wait_tasks 工具的默认超时时间（秒）
     pub default_wait_tasks_timeout_secs: u64,
+    /// 前台预算（秒）：wait_tasks 单次等待不超过该值，超过后批次转后台通知；0 表示不限。
+    pub tool_background_after_secs: u64,
     /// shell 工具默认返回的最新输出行数
     pub shell_default_tail_lines: usize,
     /// shell 工具允许返回的最大输出行数
@@ -241,6 +245,14 @@ pub trait BuiltinTool: Send + Sync + 'static {
         tool_inflight_timeout_secs: u64,
     ) -> std::time::Duration {
         std::time::Duration::from_secs(tool_inflight_timeout_secs)
+    }
+
+    /// 执行超过前台预算（`HARNESS_TOOL_BACKGROUND_AFTER_SECS`）时是否自动转后台。
+    ///
+    /// 仅对 `kind() == Async` 的工具生效。缺省 `false`：写效果或瞬时工具不应转后台；
+    /// 耗时且结果可稍后送达的工具（`shell_exec`、插件工具）显式 opt-in。
+    fn backgroundable(&self) -> bool {
+        false
     }
 
     /// 异步执行入口。仅 `kind() == Async` 的工具需要 override；
