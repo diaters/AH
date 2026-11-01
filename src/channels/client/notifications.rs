@@ -130,7 +130,7 @@ pub(super) fn enqueue(
         "task_status" if data["parent_id"].is_null() && data["status"] == "failed" => {
             "Harness 任务失败"
         }
-        "text" if data["background_notification"] == true => "Harness 后台结果",
+        // 后台文本结果只有通用摘要、没有可读内容，不推送；由 WSS 同步到客户端。
         _ => return,
     };
     if state.notifications.len() >= 4000 {
@@ -464,6 +464,21 @@ mod tests {
     }
     fn queue(store: &mut Store, session: Uuid, config: &MeowConfig) {
         store.append_with_notification("alice",session,"question",json!({"question":"private text must not be sent","question_id":Uuid::new_v4().to_string(),"task_id":Uuid::new_v4()}),Some(config)).unwrap();
+    }
+    #[test]
+    fn background_text_result_does_not_enqueue_meow_notification() {
+        let (_dir, mut store, session) = setup();
+        let config = config();
+        store
+            .append_with_notification(
+                "alice",
+                session,
+                "text",
+                json!({"role":"system","content":"result","background_notification":true}),
+                Some(&config),
+            )
+            .unwrap();
+        assert!(store.state.notifications.is_empty());
     }
     #[test]
     fn quota_is_per_recipient_and_local_day_and_receipts_are_independent() {
