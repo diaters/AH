@@ -581,6 +581,8 @@ mod tests {
             .unwrap();
         assert!(store.state.notifications[0].received_at.is_none());
         queue(&mut store, session, &config);
+        // 入队时间取自实时时钟，须不早于它，否则跨秒时尚未到期而不会进入 quota_wait。
+        let now = chrono::Utc::now().timestamp();
         assert!(store.claim_notification(&config, now).unwrap().is_none());
         assert_eq!(store.state.notifications[1].state, "quota_wait");
         let next_day = config.day(now).1;
