@@ -75,7 +75,10 @@ pub(crate) use tools::{
 // `async_tool_dispatch_system` 供集成测试经 `harness::systems::async_tool_dispatch_system`
 // 调用 `world.run_system_once(...)`，故单独 `pub use`（其余 tools 内部系统保持
 // `pub(crate)` 仅 crate 内可见）。
-pub use runtime_config::{DEFAULT_MAIN_AGENT, HarnessConfig, HarnessSettings};
+pub use runtime_config::{
+    DEFAULT_MAIN_AGENT, DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS, DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
+    HarnessConfig, HarnessSettings,
+};
 pub use sweeper::sweep_inflight_tool_calls;
 pub use task_retention::{conversation_idle_system, terminal_task_retention_system};
 pub use tools::async_tool_dispatch_system;

@@ -16,15 +16,18 @@ use tracing::{debug, info, warn};
 
 use crate::contracts::Clock;
 use crate::domain::{
-    Agent, AgentExecutionOutput, AgentExecutionResultMessage, AgentKind, BackgroundJob,
+    Agent, AgentExecutionOutput, AgentExecutionResultMessage, AgentKind, ApprovalDecision,
+    ApprovalResolvedHookPending, ApprovalResultMessage, ApprovalVerdict, BackgroundJob,
     BackgroundJobControl, BackgroundedToolCall, ConversationMessage, DispatchHint, DispatchKind,
-    FailureReason, InFlightToolCall, InboxDeliveryMessage, InboxItem, JobControlAction,
-    JobControlOrigin, JobSource, LoopControlConfig, OutputContent, PendingDispatch, SessionBackend,
-    SessionReadRequest, SessionStatus, SystemOutputMessage, Task, TaskId, TaskStatus, TaskTodoList,
-    ToolCallingState, ToolRequestPending, WATCHDOG_TAG, WatchdogAction, WatchdogReviewOrigin,
-    WatchdogSubject, WatchdogSubjectKey, WatchdogSubjectKind, WorkItem, WorkItemType,
-    build_watchdog_prompt, evidence_fingerprint, parse_watchdog_decisions, render_todos,
-    truncate_chars,
+    FailureReason, FinalizeRequest, GrantMode, InFlightToolCall, InboxDeliveryMessage, InboxItem,
+    JobControlAction, JobControlOrigin, JobSource, LoopControlConfig, OutputContent,
+    PendingDispatch, SessionBackend, SessionReadRequest, SessionStatus, SupervisorApprovalOrigin,
+    SupervisorEscalated, SystemOutputMessage, Task, TaskId, TaskStatus, TaskTodoList,
+    ToolCallingState, ToolExecutionRequestMessage, ToolRequestPending, WATCHDOG_TAG,
+    WatchdogAction, WatchdogReviewOrigin, WatchdogReviewTrigger, WatchdogSubject,
+    WatchdogSubjectKey, WatchdogSubjectKind, WorkItem, WorkItemType, build_watchdog_prompt,
+    consecutive_error_rounds, evidence_fingerprint, parse_approval_decision,
+    parse_watchdog_decisions, render_todos, repeated_call_streak, truncate_chars,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -48,6 +51,8 @@ struct LedgerEntry {
     /// 巡检请求在飞：同一对象不并发判断。
     reviewing_since: Option<DateTime<Utc>>,
     retries: u32,
+    /// 程序侧信号请求的立即巡检（检查点 / 重复调用 / 连续失败），巡检时取走。
+    pending_trigger: Option<String>,
 }
 
 /// watchdog 的进程内账本：上次巡检时间、证据指纹与历史决策。
@@ -104,7 +109,7 @@ fn shell_output_tail(
     Some(summary.output.output)
 }
 
-fn render_message(message: &ConversationMessage) -> Option<String> {
+pub(crate) fn render_message(message: &ConversationMessage) -> Option<String> {
     match message {
         ConversationMessage::System { .. } => None,
         ConversationMessage::User { content } => {
@@ -146,10 +151,18 @@ fn subtask_evidence(
         task.status
     );
     if let Some(state) = calling {
-        evidence.push_str(&format!(
-            "工具循环：第 {}/{} 轮\n",
-            state.iteration, state.max_iterations
-        ));
+        evidence.push_str(&format!("已执行工具调用：{} 轮\n", state.iteration));
+        let streak = repeated_call_streak(&state.conversation);
+        if streak >= 2 {
+            evidence.push_str(&format!("连续相同工具调用：{streak} 轮\n"));
+        }
+        let errors = consecutive_error_rounds(&state.conversation);
+        if errors >= 1 {
+            evidence.push_str(&format!("连续全部失败的工具轮次：{errors} 轮\n"));
+        }
+        if let Some(finalize) = &state.finalize {
+            evidence.push_str(&format!("已要求收尾：{}\n", finalize.reason));
+        }
     }
     if let Some(todos) = todos.filter(|t| !t.items.is_empty()) {
         evidence.push_str("进度清单：\n");
@@ -194,9 +207,15 @@ pub fn watchdog_tick_system(
     )>,
     calling: Query<&ToolCallingState>,
     todos: Query<&TaskTodoList>,
+    triggers: Query<(Entity, &WatchdogReviewTrigger)>,
     backend: Option<Res<NativeProcessBackend>>,
 ) {
     let now = clock.0;
+    let mut triggered: HashMap<TaskId, String> = HashMap::new();
+    for (entity, trigger) in &triggers {
+        commands.entity(entity).despawn();
+        triggered.insert(trigger.task_id, trigger.reason.clone());
+    }
     let supervised = jobs.iter().any(|job| {
         matches!(
             job.source,
@@ -212,17 +231,20 @@ pub fn watchdog_tick_system(
     }
     let interval =
         chrono::Duration::seconds(i64::try_from(config.watchdog_interval_secs).unwrap_or(i64::MAX));
-    match schedule.as_deref_mut() {
-        Some(schedule) => {
-            if !schedule.periodic_ready(DeadlineKey::Watchdog, now, interval) {
-                return;
+    // 程序侧触发信号绕过定时节拍立即巡检；否则按节拍巡检。
+    if triggered.is_empty() {
+        match schedule.as_deref_mut() {
+            Some(schedule) => {
+                if !schedule.periodic_ready(DeadlineKey::Watchdog, now, interval) {
+                    return;
+                }
             }
-        }
-        None => {
-            if ledger.last_tick.is_some_and(|last| now - last < interval) {
-                return;
+            None => {
+                if ledger.last_tick.is_some_and(|last| now - last < interval) {
+                    return;
+                }
+                ledger.last_tick = Some(now);
             }
-            ledger.last_tick = Some(now);
         }
     }
     if !watchdog_available(&agents) {
@@ -284,6 +306,7 @@ pub fn watchdog_tick_system(
                     fingerprint: evidence_fingerprint(&progress),
                     unchanged_since_last_review: false,
                     history: Vec::new(),
+                    trigger: None,
                 });
             }
             JobSource::SubTaskBatch { task_ids, .. } => {
@@ -298,6 +321,10 @@ pub fn watchdog_tick_system(
                     if child.status.is_terminal()
                         || matches!(child.status, TaskStatus::Pending | TaskStatus::Ready)
                     {
+                        continue;
+                    }
+                    // 等待审批 / 用户确认不是停滞，也不是 watchdog 能推进的对象。
+                    if child.pending_confirmation_id.is_some() {
                         continue;
                     }
                     let state = calling
@@ -319,6 +346,7 @@ pub fn watchdog_tick_system(
                         evidence,
                         unchanged_since_last_review: false,
                         history: Vec::new(),
+                        trigger: None,
                     });
                 }
             }
@@ -330,14 +358,20 @@ pub fn watchdog_tick_system(
     ledger
         .entries
         .retain(|key, _| subjects.iter().any(|s| s.key == *key));
+    for (task_id, reason) in triggered {
+        let key = WatchdogSubjectKey::SubTask(task_id);
+        if subjects.iter().any(|s| s.key == key) {
+            ledger.entries.entry(key).or_default().pending_trigger = Some(reason);
+        }
+    }
 
     let stale_review = interval * 3;
     let mut selected: Vec<(String, WatchdogSubject)> = Vec::new();
     for mut subject in subjects {
-        if subject.elapsed_secs < interval.num_seconds() {
+        let entry = ledger.entries.entry(subject.key).or_default();
+        if entry.pending_trigger.is_none() && subject.elapsed_secs < interval.num_seconds() {
             continue;
         }
-        let entry = ledger.entries.entry(subject.key).or_default();
         if entry
             .reviewing_since
             .is_some_and(|since| now - since < stale_review)
@@ -353,6 +387,7 @@ pub fn watchdog_tick_system(
         }
         subject.unchanged_since_last_review = entry.fingerprint == Some(subject.fingerprint);
         subject.history = entry.history.clone();
+        subject.trigger = entry.pending_trigger.take();
         entry.reviewing_since = Some(now);
         let id = format!("S{}", selected.len() + 1);
         selected.push((id, subject));
@@ -389,9 +424,16 @@ pub fn watchdog_response_system(
     index: Res<EntityIndex>,
     mut ledger: ResMut<WatchdogLedger>,
     results: Query<(Entity, &AgentExecutionResultMessage)>,
-    work_items: Query<(Entity, &WorkItem, Option<&WatchdogReviewOrigin>)>,
+    work_items: Query<(
+        Entity,
+        &WorkItem,
+        Option<&WatchdogReviewOrigin>,
+        Option<&SupervisorApprovalOrigin>,
+    )>,
     jobs: Query<&BackgroundJob>,
     mut tasks: Query<&mut Task>,
+    mut calling: Query<&mut ToolCallingState>,
+    tool_requests: Query<(Entity, &ToolExecutionRequestMessage)>,
 ) {
     let now = clock.0;
     for (result_entity, message) in &results {
@@ -399,13 +441,34 @@ pub fn watchdog_response_system(
         let Some(work_item_id) = result.work_item_id else {
             continue;
         };
-        let Some((work_item_entity, _, origin)) = work_items.iter().find(|(_, wi, _)| {
-            wi.id == work_item_id && wi.work_type == WorkItemType::WatchdogReview
-        }) else {
+        let Some((work_item_entity, _, origin, approval)) =
+            work_items.iter().find(|(_, wi, _, _)| {
+                wi.id == work_item_id && wi.work_type == WorkItemType::WatchdogReview
+            })
+        else {
             continue;
         };
         commands.entity(work_item_entity).despawn();
         commands.entity(result_entity).despawn();
+        if let Some(approval) = approval {
+            let reply = match &result.result {
+                Ok(AgentExecutionOutput {
+                    content: OutputContent::Text(text),
+                    ..
+                }) => parse_approval_decision(text),
+                Ok(_) => Err("supervisor returned tool calls instead of a decision".to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            apply_approval(
+                &mut commands,
+                &index,
+                &mut tasks,
+                &tool_requests,
+                approval,
+                reply,
+            );
+            continue;
+        }
         let Some(origin) = origin else {
             continue;
         };
@@ -496,6 +559,8 @@ pub fn watchdog_response_system(
                 &mut commands,
                 &index,
                 &mut tasks,
+                &jobs,
+                &mut calling,
                 now,
                 subject,
                 action,
@@ -504,6 +569,99 @@ pub fn watchdog_response_system(
                 &decision.progress,
             );
         }
+    }
+}
+
+/// 落地监督审批：批准 / 拒绝交给 `approval_result_system`；升级或回复无效时转用户确认。
+fn apply_approval(
+    commands: &mut Commands,
+    index: &EntityIndex,
+    tasks: &mut Query<&mut Task>,
+    tool_requests: &Query<(Entity, &ToolExecutionRequestMessage)>,
+    approval: &SupervisorApprovalOrigin,
+    reply: Result<(ApprovalVerdict, String), String>,
+) {
+    let (verdict, reason) = match reply {
+        Ok(decision) => decision,
+        Err(error) => {
+            warn!(
+                event = "SupervisorApprovalFailed",
+                request_id = %approval.request_id,
+                error_type = "SupervisorReply",
+                error = %error,
+                "supervisor approval failed; escalating to user confirmation"
+            );
+            (ApprovalVerdict::Escalate, format!("监督审批失败：{error}"))
+        }
+    };
+    info!(
+        event = "SupervisorApprovalDecision",
+        request_id = %approval.request_id,
+        source_task_id = %approval.source_task_id,
+        tool_name = %approval.tool_name,
+        verdict = ?verdict,
+        reason = %reason,
+        "supervisor approval decision"
+    );
+    let label = &approval.subject_label;
+    let tool = &approval.tool_name;
+    let notice = match verdict {
+        ApprovalVerdict::Approve | ApprovalVerdict::Reject => {
+            let approved = verdict == ApprovalVerdict::Approve;
+            commands.spawn((
+                ApprovalResultMessage {
+                    request_id: approval.request_id,
+                    source_task_id: approval.source_task_id,
+                    approval_task_id: approval.approval_task_id,
+                    decision: if approved {
+                        ApprovalDecision::Approved
+                    } else {
+                        ApprovalDecision::Rejected
+                    },
+                    reasoning: reason.clone(),
+                    grant_mode: GrantMode::Once,
+                },
+                ApprovalResolvedHookPending,
+            ));
+            if approved {
+                format!("已批准{label}调用 {tool}：{reason}")
+            } else {
+                format!("已拒绝{label}调用 {tool}：{reason}")
+            }
+        }
+        ApprovalVerdict::Escalate => {
+            let Some((request_entity, request)) = tool_requests
+                .iter()
+                .find(|(_, r)| r.pending_confirmation_id == Some(approval.request_id))
+            else {
+                debug!(
+                    event = "SupervisorEscalationNoRequest",
+                    request_id = %approval.request_id,
+                    "tool request already gone; escalation dropped"
+                );
+                return;
+            };
+            // 清除挂起标记后由 tool_dispatch_system 重新分发，标记使其直接走用户确认。
+            let mut updated = request.clone();
+            updated.pending_confirmation_id = None;
+            commands
+                .entity(request_entity)
+                .insert((updated, SupervisorEscalated));
+            if let Some(mut task) = index
+                .get_task(&approval.source_task_id)
+                .and_then(|e| tasks.get_mut(e).ok())
+                && task.pending_confirmation_id == Some(approval.request_id)
+            {
+                task.pending_confirmation_id = None;
+            }
+            format!("{label}调用 {tool} 需要你确认：{reason}")
+        }
+    };
+    if let Some(owner) = approval.owner_task_id {
+        commands.spawn(SystemOutputMessage {
+            task_id: owner,
+            content: format!("🐕 Watchdog {notice}"),
+        });
     }
 }
 
@@ -521,6 +679,8 @@ fn apply_decision(
     commands: &mut Commands,
     index: &EntityIndex,
     tasks: &mut Query<&mut Task>,
+    jobs: &Query<&BackgroundJob>,
+    calling: &mut Query<&mut ToolCallingState>,
     now: DateTime<Utc>,
     subject: &WatchdogSubject,
     action: WatchdogAction,
@@ -576,6 +736,57 @@ fn apply_decision(
                 },
             });
             format!("已调整{label}的执行策略：{guidance}")
+        }
+        (WatchdogAction::Finalize, WatchdogSubjectKey::SubTask(task_id)) => {
+            let finalize_reason = guidance.unwrap_or(reason);
+            // 循环状态上的收尾要求拦截后续工具调用；同时经收件箱告知子任务，
+            // 覆盖本帧循环状态恰好被重建、或子任务正在等待模型回复的情况。
+            if let Some(mut state) = calling
+                .iter_mut()
+                .find(|s| s.task_id == task_id && s.work_item_id.is_none())
+                && state.finalize.is_none()
+            {
+                state.finalize = Some(FinalizeRequest::new(format!("watchdog：{finalize_reason}")));
+            }
+            commands.spawn(InboxDeliveryMessage {
+                task_id,
+                item: InboxItem::WatchdogGuidance {
+                    content: format!(
+                        "请立即收尾：停止调用工具，总结已完成与未完成的部分，并用 <<<RESULT>>>…<<</RESULT>>> 标记交付当前结果。\n原因：{finalize_reason}"
+                    ),
+                    received_at: now,
+                },
+            });
+            format!("已要求{label}收尾交付：{finalize_reason}")
+        }
+        (WatchdogAction::NotifyOwner, WatchdogSubjectKey::SubTask(task_id)) => {
+            let guidance = guidance.unwrap_or(reason);
+            let Some(job_id) = jobs.iter().find_map(|job| match &job.source {
+                JobSource::SubTaskBatch { task_ids, .. } if task_ids.contains(&task_id) => {
+                    Some(job.id)
+                }
+                _ => None,
+            }) else {
+                warn!(
+                    event = "WatchdogEscalationDropped",
+                    task_id = %task_id,
+                    "sub-task batch job not found; escalation dropped"
+                );
+                return;
+            };
+            commands.spawn(InboxDeliveryMessage {
+                task_id: subject.owner_task_id,
+                item: InboxItem::TaskNotification {
+                    job_id,
+                    source: "watchdog".to_string(),
+                    status: progress.to_string(),
+                    summary: format!(
+                        "{label}（task_id={task_id}）仍在运行，watchdog 判断需要你决定。\n建议：{guidance}\n依据：{reason}\n可调用 stop_background_job 停止整个子任务批次（job_id 同上），或继续等待批次结果。"
+                    ),
+                    received_at: now,
+                },
+            });
+            format!("已请所属任务决定{label}的去留：{reason}")
         }
         (WatchdogAction::Cancel, WatchdogSubjectKey::SubTask(task_id)) => {
             if let Some(mut child) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())

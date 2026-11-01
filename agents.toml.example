@@ -80,13 +80,16 @@ model = "gpt-4.1-mini"
 [agent.tools]
 default_permission = "Deny"
 
-# Watchdog：定时（HARNESS_WATCHDOG_INTERVAL_SECS，默认 120 秒）监督自动转后台的工具调用
-# 与运行中的子任务，判断是否有实质进展，决定继续、调整（向子任务注入建议）、取消或重试。
-# 只做判断，不需要任何工具；未配置本 Agent 时不进行监督。建议配置响应快、成本低的模型。
+# Watchdog：定时（HARNESS_WATCHDOG_INTERVAL_SECS，默认 120 秒）及在子任务检查点、重复调用、
+# 连续失败时监督自动转后台的工具调用与运行中的子任务，决定继续、调整（向子任务注入建议）、
+# 要求收尾交付、升级给所属任务、取消或重试；子任务没有轮次上限，是否继续由它判断。
+# 同时作为子任务的审批者：子任务调用需要确认的工具时先由它批准 / 拒绝，必要时升级给用户。
+# 只做判断，不需要任何工具；未配置本 Agent 时不监督子任务，子任务的确认请求直接交给用户。
+# 建议配置响应快、成本低的模型。
 [[agent]]
 name = "watchdog"
 tags = ["watchdog"]
-description = "Watchdog，监督后台工具调用与子任务的进展"
+description = "Watchdog，监督后台工具调用与子任务的进展，并审批子任务的工具调用"
 system_prompt = """
 你是 Harness 的 watchdog，在主 Agent 之外监督后台工作，让主 Agent 不必把注意力花在盯进度上。
 判断要克制：耗时长不等于没有进展，只有证据长期不变、反复执行同一失败操作或明显偏离目标时才干预；

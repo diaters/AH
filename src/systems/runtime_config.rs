@@ -16,10 +16,21 @@ pub const DEFAULT_MAIN_AGENT: &str = "default-llm-agent";
 /// 工具调用自动转后台的默认前台预算（秒）。
 pub const DEFAULT_TOOL_BACKGROUND_AFTER_SECS: u64 = 30;
 
+/// 批次子任务检查点间隔（工具调用轮数）的默认值。
+pub const DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS: u32 = 10;
+
+/// 批次子任务运行时长安全熔断的默认值（秒）：4 小时。
+pub const DEFAULT_SUBTASK_MAX_RUNTIME_SECS: u64 = 4 * 3600;
+
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub max_retries: u32,
+    /// 用户顶层任务单轮的工具调用预算；批次子任务不受此约束，由 watchdog 监督。
     pub max_tool_iterations: u32,
+    /// 批次子任务每执行该轮数工具调用即请求一次 watchdog 巡检（检查点）；0 表示关闭。
+    pub subtask_checkpoint_iterations: u32,
+    /// 批次子任务的运行时长安全熔断（秒）：到达后要求收尾，不收尾则失败；0 表示关闭。
+    pub subtask_max_runtime_secs: u64,
     pub llm: LlmProviderConfig,
     /// 主 Agent 名称（`HARNESS_MAIN_AGENT`）：用户任务与未指定 Agent 的子任务直接交给它。
     pub main_agent: String,
@@ -107,6 +118,14 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5),
+            subtask_checkpoint_iterations: std::env::var("HARNESS_SUBTASK_CHECKPOINT_ITERATIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS),
+            subtask_max_runtime_secs: std::env::var("HARNESS_SUBTASK_MAX_RUNTIME_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_SUBTASK_MAX_RUNTIME_SECS),
             llm,
             main_agent,
             memory: MemoryConfig {
@@ -231,6 +250,8 @@ impl Default for HarnessConfig {
         Self {
             max_retries: 3,
             max_tool_iterations: 5,
+            subtask_checkpoint_iterations: DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+            subtask_max_runtime_secs: DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
             llm: LlmProviderConfig {
                 provider: LlmProviderKind::OpenAi,
                 model: Some("gpt-4.1-mini".to_string()),

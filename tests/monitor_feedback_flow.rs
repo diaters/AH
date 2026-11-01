@@ -218,6 +218,8 @@ fn traffic_monitor_keeps_feedback_delivery_and_process_ownership_in_one_task() {
         HarnessConfig {
             agents_config_path: agents_config.to_string_lossy().into_owned(),
             max_tool_iterations: 50,
+            subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+            subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
             memory: harness::domain::MemoryConfig {
                 compression_threshold_tokens: 100_000,
                 ..Default::default()

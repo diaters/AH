@@ -927,7 +927,8 @@ mod tests {
             agent_id,
             pending_tool_call_ids: vec!["call_1".to_string()],
             iteration: 0,
-            max_iterations: 10,
+            max_iterations: Some(10),
+            finalize: None,
             conversation: vec![],
             tools: vec![],
             request_kind: crate::domain::AgentRequestKind::ToolExecution {
@@ -982,7 +983,8 @@ mod tests {
             agent_id,
             pending_tool_call_ids: vec!["call_1".to_string()],
             iteration: 0,
-            max_iterations: 10,
+            max_iterations: Some(10),
+            finalize: None,
             conversation: vec![],
             tools: vec![],
             request_kind: crate::domain::AgentRequestKind::ToolExecution {

@@ -141,6 +141,8 @@ impl AgentExecutor for BudgetAwareMockExecutor {
 fn test_config() -> HarnessConfig {
     HarnessConfig {
         max_tool_iterations: 3,
+        subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+        subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
         ..HarnessConfig::default()
     }
 }

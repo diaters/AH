@@ -229,6 +229,7 @@ pub(crate) fn install_demand_drive(app: &mut App) {
         PendingChannelSend,
         InboxDeliveryMessage,
         BackgroundJobControl,
+        WatchdogReviewTrigger,
         StopTaskMessage,
         StopRequested,
         BackgroundJob,

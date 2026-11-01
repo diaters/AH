@@ -123,6 +123,10 @@ struct Harness {
 }
 
 fn start(main: Script, watchdog: Script) -> Harness {
+    start_with(main, watchdog, |_| {})
+}
+
+fn start_with(main: Script, watchdog: Script, tweak: impl FnOnce(&mut HarnessConfig)) -> Harness {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let watchdog_prompts = Arc::new(Mutex::new(Vec::new()));
     let executor: Arc<dyn AgentExecutor> = Arc::new(Scripted {
@@ -132,17 +136,21 @@ fn start(main: Script, watchdog: Script) -> Harness {
         watchdog_prompts: watchdog_prompts.clone(),
     });
     let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(
-        HarnessConfig {
-            agents_config_path: "/nonexistent_agents.toml".into(),
-            max_tool_iterations: 8,
-            tool_background_after_secs: 1,
-            loop_control: LoopControlConfig {
-                watchdog_interval_secs: 1,
-                ..LoopControlConfig::default()
-            },
-            ..HarnessConfig::default()
+    let mut config = HarnessConfig {
+        agents_config_path: "/nonexistent_agents.toml".into(),
+        max_tool_iterations: 8,
+        subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+        subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
+        tool_background_after_secs: 1,
+        loop_control: LoopControlConfig {
+            watchdog_interval_secs: 1,
+            ..LoopControlConfig::default()
         },
+        ..HarnessConfig::default()
+    };
+    tweak(&mut config);
+    let mut app = build_harness_app(
+        config,
         Arc::new(Runtime::new().unwrap()),
         ExecutorRegistry::from_single_executor(executor, "default"),
         input_rx,
@@ -228,6 +236,30 @@ fn mentions(request: &AgentExecutionRequest, needle: &str) -> bool {
             ConversationMessage::User { content } => content.contains(needle),
             _ => false,
         })
+}
+
+fn tool_result_count(request: &AgentExecutionRequest) -> usize {
+    request
+        .conversation
+        .iter()
+        .flatten()
+        .filter(|m| matches!(m, ConversationMessage::Tool { .. }))
+        .count()
+}
+
+fn tool_result_mentions(request: &AgentExecutionRequest, needle: &str) -> bool {
+    request.conversation.iter().flatten().any(|m| match m {
+        ConversationMessage::Tool { content, .. } => content.contains(needle),
+        _ => false,
+    })
+}
+
+fn batch_notified(requests: &Arc<Mutex<Vec<AgentExecutionRequest>>>) -> bool {
+    requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| mentions(r, "<task-notification source=\"subtasks\""))
 }
 
 fn has_tool_result(request: &AgentExecutionRequest) -> bool {
@@ -589,5 +621,333 @@ fn wait_tasks_moves_to_background_and_batch_still_notifies() {
             .any(|m| matches!(m, ConversationMessage::Tool { content, .. }
                 if content.contains("running_in_background") && content.contains("timed_out")))),
         "wait_tasks returned the background notice within the foreground budget"
+    );
+}
+
+/// 父任务脚本：派出子任务、等待批次通知，并对 watchdog 升级通知作出回应。
+fn parent_turn(request: &AgentExecutionRequest, child: &str) -> Turn {
+    if mentions(request, "<task-notification") {
+        Turn::now(OutputContent::Text("收到".into()))
+    } else if has_tool_result(request) {
+        Turn::now(OutputContent::Text("子任务在后台执行".into()))
+    } else {
+        Turn::now(create_child(child))
+    }
+}
+
+/// 子任务没有轮次预算：越过顶层任务预算（8 轮）继续执行，不会收到预算耗尽结果；
+/// 第 10 轮检查点立即请求 watchdog 巡检。
+#[test]
+fn sub_task_runs_past_tool_budget_and_checkpoint_triggers_review() {
+    let mut h = start_with(
+        Box::new(|request| {
+            if mentions(request, "CHILD-WORK") {
+                let done = tool_result_count(request);
+                if done >= 12 {
+                    return Turn::now(OutputContent::Text(
+                        "<<<RESULT>>>12 步全部完成<<</RESULT>>>".into(),
+                    ));
+                }
+                return Turn::now(shell_call(
+                    &format!("call_{done}"),
+                    &format!("echo step-{done}"),
+                ));
+            }
+            parent_turn(request, "CHILD-WORK long job")
+        }),
+        Box::new(|_| decisions("continue", "")),
+        // 巡检节拍远大于测试时长：只有检查点触发会让 watchdog 介入。
+        |config| config.loop_control.watchdog_interval_secs = 3600,
+    );
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 800, |_| batch_notified(&requests)));
+    let all = h.requests.lock().unwrap().clone();
+    assert!(
+        !all.iter()
+            .any(|r| tool_result_mentions(r, "TOOL_BUDGET_EXHAUSTED")),
+        "sub-task must not hit the top-level tool budget"
+    );
+    let woken = all
+        .iter()
+        .find(|r| mentions(r, "<task-notification source=\"subtasks\""))
+        .unwrap();
+    assert!(mentions(woken, "12 步全部完成"));
+    let prompts = h.watchdog_prompts.lock().unwrap();
+    assert!(
+        prompts
+            .iter()
+            .any(|p| p.contains("本次巡检触发原因：检查点：已执行 10 轮工具调用")),
+        "checkpoint should trigger an immediate review: {prompts:?}"
+    );
+}
+
+/// watchdog finalize：子任务停止调用工具并交付，结果标注为未完成。
+#[test]
+fn watchdog_finalize_makes_sub_task_deliver_partial_result() {
+    let mut h = start(
+        Box::new(|request| {
+            if mentions(request, "CHILD-WORK") {
+                if mentions(request, "请立即收尾")
+                    || tool_result_mentions(request, "FINALIZE_REQUESTED")
+                {
+                    return Turn::now(OutputContent::Text(
+                        "<<<RESULT>>>已完成前半部分<<</RESULT>>>".into(),
+                    ));
+                }
+                let done = tool_result_count(request);
+                return Turn {
+                    content: shell_call(&format!("call_{done}"), &format!("echo part-{done}")),
+                    delay: Duration::from_millis(300),
+                };
+            }
+            parent_turn(request, "CHILD-WORK endless refinement")
+        }),
+        Box::new(|_| decisions("finalize", r#""guidance":"已有足够结果","#)),
+    );
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 800, |_| batch_notified(&requests)));
+    let all = h.requests.lock().unwrap().clone();
+    let woken = all
+        .iter()
+        .find(|r| mentions(r, "<task-notification source=\"subtasks\""))
+        .unwrap();
+    assert!(mentions(woken, "已完成前半部分"));
+    assert!(
+        mentions(
+            woken,
+            "[未完成：子任务被要求收尾（watchdog：已有足够结果）]"
+        ),
+        "finalized result must be marked partial"
+    );
+}
+
+/// watchdog notify_owner：子任务问题升级给父任务的 Agent，子任务本身不受影响。
+#[test]
+fn watchdog_escalates_sub_task_to_parent() {
+    let mut h = start(
+        Box::new(|request| {
+            if mentions(request, "CHILD-WORK") {
+                let done = tool_result_count(request);
+                return Turn {
+                    content: shell_call(&format!("call_{done}"), &format!("echo try-{done}")),
+                    delay: Duration::from_millis(300),
+                };
+            }
+            parent_turn(request, "CHILD-WORK ambiguous goal")
+        }),
+        Box::new(|_| decisions("notify_owner", r#""guidance":"目标不明确，请父任务澄清","#)),
+    );
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 500, |_| {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| mentions(r, "<task-notification source=\"watchdog\""))
+    }));
+    let all = h.requests.lock().unwrap().clone();
+    let escalated = all
+        .iter()
+        .find(|r| mentions(r, "<task-notification source=\"watchdog\""))
+        .unwrap();
+    assert!(mentions(escalated, "子任务「child」"));
+    assert!(mentions(escalated, "目标不明确，请父任务澄清"));
+    let child_running = h
+        .app
+        .world_mut()
+        .query::<&Task>()
+        .iter(h.app.world())
+        .any(|t| t.parent_task_id.is_some() && !t.status().is_terminal());
+    assert!(child_running, "escalation must not stop the child");
+}
+
+/// 运行时长安全熔断：到达后要求收尾；子任务配合时交付标注未完成的结果。
+#[test]
+fn runtime_fuse_requests_finalize() {
+    let mut h = start_with(
+        Box::new(|request| {
+            if mentions(request, "CHILD-WORK") {
+                if tool_result_mentions(request, "FINALIZE_REQUESTED") {
+                    return Turn::now(OutputContent::Text(
+                        "<<<RESULT>>>熔断前的成果<<</RESULT>>>".into(),
+                    ));
+                }
+                let done = tool_result_count(request);
+                return Turn {
+                    content: shell_call(&format!("call_{done}"), &format!("echo fuse-{done}")),
+                    delay: Duration::from_millis(300),
+                };
+            }
+            parent_turn(request, "CHILD-WORK slow job")
+        }),
+        Box::new(|_| decisions("continue", "")),
+        |config| config.subtask_max_runtime_secs = 1,
+    );
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 800, |_| batch_notified(&requests)));
+    let all = h.requests.lock().unwrap().clone();
+    let woken = all
+        .iter()
+        .find(|r| mentions(r, "<task-notification source=\"subtasks\""))
+        .unwrap();
+    assert!(mentions(woken, "熔断前的成果"));
+    assert!(mentions(woken, "运行时长已达安全上限 1s"));
+}
+
+/// 要求收尾后仍持续调用工具：宽限轮次用尽即判失败，父任务收到批次通知。
+#[test]
+fn ignoring_finalize_fails_sub_task() {
+    let mut h = start_with(
+        Box::new(|request| {
+            if mentions(request, "CHILD-WORK") {
+                let done = tool_result_count(request);
+                return Turn {
+                    content: shell_call(&format!("call_{done}"), &format!("echo stubborn-{done}")),
+                    delay: Duration::from_millis(200),
+                };
+            }
+            parent_turn(request, "CHILD-WORK stubborn job")
+        }),
+        Box::new(|_| decisions("continue", "")),
+        |config| config.subtask_max_runtime_secs = 1,
+    );
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 800, |_| batch_notified(&requests)));
+    let child_failed = h
+        .app
+        .world_mut()
+        .query::<&Task>()
+        .iter(h.app.world())
+        .any(|t| {
+            t.parent_task_id.is_some()
+                && t.status() == &TaskStatus::Failed(FailureReason::AgentError)
+                && t.last_error()
+                    .is_some_and(|e| e.contains("要求收尾后仍持续调用工具"))
+        });
+    assert!(child_failed);
+}
+
+/// 主 Agent 的 shell_exec 改为需要确认（子任务交主 Agent 执行，继承同样的权限）。
+fn require_confirm_for_shell(app: &mut App) {
+    let mut agents = app.world_mut().query::<&mut Agent>();
+    for mut agent in agents.iter_mut(app.world_mut()) {
+        if agent.profile.name == "default-llm-agent" {
+            agent
+                .tool_permissions
+                .overrides
+                .insert("shell_exec".into(), ToolPermission::Confirm);
+        }
+    }
+}
+
+fn approval_reply(decision: &str, reason: &str) -> Turn {
+    Turn::now(OutputContent::Text(format!(
+        r#"{{"decision":"{decision}","reason":"{reason}"}}"#
+    )))
+}
+
+fn approval_child(request: &AgentExecutionRequest) -> Turn {
+    if mentions(request, "CHILD-WORK") {
+        if tool_result_mentions(request, "approved-run") {
+            return Turn::now(OutputContent::Text(
+                "<<<RESULT>>>命令已执行<<</RESULT>>>".into(),
+            ));
+        }
+        if tool_result_mentions(request, "监督者拒绝") {
+            return Turn::now(OutputContent::Text(
+                "<<<RESULT>>>被拒绝，改为报告<<</RESULT>>>".into(),
+            ));
+        }
+        return Turn::now(shell_call("call_guarded", "echo approved-run"));
+    }
+    parent_turn(request, "CHILD-WORK run a guarded command")
+}
+
+/// 子任务调用需要确认的工具：监督者批准后工具真实执行（async 工具经 async dispatch 认领）。
+#[test]
+fn supervisor_approves_sub_task_confirm_tool() {
+    let mut h = start(
+        Box::new(approval_child),
+        Box::new(|request| {
+            if request.prompt.contains("审批者") {
+                approval_reply("approve", "在授权范围内")
+            } else {
+                decisions("continue", "")
+            }
+        }),
+    );
+    require_confirm_for_shell(&mut h.app);
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 500, |_| batch_notified(&requests)));
+    let all = h.requests.lock().unwrap().clone();
+    let woken = all
+        .iter()
+        .find(|r| mentions(r, "<task-notification source=\"subtasks\""))
+        .unwrap();
+    assert!(mentions(woken, "命令已执行"));
+    let prompts = h.watchdog_prompts.lock().unwrap();
+    let approval = prompts
+        .iter()
+        .find(|p| p.contains("审批者"))
+        .expect("supervisor receives the approval request");
+    assert!(approval.contains("子任务「child」"));
+    assert!(approval.contains("主 Agent 声明的授权范围：shell_exec"));
+    assert!(approval.contains("echo approved-run"));
+}
+
+/// 监督者拒绝：原因作为工具结果回填子任务，工具不执行。
+#[test]
+fn supervisor_rejects_sub_task_confirm_tool() {
+    let mut h = start(
+        Box::new(approval_child),
+        Box::new(|request| {
+            if request.prompt.contains("审批者") {
+                approval_reply("reject", "与目标无关")
+            } else {
+                decisions("continue", "")
+            }
+        }),
+    );
+    require_confirm_for_shell(&mut h.app);
+    let requests = h.requests.clone();
+    assert!(update_until(&mut h.app, 500, |_| batch_notified(&requests)));
+    let all = h.requests.lock().unwrap().clone();
+    assert!(
+        all.iter()
+            .any(|r| tool_result_mentions(r, "监督者拒绝：与目标无关")),
+        "rejection reason reaches the child"
+    );
+    assert!(
+        !all.iter()
+            .any(|r| tool_result_mentions(r, "approved-run\\n"))
+    );
+}
+
+/// 监督者升级：请求转为用户确认，子任务等待用户而不是被自动放行。
+#[test]
+fn supervisor_escalates_sub_task_confirm_tool_to_user() {
+    let mut h = start(
+        Box::new(approval_child),
+        Box::new(|request| {
+            if request.prompt.contains("审批者") {
+                approval_reply("escalate", "需要用户确认")
+            } else {
+                decisions("continue", "")
+            }
+        }),
+    );
+    require_confirm_for_shell(&mut h.app);
+    assert!(update_until(&mut h.app, 500, |app| {
+        app.world_mut().query::<&Task>().iter(app.world()).any(|t| {
+            t.parent_task_id.is_some()
+                && t.status() == &TaskStatus::Waiting(harness::domain::WaitingReason::User)
+                && t.pending_confirmation_id.is_some()
+        })
+    }));
+    let prompts = h.watchdog_prompts.lock().unwrap();
+    assert_eq!(
+        prompts.iter().filter(|p| p.contains("审批者")).count(),
+        1,
+        "escalated request must not loop back to the supervisor"
     );
 }

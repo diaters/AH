@@ -38,6 +38,8 @@ fn test_config() -> HarnessConfig {
         default_wait_tasks_timeout_secs: 300,
         tool_background_after_secs: 0,
         max_tool_iterations: 5,
+        subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+        subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
         shell_default_tail_lines: 200,
         shell_max_tail_lines: 500,
         shell_default_exec_timeout_secs: 300,

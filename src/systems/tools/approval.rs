@@ -8,11 +8,13 @@ use tracing::{debug, info, warn};
 use crate::{
     contracts::{Clock, FrontendRegistry},
     domain::{
-        Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResolvedHookPending,
-        ApprovalResultMessage, BuiltinToolExecutors, ChatSession, EngineEvent, EventTarget,
-        ExecutionError, GrantMode, ShortTermMemory, Task, TaskStatus, ToolCallingState,
+        Agent, ApprovalDecision, ApprovalRequestMessage, ApprovalResultMessage,
+        ApprovalReviewInput, BuiltinToolExecutors, ChatSession, DispatchHint, DispatchKind,
+        EngineEvent, EventTarget, ExecutionError, PendingDispatch, ShortTermMemory, SubTaskConfig,
+        SupervisorApprovalOrigin, Task, TaskId, TaskStatus, ToolActionKind, ToolCallingState,
         ToolContext, ToolError, ToolExecutionRequestMessage, ToolExecutionResultMessage,
-        ToolReturnedHookPending, WaitingReason,
+        ToolReturnedHookPending, WaitingReason, WorkItem, WorkItemType, build_approval_prompt,
+        truncate_chars,
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
@@ -26,70 +28,94 @@ use super::orchestrator::{
 
 /// 审批分发 System
 ///
-/// 为需要父 Agent 决策的请求创建审批任务。
-///
-/// TODO: 当前为 MVP 硬编码自动通过，需替换为真实父 Agent LLM 审查：
-///       1. 给父 Agent 创建审批用 LLM 调用，传入 tool 信息和上下文
-///       2. 解析 LLM 返回的决策（Approved/Rejected + reasoning）
-///       3. 支持 GrantMode::Permanent 将权限写入 Agent
+/// 批次子任务的确认请求交给监督者（watchdog Agent）审批：按子任务目标、主 Agent 在
+/// `create_tasks` 声明的授权范围与最近对话，组装一次无工具的判断请求。
+/// 回复由 `watchdog_response_system` 落地为批准 / 拒绝 / 升级给用户确认。
 pub fn approval_dispatch_system(
     mut commands: Commands,
     index: Res<EntityIndex>,
-    tasks: Query<&Task>,
+    tasks: Query<(&Task, Option<&SubTaskConfig>)>,
+    calling: Query<&ToolCallingState>,
     approval_requests: Query<(Entity, &ApprovalRequestMessage)>,
 ) {
     for (entity, request) in &approval_requests {
-        debug!(
-            event = "ApprovalRequestReceived",
-            request_id = %request.request_id,
-            tool_name = %request.tool_name,
-            source_task_id = %request.source_task_id,
-            parent_agent_id = %request.parent_agent_id,
-            child_agent_id = %request.child_agent_id,
-            tool_input = ?request.tool_input,
-            "approval request received - auto-approving in MVP"
-        );
+        commands.entity(entity).despawn();
+        let source = index
+            .get_task(&request.source_task_id)
+            .and_then(|e| tasks.get(e).ok());
+        let Some((task, config)) = source else {
+            warn!(
+                event = "ApprovalSourceTaskMissing",
+                request_id = %request.request_id,
+                source_task_id = %request.source_task_id,
+                "approval source task not found; request dropped"
+            );
+            continue;
+        };
+        let parent_goal = task
+            .parent_task_id
+            .and_then(|id| index.get_task(&id))
+            .and_then(|e| tasks.get(e).ok())
+            .map(|(parent, _)| truncate_chars(&parent.content, 400))
+            .unwrap_or_default();
+        let subject_label = if task.input_summary.is_empty() {
+            format!("子任务 {}", task.id)
+        } else {
+            format!("子任务「{}」", task.input_summary)
+        };
+        let recent: Vec<String> = calling
+            .iter()
+            .find(|s| s.task_id == task.id && s.work_item_id.is_none())
+            .map(|state| {
+                let lines: Vec<String> = state
+                    .conversation
+                    .iter()
+                    .filter_map(crate::systems::watchdog::render_message)
+                    .collect();
+                let skip = lines.len().saturating_sub(6);
+                lines[skip..].to_vec()
+            })
+            .unwrap_or_default();
+        let declared: Vec<String> = config.map(|c| c.allowed_tools.clone()).unwrap_or_default();
+        let tool_input = truncate_chars(&request.tool_input.to_string(), 1500);
+        let subtask_goal = truncate_chars(&task.content, 600);
+        let prompt = build_approval_prompt(&ApprovalReviewInput {
+            subject_label: &subject_label,
+            parent_goal: &parent_goal,
+            subtask_goal: &subtask_goal,
+            declared_tools: &declared,
+            tool_name: &request.tool_name,
+            tool_input: &tool_input,
+            recent: &recent,
+        });
 
         info!(
             event = "ApprovalRequestReceived",
             request_id = %request.request_id,
             tool_name = %request.tool_name,
-            parent_agent_id = %request.parent_agent_id,
+            source_task_id = %request.source_task_id,
+            supervisor_agent_id = %request.parent_agent_id,
             child_agent_id = %request.child_agent_id,
-            "审批请求：Agent [{}] 请求调用 {}，等待 Agent [{}] 审批",
-            request.child_agent_id,
+            "审批请求：{} 请求调用 {}，交监督者审批",
+            subject_label,
             request.tool_name,
-            request.parent_agent_id,
         );
 
-        // 记录原 Task 状态
-        // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-        if let Some(task) = index
-            .get_task(&request.source_task_id)
-            .and_then(|e| tasks.get(e).ok())
-            && task.status == TaskStatus::Waiting(WaitingReason::Approval)
-        {
-            debug!(
-                event = "SourceTaskWaiting",
-                task_id = %task.id,
-                "source task is waiting for approval"
-            );
-        }
-
-        // 生成自动批准结果
         commands.spawn((
-            ApprovalResultMessage {
+            WorkItem::watchdog_review(TaskId::new(), prompt),
+            SupervisorApprovalOrigin {
                 request_id: request.request_id,
                 source_task_id: request.source_task_id,
                 approval_task_id: request.approval_task_id,
-                decision: ApprovalDecision::Approved,
-                reasoning: "MVP auto-approve: parent agent approval".to_string(),
-                grant_mode: GrantMode::Once,
+                owner_task_id: task.parent_task_id,
+                tool_name: request.tool_name.clone(),
+                subject_label,
             },
-            ApprovalResolvedHookPending,
+            PendingDispatch {
+                kind: DispatchKind::WorkItem(WorkItemType::WatchdogReview),
+                hint: DispatchHint::default(),
+            },
         ));
-
-        commands.entity(entity).despawn();
     }
 }
 
@@ -131,6 +157,16 @@ pub fn approval_result_system(
             continue;
         };
 
+        // 审批已落地：任务从 Waiting(Approval) 回到 Waiting(ToolExecution)，
+        // 使工具结果（真实或拒绝）能被工具循环收集并触发 follow-up。
+        if let Some((_, mut task)) = index
+            .get_task(&tool_request.request.task_id)
+            .and_then(|e| tasks.get_mut(e).ok())
+            && task.status == TaskStatus::Waiting(WaitingReason::Approval)
+        {
+            task.mark_waiting(WaitingReason::ToolExecution, index_clock_frontends.1.0);
+        }
+
         match result.decision {
             ApprovalDecision::Rejected => {
                 debug!(
@@ -139,7 +175,7 @@ pub fn approval_result_system(
                     task_id = %tool_request.request.task_id,
                     agent_id = %tool_request.request.agent_id,
                     reasoning = %result.reasoning,
-                    "tool execution rejected by parent agent"
+                    "tool execution rejected by supervisor"
                 );
 
                 let execution_result = crate::domain::AgentExecutionResult {
@@ -147,7 +183,7 @@ pub fn approval_result_system(
                     agent_id: tool_request.request.agent_id,
                     request_kind: tool_request.request.request_kind.clone(),
                     result: Err(ExecutionError::UserCancelled(format!(
-                        "parent agent rejected: {}",
+                        "监督者拒绝：{}",
                         result.reasoning
                     ))),
                     prompt: String::new(),
@@ -164,7 +200,7 @@ pub fn approval_result_system(
                         result: execution_result,
                         tool_name: tool_request.tool_name.clone(),
                         tool_output: Err(ToolError::PermissionDenied(format!(
-                            "parent agent rejected: {}",
+                            "监督者拒绝：{}",
                             result.reasoning
                         ))),
                         tool_call_id: tool_request.tool_call_id.clone(),
@@ -185,10 +221,10 @@ pub fn approval_result_system(
                     task_id = %tool_request.request.task_id,
                     agent_id = %tool_request.request.agent_id,
                     grant_mode = ?result.grant_mode,
-                    "tool execution approved by parent agent"
+                    "tool execution approved by supervisor"
                 );
 
-                // 父 Agent 审批不写入任何持续授权：运行期授权只来自用户在会话中的选择
+                // 监督审批不写入任何持续授权：运行期授权只来自用户在会话中的选择
                 // （见 RuntimeGrants），Permanent 在此按仅本次处理。
                 info!(
                     event = "ApprovalResolved",
@@ -229,6 +265,22 @@ pub fn approval_result_system(
                     commands.entity(entity).despawn();
                     continue;
                 };
+
+                // Async 工具：清除 pending_confirmation_id 并标记本次已获批，交给
+                // async_tool_dispatch_system 下一帧认领（execute() 对 async 工具不可用）。
+                if executor.kind() == ToolActionKind::Async {
+                    let mut updated_request = tool_request.clone();
+                    updated_request.pending_confirmation_id = None;
+                    updated_request.confirmed_once = true;
+                    commands.entity(request_entity).insert(updated_request);
+                    clear_task_pending_confirmation_id(
+                        &mut tasks,
+                        index,
+                        tool_request.request.task_id,
+                    );
+                    commands.entity(entity).despawn();
+                    continue;
+                }
 
                 // 推送 ToolCallStarted 事件到所有前端（仅当 task 有 output_channel 时；
                 // 无 output_channel 时不推送，避免向无关 IM 通道广播）
