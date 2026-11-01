@@ -1000,6 +1000,64 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_run_in_supervisor_mode_goes_to_watchdog_not_denied() {
+        let (mut world, task_id, agent_id, task_entity) = confirm_world();
+        let config = HarnessConfig::default();
+        config
+            .approval_mode
+            .set(crate::systems::ApprovalMode::Supervisor);
+        world.insert_resource(HarnessSettings(config));
+        let watchdog = crate::domain::AgentId::new();
+        let watchdog_entity = world
+            .spawn(Agent {
+                id: watchdog,
+                profile: AgentProfile {
+                    name: "watchdog".to_string(),
+                    model: "m".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec![WATCHDOG_TAG.to_string()],
+                    description: String::new(),
+                },
+                kind: AgentKind::Persistent,
+                parent_id: None,
+                bound_task_id: None,
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
+            })
+            .id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .agents
+            .insert(watchdog, watchdog_entity);
+        world
+            .entity_mut(task_entity)
+            .insert(crate::domain::ScheduledRun::new(uuid::Uuid::new_v4()));
+        world.spawn(shell_exec_request(task_id, agent_id));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tool_dispatch_system);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world
+                .query::<&crate::domain::ApprovalRequestMessage>()
+                .iter(&world)
+                .count(),
+            1,
+            "scheduled run must be reviewed by the watchdog"
+        );
+        assert_eq!(
+            world
+                .query::<&crate::domain::ToolExecutionResultMessage>()
+                .iter(&world)
+                .count(),
+            0,
+            "scheduled run must not be denied before the watchdog decides"
+        );
+    }
+
+    #[test]
     fn subtask_of_scheduled_run_is_also_unattended() {
         let (mut world, task_id, agent_id, task_entity) = confirm_world();
         let parent_id = crate::domain::TaskId::new();

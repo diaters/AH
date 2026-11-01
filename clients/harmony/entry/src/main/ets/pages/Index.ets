@@ -1499,7 +1499,7 @@ struct Index {
       Text('最近运行').heading(20).margin({ top: 8 })
       ForEach(this.automation.history.records, (run: RunDto) => {
         Column({ space: 4 }) {
-          Text(`${run.fired_at} · ${run.outcome === 'notified' ? '通道已接受' : run.outcome}`).caption()
+          Text(`${formatLocalTime(run.fired_at)} · ${run.outcome === 'notified' ? '通道已接受' : run.outcome}`).caption()
           Text(run.result_summary).fontSize(14).fontColor(Theme.text)
           if (run.error) { Text(run.error).fontSize(12).fontColor(Theme.danger) }
         }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 8, bottom: 8 }).border({ width: { bottom: 1 }, color: Theme.line })

@@ -120,6 +120,9 @@ pub(crate) fn parse_schedule(s: &str) -> Result<ScheduleExpr, ToolError> {
 /// 构造输出通道。
 ///
 /// - 显式指定 `output_channel` 时必须提供 `target`。
+/// - 显式通道与当前任务来源属同一前端时，沿用来源通道（含会话 thread_id），
+///   忽略 LLM 自填的 `target`：Client 通道靠 thread_id 定位会话，缺失则结果无法送达。
+/// - Client 通道无法脱离当前会话显式构造，此时报错。
 /// - 未指定时从当前任务继承 `origin_channel`（由 dispatch 注入到
 ///   `OwnedToolContext.current_origin_channel`）。
 fn build_output_channel(
@@ -130,6 +133,14 @@ fn build_output_channel(
     if let Some(frontend_str) = output_channel_str {
         let frontend = FrontendKind::from_channel_name(frontend_str)
             .map_err(|e| ToolError::InvalidInput(format!("unknown output_channel: {e}")))?;
+        if let Some(origin) = inherited.filter(|origin| origin.frontend == frontend) {
+            return Ok(Some(origin));
+        }
+        if frontend == FrontendKind::Client {
+            return Err(ToolError::InvalidInput(
+                "client channel is bound to the current session; omit output_channel".to_string(),
+            ));
+        }
         let user_id = target
             .ok_or_else(|| {
                 ToolError::InvalidInput(
@@ -374,6 +385,42 @@ mod tests {
     }
 
     #[test]
+    fn explicit_same_frontend_keeps_inherited_session() {
+        let inherited = ChannelId {
+            frontend: crate::domain::FrontendKind::Client,
+            user_id: "diater".to_string(),
+            thread_id: Some("0b0a5a58-2f33-4f4e-9a52-6f5a1d3d2c11".to_string()),
+        };
+        let input = serde_json::json!({
+            "content": "battery",
+            "schedule": "cron:0 */2 * * *",
+            "output_channel": "client",
+            "target": "diatero"
+        });
+        let output = run_async_blocking(input, ctx_with_channel(Some(inherited.clone()))).unwrap();
+        match output {
+            ToolWorkerOutput::Effect(ToolEffect::ScheduleTask { output_channel, .. }) => {
+                assert_eq!(output_channel, Some(inherited));
+            }
+            other => panic!("expected ScheduleTask effect, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn explicit_client_channel_without_session_is_rejected() {
+        let input = serde_json::json!({
+            "content": "battery",
+            "schedule": "cron:0 */2 * * *",
+            "output_channel": "client",
+            "target": "diater"
+        });
+        match run_async_blocking(input, ctx_with_channel(None)).unwrap_err() {
+            ToolError::InvalidInput(msg) => assert!(msg.contains("session")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn explicit_output_channel_requires_target() {
         let input = serde_json::json!({
             "content": "do something",
@@ -441,7 +488,11 @@ mod tests {
     #[test]
     fn all_frontend_kinds_accepted() {
         use crate::domain::FrontendKind;
-        for expected in FrontendKind::ALL {
+        // Client 通道绑定当前会话，不接受显式构造（见 explicit_client_channel_without_session_is_rejected）
+        for expected in FrontendKind::ALL
+            .into_iter()
+            .filter(|kind| *kind != FrontendKind::Client)
+        {
             let name = expected.channel_name();
             let input = serde_json::json!({
                 "content": "x",
