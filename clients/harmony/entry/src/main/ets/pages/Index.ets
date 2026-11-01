@@ -99,6 +99,12 @@ struct Index {
   @State experienceDeleting: string = '';
   private conversationScroller: Scroller = new Scroller();
   private editPlanRevision: string = '';
+  // 左缘右拉时记录起手坐标（vp）；不在左侧起手则忽略，避免误吞内容区的横向操作。
+  private panStartX: number = -1;
+  private panStartY: number = -1;
+  // 左滑收起时记录起手坐标，与右拉唤出分开，互不干扰。
+  private closeStartX: number = -1;
+  private closeStartY: number = -1;
   @StorageLink('harnessForeground') @Watch('lifecycle') foreground: boolean = true;
   // 沉浸式避让高度（px），由 EntryAbility 按系统状态栏与导航条更新。
   @StorageProp('safeTop') safeTop: number = 0;
@@ -188,6 +194,23 @@ struct Index {
   }
   private setPanel(open: boolean): void {
     this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.panelOpen = open; });
+  }
+  // 左滑收起的共用判定：侧栏自身与遮罩都走这里。
+  // 要求水平位移 ≥48vp 且横向明显占优，避免与列表纵向滚动、按钮点击冲突。
+  private swipeClose(event: TouchEvent): void {
+    if (event.type === TouchType.Down) {
+      this.closeStartX = event.touches.length > 0 ? event.touches[0].x : -1;
+      this.closeStartY = event.touches.length > 0 ? event.touches[0].y : -1;
+      return;
+    }
+    if (event.type !== TouchType.Move || event.touches.length === 0) { return; }
+    if (this.closeStartX < 0) { return; }
+    const dx = event.touches[0].x - this.closeStartX;
+    const dy = event.touches[0].y - this.closeStartY;
+    if (dx <= -48 && Math.abs(dx) >= Math.abs(dy) * 1.5) {
+      this.closeStartX = -1;
+      this.setSidebar(false);
+    }
   }
   private wide(): boolean { return this.windowWidth >= Theme.wide; }
   private cancelReconnect(): void { if (this.reconnectTimer >= 0) { clearTimeout(this.reconnectTimer); this.reconnectTimer = -1; } }
@@ -764,85 +787,112 @@ struct Index {
 
   // ---------- 侧栏 ----------
   @Builder private navItem(symbol: Resource, label: string, view: string, badge: number) {
-    Row({ space: 14 }) {
-      SymbolGlyph(symbol).fontSize(19).fontColor([this.view === view ? Theme.text : Theme.secondary])
-      Text(label).fontSize(15).fontColor(Theme.text).layoutWeight(1)
+    Row({ space: 12 }) {
+      SymbolGlyph(symbol).fontSize(18).fontColor([this.view === view ? Theme.text : Theme.secondary])
+      Text(label).fontSize(14).fontColor(Theme.text).layoutWeight(1)
       if (badge > 0) { Text(`${badge}`).fontSize(11).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(8).padding({ left: 6, right: 6, top: 1, bottom: 1 }) }
-    }.width('100%').height(44).padding({ left: 14, right: 14 }).borderRadius(10)
+    }.width('100%').height(38).padding({ left: 12, right: 12 }).borderRadius(9)
       .backgroundColor(this.view === view ? Theme.selected : Color.Transparent)
       .onClick(() => { this.openView(view); })
+  }
+  // 实例下拉改为浮层：它曾撑在流里，实例一多就把「最近任务」挤到没有高度。
+  @Builder private instancePicker() {
+    Column({ space: 2 }) {
+      ForEach(this.instances, (item: SavedInstance) => {
+        Row() {
+          Column({ space: 2 }) {
+            Text(item.name || '实例').fontSize(14).fontColor(Theme.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(item.instance.substring(0, 8)).caption()
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          if (item.instance === this.instance) { Text('当前').caption() }
+        }.width('100%').padding({ left: 12, right: 12, top: 9, bottom: 9 }).borderRadius(8)
+          .backgroundColor(item.instance === this.instance ? Theme.selected : Color.Transparent)
+          .onClick(() => { this.switchInstance(item); })
+      }, (item: SavedInstance) => item.instance)
+      Divider().color(Theme.line).margin({ top: 2, bottom: 2 })
+      Text('+ 添加实例').fontSize(14).fontColor(Theme.accent).width('100%').padding({ left: 12, top: 10, bottom: 10 })
+        .onClick(() => { this.instanceMenu = false; this.unpair(); })
+    }.width(248).padding(6)
+  }
+  // 列表与空态共用同一份过滤结果，避免两处条件漂移。
+  private visibleSessions(): SessionDto[] {
+    const query = this.sessionSearch.trim();
+    return this.sessions
+      .filter((session: SessionDto) => !query || session.title.includes(query) ||
+        session.messages.some((message: MessageDto) => message.content.includes(query)))
+      .sort((a: SessionDto, b: SessionDto) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   }
   @Builder private sidebar() {
     Column() {
       Row() {
-        Text('Harness').heading(26).layoutWeight(1)
+        Text('Harness').heading(22).layoutWeight(1)
         Button() { SymbolGlyph($r('sys.symbol.close_sidebar')).fontSize(20).fontColor([Theme.secondary]) }
           .icon().onClick(() => { this.setSidebar(false); })
-      }.width('100%').margin({ top: 8, bottom: 20 })
+      }.width('100%').margin({ top: 6, bottom: 12 })
       Row({ space: 8 }) {
         Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
         Text(this.instances.find((item: SavedInstance) => item.instance === this.instance)?.name || this.instance.substring(0, 8))
           .fontSize(14).fontColor(Theme.text).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([Theme.secondary])
-      }.width('100%').height(44).padding({ left: 14, right: 14 }).borderRadius(10).backgroundColor(Theme.surface)
+          .rotate({ angle: this.instanceMenu ? 180 : 0 })
+      }.width('100%').height(40).padding({ left: 12, right: 12 }).borderRadius(10).backgroundColor(Theme.surface)
         .onClick(() => { this.instanceMenu = !this.instanceMenu; })
-      if (this.instanceMenu) {
-        Column({ space: 2 }) {
-          ForEach(this.instances, (item: SavedInstance) => {
-            Row() {
-              Column({ space: 2 }) {
-                Text(item.name || '实例').fontSize(14).fontColor(Theme.text).maxLines(1)
-                Text(item.instance.substring(0, 8)).caption()
-              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-              if (item.instance === this.instance) { Text('当前').caption() }
-            }.width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
-              .onClick(() => { this.switchInstance(item); })
-          }, (item: SavedInstance) => item.instance)
-          Text('+ 添加实例').fontSize(14).fontColor(Theme.accent).width('100%').padding({ left: 14, top: 10, bottom: 10 })
-            .onClick(() => { this.unpair(); })
-        }.width('100%').backgroundColor(Theme.surface).borderRadius(10).margin({ top: 4 })
-      }
+        .bindPopup(this.instanceMenu, {
+          builder: this.instancePicker,
+          placement: Placement.Bottom,
+          popupColor: Theme.surface,
+          enableArrow: false,
+          radius: 12,
+          onStateChange: (event) => { if (!event.isVisible) { this.instanceMenu = false; } }
+        })
       Button() {
         Row({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.plus')).fontSize(16).fontColor([Theme.text])
           Text('新任务').fontSize(15).fontColor(Theme.text)
         }
-      }.ghost().height(44).width('100%').margin({ top: 10 }).border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
-      Column({ space: 4 }) {
+      }.ghost().height(40).width('100%').margin({ top: 8 }).border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
+      Column({ space: 2 }) {
         this.navItem($r('sys.symbol.house'), '工作台', 'chat', this.approvals().length + this.questions().length)
         this.navItem($r('sys.symbol.clock'), '自动化', 'automation', 0)
         this.navItem($r('sys.symbol.bell'), '通知', 'inbox', this.unread())
         if (this.canManageExperience()) { this.navItem($r('sys.symbol.book'), '经验库', 'experiences', 0) }
         this.navItem($r('sys.symbol.gearshape'), '设备与连接', 'management', 0)
-      }.margin({ top: 18 })
-      Divider().color(Theme.line).margin({ top: 18, bottom: 14 })
-      Row() {
-        Text('最近任务').caption().layoutWeight(1)
-        Button() { SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([Theme.secondary]) }
-          .icon().width(28).height(28).onClick(() => { this.searching = !this.searching; if (!this.searching) { this.sessionSearch = ''; } })
-      }.padding({ left: 4 })
-      if (this.searching) {
-        TextInput({ placeholder: '搜索任务与消息', text: this.sessionSearch }).height(36).fontSize(13).margin({ top: 6, bottom: 6 })
-          .backgroundColor(Theme.surface).onChange((value: string) => { this.sessionSearch = value; })
-      }
+      }.margin({ top: 8 })
+      Divider().color(Theme.line).margin({ top: 10, bottom: 8 })
+      // 搜索占用「最近任务」这一行本身，不再另起一行把列表往下推。
+      Row({ space: 6 }) {
+        if (this.searching) {
+          TextInput({ placeholder: '搜索任务与消息', text: this.sessionSearch }).height(32).fontSize(13).layoutWeight(1)
+            .backgroundColor(Theme.surface).onChange((value: string) => { this.sessionSearch = value; })
+          Text('取消').fontSize(12).fontColor(Theme.accent).onClick(() => { this.searching = false; this.sessionSearch = ''; })
+        } else {
+          Text('最近任务').caption().layoutWeight(1)
+          Button() { SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([Theme.secondary]) }
+            .icon().width(28).height(28).onClick(() => { this.searching = true; })
+        }
+      }.width('100%').height(32).padding({ left: 4, right: 4 })
       // 普通 DTO 的同 ID 对象会整体替换；行键包含版本，避免 ForEach 复用旧闭包。
-      List({ space: 2 }) {
-        ForEach(this.sessions.filter((session: SessionDto) => !this.sessionSearch || session.title.includes(this.sessionSearch) ||
-          session.messages.some((message: MessageDto) => message.content.includes(this.sessionSearch)))
-          .sort((a: SessionDto, b: SessionDto) => (b.updated_at ?? 0) - (a.updated_at ?? 0)), (session: SessionDto) => {
-          ListItem() {
-            Row({ space: 10 }) {
-              Circle().width(7).height(7).fill(this.sessionState(session) === '执行中' || this.sessionState(session) === '待处理' ? Theme.accent : Theme.faint)
-                .margin({ top: 7 })
-              Column({ space: 3 }) {
-                Text(session.title).fontSize(14).fontColor(Theme.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text(`${this.sessionState(session)} · ${session.messages.length} 条消息`).caption()
-              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-            }.alignItems(VerticalAlign.Top).width('100%').padding({ left: 10, right: 10, top: 10, bottom: 10 }).borderRadius(10)
-              .backgroundColor(this.selected === session.id && this.view === 'chat' ? Theme.selected : Color.Transparent)
-          }.onClick(() => { this.select(session.id); })
-        }, (session: SessionDto) => `${session.id}:${session.version}`)
-      }.layoutWeight(1).scrollBar(BarState.Off).margin({ top: 6 })
+      Stack({ alignContent: Alignment.Top }) {
+        List({ space: 2 }) {
+          ForEach(this.visibleSessions(), (session: SessionDto) => {
+            ListItem() {
+              Row({ space: 10 }) {
+                Circle().width(7).height(7).fill(this.sessionState(session) === '执行中' || this.sessionState(session) === '待处理' ? Theme.accent : Theme.faint)
+                  .margin({ top: 6 })
+                Column({ space: 2 }) {
+                  Text(session.title).fontSize(14).fontColor(Theme.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(`${this.sessionState(session)} · ${session.messages.length} 条消息`).caption()
+                }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+              }.alignItems(VerticalAlign.Top).width('100%').padding({ left: 10, right: 10, top: 8, bottom: 8 }).borderRadius(9)
+                .backgroundColor(this.selected === session.id && this.view === 'chat' ? Theme.selected : Color.Transparent)
+            }.onClick(() => { this.select(session.id); })
+          }, (session: SessionDto) => `${session.id}:${session.version}`)
+        }.width('100%').height('100%').scrollBar(BarState.Off)
+        if (this.visibleSessions().length === 0) {
+          Text(this.sessionSearch ? '没有匹配的任务' : '还没有任务。点上方「新任务」开始。')
+            .caption().width('100%').padding({ left: 10, right: 10, top: 10 }).textAlign(TextAlign.Start)
+        }
+      }.layoutWeight(1).width('100%').margin({ top: 4 })
       Row({ space: 8 }) {
         Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
         Text(this.connected ? (this.connection.capabilities?.instance_name ?? '已连接') : (this.busy ? '正在连接…' : '未连接'))
@@ -850,8 +900,10 @@ struct Index {
         if (!this.connected && !this.busy) {
           Text('重连').fontSize(12).fontColor(Theme.accent).onClick(() => { this.connect(''); })
         }
-      }.width('100%').padding({ left: 6, top: 12, bottom: 4 })
-    }.height('100%').width('100%').padding({ left: 16, right: 16, top: 12 + this.top(), bottom: 16 + this.bottom() }).backgroundColor(Theme.sidebar)
+      }.width('100%').padding({ left: 6, top: 8 })
+    }.height('100%').width('100%').padding({ left: 16, right: 16, top: 12 + this.top(), bottom: 12 + this.bottom() }).backgroundColor(Theme.sidebar)
+      // 在侧栏内向左滑即可收起，与右拉唤出对称。
+      .onTouch((event: TouchEvent) => { this.swipeClose(event); })
   }
 
   // ---------- 对话 ----------
@@ -1503,10 +1555,33 @@ struct Index {
         if (this.panelOpen && this.view === 'chat' && this.current() && this.wide()) { Column() { this.panel() }.width(this.panelWidth()).height('100%').clip(true)
           .transition(TransitionEffect.move(TransitionEdge.END).combine(TransitionEffect.OPACITY)) }
       }.width('100%').height('100%').backgroundColor(Theme.page)
+        // 从左侧向右拉打开侧栏。用 touch 而非 PanGesture：PanGesture 的
+        // onActionStart 里 fingerList 可能为空，取不到真实起手点。
+        // 起手范围见下方判断：左侧 1/3 屏宽，贴边几像素会被系统侧边应用栏抢走。
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.panStartX = event.touches.length > 0 ? event.touches[0].x : -1;
+            this.panStartY = event.touches.length > 0 ? event.touches[0].y : -1;
+            return;
+          }
+          if (event.type !== TouchType.Move || event.touches.length === 0) { return; }
+          // 侧栏已开时不再处理；宽屏下侧栏可嵌入显示，关掉后同样能用右滑唤回。
+          // 起手范围取屏幕左侧 1/3：贴边几像素会被系统侧边应用栏抢走，留足内侧余量。
+          if (this.sidebarOpen || this.panStartX < 0 || this.panStartX > this.windowWidth / 3) { return; }
+          const dx = event.touches[0].x - this.panStartX;
+          const dy = event.touches[0].y - this.panStartY;
+          // 水平位移够大且明显偏横向，才认作右拉，避开列表纵向滚动与文本选择。
+          if (dx >= 48 && Math.abs(dx) >= Math.abs(dy) * 1.5) {
+            this.panStartX = -1;
+            this.setSidebar(true);
+          }
+        })
       if (this.panelOpen && this.view === 'chat' && this.current() && !this.wide()) { Column() { this.panel() }.width('100%').height('100%')
         .transition(TransitionEffect.move(TransitionEdge.END)) }
       if (this.sidebarOpen && !this.wide()) {
         Column().width('100%').height('100%').backgroundColor('#33000000').onClick(() => { this.setSidebar(false); })
+          // 遮罩上左滑同样收起，和侧栏内的手势保持一致。
+          .onTouch((event: TouchEvent) => { this.swipeClose(event); })
           .transition(TransitionEffect.OPACITY)
       }
     }.width('100%').height('100%')
