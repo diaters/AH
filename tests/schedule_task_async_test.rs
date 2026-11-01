@@ -302,7 +302,11 @@ fn run_async_rejects_invalid_cron() {
 fn run_async_all_frontend_kinds_accepted() {
     let tool = ScheduleTaskTool;
     let rt = tokio::runtime::Runtime::new().unwrap();
-    for expected in FrontendKind::ALL {
+    // Client 通道绑定当前会话，不接受显式构造
+    for expected in FrontendKind::ALL
+        .into_iter()
+        .filter(|kind| *kind != FrontendKind::Client)
+    {
         let name = expected.channel_name();
         let input = serde_json::json!({
             "content": "x",
