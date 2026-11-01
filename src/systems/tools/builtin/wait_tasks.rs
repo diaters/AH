@@ -15,7 +15,11 @@ impl crate::domain::BuiltinTool for WaitTasksTool {
         ctx: &ToolContext,
     ) -> Result<ToolAction, ToolError> {
         let task_ids = parse_wait_tasks_ids(input)?;
-        let timeout_secs = parse_wait_tasks_timeout(input, ctx.default_wait_tasks_timeout_secs);
+        let mut timeout_secs = parse_wait_tasks_timeout(input, ctx.default_wait_tasks_timeout_secs);
+        // 前台预算封顶：等待超过预算后子任务转后台，完成时以通知送达，不再占用本轮。
+        if ctx.tool_background_after_secs > 0 {
+            timeout_secs = timeout_secs.min(ctx.tool_background_after_secs);
+        }
 
         Ok(ToolAction::WaitForTasks {
             task_ids,
@@ -66,6 +70,7 @@ mod tests {
     fn test_wait_tasks_tool_parsing() {
         let ctx = ToolContext {
             default_wait_tasks_timeout_secs: 300,
+            tool_background_after_secs: 0,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 60,
@@ -102,6 +107,7 @@ mod tests {
     fn test_wait_tasks_default_timeout() {
         let ctx = ToolContext {
             default_wait_tasks_timeout_secs: 300,
+            tool_background_after_secs: 0,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 60,
@@ -132,6 +138,7 @@ mod tests {
     fn test_wait_tasks_missing_task_ids() {
         let ctx = ToolContext {
             default_wait_tasks_timeout_secs: 300,
+            tool_background_after_secs: 0,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 60,
@@ -155,6 +162,7 @@ mod tests {
     fn test_wait_tasks_empty_task_ids() {
         let ctx = ToolContext {
             default_wait_tasks_timeout_secs: 300,
+            tool_background_after_secs: 0,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 60,

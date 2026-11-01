@@ -181,6 +181,14 @@ pub fn async_tool_dispatch_system(
             chrono::Duration::seconds(settings.0.tool_inflight_timeout_secs as i64)
         });
 
+        // 前台预算：可后台化工具的任务级调用超过预算仍未返回时自动转后台。
+        // 预算必须早于失联超时，否则 sweeper 先到期，转后台没有意义。
+        let background_after = settings.0.tool_background_after_secs;
+        let background_at = (executor.backgroundable()
+            && request.request.work_item_id.is_none()
+            && background_after > 0
+            && (background_after as i64) < timeout.num_seconds())
+        .then(|| clock.0 + chrono::Duration::seconds(background_after as i64));
         // CancellationToken：dispatch 创建，挂一份到 InFlightToolCall（cancel_monitor 用），
         // 另一份到 OwnedToolContext.cancel（worker 在 run_async 内 select! 监听用）。
         let cancel = CancellationToken::new();
@@ -225,11 +233,13 @@ pub fn async_tool_dispatch_system(
                 tool_call_id: tool_call_id.clone(),
                 tool_name: tool_name.clone(),
                 original_request,
+                tool_input: request.tool_input.clone(),
             },
             InFlightToolCall {
                 started_at: clock.0,
                 timeout,
                 cancel: cancel.clone(),
+                background_at,
             },
         ));
 

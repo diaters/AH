@@ -71,11 +71,13 @@ fn pending_entity_spawn_and_query() {
                 tool_call_id: "call-9".into(),
                 tool_name: "list_scheduled_tasks".into(),
                 original_request: std::sync::Arc::new(req),
+                tool_input: serde_json::Value::Null,
             },
             InFlightToolCall {
                 started_at: now(&world),
                 timeout: ChronoDuration::seconds(300),
                 cancel: tokio_util::sync::CancellationToken::new(),
+                background_at: None,
             },
         ))
         .id();

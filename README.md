@@ -13,8 +13,14 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   [HarmonyOS API 26 工作台](docs/client-channel.md) 已提供原生工程，真机验证与后续管理能力仍待完成
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - 多 Agent 按职责分工：用户任务直接交给主 Agent（`HARNESS_MAIN_AGENT`，默认 `default-llm-agent`），
-  摘要员、evaluator、经验管理员与子任务执行为主 Agent 服务
-- `create_tasks` + `wait_tasks` 驱动的任务分解能力
+  摘要员、evaluator、经验管理员、watchdog 与子任务执行为主 Agent 服务
+- `create_tasks` + `wait_tasks` 驱动的任务分解能力；子任务在后台执行，批次完成后通知父任务
+- 异步工具调用：`shell_exec` 与插件工具超过前台预算（`HARNESS_TOOL_BACKGROUND_AFTER_SECS`，默认 30 秒）
+  自动转后台，模型立即收到 `running_in_background` 与 `job_id` 并可继续推理或结束本轮；
+  结果以 `<task-notification>` 注入并自动开启新一轮，`stop_background_job` 可主动停止
+- Watchdog：定时巡检后台工具调用与子任务（`HARNESS_WATCHDOG_INTERVAL_SECS`，默认 120 秒），
+  由带 `watchdog` 标签的 Agent 判断是否有实质进展，继续、向子任务注入调整建议、取消或重试，
+  主 Agent 不必轮询子任务进度
 - 每个完整聊天通道只保留一个未结束的用户顶层任务，运行中消息引导该任务；
   `/stop` 保留会话，`/finish` 清理后释放名额；`/btw` 只在空通道创建新主题；内部子任务与输出型定时任务可并行
 - Agent loop 控制：任务运行中的输入以引导式插入（steer）在下一个工具结果边界送达，

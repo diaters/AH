@@ -69,6 +69,7 @@ pub fn spawn_create_tasks_messages(
     definitions: Vec<SubTaskDefinition>,
     tool_call_id: Option<String>,
     parent_origin_channel: Option<ChannelId>,
+    job_id: Option<Uuid>,
     index: &mut EntityIndex,
 ) -> (Uuid, Vec<TaskId>) {
     let batch_id = Uuid::new_v4();
@@ -211,13 +212,19 @@ pub fn spawn_create_tasks_messages(
                 turn_generation: None,
             },
             tool_name: "create_tasks".to_string(),
-            tool_output: Ok(serde_json::json!({
-                "status": "batch_created",
-                "batch_id": batch_id.to_string(),
-                "task_count": total_count,
-                "tasks": tasks_with_ids,
-                "note": "Sub-tasks run in the background. Call wait_tasks to block for results, or continue other work: a <task-notification> with all results will be delivered when the batch finishes.",
-            })),
+            tool_output: Ok({
+                let mut output = serde_json::json!({
+                    "status": "batch_created",
+                    "batch_id": batch_id.to_string(),
+                    "task_count": total_count,
+                    "tasks": tasks_with_ids,
+                    "note": "Sub-tasks run in the background and are supervised by a watchdog. Continue independent work, or end your turn if you depend on their results: a <task-notification> with all results is delivered automatically when the batch finishes. Do not poll.",
+                });
+                if let Some(job_id) = job_id {
+                    output["job_id"] = serde_json::json!(job_id.to_string());
+                }
+                output
+            }),
             tool_call_id,
             processed: false,
             original_tool_output: None,
@@ -333,10 +340,21 @@ pub fn spawn_wait_result_message(
     results: Vec<TaskWaitResult>,
     timed_out: bool,
 ) {
-    let output = serde_json::json!({
-        "results": results,
-        "timed_out": timed_out,
-    });
+    // 超时即转后台：批次继续执行，完成后由后台作业通知送达，不再需要重复等待。
+    let still_running = results.iter().any(|r| !r.status.is_terminal());
+    let output = if timed_out && still_running {
+        serde_json::json!({
+            "status": "running_in_background",
+            "results": results,
+            "timed_out": true,
+            "message": "子任务仍在后台执行。全部结束后结果会以 <task-notification source=\"subtasks\"> 送达并自动开启新的一轮；无需再次调用 wait_tasks 或轮询进度，进展由 watchdog 监督。不依赖这些结果的工作可以继续，否则请结束本轮回复并说明在等待什么。",
+        })
+    } else {
+        serde_json::json!({
+            "results": results,
+            "timed_out": timed_out,
+        })
+    };
 
     debug!(
         event = "WaitForTasksCompleted",
@@ -494,6 +512,28 @@ pub fn handle_tool_action<B: SessionBackend>(
             });
             commands.entity(request_entity).despawn();
         }
+        Ok(ToolAction::StopBackgroundJob { job_id }) => {
+            // 交给后台作业控制系统统一执行（与 watchdog 同一入口），结果由其回填本次调用。
+            let Some(tool_call_id) = request.tool_call_id.clone() else {
+                spawn_tool_error(
+                    commands,
+                    request_entity,
+                    request,
+                    ToolError::InvalidInput("stop_background_job requires a tool call id".into()),
+                );
+                return;
+            };
+            commands.spawn(crate::domain::BackgroundJobControl {
+                job_id,
+                action: crate::domain::JobControlAction::Stop,
+                origin: crate::domain::JobControlOrigin::Agent {
+                    task_id: request.request.task_id,
+                    agent_id: request.request.agent_id,
+                    tool_call_id,
+                },
+            });
+            commands.entity(request_entity).despawn();
+        }
         Ok(ToolAction::SendChannelMessage {
             channel,
             target,
@@ -643,6 +683,13 @@ fn handle_create_batch(
                 thread_id: None,
             })
         });
+    // 登记后台任务：未被 wait_tasks 认领时，批次完成后以通知回流父任务。
+    // WorkItem 内部调用不登记（其原任务可能已终态）。
+    let job_id = request
+        .request
+        .work_item_id
+        .is_none()
+        .then(uuid::Uuid::new_v4);
     let (batch_id, task_ids) = spawn_create_tasks_messages(
         commands,
         request_entity,
@@ -652,12 +699,13 @@ fn handle_create_batch(
         definitions,
         request.tool_call_id.clone(),
         parent_origin_channel,
+        job_id,
         index,
     );
-    // 登记后台任务：未被 wait_tasks 认领时，批次完成后以通知回流父任务
-    if request.request.work_item_id.is_none() {
-        crate::systems::loop_control::spawn_background_job(
+    if let Some(job_id) = job_id {
+        crate::systems::loop_control::register_background_job(
             commands,
+            job_id,
             task_entity,
             request.request.task_id,
             JobSource::SubTaskBatch { batch_id, task_ids },
@@ -1396,6 +1444,7 @@ mod tests {
             }],
             None,
             parent_origin_channel,
+            None,
             &mut index,
         );
     }

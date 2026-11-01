@@ -122,6 +122,8 @@ pub fn llm_response_system(
                     }
                     // 经验管理员回复由 experience_librarian_response_system 处理。
                     WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => continue,
+                    // watchdog 回复由 watchdog_response_system 处理。
+                    WorkItemType::WatchdogReview => continue,
                     WorkItemType::Summarization => {
                         handle_summarization_work_item_result(
                             &mut commands,

@@ -29,11 +29,13 @@ fn spawn_pending(world: &mut bevy_ecs::prelude::World, call_id: &str) -> bevy_ec
                 tool_call_id: call_id.into(),
                 tool_name: "t".into(),
                 original_request: std::sync::Arc::new(req),
+                tool_input: serde_json::Value::Null,
             },
             InFlightToolCall {
                 started_at: now(world),
                 timeout: chrono::Duration::seconds(300),
                 cancel: tokio_util::sync::CancellationToken::new(),
+                background_at: None,
             },
         ))
         .id()

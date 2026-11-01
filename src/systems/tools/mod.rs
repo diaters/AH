@@ -7,6 +7,7 @@ mod approval_gate;
 mod approval_hook;
 mod async_dispatch;
 pub mod backend;
+mod background;
 pub mod builtin;
 mod cancel_monitor;
 mod channel_send_dispatch;
@@ -26,6 +27,7 @@ pub use approval_gate::approval_sender_gate_system;
 pub use approval_hook::{on_approval_requested_hook_system, on_approval_resolved_hook_system};
 pub use async_dispatch::async_tool_dispatch_system;
 pub use backend::NativeProcessBackend;
+pub use background::tool_auto_background_system;
 pub use cancel_monitor::cancel_monitor_system;
 pub use channel_send_dispatch::channel_send_dispatch_system;
 pub use confirmation::tool_confirmation_result_system;
@@ -51,8 +53,8 @@ use crate::domain::{
 use self::builtin::{
     AskUserTool, ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool,
     ListScheduledTasksTool, ScheduleTaskTool, SearchExperienceTool, ShellExecTool, ShellInputTool,
-    ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, UpdateScheduledTaskTool,
-    UpdateTodosTool, ViewImageTool, WaitTasksTool,
+    ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, StopBackgroundJobTool,
+    UpdateScheduledTaskTool, UpdateTodosTool, ViewImageTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
 
@@ -63,7 +65,7 @@ pub fn register_builtin_tools(
 ) {
     registry.register(ToolDefinition {
         name: "create_tasks".to_string(),
-        description: "Create sub-tasks to delegate work to specialized child agents. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete. Sub-tasks run in the background: call wait_tasks to block for results, or keep working and a <task-notification> with all results will be delivered when the batch finishes.".to_string(),
+        description: "Create sub-tasks to delegate work to specialized child agents. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete. Sub-tasks run in the background and return a job_id: keep working, or end your turn if you depend on their results; a <task-notification> with all results is delivered automatically when the batch finishes and starts a new turn. Do not poll: a watchdog supervises sub-task progress, nudges stalled sub-tasks and cancels hopeless ones, so you do not need to monitor them.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -112,7 +114,7 @@ pub fn register_builtin_tools(
 
     registry.register(ToolDefinition {
         name: "wait_tasks".to_string(),
-        description: "Wait for child tasks to complete and collect their results. Returns the status and results of all specified tasks when all complete or timeout is reached.".to_string(),
+        description: "Wait briefly for child tasks to complete and collect their results. If they are still running after the foreground budget, returns running_in_background with current statuses; the full results then arrive as a <task-notification>, so never call wait_tasks repeatedly.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -136,10 +138,28 @@ pub fn register_builtin_tools(
     });
     executors.register(Box::new(WaitTasksTool));
 
+    registry.register(ToolDefinition {
+        name: "stop_background_job".to_string(),
+        description: "停止本任务的后台作业：自动转后台的工具调用，或 create_tasks 派出的子任务批次（取消其中未完成的子任务）。job_id 来自 running_in_background / batch_created 结果。被停止的作业不再发送完成通知。shell_start 会话请用 shell_stop。".to_string(),
+        parameters: ToolSchema {
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "job_id": { "type": "string", "description": "后台作业 ID" }
+                },
+                "required": ["job_id"]
+            }),
+        },
+        default_permission: ToolPermission::Allow,
+        executor: ToolExecutorKind::Builtin("stop_background_job".to_string()),
+        required_tag: None,
+    });
+    executors.register(Box::new(StopBackgroundJobTool));
+
     // Shell tools
     registry.register(ToolDefinition {
         name: "shell_exec".to_string(),
-        description: "执行一次性 shell 命令并等待结果，适合 build、test、lint、文件操作。返回 command_succeeded、exit_code、timed_out；工具返回不代表命令成功。命令结束或超时会清理同组后台后代，nohup 和 & 不能让它们持续运行。长期监控、服务或耗时观察请用 shell_start，并以前台方式运行；不要改用外部服务管理器规避 Harness 生命周期，除非用户明确要求独立部署。".to_string(),
+        description: "执行一次性 shell 命令并等待结果，适合 build、test、lint、文件操作。命令超过前台预算仍未结束会自动转后台并返回 running_in_background 与 job_id，结果稍后以 <task-notification> 送达；此时不要重复执行或轮询。返回 command_succeeded、exit_code、timed_out；工具返回不代表命令成功。命令结束或超时会清理同组后台后代，nohup 和 & 不能让它们持续运行。长期监控、服务或耗时观察请用 shell_start，并以前台方式运行；不要改用外部服务管理器规避 Harness 生命周期，除非用户明确要求独立部署。".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",

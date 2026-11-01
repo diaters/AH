@@ -4,14 +4,17 @@
 
 mod attachment;
 mod background;
+mod control;
 mod inbox;
 mod monitor;
 mod stop;
 
 pub(crate) use attachment::context_attachment_system;
 pub(crate) use background::{
-    background_job_cleanup_system, background_job_monitor_system, spawn_background_job,
+    background_job_cleanup_system, background_job_monitor_system, register_background_job,
+    spawn_background_job,
 };
+pub(crate) use control::background_job_control_system;
 pub(crate) use inbox::{inbox_ingest_system, inbox_status_sync_system, inbox_wake_system};
 pub(crate) use stop::{clear_stop_requested_system, stop_task_system};
 

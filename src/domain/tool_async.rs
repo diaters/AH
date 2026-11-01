@@ -96,6 +96,8 @@ pub struct ToolRequestPending {
     pub tool_name: String,
     /// 原始请求（重建 `ToolExecutionResultMessage` 的完整字段来源）。
     pub original_request: Arc<AgentExecutionRequest>,
+    /// 工具入参：watchdog 取证与后台调用重试使用。
+    pub tool_input: serde_json::Value,
 }
 
 /// 在飞标记。sweeper 扫描对象。
@@ -115,6 +117,27 @@ pub struct InFlightToolCall {
     /// 取消令牌。dispatch 创建并 clone 一份给 worker（经 `OwnedToolContext`）；
     /// `cancel_monitor_system` 在父任务终态时调用 `cancel.cancel()`。
     pub cancel: CancellationToken,
+    /// 超过该时刻仍未返回则自动转后台（`None` 表示该调用不转后台）。
+    ///
+    /// dispatch 仅为可后台化工具（`BuiltinTool::backgroundable`）的任务级调用填写，
+    /// 且必须早于失联超时；转后台由 `tool_auto_background_system` 执行。
+    pub background_at: Option<DateTime<Utc>>,
+}
+
+/// 已转后台的工具调用：LLM 已收到 `running_in_background` 合成结果，
+/// 最终结果不再回填工具循环，而是作为 `<task-notification>` 投递到所属任务收件箱。
+///
+/// 挂在挂起实体（`ToolRequestPending`）上，exactly-once 仍由挂起实体是否存在裁决。
+#[derive(Component, Debug, Clone)]
+pub struct BackgroundedToolCall {
+    /// 对应 `BackgroundJob.id`，也是暴露给 LLM 的 `job_id`。
+    pub job_id: uuid::Uuid,
+    /// 转后台时刻。
+    pub detached_at: DateTime<Utc>,
+    /// 结果到达时不再通知（Agent 主动停止或被重试取代）。
+    pub silent: bool,
+    /// 附在通知开头的说明（如 watchdog 取消原因）。
+    pub note: Option<String>,
 }
 
 // ============ 声明式写效果 ============

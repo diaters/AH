@@ -16,12 +16,16 @@ pub enum DeadlineKey {
     Retry(Entity),
     Wait(Entity),
     Tool(Entity),
+    /// 在飞工具调用的前台预算到期（自动转后台）。
+    ToolBackground(Entity),
     Inbox(Entity),
     Accounting(Entity),
     Persist,
     Maintenance,
     Background,
     Monitor,
+    /// watchdog 巡检节拍。
+    Watchdog,
 }
 
 /// 时间索引只缓存下一次处理时间，不复制 Task 或 ScheduleDefinition。
@@ -107,7 +111,15 @@ impl DemandSchedule {
         now: DateTime<Utc>,
         interval: chrono::Duration,
     ) -> bool {
-        let key = DeadlineKey::Background;
+        self.periodic_ready(DeadlineKey::Background, now, interval)
+    }
+    /// 周期性工作的节拍：未登记或已到期时登记下一次并返回 true。
+    pub(crate) fn periodic_ready(
+        &mut self,
+        key: DeadlineKey,
+        now: DateTime<Utc>,
+        interval: chrono::Duration,
+    ) -> bool {
         if self.wall.get(&key).is_some_and(|at| *at > now) && !self.is_due(key) {
             return false;
         }
@@ -216,6 +228,7 @@ pub(crate) fn install_demand_drive(app: &mut App) {
         ToolEffectPending,
         PendingChannelSend,
         InboxDeliveryMessage,
+        BackgroundJobControl,
         StopTaskMessage,
         StopRequested,
         BackgroundJob,
@@ -255,6 +268,7 @@ fn project_deadlines(
     tasks: Query<(Entity, &Task), Changed<Task>>,
     waits: Query<(Entity, &WaitingForTasksInfo), Changed<WaitingForTasksInfo>>,
     tools: Query<(Entity, &InFlightToolCall), Changed<InFlightToolCall>>,
+    backgrounded: Query<Entity, Added<BackgroundedToolCall>>,
     inboxes: Query<(Entity, &Task, &TaskInbox, Option<&AutoWakeBudget>), Without<AskUserPending>>,
     jobs: Query<&BackgroundJob>,
     monitor: Res<crate::systems::MonitorDeliveries>,
@@ -281,6 +295,7 @@ fn project_deadlines(
     }
     for entity in removed_tools.read() {
         schedule.clear(DeadlineKey::Tool(entity));
+        schedule.clear(DeadlineKey::ToolBackground(entity));
     }
     for entity in removed_inboxes.read() {
         schedule.clear(DeadlineKey::Inbox(entity));
@@ -303,6 +318,12 @@ fn project_deadlines(
             call.started_at + call.timeout + chrono::Duration::milliseconds(1),
             clock.0,
         );
+        if let Some(at) = call.background_at {
+            schedule.project(DeadlineKey::ToolBackground(entity), at, clock.0);
+        }
+    }
+    for entity in &backgrounded {
+        schedule.clear(DeadlineKey::ToolBackground(entity));
     }
     for (entity, task, inbox, budget) in &inboxes {
         let key = DeadlineKey::Inbox(entity);

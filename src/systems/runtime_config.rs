@@ -13,6 +13,9 @@ use crate::prelude::Resource;
 /// 主 Agent 的默认名称：用户任务直接交给它处理。
 pub const DEFAULT_MAIN_AGENT: &str = "default-llm-agent";
 
+/// 工具调用自动转后台的默认前台预算（秒）。
+pub const DEFAULT_TOOL_BACKGROUND_AFTER_SECS: u64 = 30;
+
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub max_retries: u32,
@@ -42,6 +45,9 @@ pub struct HarnessConfig {
     /// 长任务场景。具体工具可在 `BuiltinTool::max_duration` override 中
     /// 基于业务超时 + margin 推导。
     pub tool_inflight_timeout_secs: u64,
+    /// 可后台化工具调用的前台预算（秒）：超过仍未返回则自动转后台，结果稍后以
+    /// `<task-notification>` 送达；`wait_tasks` 的单次等待也不超过该值。0 表示关闭。
+    pub tool_background_after_secs: u64,
     /// 每个 session stream 的最大缓存字节数
     pub shell_max_buffer_bytes_per_stream: usize,
     /// 终态任务树保留时长（秒），超过后整树回收，避免长期运行时实体无限增长
@@ -135,6 +141,10 @@ impl HarnessConfig {
                         .ok()
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(defaults.background_poll_ms),
+                    watchdog_interval_secs: std::env::var("HARNESS_WATCHDOG_INTERVAL_SECS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(defaults.watchdog_interval_secs),
                 }
             },
             agents_config_path,
@@ -168,6 +178,10 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(300),
+            tool_background_after_secs: std::env::var("HARNESS_TOOL_BACKGROUND_AFTER_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_TOOL_BACKGROUND_AFTER_SECS),
             shell_max_buffer_bytes_per_stream: std::env::var(
                 "HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM",
             )
@@ -233,6 +247,7 @@ impl Default for HarnessConfig {
             shell_default_exec_timeout_secs: 300,
             shell_default_stop_timeout_secs: 10,
             tool_inflight_timeout_secs: 300,
+            tool_background_after_secs: DEFAULT_TOOL_BACKGROUND_AFTER_SECS,
             shell_max_buffer_bytes_per_stream: 64 * 1024,
             terminal_task_retention_secs: 3600,
             conversation_idle_secs: 86400,

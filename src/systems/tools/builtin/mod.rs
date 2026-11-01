@@ -7,6 +7,7 @@ mod schedule_task;
 pub mod scheduled;
 mod search_experience;
 mod shell;
+mod stop_background_job;
 mod update_todos;
 mod view_image;
 mod wait_tasks;
@@ -22,6 +23,7 @@ pub use search_experience::SearchExperienceTool;
 pub use shell::{
     ShellExecTool, ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
 };
+pub use stop_background_job::StopBackgroundJobTool;
 pub use update_todos::UpdateTodosTool;
 pub use view_image::ViewImageTool;
 pub use wait_tasks::WaitTasksTool;

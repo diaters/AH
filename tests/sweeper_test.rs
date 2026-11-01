@@ -39,12 +39,14 @@ fn spawn_inflight(
                 tool_call_id: call_id.into(),
                 tool_name: "t".into(),
                 original_request: std::sync::Arc::new(req),
+                tool_input: serde_json::Value::Null,
             },
             InFlightToolCall {
                 // 关键：从世界时钟取基准，禁止 Utc::now()
                 started_at: now(world) - chrono::Duration::seconds(age_secs),
                 timeout: chrono::Duration::seconds(timeout_secs),
                 cancel: tokio_util::sync::CancellationToken::new(),
+                background_at: None,
             },
         ))
         .id()

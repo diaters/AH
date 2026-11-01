@@ -21,9 +21,23 @@ use crate::systems::tools::backend::native::is_session_not_found;
 /// 通知中携带的 shell 输出末尾行数。
 const NOTIFICATION_TAIL_LINES: usize = 20;
 
-/// 为所属任务登记一个后台任务实体。
+/// 为所属任务登记一个后台任务实体，返回作业 ID（即暴露给 LLM 的 `job_id`）。
 pub(crate) fn spawn_background_job(
     commands: &mut Commands,
+    owner_entity: Entity,
+    owner_task_id: TaskId,
+    source: JobSource,
+    now: chrono::DateTime<chrono::Utc>,
+) -> uuid::Uuid {
+    let id = uuid::Uuid::new_v4();
+    register_background_job(commands, id, owner_entity, owner_task_id, source, now);
+    id
+}
+
+/// 以调用方预先生成的作业 ID 登记后台任务（工具结果需要在登记前写入 `job_id`）。
+pub(crate) fn register_background_job(
+    commands: &mut Commands,
+    id: uuid::Uuid,
     owner_entity: Entity,
     owner_task_id: TaskId,
     source: JobSource,
@@ -32,12 +46,13 @@ pub(crate) fn spawn_background_job(
     debug!(
         event = "BackgroundJobRegistered",
         task_id = %owner_task_id,
+        job_id = %id,
         source = source.label(),
         "background job registered"
     );
     commands.spawn((
         BackgroundJob {
-            id: uuid::Uuid::new_v4(),
+            id,
             owner_task_id,
             source,
             started_at: now,
@@ -98,6 +113,8 @@ pub(crate) fn background_job_monitor_system(
     index: Res<EntityIndex>,
     tasks: Query<&Task>,
     waiting: Query<&WaitingForTasksInfo>,
+    pending_calls: Query<&crate::domain::ToolRequestPending>,
+    queued_calls: Query<&crate::domain::ToolExecutionRequestMessage>,
     mut jobs: Query<(Entity, &mut BackgroundJob, &JobOwner)>,
     mut demand: Option<ResMut<crate::systems::demand::DemandSchedule>>,
 ) {
@@ -123,23 +140,22 @@ pub(crate) fn background_job_monitor_system(
         if !poll_shell && matches!(job.source, JobSource::Shell { .. }) {
             continue;
         }
-        // wait_tasks 认领：父任务正显式等待该批次中的任务时，结果走 wait_tasks 返回，不再通知
-        let should_claim = match &job.source {
-            JobSource::SubTaskBatch { task_ids, .. } => {
-                !job.claimed
-                    && waiting.get(owner.0).is_ok_and(|info| {
-                        info.target_task_ids.iter().any(|id| task_ids.contains(id))
-                    })
+        // wait_tasks 认领：父任务正显式等待该批次中的任务时，结果走 wait_tasks 返回，不再通知。
+        // 按当前等待状态重算：wait_tasks 超时转后台后，批次完成恢复通知。
+        if let JobSource::SubTaskBatch { task_ids, .. } = &job.source {
+            let claimed = waiting
+                .get(owner.0)
+                .is_ok_and(|info| info.target_task_ids.iter().any(|id| task_ids.contains(id)));
+            if claimed != job.claimed {
+                debug!(
+                    event = "BackgroundJobClaimChanged",
+                    task_id = %job.owner_task_id,
+                    job_id = %job.id,
+                    claimed,
+                    "sub-task batch wait_tasks claim changed"
+                );
+                job.claimed = claimed;
             }
-            JobSource::Shell { .. } => false,
-        };
-        if should_claim {
-            debug!(
-                event = "BackgroundJobClaimed",
-                task_id = %job.owner_task_id,
-                "sub-task batch claimed by wait_tasks"
-            );
-            job.claimed = true;
         }
 
         let completion = match &job.source {
@@ -164,7 +180,7 @@ pub(crate) fn background_job_monitor_system(
                         | SessionStatus::ExitedWithError
                         | SessionStatus::FailedToStart => {
                             if !notify_on_exit {
-                                commands.entity(job_entity).despawn();
+                                commands.entity(job_entity).try_despawn();
                                 continue;
                             }
                             let status = match summary.exit_code {
@@ -207,12 +223,23 @@ pub(crate) fn background_job_monitor_system(
             JobSource::SubTaskBatch { task_ids, .. } => {
                 batch_completion(task_ids, &index, &tasks).map(Some)
             }
+            // 结果已由 ingest 投递（或被静默丢弃）；挂起实体消失即退役。
+            // watchdog 重试的新请求在被异步派发认领前仍是请求消息，同样视为在飞。
+            JobSource::ToolCall { tool_call_id, .. } => {
+                let alive = pending_calls
+                    .iter()
+                    .any(|pending| &pending.tool_call_id == tool_call_id)
+                    || queued_calls
+                        .iter()
+                        .any(|queued| queued.tool_call_id.as_ref() == Some(tool_call_id));
+                (!alive).then_some(None)
+            }
         };
 
         let Some(notification) = completion else {
             continue;
         };
-        commands.entity(job_entity).despawn();
+        commands.entity(job_entity).try_despawn();
 
         match notification {
             Some((status, summary)) if !job.claimed => {
@@ -270,6 +297,8 @@ pub(crate) fn background_job_cleanup_system(
                     let _ = backend.stop_session(*handle_id);
                 }
             }
+            // 挂起实体上的取消令牌由 cancel_monitor 在所属任务终态时触发。
+            JobSource::ToolCall { .. } => {}
             JobSource::SubTaskBatch { task_ids, .. } => {
                 for task_id in task_ids {
                     if let Some(mut child) =
@@ -291,7 +320,7 @@ pub(crate) fn background_job_cleanup_system(
             source = job.source.label(),
             "owner task terminal or removed; background job force-stopped"
         );
-        commands.entity(job_entity).despawn();
+        commands.entity(job_entity).try_despawn();
     }
 }
 

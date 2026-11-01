@@ -103,6 +103,11 @@ impl BuiltinTool for RhaiPluginAsyncWrapper {
         ToolActionKind::Async
     }
 
+    /// 插件工具耗时不可预知，超过前台预算后转后台。
+    fn backgroundable(&self) -> bool {
+        true
+    }
+
     fn max_duration(
         &self,
         _input: &serde_json::Value,

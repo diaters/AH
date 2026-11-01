@@ -53,6 +53,7 @@ fn schedule_task_execute_is_async_only_defense() {
         &serde_json::json!({}),
         &harness::domain::ToolContext {
             default_wait_tasks_timeout_secs: 300,
+            tool_background_after_secs: 0,
             shell_default_tail_lines: 50,
             shell_max_tail_lines: 500,
             shell_default_exec_timeout_secs: 60,

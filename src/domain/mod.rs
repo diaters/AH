@@ -33,6 +33,7 @@ mod summarization;
 mod task;
 mod tool_async;
 mod tool_runtime;
+mod watchdog;
 mod work_item;
 mod workflow;
 
@@ -226,10 +227,11 @@ pub use signal_trigger::{
 
 // loop_control
 pub use loop_control::{
-    AutoWakeBudget, BackgroundJob, BackgroundReportTurn, DeferredResult, InboxDeliveryMessage,
-    InboxItem, InflightLlmRequests, JobOwner, JobSource, LoopControlConfig, MAX_TODO_ITEMS,
-    OwnedJobs, StopRequested, StopTaskMessage, TaskInbox, TaskTodoList, TodoItem, TodoStatus,
-    TurnGeneration, render_inbox_items, render_todos, validate_todos,
+    AutoWakeBudget, BackgroundJob, BackgroundJobControl, BackgroundReportTurn, DeferredResult,
+    InboxDeliveryMessage, InboxItem, InflightLlmRequests, JobControlAction, JobControlOrigin,
+    JobOwner, JobSource, LoopControlConfig, MAX_TODO_ITEMS, OwnedJobs, StopRequested,
+    StopTaskMessage, TaskInbox, TaskTodoList, TodoItem, TodoStatus, TurnGeneration,
+    render_inbox_items, render_todos, validate_todos,
 };
 
 // session
@@ -273,8 +275,16 @@ pub use tool_runtime::ToolCallingState;
 
 // tool_async
 pub use tool_async::{
-    InFlightToolCall, OwnedToolContext, SchedulerStateSnapshot, ToolAsyncResult, ToolEffect,
-    ToolEffectPending, ToolRequestPending, ToolResultReceiver, ToolWorkerPayload,
+    BackgroundedToolCall, InFlightToolCall, OwnedToolContext, SchedulerStateSnapshot,
+    ToolAsyncResult, ToolEffect, ToolEffectPending, ToolRequestPending, ToolResultReceiver,
+    ToolWorkerPayload,
+};
+
+// watchdog
+pub use watchdog::{
+    WATCHDOG_TAG, WatchdogAction, WatchdogDecision, WatchdogReviewOrigin, WatchdogSubject,
+    WatchdogSubjectKey, WatchdogSubjectKind, build_watchdog_prompt, evidence_fingerprint,
+    parse_watchdog_decisions, truncate_chars,
 };
 
 // work_item
