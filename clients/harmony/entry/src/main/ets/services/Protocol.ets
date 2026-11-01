@@ -5,6 +5,11 @@ export interface TaskDto {
 }
 export interface QuestionDto { task_id: string; question_id: string; question: string; claimed: boolean; }
 export interface ApprovalOptionDto { id: string; label: string; description: string; }
+// 拒绝类选项：deny 与各通道统一的 reject_with_feedback 都表示拒绝。
+// 只有拒绝会携带理由——运行时只在拒绝分支读取 feedback，允许时填写无效果。
+export function isDenyOption(optionId: string): boolean {
+  return optionId === 'deny' || optionId === 'reject_with_feedback';
+}
 export interface ApprovalDto {
   request_id: string; agent_name: string; tool_name: string; version: number;
   claimed: boolean; options: ApprovalOptionDto[];

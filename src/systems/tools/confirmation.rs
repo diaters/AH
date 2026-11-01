@@ -147,24 +147,34 @@ pub fn tool_confirmation_result_system(
 
         match selected_option {
             Some(option) if option.is_deny() => {
-                // 用户拒绝
+                // 用户拒绝：`feedback` 是拒绝理由（客户端输入框、TUI / QQ / Telegram 的
+                // `reject_with_feedback` 两步交互都写入该字段）。它必须并入错误结果，
+                // 否则 Agent 只能看到「被拒」，不知道该按什么意图改写重试。
+                let user_note = response
+                    .feedback
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty());
                 warn!(
                     event = "ToolConfirmationDenied",
                     tool_name = %tool_request.tool_name,
                     task_id = %tool_request.request.task_id,
                     agent_id = %tool_request.request.agent_id,
                     pending_sibling_count = pending_sibling_count,
+                    has_user_note = user_note.is_some(),
                     "tool execution denied by user"
                 );
+                let denial_reason = match user_note {
+                    Some(note) => format!("user denied tool execution; user note: {note}"),
+                    None => "user denied tool execution".to_string(),
+                };
 
                 // 生成错误结果
                 let execution_result = crate::domain::AgentExecutionResult {
                     task_id: tool_request.request.task_id,
                     agent_id: tool_request.request.agent_id,
                     request_kind: tool_request.request.request_kind.clone(),
-                    result: Err(ExecutionError::UserCancelled(
-                        "user denied tool execution".to_string(),
-                    )),
+                    result: Err(ExecutionError::UserCancelled(denial_reason.clone())),
                     prompt: String::new(),
                     system_prompt: None,
                     tools: vec![],
@@ -178,7 +188,7 @@ pub fn tool_confirmation_result_system(
                     ToolExecutionResultMessage {
                         result: execution_result,
                         tool_name: tool_request.tool_name.clone(),
-                        tool_output: Err(ToolError::PermissionDenied("user denied".to_string())),
+                        tool_output: Err(ToolError::PermissionDenied(denial_reason)),
                         tool_call_id: tool_request.tool_call_id.clone(),
                         processed: false,
                         original_tool_output: None,
@@ -212,6 +222,20 @@ pub fn tool_confirmation_result_system(
                     pending_sibling_count = pending_sibling_count,
                     "tool execution confirmed by user"
                 );
+                // 说明只在拒绝语义下有去处（并入拒绝原因）。允许时携带的说明没有
+                // 合适的作用点，明确记为丢弃，避免"看起来生效、实际无效果"。
+                if response
+                    .feedback
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    debug!(
+                        event = "ApprovalFeedbackDroppedOnApprove",
+                        tool_name = %tool_request.tool_name,
+                        request_id = %response.request_id,
+                        "approval feedback only applies to denial; note ignored for this option"
+                    );
+                }
 
                 // Permanent 模式（"本会话允许"）：按来源会话 × 发起人写入运行期授权。
                 // 没有来源会话的任务（webhook 事件等）无会话可复用，按仅本次处理。
@@ -618,6 +642,117 @@ mod tests {
             task.pending_confirmation_id.is_none(),
             "pending_confirmation_id should be cleared after denial"
         );
+    }
+
+    /// 拒绝理由必须真正落到 Agent 可见的结果里。
+    ///
+    /// 此前 `ToolConfirmationResponseMessage.feedback` 只被搬运、无人读取，
+    /// 客户端与 IM 通道的「附加说明」全部丢失，Agent 只能看到笼统的 user denied。
+    #[test]
+    fn denial_note_reaches_tool_result() {
+        let mut world = test_world();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
+        let request_id = Uuid::new_v4();
+
+        let mut task = dummy_task(task_id);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        world.spawn(dummy_request(task_id, agent_id, request_id));
+        world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
+            request_id,
+            selected_option: "deny".to_string(),
+            feedback: Some("  不要用 rm，改成先备份  ".to_string()),
+        });
+
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let results: Vec<_> = world
+            .query::<&crate::domain::ToolExecutionResultMessage>()
+            .iter(&world)
+            .collect();
+        let result = results
+            .first()
+            .expect("denial must still produce a tool result");
+        let crate::domain::ToolError::PermissionDenied(reason) = result
+            .tool_output
+            .as_ref()
+            .expect_err("denial is an error result")
+        else {
+            panic!("denial must surface as PermissionDenied");
+        };
+        assert_eq!(
+            reason, "user denied tool execution; user note: 不要用 rm，改成先备份",
+            "拒绝理由须去首尾空白后并入工具结果"
+        );
+        assert!(
+            matches!(
+                &result.result.result,
+                Err(crate::domain::ExecutionError::UserCancelled(message))
+                    if message.contains("不要用 rm")
+            ),
+            "执行结果同样要带理由，便于观察与恢复判断"
+        );
+    }
+
+    /// 「拒绝并反馈」选项必须走拒绝分支。
+    ///
+    /// 若它被当成普通选项，会落入批准分支去执行工具——用户点的是拒绝。
+    #[test]
+    fn reject_with_feedback_option_is_a_denial() {
+        let mut world = test_world();
+        let task_id = crate::domain::TaskId::new();
+        let agent_id = crate::domain::AgentId::new();
+        let request_id = Uuid::new_v4();
+
+        let mut task = dummy_task(task_id);
+        task.pending_confirmation_id = Some(request_id);
+        let task_entity = world.spawn(task).id();
+        world
+            .resource_mut::<crate::ecs::EntityIndex>()
+            .tasks
+            .insert(task_id, task_entity);
+
+        let mut request = dummy_request(task_id, agent_id, request_id);
+        request.pending_confirmation_options = Some(vec![
+            ConfirmationOption::allow_once(),
+            ConfirmationOption {
+                id: "reject_with_feedback".to_string(),
+                label: "Deny with reason".to_string(),
+                mode: crate::domain::GrantMode::Once,
+            },
+        ]);
+        world.spawn(request);
+        world.spawn(ToolConfirmationResponseMessage {
+            sender: None,
+            request_id,
+            selected_option: "reject_with_feedback".to_string(),
+            feedback: Some("这条命令会删库".to_string()),
+        });
+
+        world
+            .run_system_once(tool_confirmation_result_system)
+            .unwrap();
+
+        let results: Vec<_> = world
+            .query::<&crate::domain::ToolExecutionResultMessage>()
+            .iter(&world)
+            .collect();
+        let result = results.first().expect("denial must produce a tool result");
+        match result.tool_output.as_ref() {
+            Err(crate::domain::ToolError::PermissionDenied(reason)) => {
+                assert!(reason.contains("这条命令会删库"));
+            }
+            other => panic!("reject_with_feedback 必须归为拒绝，实际得到 {other:?}"),
+        }
     }
 
     #[test]

@@ -96,6 +96,8 @@ WSS 写入超过 10 秒则断开；客户端用原游标补发或重新同步，
 | `respond_approval` | `session_id`、`request_id`、`expected_version`、`option_id`；可选 `feedback` |
 
 审批的版本与选项来自最新快照，同一请求只有一次入队机会，运行时仍须再校验。
+`feedback` 只在拒绝类选项（`deny`、`reject_with_feedback`）上生效：它作为拒绝理由并入
+工具结果转达给 Agent；选择允许类选项时携带的说明没有作用点，运行时不采纳。
 停止/结束绑定原 Task 和版本；回答绑定原 `ask_user` 工具调用 ID，不从普通聊天猜测请求。
 控制与定时命令经 ECS 处理后，回执更新为 `processed` 或 `rejected`，失败码在 `result_code` 中；
 `processed` 表示控制处理完成，不等于任务成功。普通文本和审批的入队回执仍不宣称最终消费。

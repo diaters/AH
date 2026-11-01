@@ -306,7 +306,7 @@ async fn approval_is_claimed_once_and_keeps_authenticated_sender() {
     });
     let command = |id| {
         json!({"operation":"respond_approval","command_id":id,"session_id":session_id,
-        "request_id":request_id,"expected_version":1,"option_id":"allow","feedback":null})
+        "request_id":request_id,"expected_version":1,"option_id":"allow","feedback":"不要动生产库"})
     };
     let one = command(Uuid::new_v4());
     let two = command(Uuid::new_v4());
@@ -325,11 +325,16 @@ async fn approval_is_claimed_once_and_keeps_authenticated_sender() {
             request_id: id,
             sender,
             option,
-            ..
+            feedback,
         } => {
             assert_eq!(id, request_id);
             assert_eq!(sender.as_deref(), Some("alice"));
             assert_eq!(option, "allow");
+            assert_eq!(
+                feedback.as_deref(),
+                Some("不要动生产库"),
+                "服务端必须把审批说明原样交给运行时，不能在通道层吞掉"
+            );
         }
         _ => panic!("expected unified confirmation"),
     }
