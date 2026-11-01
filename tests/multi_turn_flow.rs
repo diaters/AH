@@ -26,7 +26,9 @@ use tokio::runtime::Runtime;
 
 fn test_config() -> HarnessConfig {
     HarnessConfig {
-        approval_mode: harness::systems::ApprovalMode::Manual,
+        approval_mode: harness::systems::ApprovalSetting::new(
+            harness::systems::ApprovalMode::Manual,
+        ),
         memory: harness::domain::MemoryConfig::default(),
         max_retries: 3,
         llm: harness::llm::LlmProviderConfig {

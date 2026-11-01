@@ -142,7 +142,10 @@ pub use chat_session::ChatSession;
 pub use command::{ShutdownState, UserCommand};
 
 // confirmation
-pub use confirmation::{ApprovalDecision, ConfirmationOption, ConfirmationSource, GrantMode};
+pub use confirmation::{
+    ApprovalDecision, ApprovalMode, ApprovalSetting, ConfirmationOption, ConfirmationSource,
+    GrantMode,
+};
 
 // error
 pub use error::{ExecutionError, FailureReason, ToolError};

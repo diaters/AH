@@ -140,7 +140,9 @@ impl AgentExecutor for BudgetAwareMockExecutor {
 
 fn test_config() -> HarnessConfig {
     HarnessConfig {
-        approval_mode: harness::systems::ApprovalMode::Manual,
+        approval_mode: harness::systems::ApprovalSetting::new(
+            harness::systems::ApprovalMode::Manual,
+        ),
         max_tool_iterations: 3,
         subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
         subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,

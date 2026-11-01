@@ -1198,3 +1198,57 @@ async fn experience_draft_merges_into_existing_entry_and_discard_removes_card() 
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn approval_mode_is_optional_and_switchable() {
+    use crate::domain::{ApprovalMode, ApprovalSetting};
+    let fixture = Fixture::new();
+    let (_, token) = fixture.pair("u");
+    let (status, _) = fixture
+        .request(&token, "GET", "/v1/approval-mode", Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let setting = ApprovalSetting::new(ApprovalMode::Supervisor);
+    let Fixture {
+        client,
+        input,
+        _dir,
+    } = fixture;
+    let fixture = Fixture {
+        client: client.with_approval_setting(setting.clone()),
+        input,
+        _dir,
+    };
+    let (_, caps) = fixture
+        .request(&token, "GET", "/v1/capabilities", Value::Null)
+        .await;
+    assert!(
+        caps["operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("approval_mode.manage"))
+    );
+    let (_, body) = fixture
+        .request(&token, "GET", "/v1/approval-mode", Value::Null)
+        .await;
+    assert_eq!(body["mode"], "supervisor");
+
+    let (status, body) = fixture
+        .request(
+            &token,
+            "PUT",
+            "/v1/approval-mode",
+            json!({"mode":"allow_all"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["mode"], "allow_all");
+    assert_eq!(setting.get(), ApprovalMode::AllowAll);
+
+    let (status, _) = fixture
+        .request(&token, "PUT", "/v1/approval-mode", json!({"mode":"yolo"}))
+        .await;
+    assert!(status.is_client_error());
+    assert_eq!(setting.get(), ApprovalMode::AllowAll);
+}

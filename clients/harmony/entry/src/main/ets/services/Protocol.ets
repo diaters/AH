@@ -56,6 +56,7 @@ export interface SnapshotDto {
   files: ClientFileDto[];
 }
 export interface CapabilitiesDto { protocol_version: number; instance_id: string; instance_name: string; operations: string[]; meow_enabled?: boolean; }
+export interface ApprovalModeDto { mode: string; }
 export interface PairDto { instance_id: string; token: string; }
 export interface ReceiptDto { command_id: string; session_id: string; status: string; result_code?: string; }
 export interface CommandDto {
@@ -91,3 +92,11 @@ export function formatLocalTime(value: string): string {
   const two = (n: number): string => `${n}`.padStart(2, '0');
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
 }
+
+// 审批方式：运行时对「需确认的工具调用」的处理。取值与服务端 HARNESS_APPROVAL_MODE 一致。
+export interface ApprovalModeChoice { id: string; label: string; description: string; }
+export const APPROVAL_MODES: ApprovalModeChoice[] = [
+  { id: 'supervisor', label: 'Agent 审批', description: 'watchdog 先判断：安全则批准，越权则拒绝，拿不准才问你' },
+  { id: 'manual', label: '手动确认', description: '每次需确认的工具调用都由你决定' },
+  { id: 'allow_all', label: '全部同意', description: '需确认的工具直接放行，不再询问（风险最高）' }
+];

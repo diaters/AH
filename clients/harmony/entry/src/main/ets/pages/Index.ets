@@ -6,7 +6,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
-  ExperienceSummaryDto, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, formatLocalTime, isDenyOption, observationOutcome } from '../services/Protocol';
+  ExperienceSummaryDto, ApprovalModeChoice, APPROVAL_MODES, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, formatLocalTime, isDenyOption, observationOutcome } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
@@ -77,6 +77,7 @@ struct Index {
   @State pendingUpload: PendingUploadDto | undefined = undefined;
   @State devices: DeviceDto[] = [];
   @State diagnostics: DiagnosticsDto | undefined = undefined;
+  @State approvalMode: string = '';
   @State viewing: ArtifactRef | undefined = undefined;
   @State sessionSearch: string = '';
   @State approvalFeedback: Record<string, string> = {};
@@ -173,7 +174,7 @@ struct Index {
   }
   private resetInstanceView(): void {
     this.sessions = []; this.files = []; this.notifications = []; this.notificationsTruncated = false; this.notificationOverflow = 0;
-    this.automation = { available: false, schedules: [], timezone: '' }; this.devices = []; this.diagnostics = undefined;
+    this.automation = { available: false, schedules: [], timezone: '' }; this.devices = []; this.diagnostics = undefined; this.approvalMode = '';
     this.questionDrafts = {}; this.approvalFeedback = {}; this.processExpanded = {}; this.viewing = undefined;
     this.summaryOpen = false; this.summaryNote = ''; this.draftTitles = {}; this.draftBodies = {}; this.draftEditing = {}; this.draftAsNew = {};
     this.experienceEnabled = false; this.experiences = []; this.experienceDetail = undefined; this.experienceEditing = false; this.experienceDeleting = '';
@@ -595,7 +596,14 @@ struct Index {
   }
   private async loadManagement(): Promise<void> {
     if (!this.connected || this.busy) { return; } this.busy = true;
-    try { this.devices = (await this.connection.devices()).devices; this.diagnostics = this.connection.supports('diagnostics.read') ? await this.connection.diagnostics() : undefined; }
+    try { this.devices = (await this.connection.devices()).devices; this.diagnostics = this.connection.supports('diagnostics.read') ? await this.connection.diagnostics() : undefined;
+      this.approvalMode = this.connection.supports('approval_mode.manage') ? (await this.connection.approvalMode()).mode : ''; }
+    catch (error) { this.status = (error as Error).message; }
+    finally { this.busy = false; }
+  }
+  private async chooseApprovalMode(mode: string): Promise<void> {
+    if (this.busy || mode === this.approvalMode) { return; } this.busy = true;
+    try { this.approvalMode = (await this.connection.setApprovalMode(mode)).mode; this.status = '审批方式已更新'; }
     catch (error) { this.status = (error as Error).message; }
     finally { this.busy = false; }
   }
@@ -1564,6 +1572,22 @@ struct Index {
         Text(`${this.diagnostics.sessions} 个任务 · ${this.diagnostics.pending_approvals} 项审批 · ${this.diagnostics.pending_questions} 个问题`).caption()
         Text(`同步游标 ${this.diagnostics.cursor} · 保留 ${this.diagnostics.event_retention} 条事件 · 重启后未知命令 ${this.diagnostics.unknown_commands}`).caption()
         Text(`实例 ${this.diagnostics.instance_id}`).caption().copyOption(CopyOptions.LocalDevice)
+      }.card()
+    }
+    if (this.approvalMode.length > 0) {
+      Column({ space: 8 }) {
+        Text('审批方式').heading(18)
+        ForEach(APPROVAL_MODES, (choice: ApprovalModeChoice) => {
+          Row({ space: 10 }) {
+            Radio({ value: choice.id, group: 'approvalMode' }).checked(choice.id === this.approvalMode)
+              .enabled(this.connected && !this.busy).onChange((checked: boolean) => { if (checked) { this.chooseApprovalMode(choice.id); } })
+            Column({ space: 2 }) {
+              Text(choice.label).fontSize(15).fontColor(choice.id === 'allow_all' ? Theme.danger : Theme.text)
+              Text(choice.description).caption()
+            }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          }.width('100%')
+        }, (choice: ApprovalModeChoice) => choice.id)
+        Text('对实例全局生效；重启后恢复为服务端配置（HARNESS_APPROVAL_MODE）。').caption()
       }.card()
     }
     Text('已配对设备').heading(18).margin({ top: 8 })

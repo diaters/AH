@@ -180,7 +180,7 @@ pub fn tool_dispatch_system(
             scope.as_ref(),
         );
         if permission == ToolPermission::Confirm
-            && settings.0.approval_mode == ApprovalMode::AllowAll
+            && settings.0.approval_mode.get() == ApprovalMode::AllowAll
         {
             info!(
                 event = "ToolAutoApproved",
@@ -382,7 +382,7 @@ pub fn tool_dispatch_system(
                     .is_some_and(|(_, task)| is_supervised_subtask(task, None));
                 // supervisor 模式下，任务级调用（含主 Agent）同样先交 watchdog 审批。
                 let supervised = supervised
-                    || (settings.0.approval_mode == ApprovalMode::Supervisor
+                    || (settings.0.approval_mode.get() == ApprovalMode::Supervisor
                         && request.request.work_item_id.is_none());
                 let parent_approval = (supervised && escalated.is_none())
                     .then(|| {

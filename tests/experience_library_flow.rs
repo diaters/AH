@@ -79,7 +79,9 @@ impl AgentExecutor for Recorder {
 /// 不读取工作目录下的 agents.toml，只使用用例内创建的 Agent。
 fn isolated_config() -> HarnessConfig {
     HarnessConfig {
-        approval_mode: harness::systems::ApprovalMode::Manual,
+        approval_mode: harness::systems::ApprovalSetting::new(
+            harness::systems::ApprovalMode::Manual,
+        ),
         agents_config_path: "/nonexistent_agents.toml".to_string(),
         ..HarnessConfig::default()
     }

@@ -963,7 +963,7 @@ fn top_level_shell(request: &AgentExecutionRequest) -> Turn {
 }
 
 fn with_mode(mode: ApprovalMode) -> impl FnOnce(&mut HarnessConfig) {
-    move |config| config.approval_mode = mode
+    move |config| config.approval_mode = harness::systems::ApprovalSetting::new(mode)
 }
 
 fn watchdog_replying(decision: &'static str) -> Script {

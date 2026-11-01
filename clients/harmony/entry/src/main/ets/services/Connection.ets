@@ -4,7 +4,7 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, ExperienceDto, ExperienceListDto,
+import { ApprovalModeDto, CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, ExperienceDto, ExperienceListDto,
   ExperienceSummaryDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
 
 // 服务端 `--client-pair` 输出的单个配对链接。
@@ -178,6 +178,13 @@ export class Connection {
   }
   async diagnostics(): Promise<DiagnosticsDto> {
     return JSON.parse(await this.request('/v1/diagnostics', http.RequestMethod.GET)) as DiagnosticsDto;
+  }
+  async approvalMode(): Promise<ApprovalModeDto> {
+    return JSON.parse(await this.request('/v1/approval-mode', http.RequestMethod.GET)) as ApprovalModeDto;
+  }
+  async setApprovalMode(mode: string): Promise<ApprovalModeDto> {
+    const body: Record<string, string> = { 'mode': mode };
+    return JSON.parse(await this.request('/v1/approval-mode', http.RequestMethod.PUT, JSON.stringify(body))) as ApprovalModeDto;
   }
   async acknowledgeNotification(id: string, read: boolean): Promise<void> {
     const body: Record<string, boolean> = { 'read': read };

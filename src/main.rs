@@ -201,7 +201,8 @@ fn main() -> Result<()> {
     let client_server = if let Some(client_config) = config.channels.client.clone() {
         let store = harness::channels::client::Store::open(client_config.state_path.clone())?;
         let client = harness::channels::client::Client::new(client_config, store, input_tx.clone())
-            .with_experience_library(experience_library.clone());
+            .with_experience_library(experience_library.clone())
+            .with_approval_setting(config.approval_mode.clone());
         let server = runtime.block_on(harness::channels::client::ClientServer::start(
             client.clone(),
         ))?;
