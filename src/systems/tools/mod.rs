@@ -38,7 +38,9 @@ pub use result::tool_result_system;
 pub use tool_calling::tool_calling_orchestrator_system;
 
 pub use tool_called_hook::on_tool_called_hook_system;
-pub(crate) use tool_calling::{CallingStateInfo, find_calling_state, handle_tool_calls_response};
+pub(crate) use tool_calling::{
+    CallingStateInfo, ToolLoopPolicy, find_calling_state, handle_tool_calls_response,
+};
 pub use tool_returned_hook::on_tool_returned_hook_system;
 pub use waiting::{WaitingIndex, check_waiting_tasks_system};
 

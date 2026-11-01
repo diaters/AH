@@ -84,6 +84,7 @@ pub fn llm_response_system(
             task_id: s.task_id,
             iteration: s.iteration,
             max_iterations: s.max_iterations,
+            finalize: s.finalize.clone(),
             conversation: s.conversation.clone(),
             tools: s.tools.clone(),
             request_kind: s.request_kind.clone(),
@@ -203,6 +204,10 @@ pub fn llm_response_system(
                     // Despawn any ToolCallingState for this task (loop completed with text)
                     // 按 (task_id, work_item_id) 严格匹配：仅清理当前调用循环的 State，
                     // 不影响同 Task 下其他 WorkItem 的 State。
+                    let finalize_reason =
+                        find_calling_state(&state_info, task.id, result.work_item_id)
+                            .and_then(|info| info.finalize.as_ref())
+                            .map(|request| request.reason.clone());
                     if let Some(info) =
                         find_calling_state(&state_info, task.id, result.work_item_id)
                     {
@@ -290,6 +295,13 @@ pub fn llm_response_system(
                         } else {
                             content.clone()
                         };
+                        // 被要求收尾的子任务：结果标注为未完成，父 Agent 据此决定补派或重试。
+                        let result_summary = match &finalize_reason {
+                            Some(reason) => {
+                                format!("[未完成：子任务被要求收尾（{reason}）]\n{result_summary}")
+                            }
+                            None => result_summary,
+                        };
                         // 终态约束：仍有活跃后台任务、或已完成但通知尚未送达 LLM 时不进入终态，
                         // 暂存候选结果，待后台任务全部结束后由收件箱唤醒续一轮。
                         let active_jobs = owned_jobs
@@ -357,7 +369,7 @@ pub fn llm_response_system(
                         calls,
                         reasoning_content,
                         clock.0,
-                        settings.0.max_tool_iterations,
+                        crate::systems::tools::ToolLoopPolicy::from_config(&settings.0),
                     );
                 }
                 Err(error) if error.is_retryable() && task.retry_count < task.max_retries => {

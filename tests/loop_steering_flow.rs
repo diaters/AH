@@ -140,6 +140,8 @@ fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness 
     let mut app = build_harness_app(
         HarnessConfig {
             max_tool_iterations: 5,
+            subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+            subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
             ..HarnessConfig::default()
         },
         Arc::new(Runtime::new().unwrap()),

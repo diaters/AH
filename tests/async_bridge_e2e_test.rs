@@ -108,7 +108,8 @@ fn spawn_calling_state(
         agent_id,
         pending_tool_call_ids: pending.iter().map(|s| s.to_string()).collect(),
         iteration: 1,
-        max_iterations: 10,
+        max_iterations: Some(10),
+        finalize: None,
         conversation: vec![],
         tools: vec![],
         request_kind: AgentRequestKind::ToolExecution {

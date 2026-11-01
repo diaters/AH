@@ -9,11 +9,12 @@ use uuid::Uuid;
 use crate::{
     contracts::{Clock, FrontendRegistry},
     domain::{
-        Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
-        ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
-        PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants, ScheduledRun,
-        ShortTermMemory, SpaceToolRegistry, Task, TaskInitiator, ToolConfirmationRequestMessage,
-        ToolContext, ToolError, ToolExecutionRequestMessage, ToolPermission, WaitingReason,
+        Agent, AgentKind, ApprovalRequestMessage, ApprovalRequestedHookPending,
+        BuiltinToolExecutors, ChannelId, ChatSession, ConfirmationOption, ConfirmationSource,
+        EngineEvent, EventTarget, PermissionAction, PermissionAuditContext, PermissionSource,
+        RuntimeGrants, ScheduledRun, ShortTermMemory, SpaceToolRegistry, SupervisorEscalated, Task,
+        TaskInitiator, ToolConfirmationRequestMessage, ToolContext, ToolError,
+        ToolExecutionRequestMessage, ToolPermission, WATCHDOG_TAG, WaitingReason,
         resolve_tool_permission,
     },
     ecs::EntityIndex,
@@ -24,6 +25,7 @@ use crate::{
 use super::approval_gate::task_grant_scope;
 use super::orchestrator::restore_task_after_tool;
 use super::orchestrator::{ToolResources, ToolWorldQueries, handle_tool_action, spawn_tool_error};
+use super::tool_calling::is_supervised_subtask;
 
 /// Tool 分发 System
 ///
@@ -38,7 +40,11 @@ pub fn tool_dispatch_system(
     mut short_term_memories: Query<&mut ShortTermMemory>,
     chat_sessions: Query<&ChatSession>,
     calling_states: Query<(Entity, &crate::domain::ToolCallingState)>,
-    mut requests: Query<(Entity, &mut ToolExecutionRequestMessage)>,
+    mut requests: Query<(
+        Entity,
+        &mut ToolExecutionRequestMessage,
+        Option<&SupervisorEscalated>,
+    )>,
     settings: Res<HarnessSettings>,
     backend: Res<NativeProcessBackend>,
     // 合并 index / clock / frontend_registry 等为单 SystemParam，规避 Bevy 单 system 16 参数上限；
@@ -60,7 +66,7 @@ pub fn tool_dispatch_system(
     let scheduled_runs = &index_clock_frontends.3;
     let runtime_grants = index_clock_frontends.4.as_deref();
     let initiators = &index_clock_frontends.5;
-    for (entity, mut request) in &mut requests {
+    for (entity, mut request, escalated) in &mut requests {
         if index
             .get_task(&request.request.task_id)
             .and_then(|entity| tasks.get(entity).ok())
@@ -356,34 +362,23 @@ pub fn tool_dispatch_system(
                     PermissionAuditContext::Dispatch,
                 );
 
-                // Find the task to check parent_task_id
-                // 经 EntityIndex O(1) 解析 TaskId → Entity（替代全量线性扫描）
-                let task_for_approval = index
+                // 批次子任务的确认请求先交监督者（watchdog Agent）按子任务目标与授权范围审批；
+                // 监督者判断需要人工时升级（SupervisorEscalated），再走下方用户确认。
+                let supervised = index
                     .get_task(&request.request.task_id)
                     .and_then(|e| tasks.get(e).ok())
-                    .map(|(_, t)| t.clone());
-
-                // 统一按 task.parent_task_id 查找父 Agent
-                // 经 EntityIndex O(1) 解析 parent TaskId 与 parent AgentId（替代全量线性扫描）
-                let parent_approval = task_for_approval
-                    .as_ref()
-                    .and_then(|task| task.parent_task_id)
-                    .and_then(|parent_task_id| {
-                        index
-                            .get_task(&parent_task_id)
-                            .and_then(|e| tasks.get(e).ok())
-                            .and_then(|(_, parent_task)| parent_task.delegate)
-                            .and_then(|parent_agent_id| {
-                                index
-                                    .get_agent(&parent_agent_id)
-                                    .and_then(|e| agents.get(e).ok())
+                    .is_some_and(|(_, task)| is_supervised_subtask(task, None));
+                let parent_approval = (supervised && escalated.is_none())
+                    .then(|| {
+                        agents
+                            .iter()
+                            .find(|a| {
+                                a.kind == AgentKind::Persistent
+                                    && a.capabilities.tags.iter().any(|t| t == WATCHDOG_TAG)
                             })
-                            .filter(|parent| {
-                                parent.effective_permission(&tool_name, Some(&registry)).0
-                                    == ToolPermission::Allow
-                            })
-                            .map(|parent| parent.id)
-                    });
+                            .map(|a| a.id)
+                    })
+                    .flatten();
 
                 if let Some(parent_agent_id) = parent_approval {
                     debug!(
@@ -391,8 +386,8 @@ pub fn tool_dispatch_system(
                         tool_name = %tool_name,
                         agent_id = %agent.id,
                         parent_agent_id = %parent_agent_id,
-                        reason = "parent task delegate has permission",
-                        "tool requires parent agent approval"
+                        reason = "supervised sub-task",
+                        "tool requires supervisor approval"
                     );
 
                     if let Some((_, mut task)) = tasks

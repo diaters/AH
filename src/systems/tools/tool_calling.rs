@@ -2,25 +2,46 @@
 //!
 //! 自 `transform/llm_response.rs` 按知识域归位至此（P2 重组，纯搬家）。
 //! 承载工具调用循环的编排知识：`ToolCallingState` 的查找与严格匹配协议、
-//! 工具预算耗尽的合成结果生成、结果收集与 follow-up LLM 请求生成。
+//! 工具预算耗尽 / 收尾要求的合成结果生成、结果收集与 follow-up LLM 请求生成。
+//!
+//! 用户顶层任务受轮次预算约束（到达后请 LLM 总结并询问用户）；批次子任务没有轮次预算，
+//! 程序侧只产出检查点、重复调用、连续失败等巡检触发信号，由 watchdog 判断是否干预。
+//! 唯一的硬指标是子任务运行时长安全熔断：到达后先要求收尾，宽限轮次内仍不收尾才判失败。
 
 use crate::prelude::*;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     contracts::Clock,
     domain::{
         AgentExecutionOutput, AgentExecutionRequest, AgentExecutionRequestMessage,
         AgentExecutionResult, AgentId, AgentRequestKind, ConversationMessage, FailureReason,
-        LlmToolCall, MessageDispatchedHookPending, OutputContent, Task, TaskId, TaskStatus,
-        ToolCalledHookPending, ToolCallingState, ToolDefinition, ToolExecutionRequestMessage,
-        ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason,
+        FinalizeRequest, LlmToolCall, MessageDispatchedHookPending, OutputContent, Task, TaskId,
+        TaskStatus, ToolCalledHookPending, ToolCallingState, ToolDefinition,
+        ToolExecutionRequestMessage, ToolExecutionResultMessage, ToolReturnedHookPending,
+        WaitingReason, WatchdogReviewTrigger, consecutive_error_rounds, repeated_call_streak,
     },
     ecs::EntityIndex,
 };
 
 /// 绝对硬上限倍数：iteration 超过此值 × max_iterations 时强制失败任务
 pub(crate) const HARD_LIMIT_MULTIPLIER: u32 = 2;
+
+/// 收到收尾要求后仍继续调用工具的宽限轮数；超过即判失败。
+pub(crate) const FINALIZE_GRACE_ROUNDS: u32 = 2;
+
+/// 连续相同调用 / 连续全部失败达到该轮数时请求 watchdog 立即巡检。
+pub(crate) const LOOP_SIGNAL_THRESHOLD: u32 = 3;
+
+/// 工具循环对话的上下文预算（估算 token）：超过后省略较早的工具输出正文。
+/// 与派发期对话裁剪使用同一安全上限。
+pub(crate) const TOOL_LOOP_CONTEXT_BUDGET_TOKENS: u32 = 100_000;
+
+/// 预算裁剪时保留原文的最近工具结果条数。
+const KEEP_RECENT_TOOL_RESULTS: usize = 6;
+
+/// 已省略工具输出的标记前缀。
+const PRUNED_PREFIX: &str = "[早期工具输出已省略";
 
 /// `ToolCallingState` 的快照，用于在 `llm_response_system` 内避开 Bevy 借用冲突。
 ///
@@ -30,11 +51,35 @@ pub(crate) struct CallingStateInfo {
     pub(crate) entity: Entity,
     pub(crate) task_id: TaskId,
     pub(crate) iteration: u32,
-    pub(crate) max_iterations: u32,
+    pub(crate) max_iterations: Option<u32>,
+    pub(crate) finalize: Option<FinalizeRequest>,
     pub(crate) conversation: Vec<ConversationMessage>,
     pub(crate) tools: Vec<ToolDefinition>,
     pub(crate) request_kind: AgentRequestKind,
     pub(crate) work_item_id: Option<uuid::Uuid>,
+}
+
+/// 工具循环策略：轮次预算与子任务监督参数。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ToolLoopPolicy {
+    pub(crate) max_tool_iterations: u32,
+    pub(crate) subtask_checkpoint_iterations: u32,
+    pub(crate) subtask_max_runtime_secs: u64,
+}
+
+impl ToolLoopPolicy {
+    pub(crate) fn from_config(config: &crate::systems::HarnessConfig) -> Self {
+        Self {
+            max_tool_iterations: config.max_tool_iterations,
+            subtask_checkpoint_iterations: config.subtask_checkpoint_iterations,
+            subtask_max_runtime_secs: config.subtask_max_runtime_secs,
+        }
+    }
+}
+
+/// 批次子任务（`create_tasks` 派出）不受轮次预算约束，由 watchdog 监督。
+pub(crate) fn is_supervised_subtask(task: &Task, work_item_id: Option<uuid::Uuid>) -> bool {
+    work_item_id.is_none() && task.parent_task_id.is_some() && task.batch_id.is_some()
 }
 
 /// 在 `state_info` 中按 `(task_id, work_item_id)` 严格匹配查找 ToolCallingState。
@@ -56,33 +101,23 @@ pub(crate) fn find_calling_state(
         .find(|i| i.task_id == task_id && i.work_item_id == work_item_id)
 }
 
-/// 生成合成 ToolExecutionResultMessage，用于向 LLM 传达工具预算已耗尽
+/// 生成合成 ToolExecutionResultMessage：不执行真实工具，直接把说明作为工具结果回填。
 ///
 /// 合成结果跳过 ToolCalledHookPending（不 spawn），因此不会触发 on_tool_called hook。
 /// 合成结果附加 ToolReturnedHookPending，会进入 on_tool_returned hook 流水线。
-pub(crate) fn spawn_synthetic_limit_result(
+fn spawn_synthetic_result(
     commands: &mut Commands,
     task_id: TaskId,
     agent_id: AgentId,
-    tool_call_id: &str,
-    tool_name: &str,
-    iteration: u32,
-    max_iterations: u32,
+    call: &LlmToolCall,
+    status: &str,
+    output: String,
 ) {
-    let tool_output = Ok(serde_json::json!({
-        "exit_code": 1,
-        "status": "tool_budget_exhausted",
-        "output": format!(
-            "[TOOL_BUDGET_EXHAUSTED] 本轮工具调用次数已达上限 ({}/{})。请总结你目前取得的进展，并向用户说明下一步需要什么，等待用户决策是否继续。",
-            iteration, max_iterations
-        )
-    }));
-
     let result = AgentExecutionResult {
         task_id,
         agent_id,
         request_kind: AgentRequestKind::ToolExecution {
-            tool_name: tool_name.to_string(),
+            tool_name: call.name.clone(),
         },
         result: Ok(AgentExecutionOutput {
             content: OutputContent::Text(String::new()),
@@ -100,9 +135,13 @@ pub(crate) fn spawn_synthetic_limit_result(
     commands.spawn((
         ToolExecutionResultMessage {
             result,
-            tool_name: tool_name.to_string(),
-            tool_output,
-            tool_call_id: Some(tool_call_id.to_string()),
+            tool_name: call.name.clone(),
+            tool_output: Ok(serde_json::json!({
+                "exit_code": 1,
+                "status": status,
+                "output": output,
+            })),
+            tool_call_id: Some(call.id.clone()),
             processed: false,
             original_tool_output: None,
         },
@@ -110,11 +149,132 @@ pub(crate) fn spawn_synthetic_limit_result(
     ));
 }
 
-/// 处理 LLM 响应中的 ToolCalls 分支（自 `llm_response.rs` 迁入，纯搬家）。
+fn budget_exhausted_text(iteration: u32, max_iterations: u32) -> String {
+    format!(
+        "[TOOL_BUDGET_EXHAUSTED] 本轮工具调用次数已达上限 ({iteration}/{max_iterations})。请总结你目前取得的进展，并向用户说明下一步需要什么，等待用户决策是否继续。"
+    )
+}
+
+fn finalize_text(reason: &str) -> String {
+    format!(
+        "[FINALIZE_REQUESTED] 本工具调用未执行：子任务已被要求收尾（{reason}）。请停止调用工具，总结已完成的工作、未完成的部分及原因，并用 <<<RESULT>>>…<<</RESULT>>> 标记交付当前结果。"
+    )
+}
+
+/// 子任务的巡检触发信号：检查点、重复相同调用、连续失败。
+fn loop_signal(
+    conversation: &[ConversationMessage],
+    iteration: u32,
+    checkpoint: u32,
+) -> Option<String> {
+    let streak = repeated_call_streak(conversation);
+    if streak >= LOOP_SIGNAL_THRESHOLD {
+        return Some(format!("连续 {streak} 轮发出完全相同的工具调用"));
+    }
+    let errors = consecutive_error_rounds(conversation);
+    if errors >= LOOP_SIGNAL_THRESHOLD {
+        return Some(format!("连续 {errors} 轮工具调用全部失败"));
+    }
+    (checkpoint > 0 && iteration.is_multiple_of(checkpoint))
+        .then(|| format!("检查点：已执行 {iteration} 轮工具调用"))
+}
+
+/// 超过上下文预算时，从最早的工具结果开始省略正文（保留最近若干条与调用配对结构）。
 ///
-/// 职责：更新/创建 `ToolCallingState`、执行迭代限制三段策略
-/// （绝对硬上限 → WorkItem 隔离 → 普通任务预算耗尽合成结果），
-/// 并为每个调用 spawn `ToolExecutionRequestMessage`。
+/// 返回省略的条数。只改写 Tool 内容，不删除消息，保证 tool_call_id 配对完整。
+pub(crate) fn prune_tool_outputs(
+    conversation: &mut [ConversationMessage],
+    budget_tokens: u32,
+) -> usize {
+    let mut total: u64 = conversation
+        .iter()
+        .map(|m| u64::from(m.estimated_tokens()))
+        .sum();
+    if total <= u64::from(budget_tokens) {
+        return 0;
+    }
+    let tool_positions: Vec<usize> = conversation
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(m, ConversationMessage::Tool { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    let prunable = tool_positions
+        .len()
+        .saturating_sub(KEEP_RECENT_TOOL_RESULTS);
+    let mut pruned = 0;
+    for &position in &tool_positions[..prunable] {
+        if total <= u64::from(budget_tokens) {
+            break;
+        }
+        let ConversationMessage::Tool { content, .. } = &mut conversation[position] else {
+            continue;
+        };
+        if content.starts_with(PRUNED_PREFIX) {
+            continue;
+        }
+        let before = u64::from(crate::domain::estimate_tokens(content));
+        let head: String = content.chars().take(200).collect();
+        *content = format!(
+            "{PRUNED_PREFIX}以节省上下文：原 {} 字符，开头：{head}…]",
+            content.chars().count()
+        );
+        let after = u64::from(crate::domain::estimate_tokens(content));
+        total = total.saturating_sub(before.saturating_sub(after));
+        pruned += 1;
+    }
+    pruned
+}
+
+/// 以合成结果回填本轮全部调用，并把循环状态更新为"等待合成结果"。
+#[allow(clippy::too_many_arguments)]
+fn respond_synthetic(
+    commands: &mut Commands,
+    task: &mut Task,
+    info: &CallingStateInfo,
+    agent_id: AgentId,
+    calls: &[LlmToolCall],
+    conversation: Vec<ConversationMessage>,
+    iteration: u32,
+    finalize: Option<FinalizeRequest>,
+    status: &str,
+    output: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    for call in calls {
+        spawn_synthetic_result(
+            commands,
+            task.id,
+            agent_id,
+            call,
+            status,
+            output.to_string(),
+        );
+    }
+    commands.entity(info.entity).despawn();
+    commands.spawn(ToolCallingState {
+        task_id: task.id,
+        agent_id,
+        pending_tool_call_ids: calls.iter().map(|c| c.id.clone()).collect(),
+        iteration,
+        max_iterations: info.max_iterations,
+        finalize,
+        conversation,
+        tools: info.tools.clone(),
+        request_kind: info.request_kind.clone(),
+        work_item_id: info.work_item_id,
+    });
+    // 不生成真实 ToolExecutionRequestMessage；置 Waiting(ToolExecution) 使
+    // tool_calling_orchestrator_system 继续收集合成结果。
+    if info.work_item_id.is_none() && !task.status.is_terminal() {
+        task.mark_waiting(WaitingReason::ToolExecution, now);
+    }
+}
+
+/// 处理 LLM 响应中的 ToolCalls 分支（自 `llm_response.rs` 迁入）。
+///
+/// 职责：更新/创建 `ToolCallingState`、执行循环约束（收尾要求 → 安全熔断 →
+/// 轮次预算），子任务产出巡检触发信号，并为每个调用 spawn `ToolExecutionRequestMessage`。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_tool_calls_response(
     commands: &mut Commands,
@@ -124,11 +284,9 @@ pub(crate) fn handle_tool_calls_response(
     calls: &[LlmToolCall],
     reasoning_content: &Option<String>,
     now: chrono::DateTime<chrono::Utc>,
-    max_tool_iterations: u32,
+    policy: ToolLoopPolicy,
 ) {
-    // Check for existing ToolCallingState (follow-up iteration).
-    // 按 (task_id, work_item_id) 严格匹配：避免误复用同 Task 下
-    // 其他 WorkItem 残留的 State。
+    // 按 (task_id, work_item_id) 严格匹配：避免误复用同 Task 下其他 WorkItem 残留的 State。
     let existing = find_calling_state(state_info, task.id, result.work_item_id);
     let assistant_text = result
         .result
@@ -139,7 +297,6 @@ pub(crate) fn handle_tool_calls_response(
 
     if let Some(info) = existing {
         let new_iteration = info.iteration + 1;
-        // Despawn old state and create updated one
         let mut new_conversation = info.conversation.clone();
         new_conversation.push(ConversationMessage::Assistant {
             content: assistant_text.clone(),
@@ -147,22 +304,86 @@ pub(crate) fn handle_tool_calls_response(
             reasoning_content: reasoning_content.clone(),
         });
 
-        if new_iteration > info.max_iterations {
+        // 子任务运行时长安全熔断：到达后转为收尾要求。
+        let mut finalize = info.finalize.clone();
+        if finalize.is_none()
+            && info.max_iterations.is_none()
+            && policy.subtask_max_runtime_secs > 0
+            && (now - task.created_at).num_seconds()
+                >= i64::try_from(policy.subtask_max_runtime_secs).unwrap_or(i64::MAX)
+        {
+            warn!(
+                event = "SubTaskRuntimeFuseTripped",
+                task_id = %task.id,
+                max_runtime_secs = policy.subtask_max_runtime_secs,
+                "sub-task reached runtime safety fuse; requesting finalize"
+            );
+            finalize = Some(FinalizeRequest::new(format!(
+                "运行时长已达安全上限 {}s",
+                policy.subtask_max_runtime_secs
+            )));
+        }
+
+        if let Some(mut request) = finalize {
+            request.rounds += 1;
+            if request.rounds > FINALIZE_GRACE_ROUNDS {
+                warn!(
+                    event = "FinalizeIgnored",
+                    task_id = %task.id,
+                    rounds = request.rounds,
+                    reason = %request.reason,
+                    "tool loop kept calling tools after finalize request; failing task"
+                );
+                if info.work_item_id.is_none() {
+                    task.mark_failed_reason(
+                        FailureReason::AgentError,
+                        format!("要求收尾后仍持续调用工具（{}）", request.reason),
+                        now,
+                    );
+                }
+                commands.entity(info.entity).despawn();
+                return;
+            }
+            debug!(
+                event = "FinalizeRequestedSyntheticResult",
+                task_id = %task.id,
+                rounds = request.rounds,
+                "finalize requested, returning synthetic results"
+            );
+            let output = finalize_text(&request.reason);
+            respond_synthetic(
+                commands,
+                task,
+                info,
+                result.agent_id,
+                calls,
+                new_conversation,
+                new_iteration,
+                Some(request),
+                "finalize_requested",
+                &output,
+                now,
+            );
+            return;
+        }
+
+        if let Some(max_iterations) = info.max_iterations
+            && new_iteration > max_iterations
+        {
             // 绝对硬上限：任何情况下都强制失败，防止无限循环
-            if new_iteration > HARD_LIMIT_MULTIPLIER * info.max_iterations {
+            if new_iteration > HARD_LIMIT_MULTIPLIER * max_iterations {
                 warn!(
                     event = "ToolCallingHardLimitExceeded",
                     task_id = %task.id,
                     iteration = new_iteration,
-                    max_iterations = info.max_iterations,
+                    max_iterations,
                     "tool calling exceeded absolute hard limit"
                 );
                 if info.work_item_id.is_none() {
                     task.mark_failed_reason(
                         FailureReason::AgentError,
                         format!(
-                            "tool calling exceeded absolute hard limit ({}/{})",
-                            new_iteration, info.max_iterations
+                            "tool calling exceeded absolute hard limit ({new_iteration}/{max_iterations})"
                         ),
                         now,
                     );
@@ -178,56 +399,56 @@ pub(crate) fn handle_tool_calls_response(
                     task_id = %task.id,
                     work_item_id = ?info.work_item_id,
                     iteration = new_iteration,
-                    max_iterations = info.max_iterations,
+                    max_iterations,
                     "work item tool calling exceeded max iterations"
                 );
                 commands.entity(info.entity).despawn();
                 return;
             }
 
-            // 普通任务：生成合成 tool result
+            // 用户顶层任务：生成合成 tool result，请 LLM 总结并询问用户
             debug!(
                 event = "ToolBudgetExhausted",
                 task_id = %task.id,
                 iteration = new_iteration,
-                max_iterations = info.max_iterations,
+                max_iterations,
                 "tool budget exhausted, returning synthetic result"
             );
-
-            for call in calls {
-                spawn_synthetic_limit_result(
-                    commands,
-                    task.id,
-                    result.agent_id,
-                    &call.id,
-                    &call.name,
-                    info.iteration,
-                    info.max_iterations,
-                );
-            }
-
-            // 更新 ToolCallingState，记录这些 tool_call_id 正在等待合成结果
-            let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
-            commands.entity(info.entity).despawn();
-            commands.spawn(ToolCallingState {
-                task_id: task.id,
-                agent_id: result.agent_id,
-                pending_tool_call_ids: pending_ids,
-                iteration: new_iteration,
-                max_iterations: info.max_iterations,
-                conversation: new_conversation,
-                tools: info.tools.clone(),
-                request_kind: info.request_kind.clone(),
-                work_item_id: info.work_item_id,
-            });
-
-            // 不生成真实 ToolExecutionRequestMessage，避免真实工具执行
-            // 将任务设为 Waiting(ToolExecution)，使 tool_calling_orchestrator_system
-            // 入口检查允许此状态继续处理合成结果
-            if info.work_item_id.is_none() && !task.status.is_terminal() {
-                task.mark_waiting(WaitingReason::ToolExecution, now);
-            }
+            let output = budget_exhausted_text(info.iteration, max_iterations);
+            respond_synthetic(
+                commands,
+                task,
+                info,
+                result.agent_id,
+                calls,
+                new_conversation,
+                new_iteration,
+                None,
+                "tool_budget_exhausted",
+                &output,
+                now,
+            );
             return;
+        }
+
+        if info.max_iterations.is_none()
+            && let Some(reason) = loop_signal(
+                &new_conversation,
+                new_iteration,
+                policy.subtask_checkpoint_iterations,
+            )
+        {
+            info!(
+                event = "WatchdogReviewTriggered",
+                task_id = %task.id,
+                iteration = new_iteration,
+                reason = %reason,
+                "sub-task loop signal requests watchdog review"
+            );
+            commands.spawn(WatchdogReviewTrigger {
+                task_id: task.id,
+                reason,
+            });
         }
 
         let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
@@ -248,6 +469,7 @@ pub(crate) fn handle_tool_calls_response(
             pending_tool_call_ids: pending_ids,
             iteration: new_iteration,
             max_iterations: info.max_iterations,
+            finalize: None,
             conversation: new_conversation,
             tools: info.tools.clone(),
             request_kind: info.request_kind.clone(),
@@ -285,7 +507,8 @@ pub(crate) fn handle_tool_calls_response(
         };
 
         let pending_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
-        let max_iterations = max_tool_iterations;
+        let max_iterations = (!is_supervised_subtask(task, result.work_item_id))
+            .then_some(policy.max_tool_iterations);
 
         debug!(
             event = "ToolCallingStateCreated",
@@ -294,7 +517,7 @@ pub(crate) fn handle_tool_calls_response(
             iteration = 1,
             pending_count = pending_ids.len(),
             tools = ?calls.iter().map(|c| &c.name).collect::<Vec<_>>(),
-            max_iterations = max_iterations,
+            max_iterations = ?max_iterations,
             "created tool calling state"
         );
 
@@ -304,6 +527,7 @@ pub(crate) fn handle_tool_calls_response(
             pending_tool_call_ids: pending_ids,
             iteration: 1,
             max_iterations,
+            finalize: None,
             conversation,
             tools: result.tools.clone(),
             request_kind: result.request_kind.clone(),
@@ -460,15 +684,17 @@ pub fn tool_calling_orchestrator_system(
             commands.entity(*entity).despawn();
         }
 
-        // Check iteration limit
-        if state.iteration >= state.max_iterations {
+        // Check iteration limit（批次子任务无轮次预算，由 watchdog 监督）
+        if let Some(max_iterations) = state.max_iterations
+            && state.iteration >= max_iterations
+        {
             // 绝对硬上限
-            if state.iteration > HARD_LIMIT_MULTIPLIER * state.max_iterations {
+            if state.iteration > HARD_LIMIT_MULTIPLIER * max_iterations {
                 warn!(
                     event = "ToolCallingHardLimitExceeded",
                     task_id = %state.task_id,
                     iteration = state.iteration,
-                    max_iterations = state.max_iterations,
+                    max_iterations,
                     "tool calling exceeded absolute hard limit on result collection"
                 );
                 // WorkItem 不修改原任务状态
@@ -481,7 +707,7 @@ pub fn tool_calling_orchestrator_system(
                         crate::domain::FailureReason::AgentError,
                         format!(
                             "tool calling exceeded absolute hard limit ({}/{})",
-                            state.iteration, state.max_iterations
+                            state.iteration, max_iterations
                         ),
                         clock.0,
                     );
@@ -497,23 +723,34 @@ pub fn tool_calling_orchestrator_system(
                     task_id = %state.task_id,
                     work_item_id = ?state.work_item_id,
                     iteration = state.iteration,
-                    max_iterations = state.max_iterations,
+                    max_iterations,
                     "work item tool calling reached max iterations"
                 );
                 commands.entity(state_entity).despawn();
                 continue;
             } else {
                 // 普通任务：允许 LLM 再响应一次，用于总结和询问用户
-                // 任务当前处于 Waiting(ToolExecution) 状态，
-                // tool_calling_orchestrator_system 入口检查允许此状态继续处理
                 debug!(
                     event = "ToolBudgetExhaustedAllowingSummary",
                     task_id = %state.task_id,
                     iteration = state.iteration,
-                    max_iterations = state.max_iterations,
+                    max_iterations,
                     "tool budget exhausted, allowing LLM to summarize"
                 );
             }
+        }
+
+        // 长时间运行的工具循环：超过上下文预算时省略较早的工具输出正文。
+        let pruned = prune_tool_outputs(&mut state.conversation, TOOL_LOOP_CONTEXT_BUDGET_TOKENS);
+        if pruned > 0 {
+            info!(
+                event = "ToolLoopContextPruned",
+                task_id = %state.task_id,
+                iteration = state.iteration,
+                pruned_results = pruned,
+                budget_tokens = TOOL_LOOP_CONTEXT_BUDGET_TOKENS,
+                "pruned early tool outputs to stay within context budget"
+            );
         }
 
         // 在 follow-up 中保留当前通道上下文，避免多轮 tool calling 后丢失来源信息。
@@ -575,6 +812,81 @@ pub fn tool_calling_orchestrator_system(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prune_tool_outputs_keeps_recent_results_and_pairing() {
+        let big = "x ".repeat(4000);
+        let mut conversation = Vec::new();
+        for i in 0..10 {
+            conversation.push(ConversationMessage::Assistant {
+                content: None,
+                tool_calls: vec![LlmToolCall {
+                    id: format!("c{i}"),
+                    name: "shell_exec".into(),
+                    arguments: "{}".into(),
+                }],
+                reasoning_content: None,
+            });
+            conversation.push(ConversationMessage::Tool {
+                tool_call_id: format!("c{i}"),
+                content: big.clone(),
+            });
+        }
+        let len = conversation.len();
+        assert_eq!(prune_tool_outputs(&mut conversation, 1_000_000), 0);
+        let pruned = prune_tool_outputs(&mut conversation, 1_000);
+        assert_eq!(
+            pruned, 4,
+            "only results older than the recent window are pruned"
+        );
+        assert_eq!(
+            conversation.len(),
+            len,
+            "messages are rewritten, not removed"
+        );
+        let contents: Vec<&str> = conversation
+            .iter()
+            .filter_map(|m| match m {
+                ConversationMessage::Tool { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(contents[..4].iter().all(|c| c.starts_with(PRUNED_PREFIX)));
+        assert!(contents[4..].iter().all(|c| *c == big));
+        // 已省略的内容不会被重复改写。
+        assert_eq!(prune_tool_outputs(&mut conversation, 1_000), 0);
+    }
+
+    #[test]
+    fn loop_signal_prefers_repeat_then_errors_then_checkpoint() {
+        let round = |args: &str, result: &str| {
+            vec![
+                ConversationMessage::Assistant {
+                    content: None,
+                    tool_calls: vec![LlmToolCall {
+                        id: args.into(),
+                        name: "shell_exec".into(),
+                        arguments: args.into(),
+                    }],
+                    reasoning_content: None,
+                },
+                ConversationMessage::Tool {
+                    tool_call_id: args.into(),
+                    content: result.into(),
+                },
+            ]
+        };
+        let same: Vec<_> = (0..3).flat_map(|_| round("same", "ok")).collect();
+        assert!(loop_signal(&same, 3, 10).unwrap().contains("完全相同"));
+        let errors: Vec<_> = (0..3)
+            .flat_map(|i| round(&i.to_string(), "error: boom"))
+            .collect();
+        assert!(loop_signal(&errors, 3, 10).unwrap().contains("全部失败"));
+        let fine: Vec<_> = (0..2).flat_map(|i| round(&i.to_string(), "ok")).collect();
+        assert!(loop_signal(&fine, 10, 10).unwrap().contains("检查点"));
+        assert!(loop_signal(&fine, 9, 10).is_none());
+        assert!(loop_signal(&fine, 10, 0).is_none());
+    }
+
     use super::*;
 
     /// 构造一个最小 CallingStateInfo 用于查找测试。
@@ -586,7 +898,8 @@ mod tests {
             entity: Entity::PLACEHOLDER,
             task_id,
             iteration: 1,
-            max_iterations: 10,
+            max_iterations: Some(10),
+            finalize: None,
             conversation: vec![],
             tools: vec![],
             request_kind: AgentRequestKind::LlmCompletion,

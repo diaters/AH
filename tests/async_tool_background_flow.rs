@@ -92,6 +92,8 @@ fn start_with(
         HarnessConfig {
             agents_config_path: "/nonexistent_agents.toml".into(),
             max_tool_iterations: 8,
+            subtask_checkpoint_iterations: harness::systems::DEFAULT_SUBTASK_CHECKPOINT_ITERATIONS,
+            subtask_max_runtime_secs: harness::systems::DEFAULT_SUBTASK_MAX_RUNTIME_SECS,
             tool_background_after_secs: 1,
             ..HarnessConfig::default()
         },

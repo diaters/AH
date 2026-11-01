@@ -271,7 +271,7 @@ pub use experience_library::{
 };
 
 // tool_runtime
-pub use tool_runtime::ToolCallingState;
+pub use tool_runtime::{FinalizeRequest, ToolCallingState};
 
 // tool_async
 pub use tool_async::{
@@ -282,9 +282,11 @@ pub use tool_async::{
 
 // watchdog
 pub use watchdog::{
-    WATCHDOG_TAG, WatchdogAction, WatchdogDecision, WatchdogReviewOrigin, WatchdogSubject,
-    WatchdogSubjectKey, WatchdogSubjectKind, build_watchdog_prompt, evidence_fingerprint,
-    parse_watchdog_decisions, truncate_chars,
+    ApprovalReviewInput, ApprovalVerdict, SupervisorApprovalOrigin, SupervisorEscalated,
+    WATCHDOG_TAG, WatchdogAction, WatchdogDecision, WatchdogReviewOrigin, WatchdogReviewTrigger,
+    WatchdogSubject, WatchdogSubjectKey, WatchdogSubjectKind, build_approval_prompt,
+    build_watchdog_prompt, consecutive_error_rounds, evidence_fingerprint, parse_approval_decision,
+    parse_watchdog_decisions, repeated_call_streak, truncate_chars,
 };
 
 // work_item
