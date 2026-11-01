@@ -110,6 +110,62 @@ impl Notification {
     }
 }
 
+const PREVIEW_CHARS: usize = 200;
+
+/// 取首个非空字符串字段并按字符截断，折叠空白。
+fn preview(data: &Value, key: &str) -> Option<String> {
+    let text = data[key]
+        .as_str()?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    let mut out: String = text.chars().take(PREVIEW_CHARS).collect();
+    if text.chars().count() > PREVIEW_CHARS {
+        out.push('…');
+    }
+    Some(out)
+}
+
+fn compose(kind: &str, data: &Value) -> Option<(&'static str, String)> {
+    let named = |label: &str, key: &str| {
+        let name = data[key].as_str().filter(|s| !s.is_empty());
+        name.map_or_else(|| label.to_string(), |n| format!("{label}（{n}）"))
+    };
+    let root = data["parent_id"].is_null();
+    Some(match kind {
+        "approval_required" => {
+            let who = data["agent_name"].as_str().unwrap_or("Agent");
+            let tool = data["tool_name"].as_str().unwrap_or("工具");
+            (
+                "Harness 待审批",
+                format!("{who} 请求使用工具 {tool}，请打开 Harness 审批。"),
+            )
+        }
+        "question" => ("Harness 待回答", preview(data, "question")?),
+        "task_status" if root && data["status"] == "done" => (
+            "Harness 任务完成",
+            match preview(data, "result") {
+                Some(r) => format!("{}：{r}", named("任务", "name")),
+                None => format!("{}已完成。", named("任务", "name")),
+            },
+        ),
+        "task_status" if root && data["status"] == "failed" => (
+            "Harness 任务失败",
+            match preview(data, "result") {
+                Some(r) => format!("{}：{r}", named("任务", "name")),
+                None => format!("{}执行失败。", named("任务", "name")),
+            },
+        ),
+        "text" if data["background_notification"] == true => {
+            ("Harness 后台结果", preview(data, "content")?)
+        }
+        _ => return None,
+    })
+}
+
 pub(super) fn enqueue(
     state: &mut State,
     user: &str,
@@ -121,17 +177,8 @@ pub(super) fn enqueue(
     let Some(recipient) = config.recipients.get(user) else {
         return;
     };
-    let title = match kind {
-        "approval_required" => "Harness 待审批",
-        "question" => "Harness 待回答",
-        "task_status" if data["parent_id"].is_null() && data["status"] == "done" => {
-            "Harness 任务完成"
-        }
-        "task_status" if data["parent_id"].is_null() && data["status"] == "failed" => {
-            "Harness 任务失败"
-        }
-        "text" if data["background_notification"] == true => "Harness 后台结果",
-        _ => return,
+    let Some((title, message)) = compose(kind, data) else {
+        return;
     };
     if state.notifications.len() >= 4000 {
         if let Some(index) = state
@@ -146,14 +193,14 @@ pub(super) fn enqueue(
         }
     }
     let now = chrono::Utc::now().timestamp();
-    // 只发送关联标识与通用摘要；正文、工具参数、凭证仍由鉴权接口读取。
+    // 只发送截断后的可读摘要；工具参数、凭证不进入外部通知，完整内容由鉴权接口读取。
     state.notifications.push(Notification {
         id: Uuid::new_v4(),
         user_id: user.into(),
         session_id: session,
         recipient_hash: hash(recipient),
         title: title.into(),
-        message: format!("会话 {session} 有新的处理结果或待办，请打开 Harness 同步完整状态。"),
+        message,
         state: "queued".into(),
         result_code: None,
         created_at: now,
@@ -466,6 +513,51 @@ mod tests {
         store.append_with_notification("alice",session,"question",json!({"question":"private text must not be sent","question_id":Uuid::new_v4().to_string(),"task_id":Uuid::new_v4()}),Some(config)).unwrap();
     }
     #[test]
+    fn notifications_carry_truncated_readable_preview_without_tool_input() {
+        let (_dir, mut store, session) = setup();
+        let config = config();
+        let long = "结果".repeat(300);
+        for (kind, data) in [
+            (
+                "text",
+                json!({"content":long,"background_notification":true}),
+            ),
+            (
+                "text",
+                json!({"content":"   ","background_notification":true}),
+            ),
+            (
+                "task_status",
+                json!({"name":"日报","status":"done","result":"完成 3 项","parent_id":null}),
+            ),
+            (
+                "task_status",
+                json!({"name":"子任务","status":"done","result":"x","parent_id":"p"}),
+            ),
+            (
+                "approval_required",
+                json!({"agent_name":"coder","tool_name":"shell","input_json":"{\"token\":\"SECRET\"}"}),
+            ),
+        ] {
+            store
+                .append_with_notification("alice", session, kind, data, Some(&config))
+                .unwrap();
+        }
+        let msgs: Vec<_> = store
+            .state
+            .notifications
+            .iter()
+            .map(|n| n.message.clone())
+            .collect();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].chars().count(), PREVIEW_CHARS + 1);
+        assert!(msgs[0].ends_with('…'));
+        assert_eq!(msgs[1], "任务（日报）：完成 3 项");
+        assert!(
+            msgs[2].contains("coder") && msgs[2].contains("shell") && !msgs[2].contains("SECRET")
+        );
+    }
+    #[test]
     fn quota_is_per_recipient_and_local_day_and_receipts_are_independent() {
         let (_dir, mut store, session) = setup();
         let mut config = config();
@@ -473,7 +565,7 @@ mod tests {
         queue(&mut store, session, &config);
         let now = chrono::Utc::now().timestamp();
         let n = store.claim_notification(&config, now).unwrap().unwrap();
-        assert!(!n.message.contains("private text"));
+        assert!(n.message.contains("private text"));
         store
             .finish_notification(
                 n.id,
@@ -489,6 +581,8 @@ mod tests {
             .unwrap();
         assert!(store.state.notifications[0].received_at.is_none());
         queue(&mut store, session, &config);
+        // 入队时间取自实时时钟，须不早于它，否则跨秒时尚未到期而不会进入 quota_wait。
+        let now = chrono::Utc::now().timestamp();
         assert!(store.claim_notification(&config, now).unwrap().is_none());
         assert_eq!(store.state.notifications[1].state, "quota_wait");
         let next_day = config.day(now).1;
@@ -650,7 +744,7 @@ mod tests {
         cancel.cancel();
         worker.await.unwrap();
         let requests = mock.received_requests().await.unwrap();
-        assert!(!String::from_utf8_lossy(&requests[0].body).contains("private question"));
+        assert!(String::from_utf8_lossy(&requests[0].body).contains("private question"));
         drop(client);
         let recovered = Store::open(dir.path().join("state.json")).unwrap();
         assert_eq!(
