@@ -67,7 +67,7 @@ pub fn register_builtin_tools(
 ) {
     registry.register(ToolDefinition {
         name: "create_tasks".to_string(),
-        description: "Create sub-tasks to delegate work to specialized child agents. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete. Sub-tasks run in the background and return a job_id: keep working, or end your turn if you depend on their results; a <task-notification> with all results is delivered automatically when the batch finishes and starts a new turn. Do not poll: a watchdog supervises sub-task progress, nudges stalled sub-tasks and cancels hopeless ones, so you do not need to monitor them.".to_string(),
+        description: "Create background sub-tasks. Each sub-task is executed by the main agent in a separate context, with the same tool permissions as you. Supports creating multiple tasks with dependency ordering. Tasks without dependencies will run in parallel; tasks with dependencies will wait for them to complete. Sub-tasks run in the background and return a job_id: keep working, or end your turn if you depend on their results; a <task-notification> with all results is delivered automatically when the batch finishes and starts a new turn. Do not poll: a watchdog supervises sub-task progress, nudges stalled sub-tasks and cancels hopeless ones, so you do not need to monitor them.".to_string(),
         parameters: ToolSchema {
             schema: serde_json::json!({
                 "type": "object",
@@ -80,25 +80,21 @@ pub fn register_builtin_tools(
                             "properties": {
                                 "name": {
                                     "type": "string",
-                                    "description": "Name for the sub-task/child agent"
+                                    "description": "Unique name for the sub-task within this batch"
                                 },
                                 "content": {
                                     "type": "string",
-                                    "description": "Task description/prompt for the child agent"
+                                    "description": "Self-contained task description; the sub-task does not see your conversation"
                                 },
                                 "tools": {
                                     "type": "array",
                                     "items": { "type": "string" },
-                                    "description": "List of tool names the child agent can use"
+                                    "description": "Tool names this sub-task is expected to use. Declares its authorization scope: the watchdog approves confirm-required calls only within it. It does not restrict which tools are available"
                                 },
                                 "depends_on": {
                                     "type": "array",
                                     "items": { "type": "string" },
                                     "description": "Names of other sub-tasks in this batch that must complete before this one starts"
-                                },
-                                "model": {
-                                    "type": "string",
-                                    "description": "Optional model override for the child agent"
                                 }
                             },
                             "required": ["name", "content", "tools"]

@@ -44,10 +44,6 @@ event = "on_agent_started"
 script = "hooks/on_agent_started.rhai"
 
 [[hooks]]
-event = "on_agent_stopped"
-script = "hooks/on_agent_stopped.rhai"
-
-[[hooks]]
 event = "on_message_dispatched"
 script = "hooks/on_message_dispatched.rhai"
 

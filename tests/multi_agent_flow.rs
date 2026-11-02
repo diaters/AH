@@ -5,10 +5,9 @@ use std::{sync::Arc, thread, time::Duration};
 use common::mock_executor::PromptEchoExecutor;
 use crossbeam_channel::unbounded;
 use harness::{
-    app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
-    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
-    domain::ExternalInput, domain::FrontendKind, domain::Task, domain::TaskTerminatedMessage,
-    llm::ExecutorRegistry, systems::HarnessConfig,
+    app::build_harness_app, domain::Agent, domain::AgentExecutor, domain::ChannelId,
+    domain::ExternalInput, domain::FrontendKind, domain::Task, llm::ExecutorRegistry,
+    systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -94,12 +93,6 @@ fn loads_persistent_agents_from_config() {
         "should have default agent"
     );
     assert!(names.contains(&"evaluator"), "should have evaluator agent");
-
-    for agent in &agents {
-        assert_eq!(agent.kind, AgentKind::Persistent);
-        assert_eq!(agent.parent_id, None);
-        assert_eq!(agent.bound_task_id, None);
-    }
 }
 
 /// 验证 tags 匹配选择 Agent。
@@ -144,98 +137,5 @@ fn selects_agent_by_tags_match() {
         !tasks[0].status().is_terminal(),
         "multi-turn task should not be in terminal state, got {:?}",
         tasks[0].status()
-    );
-}
-
-/// 验证任务型 Agent 的创建、执行和销毁完整生命周期。
-#[test]
-fn task_scoped_agent_lifecycle() {
-    let runtime = Arc::new(Runtime::new().expect("runtime should be created"));
-    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
-    let _executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let (_input_tx, input_rx) = unbounded();
-    let executor: Arc<dyn AgentExecutor> = Arc::new(PromptEchoExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let mut app = build_harness_app(
-        multi_agent_config(),
-        runtime,
-        executor_registry,
-        input_rx,
-        vec![],
-        harness::channels::ChannelManager::empty().0,
-    );
-
-    app.update();
-
-    let parent_agent_id = {
-        let world = app.world_mut();
-        let mut query = world.query::<&Agent>();
-        let default_agent = query
-            .iter(world)
-            .find(|a| a.profile.name == "default-llm-agent")
-            .expect("default agent should exist");
-        default_agent.id
-    };
-
-    let task_id = harness::domain::TaskId::new();
-    {
-        let world = app.world_mut();
-        world.spawn(Agent {
-            id: harness::domain::AgentId::new(),
-            profile: AgentProfile {
-                name: "sub-agent".to_string(),
-                model: "gpt-4.1-mini".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec!["llm".to_string()],
-                description: "子 Agent".to_string(),
-            },
-            kind: AgentKind::TaskScoped,
-            parent_id: Some(parent_agent_id),
-            bound_task_id: Some(task_id),
-            tool_permissions: AgentToolPermissions::default(),
-            system_prompt: None,
-        });
-    }
-
-    let task_scoped_count = {
-        let world = app.world_mut();
-        let mut query = world.query::<&Agent>();
-        query
-            .iter(world)
-            .filter(|a| a.kind == AgentKind::TaskScoped)
-            .count()
-    };
-    assert_eq!(task_scoped_count, 1);
-
-    {
-        let world = app.world_mut();
-        let mut task = Task::from_user_input("test".to_string(), 3, default_channel());
-        task.id = task_id;
-        task.creator = parent_agent_id;
-        task.mark_done("done".to_string(), chrono::Utc::now());
-        let task_entity = world.spawn(task).id();
-        // 经 spawn 后同步写 EntityIndex（模拟 spawn_task 封装的索引维护），
-        // 供 maintenance::handle_termination 等 O(1) 解析 TaskId → Entity（ADR-005 §3 阶段 2）。
-        world
-            .resource_mut::<harness::ecs::EntityIndex>()
-            .tasks
-            .insert(task_id, task_entity);
-        world.spawn(TaskTerminatedMessage { task_id });
-    }
-
-    app.update();
-
-    let task_scoped_count = {
-        let world = app.world_mut();
-        let mut query = world.query::<&Agent>();
-        query
-            .iter(world)
-            .filter(|a| a.kind == AgentKind::TaskScoped)
-            .count()
-    };
-    assert_eq!(
-        task_scoped_count, 0,
-        "task-scoped agent should be despawned after task termination"
     );
 }

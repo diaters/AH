@@ -36,9 +36,8 @@ pub(crate) use command::{
     command_parse_system, reload_plugins_system, reload_triggers_message_consumer_system,
 };
 pub(crate) use dispatch::{
-    agent_started_hook_system, agent_stopped_hook_system, dispatch_system,
-    on_message_dispatched_hook_system, subtask_dispatch_preparation_system,
-    workitem_lifecycle_hook_system,
+    agent_started_hook_system, dispatch_system, on_message_dispatched_hook_system,
+    subtask_dispatch_preparation_system, workitem_lifecycle_hook_system,
 };
 pub(crate) use evaluation::evaluation_trigger_system;
 pub(crate) use execution::{agent_execution_system, model_chain_state_update_system};
@@ -51,9 +50,7 @@ pub(crate) use loop_control::{
     clear_stop_requested_system, context_attachment_system, inbox_ingest_system,
     inbox_status_sync_system, inbox_wake_system, monitor_output_system, stop_task_system,
 };
-pub(crate) use maintenance::{
-    agent_factory_system, load_agents_system, validate_required_tags_system,
-};
+pub(crate) use maintenance::{load_agents_system, validate_required_tags_system};
 pub(crate) use memory::{
     init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
 };

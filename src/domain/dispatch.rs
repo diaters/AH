@@ -4,7 +4,7 @@
 //! 所有派发请求通过 `PendingDispatch` Component 流转，
 //! 由单一的 `dispatch_system` 扫描处理。
 
-use crate::domain::{AgentId, WorkItemType};
+use crate::domain::WorkItemType;
 use bevy_ecs::prelude::Component;
 
 /// 派发请求标记 Component，附加在 Task 或 WorkItem Entity 上。
@@ -31,8 +31,6 @@ pub enum DispatchKind {
 pub struct DispatchHint {
     /// 指定的 Persistent Agent 名称；`None` 表示交给主 Agent（初次派发）。
     pub preferred_agent_name: Option<String>,
-    /// 目标 Agent 不存在时 spawn 新 Agent 的规格
-    pub agent_spawn_spec: Option<AgentSpawnSpec>,
 }
 
 impl DispatchHint {
@@ -45,18 +43,8 @@ impl DispatchHint {
     pub fn agent(name: impl Into<String>) -> Self {
         Self {
             preferred_agent_name: Some(name.into()),
-            agent_spawn_spec: None,
         }
     }
-}
-
-/// Agent 生成规格
-#[derive(Debug, Clone)]
-pub struct AgentSpawnSpec {
-    pub name: String,
-    pub model: Option<String>,
-    pub allowed_tools: Vec<String>,
-    pub parent_agent_id: Option<AgentId>,
 }
 
 #[cfg(test)]
@@ -67,7 +55,6 @@ mod tests {
     fn main_agent_hint_has_no_preference() {
         let hint = DispatchHint::main_agent();
         assert!(hint.preferred_agent_name.is_none());
-        assert!(hint.agent_spawn_spec.is_none());
     }
 
     #[test]

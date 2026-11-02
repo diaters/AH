@@ -134,9 +134,6 @@ fn turn_limit_creates_evaluation_workitem() {
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::domain::AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });
@@ -240,9 +237,6 @@ fn setup_eval_test_app(
             tags: vec!["evaluation".to_string()],
             description: "evaluator agent".to_string(),
         },
-        kind: harness::domain::AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions: harness::domain::AgentToolPermissions::default(),
         system_prompt: None,
     });

@@ -13,8 +13,8 @@ use tokio::runtime::Runtime;
 use common::mock_executor::EchoExecutor;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutor,
-    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions,
-    domain::LtmEvictedHookPending, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::AgentProfile, domain::AgentToolPermissions, domain::LtmEvictedHookPending,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
@@ -30,9 +30,6 @@ fn make_agent() -> Agent {
             tags: vec![],
             description: "test".to_string(),
         },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
         system_prompt: None,
     }

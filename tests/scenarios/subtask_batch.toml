@@ -1,0 +1,31 @@
+# 场景：子任务批次（create_tasks 交给主 Agent 后台执行，依赖结果注入，批次完成后唤醒父任务汇报）
+[scenario]
+name = "subtask_batch"
+description = "用 create_tasks 拆成两个有依赖的子任务，完成后汇报结论"
+input = "请用 create_tasks 创建两个子任务：count 用 shell_exec 统计 src 目录下 .rs 文件的数量；summary 依赖 count，根据 count 的结果写一句中文总结。等子任务批次完成后，告诉我 .rs 文件数量和那句总结。"
+max_cost_usd = 0.20
+timeout_secs = 300
+
+[[assertions]]
+type = "tool_called"
+tool = "create_tasks"
+min_times = 1
+
+[[assertions]]
+type = "tool_called"
+tool = "shell_exec"
+min_times = 1
+
+[[assertions]]
+type = "state_reached"
+workitem_status = "Completed"
+
+[[assertions]]
+type = "response_matches"
+pattern = '\d+'
+desc = "最终汇报包含文件数量"
+
+[[assertions]]
+type = "llm_judge"
+rubric = "最终回复是否基于子任务结果给出了 .rs 文件数量（合理范围 50-1000）以及一句中文总结"
+threshold = 0.7

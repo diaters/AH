@@ -6,7 +6,7 @@ use crate::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use super::{AgentId, ChannelId, TaskId, ToolPermission};
+use super::{AgentId, ChannelId, ToolPermission};
 
 /// 权限来源标识，用于审计与调试
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,13 +93,6 @@ pub struct AgentProfile {
     pub model: String,
 }
 
-/// Agent 类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AgentKind {
-    Persistent,
-    TaskScoped,
-}
-
 /// Agent 的 Tool 权限配置
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentToolPermissions {
@@ -168,24 +161,13 @@ impl From<super::AgentToolsConfig> for AgentToolPermissions {
     }
 }
 
-/// Agent 实体即将被 despawn 前的标记组件。
-///
-/// 由 `handle_termination` 在 Agent 绑定的 Task 进入终态时插入，
-/// 由 `agent_stopped_hook_system` 派发 `OnAgentStopped` hook 后负责 despawn。
-/// 无需内含 `HookPoint` —— 此标记固定对应 `OnAgentStopped`。
-#[derive(Component, Debug, Clone)]
-pub struct AgentStoppingHookPending;
-
 /// Agent 实体
 #[derive(Debug, Clone, Component)]
 pub struct Agent {
     pub id: AgentId,
     pub profile: AgentProfile,
     pub capabilities: AgentCapabilities,
-    pub kind: AgentKind,
-    pub parent_id: Option<AgentId>,
-    pub bound_task_id: Option<TaskId>,
-    /// Tool 权限配置：启动加载、父 Agent 授权或后续修正
+    /// Tool 权限配置：启动加载或运行时修正
     pub tool_permissions: AgentToolPermissions,
     /// Agent 级 system prompt（来自 agents.toml）：WorkItem 执行时作为 system_prompt 传递给 LLM。
     /// None 表示使用 WorkItem 自身的 system_prompt（保持向后兼容）。
@@ -224,9 +206,6 @@ mod tests {
                 tags: vec!["memory".to_string()],
                 description: "memory agent".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Confirm,
                 default_permission_explicit: true,
@@ -296,9 +275,6 @@ mod tests {
                 tags: vec![],
                 description: String::new(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: default,
                 default_permission_explicit: explicit,

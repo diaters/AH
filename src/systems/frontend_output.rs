@@ -389,7 +389,7 @@ mod tests {
 
     use crate::contracts::FrontendRegistry;
     use crate::domain::{
-        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
+        Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId,
         ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend, FrontendKind,
         Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
         UserAction, UserOutputMessage, WaitingReason, WaitingReasonKind,
@@ -1165,9 +1165,6 @@ mod tests {
                 tags: vec![],
                 description: String::new(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         };

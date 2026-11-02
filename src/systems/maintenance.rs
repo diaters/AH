@@ -2,16 +2,10 @@ use std::fs;
 
 use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
-    contracts::Clock,
-    domain::{
-        Agent, AgentCapabilities, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind,
-        AgentProfile, AgentSpawnRequestMessage, AgentStoppingHookPending, AgentToolPermissions,
-        FailureReason, MessageDispatchedHookPending, SpaceToolRegistry, Task, TaskId,
-        TaskTerminatedMessage, ToolPermission,
-    },
+    domain::{Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, SpaceToolRegistry},
     systems::HarnessSettings,
 };
 
@@ -34,43 +28,6 @@ pub(crate) fn load_agents_system(
         &registry,
         plugin_registry.as_deref(),
     );
-}
-
-/// 运行时系统：处理 Agent 创建和销毁
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn agent_factory_system(
-    mut commands: Commands,
-    clock: Res<Clock>,
-    registry: Res<SpaceToolRegistry>,
-    mut index: ResMut<EntityIndex>,
-    agents: Query<(Entity, &Agent)>,
-    mut tasks: Query<&mut Task>,
-    spawn_requests: Query<(Entity, &AgentSpawnRequestMessage)>,
-    terminated_messages: Query<(Entity, &TaskTerminatedMessage)>,
-) {
-    for (entity, request) in &spawn_requests {
-        handle_spawn_request(
-            &mut commands,
-            &mut index,
-            &agents,
-            &mut tasks,
-            &clock,
-            &registry,
-            request,
-        );
-        commands.entity(entity).despawn();
-    }
-
-    for (entity, terminated) in &terminated_messages {
-        handle_termination(
-            &mut commands,
-            &agents,
-            &mut tasks,
-            &index,
-            terminated.task_id,
-        );
-        commands.entity(entity).despawn();
-    }
 }
 
 fn load_persistent_agents(
@@ -243,9 +200,6 @@ fn spawn_persistent_agent_from_entry(
                 tags: entry.tags.clone(),
                 description: entry.description.clone(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions,
             system_prompt: entry.system_prompt.clone(),
         },
@@ -297,212 +251,6 @@ fn collect_plugin_agent_entries(
     entries
 }
 
-fn handle_spawn_request(
-    commands: &mut Commands,
-    index: &mut EntityIndex,
-    agents: &Query<(Entity, &Agent)>,
-    tasks: &mut Query<&mut Task>,
-    clock: &Clock,
-    registry: &SpaceToolRegistry,
-    request: &AgentSpawnRequestMessage,
-) {
-    // UUID 寻址改用 EntityIndex O(1) 解析
-    let Some((_, parent_agent)) = index
-        .get_agent(&request.parent_agent_id)
-        .and_then(|e| agents.get(e).ok())
-    else {
-        warn!(
-            event = "SpawnRequestFailed",
-            parent_id = %request.parent_agent_id,
-            task_id = %request.task_id,
-            reason = "parent_agent_not_found",
-            "parent agent not found for spawn request"
-        );
-        mark_task_failed(
-            tasks,
-            index,
-            clock,
-            request.task_id,
-            "parent agent not found for spawn request",
-        );
-        return;
-    };
-
-    let parent_perms = inherited_tool_permissions(parent_agent, registry, &request.tools);
-
-    let allowed_tools: Vec<String> = parent_perms.iter().map(|(t, _)| t.clone()).collect();
-
-    // 只在请求了工具但全部无效时才拒绝
-    // 空工具列表是合法的，表示纯 LLM 对话任务
-    if allowed_tools.is_empty() && !request.tools.is_empty() {
-        warn!(
-            event = "SpawnRequestRejected",
-            parent_id = %request.parent_agent_id,
-            task_id = %request.task_id,
-            requested_tools = ?request.tools,
-            reason = "all_requested_tools_denied",
-            "spawn rejected: all requested tools are denied for parent agent"
-        );
-        let msg = format!(
-            "Agent spawn rejected: all requested tools {:?} are denied for parent agent",
-            request.tools
-        );
-        mark_task_failed(tasks, index, clock, request.task_id, &msg);
-        return;
-    }
-
-    // 使用请求中的 model，或继承父 Agent 的 model
-    let model = request
-        .model
-        .clone()
-        .unwrap_or_else(|| parent_agent.profile.model.clone());
-
-    let id = crate::domain::AgentId::new();
-    debug!(
-        event = "TaskScopedAgentSpawned",
-        agent_id = %id,
-        agent_name = %request.name,
-        agent_model = %model,
-        parent_agent_id = %request.parent_agent_id,
-        task_id = %request.task_id,
-        tools = ?allowed_tools,
-        "spawning task-scoped agent"
-    );
-
-    // 构建 tool_permissions: 子 Agent 默认拒绝，按工具逐个继承父的 effective_permission
-    let tool_permissions = AgentToolPermissions {
-        default_permission: ToolPermission::Deny,
-        default_permission_explicit: true,
-        overrides: parent_perms.into_iter().collect(),
-    };
-
-    // 权限审计（tracing log）：子 Agent 继承父权限的每个 override。
-    // 不发 EngineEvent——spawn 路径无 frontend_registry 访问，且继承日志
-    // 仅供可观测性消费，无需推前端。grant_permission 的日志已在
-    // Agent::grant_permission 方法内（任务 2），此处仅记录继承映射。
-    for (tool, perm) in &tool_permissions.overrides {
-        info!(
-            event = "PermissionInherit",
-            agent_id = %id,
-            tool_name = %tool,
-            permission = ?perm,
-            context = "SpawnInherit",
-            "子 Agent 继承父权限"
-        );
-    }
-
-    spawn_agent(
-        commands,
-        index,
-        Agent {
-            id,
-            profile: AgentProfile {
-                name: request.name.clone(),
-                model,
-            },
-            capabilities: AgentCapabilities {
-                // TaskScoped Agent 不参与路由
-                tags: vec![],
-                description: request.description.clone(),
-            },
-            kind: AgentKind::TaskScoped,
-            parent_id: Some(request.parent_agent_id),
-            bound_task_id: Some(request.task_id),
-            tool_permissions,
-            system_prompt: None,
-        },
-    );
-
-    // 更新 Task 的 delegate 为实际执行的 task-scoped agent
-    // UUID 寻址改用 EntityIndex O(1) 解析
-    if let Some(mut task) = index
-        .get_task(&request.task_id)
-        .and_then(|e| tasks.get_mut(e).ok())
-    {
-        task.delegate = Some(id);
-    }
-
-    // 从 registry 构建子 Agent 的工具列表
-    let child_tools: Vec<crate::domain::ToolDefinition> = registry
-        .iter()
-        .filter(|td| allowed_tools.contains(&td.name))
-        .cloned()
-        .collect();
-
-    let execution_request = AgentExecutionRequest {
-        task_id: request.task_id,
-        agent_id: id,
-        request_kind: crate::domain::AgentRequestKind::LlmCompletion,
-        prompt: if request.task_prompt.is_empty() {
-            request.description.clone()
-        } else {
-            request.task_prompt.clone()
-        },
-        system_prompt: request.task_system_prompt.clone(),
-        tools: child_tools,
-        conversation: None,
-        work_item_id: None,
-        model_override: None,
-        turn_generation: None,
-        vision: false,
-        trusted_images: Vec::new(),
-    };
-
-    commands.spawn((
-        AgentExecutionRequestMessage {
-            request: execution_request,
-        },
-        MessageDispatchedHookPending,
-    ));
-}
-
-fn handle_termination(
-    commands: &mut Commands,
-    agents: &Query<(Entity, &Agent)>,
-    tasks: &mut Query<&mut Task>,
-    index: &EntityIndex,
-    _task_id: TaskId,
-) {
-    for (entity, agent) in agents {
-        if agent.kind != AgentKind::TaskScoped {
-            continue;
-        }
-        let Some(bound_task_id) = agent.bound_task_id else {
-            continue;
-        };
-        // UUID 寻址改用 EntityIndex O(1) 解析
-        let is_terminal = index
-            .get_task(&bound_task_id)
-            .and_then(|e| tasks.get(e).ok())
-            .is_some_and(|task| task.status.is_terminal());
-        if is_terminal {
-            debug!(
-                event = "TaskScopedAgentStopping",
-                agent_id = %agent.id,
-                agent_name = %agent.profile.name,
-                task_id = %bound_task_id,
-                "marking task-scoped agent for stopping after task termination"
-            );
-            // 不直接 despawn，而是插入标记，由 agent_stopped_hook_system
-            // 派发 OnAgentStopped hook 后再 despawn。
-            commands.entity(entity).insert(AgentStoppingHookPending);
-        }
-    }
-}
-
-fn mark_task_failed(
-    tasks: &mut Query<&mut Task>,
-    index: &EntityIndex,
-    clock: &Clock,
-    task_id: TaskId,
-    error_message: &str,
-) {
-    // UUID 寻址改用 EntityIndex O(1) 解析
-    if let Some(mut task) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok()) {
-        task.mark_failed_reason(FailureReason::AgentError, error_message, clock.0);
-    }
-}
-
 /// O7 启动期 required_tag 孤儿扫描。
 ///
 /// 遍历 `SpaceToolRegistry` 中所有工具的 `required_tag`，若某工具声明了
@@ -510,7 +258,7 @@ fn mark_task_failed(
 /// 则发出 `RequiredTagOrphan` warn。
 ///
 /// 语义：该工具在当前 Agent 集合下不可被路由（无人能满足 required_tag），
-/// 但不阻止启动——task-scoped Agent 可能在运行时被 spawn 并持有该 tag。
+/// 但不阻止启动。
 pub fn validate_required_tags(registry: &SpaceToolRegistry, agents: &[Agent]) {
     use std::collections::HashSet;
     let all_tags: HashSet<&str> = agents
@@ -526,7 +274,7 @@ pub fn validate_required_tags(registry: &SpaceToolRegistry, agents: &[Agent]) {
                 tool_name = %tool_def.name,
                 required_tag = %required,
                 "no agent currently holds the required_tag; tool will be unusable until \
-                 an agent with this tag is loaded (e.g., task-scoped agent at runtime)"
+                 an agent with this tag is configured"
             );
         }
     }
@@ -536,7 +284,6 @@ pub fn validate_required_tags(registry: &SpaceToolRegistry, agents: &[Agent]) {
 ///
 /// 通过 `Local<bool>` 保证只在第一次 update 时运行一次，扫描启动期已加载的
 /// 持久化 Agent 与 `SpaceToolRegistry` 中工具的 `required_tag` 匹配关系。
-/// task-scoped Agent 在运行时 spawn 不经此扫描（它们由父 Agent 显式授权）。
 pub(crate) fn validate_required_tags_system(
     mut ran: Local<bool>,
     agents: Query<&Agent>,
@@ -550,132 +297,6 @@ pub(crate) fn validate_required_tags_system(
     validate_required_tags(&tool_registry, &agent_list);
 }
 
-/// 子 Agent 的工具权限继承：保留父 Agent 非 Deny 的工具，并继承父的 effective_permission。
-fn inherited_tool_permissions(
-    parent: &Agent,
-    registry: &SpaceToolRegistry,
-    tools: &[String],
-) -> Vec<(String, ToolPermission)> {
-    tools
-        .iter()
-        .filter_map(|tool| {
-            let (perm, _source) = parent.effective_permission(tool, Some(registry));
-            (perm != ToolPermission::Deny).then(|| (tool.clone(), perm))
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod o2_inheritance_tests {
-    //! O2 子 Agent 权限继承单元测试
-    //!
-    //! 验证 `handle_spawn_request` 使用的 `inherited_tool_permissions`：
-    //! 父 Confirm → 子 Confirm（不再降为 Allow）；父 Allow → 子 Allow；
-    //! 父 Deny → 工具不传入子 overrides。
-
-    use super::*;
-    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolSchema};
-    use std::collections::HashMap;
-
-    /// 构造父 Agent：default + explicit + overrides 完全可控
-    fn make_parent(
-        default: ToolPermission,
-        explicit: bool,
-        overrides: HashMap<String, ToolPermission>,
-    ) -> Agent {
-        Agent {
-            id: crate::domain::AgentId::nil(),
-            profile: AgentProfile {
-                name: "parent".to_string(),
-                model: "m".to_string(),
-            },
-            capabilities: AgentCapabilities {
-                tags: vec![],
-                description: String::new(),
-            },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
-            tool_permissions: AgentToolPermissions {
-                default_permission: default,
-                default_permission_explicit: explicit,
-                overrides,
-            },
-            system_prompt: None,
-        }
-    }
-
-    /// 构造只含一个工具的 SpaceToolRegistry
-    fn make_registry_with(tool_name: &str, perm: ToolPermission) -> SpaceToolRegistry {
-        let mut registry = SpaceToolRegistry::default();
-        registry.register(ToolDefinition {
-            name: tool_name.to_string(),
-            description: "test".to_string(),
-            parameters: ToolSchema::default(),
-            default_permission: perm,
-            executor: ToolExecutorKind::Builtin(tool_name.to_string()),
-            required_tag: None,
-        });
-        registry
-    }
-
-    /// 父 Confirm → 子 Confirm（不再降为 Allow）
-    #[test]
-    fn child_inherits_confirm_from_parent_confirm() {
-        let mut overrides = HashMap::new();
-        overrides.insert("shell_exec".to_string(), ToolPermission::Confirm);
-        let parent = make_parent(ToolPermission::Deny, true, overrides);
-        let registry = make_registry_with("shell_exec", ToolPermission::Allow);
-
-        let parent_perms =
-            inherited_tool_permissions(&parent, &registry, &["shell_exec".to_string()]);
-
-        assert_eq!(parent_perms.len(), 1, "Confirm 工具应保留");
-        assert_eq!(parent_perms[0].0, "shell_exec");
-        assert_eq!(
-            parent_perms[0].1,
-            ToolPermission::Confirm,
-            "父 Confirm 必须原样继承为子 Confirm，不得降级为 Allow"
-        );
-    }
-
-    /// 父 Allow → 子 Allow
-    #[test]
-    fn child_inherits_allow_from_parent_allow() {
-        let mut overrides = HashMap::new();
-        overrides.insert("shell_exec".to_string(), ToolPermission::Allow);
-        let parent = make_parent(ToolPermission::Deny, true, overrides);
-        let registry = make_registry_with("shell_exec", ToolPermission::Confirm);
-
-        let parent_perms =
-            inherited_tool_permissions(&parent, &registry, &["shell_exec".to_string()]);
-
-        assert_eq!(parent_perms.len(), 1, "Allow 工具应保留");
-        assert_eq!(
-            parent_perms[0].1,
-            ToolPermission::Allow,
-            "父 Allow 必须原样继承为子 Allow"
-        );
-    }
-
-    /// 父 Deny → 工具不传入子 overrides
-    #[test]
-    fn child_excludes_denied_tool() {
-        let mut overrides = HashMap::new();
-        overrides.insert("shell_exec".to_string(), ToolPermission::Deny);
-        let parent = make_parent(ToolPermission::Deny, true, overrides);
-        let registry = make_registry_with("shell_exec", ToolPermission::Allow);
-
-        let parent_perms =
-            inherited_tool_permissions(&parent, &registry, &["shell_exec".to_string()]);
-
-        assert!(
-            parent_perms.is_empty(),
-            "父 Deny 的工具必须被排除，不得进入子 overrides"
-        );
-    }
-}
-
 #[cfg(test)]
 mod required_tag_tests {
     //! O7 required_tag 启动期孤儿扫描测试
@@ -685,7 +306,7 @@ mod required_tag_tests {
     //! - 工具无 required_tag 且 agents 列表为空
 
     use super::*;
-    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolSchema};
+    use crate::domain::{ToolDefinition, ToolExecutorKind, ToolPermission, ToolSchema};
 
     fn make_tool_def_with_required_tag(name: &str, required_tag: Option<&str>) -> ToolDefinition {
         ToolDefinition {
@@ -709,9 +330,6 @@ mod required_tag_tests {
                 tags,
                 description: String::new(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         }

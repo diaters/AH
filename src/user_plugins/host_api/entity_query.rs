@@ -145,8 +145,8 @@ fn agent_to_map(a: &Agent) -> Map {
 mod tests {
     use super::*;
     use crate::domain::{
-        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, ChannelId,
-        FrontendKind, Task, WorkItem,
+        Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId, FrontendKind,
+        Task, WorkItem,
     };
 
     fn make_task(content: &str) -> Task {
@@ -171,9 +171,6 @@ mod tests {
                 tags: Vec::new(),
                 description: String::new(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         }

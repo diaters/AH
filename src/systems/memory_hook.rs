@@ -143,7 +143,7 @@ fn dispatch_ltm_hook(world: &mut World, registry: &mut PluginRegistry, point: Ho
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions};
+    use crate::domain::{AgentCapabilities, AgentProfile, AgentToolPermissions};
 
     fn make_agent() -> Agent {
         Agent {
@@ -156,9 +156,6 @@ mod tests {
                 tags: vec![],
                 description: "test".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         }

@@ -24,9 +24,9 @@ use crate::contracts::{Clock, FrontendRegistry};
 use crate::domain::JobSource;
 use crate::domain::SessionBackend;
 use crate::domain::{
-    Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AgentKind, AskUserPending,
-    BatchTaskState, ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind,
-    EngineEvent, EntryRole, EventTarget, FrontendKind, MessageRole, OutputContent, PendingDispatch,
+    Agent, AgentExecutionOutput, AgentExecutionResult, AgentId, AskUserPending, BatchTaskState,
+    ChannelId, ChatRoundStartedMessage, ChatSession, DispatchHint, DispatchKind, EngineEvent,
+    EntryRole, EventTarget, FrontendKind, MessageRole, OutputContent, PendingDispatch,
     SessionHandleId, SessionInputRequest, SessionReadRequest, SessionStartRequest, SessionSummary,
     ShellSessionResult, ShortTermMemory, SubTaskBatchCreatedMessage, SubTaskBatchState,
     SubTaskConfig, SubTaskDefinition, Task, TaskId, TaskStatus, ToolAction, ToolCallingState,
@@ -122,10 +122,8 @@ pub fn spawn_create_tasks_messages(
 
         let sub_task_config = SubTaskConfig {
             batch_id,
-            child_agent_name: def.name.clone(),
-            child_agent_model: def.model.clone(),
-            allowed_tools: def.tools.clone(),
-            parent_agent_id: agent_id,
+            name: def.name.clone(),
+            declared_tools: def.tools.clone(),
             depends_on: def.depends_on.clone(),
             depended_by,
         };
@@ -1153,20 +1151,14 @@ fn start_new_chat(
     // 开始新对话
     let agent = {
         let name = agent_name.as_deref();
-        let by_name = name.and_then(|n| {
-            world
-                .agents
-                .iter()
-                .find(|a| a.kind == AgentKind::Persistent && a.profile.name == n)
-        });
+        let by_name = name.and_then(|n| world.agents.iter().find(|a| a.profile.name == n));
         if let Some(a) = by_name {
             Some(a)
         } else if !agent_tags.is_empty() {
             world.agents.iter().find(|a| {
-                a.kind == AgentKind::Persistent
-                    && agent_tags
-                        .iter()
-                        .all(|tag| a.capabilities.tags.contains(tag))
+                agent_tags
+                    .iter()
+                    .all(|tag| a.capabilities.tags.contains(tag))
             })
         } else {
             None
@@ -1440,7 +1432,6 @@ mod tests {
                 content: "do something".to_string(),
                 tools: vec![],
                 depends_on: vec![],
-                model: None,
             }],
             None,
             parent_origin_channel,
@@ -1921,9 +1912,6 @@ mod tests {
                 tags: vec![],
                 description: "test".to_string(),
             },
-            kind: AgentKind::TaskScoped,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: crate::domain::AgentToolPermissions {
                 default_permission: crate::domain::ToolPermission::Allow,
                 default_permission_explicit: true,

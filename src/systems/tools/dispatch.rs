@@ -9,13 +9,12 @@ use uuid::Uuid;
 use crate::{
     contracts::{Clock, FrontendRegistry},
     domain::{
-        Agent, AgentKind, ApprovalRequestMessage, ApprovalRequestedHookPending,
-        BuiltinToolExecutors, ChannelId, ChatSession, ConfirmationOption, ConfirmationSource,
-        EngineEvent, EventTarget, PermissionAction, PermissionAuditContext, PermissionSource,
-        RuntimeGrants, ScheduledRun, ShortTermMemory, SpaceToolRegistry, SupervisorEscalated, Task,
-        TaskInitiator, ToolConfirmationRequestMessage, ToolContext, ToolError,
-        ToolExecutionRequestMessage, ToolPermission, WATCHDOG_TAG, WaitingReason,
-        resolve_tool_permission,
+        Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
+        ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
+        PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants, ScheduledRun,
+        ShortTermMemory, SpaceToolRegistry, SupervisorEscalated, Task, TaskInitiator,
+        ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
+        ToolPermission, WATCHDOG_TAG, WaitingReason, resolve_tool_permission,
     },
     ecs::EntityIndex,
     systems::NativeProcessBackend,
@@ -388,10 +387,7 @@ pub fn tool_dispatch_system(
                     .then(|| {
                         agents
                             .iter()
-                            .find(|a| {
-                                a.kind == AgentKind::Persistent
-                                    && a.capabilities.tags.iter().any(|t| t == WATCHDOG_TAG)
-                            })
+                            .find(|a| a.capabilities.tags.iter().any(|t| t == WATCHDOG_TAG))
                             .map(|a| a.id)
                     })
                     .flatten();
@@ -634,9 +630,9 @@ mod tests {
     use crate::{
         contracts::{Clock, FrontendRegistry},
         domain::{
-            Agent, AgentCapabilities, AgentExecutionRequest, AgentKind, AgentProfile,
-            AgentRequestKind, AgentToolPermissions, BuiltinToolExecutors, ChannelId, FrontendKind,
-            SpaceToolRegistry, Task, TaskStatus, ToolConfirmationRequestMessage, ToolDefinition,
+            Agent, AgentCapabilities, AgentExecutionRequest, AgentProfile, AgentRequestKind,
+            AgentToolPermissions, BuiltinToolExecutors, ChannelId, FrontendKind, SpaceToolRegistry,
+            Task, TaskStatus, ToolConfirmationRequestMessage, ToolDefinition,
             ToolExecutionRequestMessage, ToolExecutorKind, ToolPermission, ToolSchema,
             WaitingReason,
         },
@@ -724,9 +720,6 @@ mod tests {
                     tags: vec![],
                     description: "test".to_string(),
                 },
-                kind: AgentKind::TaskScoped,
-                parent_id: None,
-                bound_task_id: Some(task_id),
                 tool_permissions: AgentToolPermissions {
                     default_permission: ToolPermission::Confirm,
                     default_permission_explicit: true,
@@ -902,9 +895,6 @@ mod tests {
                     tags: vec![],
                     description: String::new(),
                 },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
                 tool_permissions: AgentToolPermissions::default(),
                 system_prompt: None,
             })
@@ -1019,9 +1009,6 @@ mod tests {
                     tags: vec![WATCHDOG_TAG.to_string()],
                     description: String::new(),
                 },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
                 tool_permissions: AgentToolPermissions::default(),
                 system_prompt: None,
             })

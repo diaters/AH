@@ -5,9 +5,9 @@ use crate::ecs::EntityIndex;
 use crate::{
     contracts::Clock,
     domain::{
-        Agent, AgentExecutionOutput, AgentExecutionResult, AgentKind, AgentRequestKind,
-        AskUserPending, ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind,
-        EntryMetadata, EntryRole, InFlightToolCall, InboxDeliveryMessage, InboxItem, OutputContent,
+        Agent, AgentExecutionOutput, AgentExecutionResult, AgentRequestKind, AskUserPending,
+        ContinueTaskMessage, CreateTaskMessage, DispatchHint, DispatchKind, EntryMetadata,
+        EntryRole, InFlightToolCall, InboxDeliveryMessage, InboxItem, OutputContent,
         PendingDispatch, ShortTermMemory, SystemOutputMessage, Task, TaskRoutingPolicy, TaskStatus,
         ToolConfirmationResponseMessage, ToolExecutionResultMessage, ToolRequestPending,
         TrustedImages, UserCommand, UserInputMessage, WaitingReason,
@@ -429,11 +429,7 @@ pub(crate) fn continue_task_system(
             // 指定 Agent 时会按 preferred_agent_name 重新 mark_waiting_for_agent 设置 delegate。
             task.delegate = None;
             let reuse_hint = if task.parent_task_id.is_none() {
-                match prev_delegate.and_then(|id| {
-                    agents
-                        .iter()
-                        .find(|a| a.id == id && a.kind == AgentKind::Persistent)
-                }) {
+                match prev_delegate.and_then(|id| agents.iter().find(|a| a.id == id)) {
                     Some(agent) => DispatchHint::agent(agent.profile.name.clone()),
                     None => DispatchHint::main_agent(),
                 }
@@ -458,11 +454,10 @@ mod tests {
     use crate::contracts::Clock;
     use crate::domain::MemoryConfig;
     use crate::domain::{
-        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, AskUserPending,
-        ChannelId, ContinueTaskMessage, CreateTaskMessage, DispatchHint, FinishTaskMessage,
-        FrontendKind, PendingDispatch, SystemOutputMessage, Task, TaskStatus,
-        ToolConfirmationResponseMessage, ToolExecutionResultMessage, UserInputMessage,
-        WaitingReason,
+        Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, AskUserPending, ChannelId,
+        ContinueTaskMessage, CreateTaskMessage, DispatchHint, FinishTaskMessage, FrontendKind,
+        PendingDispatch, SystemOutputMessage, Task, TaskStatus, ToolConfirmationResponseMessage,
+        ToolExecutionResultMessage, UserInputMessage, WaitingReason,
     };
     use crate::ecs::EntityIndex;
     use crate::systems::command::command_parse_system;
@@ -516,7 +511,7 @@ mod tests {
         task
     }
 
-    fn make_agent(id: crate::domain::AgentId, name: &str, kind: AgentKind) -> Agent {
+    fn make_agent(id: crate::domain::AgentId, name: &str) -> Agent {
         Agent {
             id,
             profile: AgentProfile {
@@ -527,9 +522,6 @@ mod tests {
                 tags: vec![],
                 description: String::new(),
             },
-            kind,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         }
@@ -998,7 +990,7 @@ mod tests {
 
         let agent_id = crate::domain::AgentId::new();
         let task = make_task_with_delegate(telegram_channel(), Some(agent_id), None);
-        let agent = make_agent(agent_id, "reused-agent", AgentKind::Persistent);
+        let agent = make_agent(agent_id, "reused-agent");
 
         let hint = run_continue_and_get_hint(&mut app, task, Some(agent));
         let hint = hint.expect("PendingDispatch should be attached after continue");
@@ -1046,7 +1038,7 @@ mod tests {
         let agent_id = crate::domain::AgentId::new();
         let parent_id = crate::domain::TaskId::new();
         let task = make_task_with_delegate(telegram_channel(), Some(agent_id), Some(parent_id));
-        let agent = make_agent(agent_id, "sub-agent", AgentKind::Persistent);
+        let agent = make_agent(agent_id, "sub-agent");
 
         let hint = run_continue_and_get_hint(&mut app, task, Some(agent));
         let hint = hint.expect("PendingDispatch should be attached after continue");

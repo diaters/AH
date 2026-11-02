@@ -14,11 +14,10 @@ use harness::domain::{ScheduleDefinition, ScheduleExpr};
 use harness::triggers::SchedulerState;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
-    domain::AgentExecutor, domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions,
-    domain::ChannelId, domain::EngineEvent, domain::EventTarget, domain::Frontend,
-    domain::FrontendKind, domain::LlmToolCall, domain::LongTermMemory, domain::OutputContent,
-    domain::Task, domain::TaskStatus, domain::TaskTrigger, llm::ExecutorRegistry,
-    systems::HarnessConfig,
+    domain::AgentExecutor, domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId,
+    domain::EngineEvent, domain::EventTarget, domain::Frontend, domain::FrontendKind,
+    domain::LlmToolCall, domain::LongTermMemory, domain::OutputContent, domain::Task,
+    domain::TaskStatus, domain::TaskTrigger, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 
@@ -100,9 +99,6 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
                     tags: vec!["llm".to_string(), "default".to_string()],
                     description: "Default LLM Agent".to_string(),
                 },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
                 tool_permissions: AgentToolPermissions::default(),
                 system_prompt: None,
             },

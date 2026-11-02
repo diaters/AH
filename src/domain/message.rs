@@ -446,25 +446,6 @@ pub struct ApprovalResultMessage {
     pub grant_mode: super::GrantMode,
 }
 
-// ============ Agent 管理 ============
-
-/// Agent 创建请求消息
-#[derive(Debug, Clone, Component)]
-pub struct AgentSpawnRequestMessage {
-    pub parent_agent_id: AgentId,
-    pub task_id: TaskId,
-    pub name: String,
-    /// 可选，None 时继承父 Agent 的 model
-    pub model: Option<String>,
-    pub description: String,
-    /// 初始 Tool 权限列表（每个 Tool 设为 Allow）
-    pub tools: Vec<String>,
-    /// 子任务的 prompt 内容
-    pub task_prompt: String,
-    /// 子任务的 system prompt（可选）
-    pub task_system_prompt: Option<String>,
-}
-
 // ============ 子任务批次 ============
 
 /// create_tasks 工具调用后产出，触发父 Task 阻塞 + 子任务派发
