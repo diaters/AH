@@ -200,6 +200,7 @@ pub fn spawn_create_tasks_messages(
                         task_names.join(", ")
                     )),
                     reasoning_content: None,
+                    usage: None,
                 }),
                 prompt: String::new(),
                 system_prompt: None,
@@ -372,6 +373,7 @@ pub fn spawn_wait_result_message(
                 result: Ok(AgentExecutionOutput {
                     content: OutputContent::Text("wait_tasks completed".to_string()),
                     reasoning_content: None,
+                    usage: None,
                 }),
                 prompt: String::new(),
                 system_prompt: None,
@@ -1372,6 +1374,7 @@ pub fn spawn_shell_result(
         result: Ok(AgentExecutionOutput {
             content: OutputContent::Text(format!("{} completed", tool_name)),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,

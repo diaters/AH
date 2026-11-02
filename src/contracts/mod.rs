@@ -5,11 +5,13 @@
 mod experience;
 mod memory;
 mod runtime;
+mod usage;
 mod wake;
 
 pub use experience::{ExperienceLibrary, SharedExperienceLibrary};
 pub use memory::MemoryStore;
 pub use runtime::{AsyncRuntime, BufferedIngress, Clock, FrontendRegistry};
+pub use usage::{SharedUsageLedger, UsageLedger};
 pub use wake::{
     ExecutionResultSender, ModelChainStateUpdateSender, RuntimeDeadlines, RuntimeWake,
     ToolResultSender, WakeSender,

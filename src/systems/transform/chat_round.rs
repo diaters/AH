@@ -86,6 +86,7 @@ pub fn chat_round_completion_system(
             result: Ok(AgentExecutionOutput {
                 content: OutputContent::Text(msg.response.clone()),
                 reasoning_content: None,
+                usage: None,
             }),
             prompt: String::new(),
             system_prompt: None,

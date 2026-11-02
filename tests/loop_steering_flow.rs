@@ -73,6 +73,7 @@ impl AgentExecutor for GatedToolExecutor {
                 Ok(AgentExecutionOutput {
                     content: OutputContent::Text("ok".to_string()),
                     reasoning_content: None,
+                    usage: None,
                 })
             });
         }
@@ -92,11 +93,13 @@ impl AgentExecutor for GatedToolExecutor {
                 Ok(AgentExecutionOutput {
                     content: OutputContent::ToolCalls(vec![tool_call]),
                     reasoning_content: None,
+                    usage: None,
                 })
             } else {
                 Ok(AgentExecutionOutput {
                     content: OutputContent::Text("final answer".to_string()),
                     reasoning_content: None,
+                    usage: None,
                 })
             }
         })

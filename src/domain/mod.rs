@@ -33,6 +33,7 @@ mod summarization;
 mod task;
 mod tool_async;
 mod tool_runtime;
+mod usage;
 mod watchdog;
 mod work_item;
 mod workflow;
@@ -160,7 +161,7 @@ pub use evaluation::{
 // execution
 pub use execution::{
     AgentExecutionOutput, AgentExecutionRequest, AgentExecutionResult, AgentRequestKind,
-    ConversationMessage, LlmToolCall, OutputContent,
+    ConversationMessage, LlmToolCall, OutputContent, TokenUsage,
 };
 
 // attachment
@@ -209,7 +210,12 @@ pub use message::{
 };
 
 // model_chain
-pub use model_chain::{ModelChainEntry, ModelChainState, ProviderEntry, ProvidersConfig};
+pub use model_chain::{
+    ModelChainEntry, ModelChainState, ModelPrice, ProviderEntry, ProvidersConfig,
+};
+pub use usage::{
+    UsageBucket, UsageContext, UsageRange, UsageRecord, UsageSummary, summarize as summarize_usage,
+};
 
 // prompt_template
 pub use prompt_template::{render_template, validate_template};

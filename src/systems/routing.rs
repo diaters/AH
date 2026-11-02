@@ -53,6 +53,7 @@ pub(crate) fn complete_ask_user(
             result: Ok(AgentExecutionOutput {
                 content: OutputContent::Text("ask_user completed".into()),
                 reasoning_content: None,
+                usage: None,
             }),
             prompt: String::new(),
             system_prompt: None,

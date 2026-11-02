@@ -39,6 +39,7 @@ impl AgentExecutor for Scripted {
                 Ok(AgentExecutionOutput {
                     content: OutputContent::Text("ok".into()),
                     reasoning_content: None,
+                    usage: None,
                 })
             });
         }
@@ -52,6 +53,7 @@ impl AgentExecutor for Scripted {
             Ok(AgentExecutionOutput {
                 content,
                 reasoning_content: None,
+                usage: None,
             })
         })
     }
