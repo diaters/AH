@@ -73,6 +73,7 @@ fn spawn_search_result(
         Ok(text) => Ok(AgentExecutionOutput {
             content: OutputContent::Text(text.clone()),
             reasoning_content: None,
+            usage: None,
         }),
         Err(error) => Err(crate::domain::ExecutionError::Unknown(error.clone())),
     };

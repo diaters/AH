@@ -82,6 +82,7 @@ fn on_llm_response_removes_marker() {
             result: Ok(AgentExecutionOutput {
                 content: OutputContent::Text("test response".to_string()),
                 reasoning_content: None,
+                usage: None,
             }),
             prompt: "test".to_string(),
             system_prompt: None,

@@ -113,6 +113,7 @@ mod tests {
             result: Ok(AgentExecutionOutput {
                 content: OutputContent::Text("test".to_string()),
                 reasoning_content: None,
+                usage: None,
             }),
             prompt: "test".to_string(),
             system_prompt: None,

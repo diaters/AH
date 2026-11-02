@@ -4,7 +4,7 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { ApprovalModeDto, CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, ExperienceDto, ExperienceListDto,
+import { ApprovalModeDto, UsageDto, CapabilitiesDto, ClientFileDto, CommandDto, DevicesDto, DiagnosticsDto, EventBatchDto, ExperienceDto, ExperienceListDto,
   ExperienceSummaryDto, PairDto, ReceiptDto, SnapshotDto } from './Protocol';
 
 // 服务端 `--client-pair` 输出的单个配对链接。
@@ -181,6 +181,9 @@ export class Connection {
   }
   async approvalMode(): Promise<ApprovalModeDto> {
     return JSON.parse(await this.request('/v1/approval-mode', http.RequestMethod.GET)) as ApprovalModeDto;
+  }
+  async usage(range: string): Promise<UsageDto> {
+    return JSON.parse(await this.request(`/v1/usage?range=${range}`, http.RequestMethod.GET)) as UsageDto;
   }
   async setApprovalMode(mode: string): Promise<ApprovalModeDto> {
     const body: Record<string, string> = { 'mode': mode };

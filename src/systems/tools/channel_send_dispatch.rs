@@ -107,6 +107,7 @@ pub fn channel_send_dispatch_system(
                     result: Ok(AgentExecutionOutput {
                         content: OutputContent::Text(output_text),
                         reasoning_content: None,
+                        usage: None,
                     }),
                     prompt: String::new(),
                     system_prompt: None,

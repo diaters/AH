@@ -121,6 +121,7 @@ fn inject_result_entity(world: &mut World, tool_output: serde_json::Value) -> En
         result: Ok(harness::domain::AgentExecutionOutput {
             content: harness::domain::OutputContent::Text("tool executed".to_string()),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,

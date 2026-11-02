@@ -72,6 +72,7 @@ fn text(value: &str) -> AgentExecutionOutput {
     AgentExecutionOutput {
         content: OutputContent::Text(value.into()),
         reasoning_content: None,
+        usage: None,
     }
 }
 
@@ -86,6 +87,7 @@ fn tool_with_text(text: &str, name: &str, input: serde_json::Value) -> AgentExec
             }],
         },
         reasoning_content: Some(PRIVATE_REASONING.into()),
+        usage: None,
     }
 }
 
@@ -201,6 +203,7 @@ fn traffic_monitor_keeps_feedback_delivery_and_process_ownership_in_one_task() {
                         arguments: "{}".into(),
                     }]),
                     reasoning_content: Some(PRIVATE_REASONING.into()),
+                    usage: None,
                 });
             }
             responses.push_back(final_text);

@@ -1252,3 +1252,83 @@ async fn approval_mode_is_optional_and_switchable() {
     assert!(status.is_client_error());
     assert_eq!(setting.get(), ApprovalMode::AllowAll);
 }
+
+#[tokio::test]
+async fn usage_summary_is_optional_and_reads_ledger() {
+    use crate::domain::{TaskId, UsageRecord};
+    // 只读的内存账本：通道只经 contracts::UsageLedger 访问，不依赖文件实现。
+    struct MemoryLedger(Vec<UsageRecord>);
+    impl crate::contracts::UsageLedger for MemoryLedger {
+        fn record(
+            &self,
+            _: &crate::domain::UsageContext,
+            _: &crate::domain::TokenUsage,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> UsageRecord {
+            unreachable!("client channel never records usage")
+        }
+        fn read_range(
+            &self,
+            _: chrono::DateTime<chrono::Local>,
+            _: chrono::DateTime<chrono::Local>,
+        ) -> Vec<UsageRecord> {
+            self.0.clone()
+        }
+    }
+    let fixture = Fixture::new();
+    let (_, token) = fixture.pair("u");
+    let (status, _) = fixture
+        .request(&token, "GET", "/v1/usage", Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let root = TaskId::new();
+    let ledger = std::sync::Arc::new(MemoryLedger(vec![UsageRecord {
+        at: chrono::Utc::now(),
+        task_id: root,
+        root_task_id: root,
+        agent: "main".into(),
+        kind: "task".into(),
+        provider: "qianfan".into(),
+        model: "m".into(),
+        input_tokens: 1200,
+        output_tokens: 300,
+        cached_input_tokens: 0,
+        reasoning_tokens: 0,
+        cost: None,
+    }]));
+    let Fixture {
+        client,
+        input,
+        _dir,
+    } = fixture;
+    let fixture = Fixture {
+        client: client.with_usage_ledger(ledger),
+        input,
+        _dir,
+    };
+    let (_, caps) = fixture
+        .request(&token, "GET", "/v1/capabilities", Value::Null)
+        .await;
+    assert!(
+        caps["operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("usage.read"))
+    );
+    let (status, body) = fixture
+        .request(&token, "GET", "/v1/usage?range=today", Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["range"], "today");
+    assert_eq!(body["currency"], "CNY");
+    assert_eq!(body["total"]["input_tokens"], 1200);
+    assert_eq!(body["total"]["unpriced_calls"], 1);
+    // 根任务不属于该用户的会话：计入 other，且不暴露根任务明细
+    assert_eq!(body["other"]["calls"], 1);
+    assert!(body.get("by_root_task").is_none());
+    let (status, _) = fixture
+        .request(&token, "GET", "/v1/usage?range=year", Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

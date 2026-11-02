@@ -41,6 +41,7 @@ impl AgentExecutor for Recorder {
         let text = |t: String| AgentExecutionOutput {
             content: OutputContent::Text(t),
             reasoning_content: None,
+            usage: None,
         };
         let output = match request.request_kind {
             AgentRequestKind::Experience => {
@@ -69,6 +70,7 @@ impl AgentExecutor for Recorder {
                         arguments: r#"{"situation":"hdc install 报错 9568322"}"#.into(),
                     }]),
                     reasoning_content: None,
+                    usage: None,
                 },
             },
         };
@@ -266,6 +268,7 @@ impl AgentExecutor for Scripted {
             Ok(AgentExecutionOutput {
                 content: OutputContent::Text(reply),
                 reasoning_content: None,
+                usage: None,
             })
         })
     }

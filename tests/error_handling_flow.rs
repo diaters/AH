@@ -247,6 +247,7 @@ fn empty_user_input_creates_task() {
                         request.prompt
                     )),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }
@@ -312,6 +313,7 @@ fn large_input_is_handled() {
                         request.prompt.len()
                     )),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }
@@ -385,6 +387,7 @@ fn multiple_concurrent_tasks_are_handled() {
                         request.task_id
                     )),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }
@@ -457,6 +460,7 @@ fn waiting_task_waits_for_user_input() {
                         request.prompt
                     )),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }

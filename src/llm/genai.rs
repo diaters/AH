@@ -234,7 +234,15 @@ impl AgentExecutor for GenaiExecutor {
                 response_len
             );
 
-            parse_response(&request.task_id, response)
+            let usage = token_usage(&response.usage, &model);
+            if usage.is_none() {
+                debug!(event = "LlmUsageMissing", task_id = %request.task_id, model = %model,
+                    "provider did not report token usage");
+            }
+            parse_response(&request.task_id, response).map(|mut output| {
+                output.usage = usage;
+                output
+            })
         })
     }
 }
@@ -351,6 +359,33 @@ fn unsanitize_tool_name(name: &str) -> String {
     name.replace("__", ":")
 }
 
+/// 提取 provider 上报的 token 用量；输入输出都未上报时返回 None（不做估算）。
+/// provider 名由执行层（降级链）补齐。
+fn token_usage(usage: &genai::chat::Usage, model: &str) -> Option<crate::domain::TokenUsage> {
+    if usage.prompt_tokens.is_none() && usage.completion_tokens.is_none() {
+        return None;
+    }
+    let count = |value: Option<i32>| value.unwrap_or(0).max(0) as u64;
+    Some(crate::domain::TokenUsage {
+        provider: String::new(),
+        model: model.to_string(),
+        input_tokens: count(usage.prompt_tokens),
+        output_tokens: count(usage.completion_tokens),
+        cached_input_tokens: count(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+        ),
+        reasoning_tokens: count(
+            usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens),
+        ),
+    })
+}
+
 fn parse_response(
     task_id: &crate::domain::TaskId,
     response: ChatResponse,
@@ -395,6 +430,7 @@ fn parse_response(
                 None => OutputContent::ToolCalls(parsed_calls),
             },
             reasoning_content,
+            usage: None,
         });
     }
 
@@ -411,6 +447,7 @@ fn parse_response(
         .map(|c| AgentExecutionOutput {
             content: OutputContent::Text(c),
             reasoning_content,
+            usage: None,
         })
         .ok_or(ExecutionError::EmptyResponse)
 }
@@ -799,6 +836,35 @@ mod tests {
     }
 
     // ---- parse_response ----
+
+    #[test]
+    fn token_usage_maps_provider_report_and_skips_missing() {
+        assert!(token_usage(&Usage::default(), "m").is_none());
+        let usage = Usage {
+            prompt_tokens: Some(1200),
+            completion_tokens: Some(300),
+            prompt_tokens_details: Some(genai::chat::PromptTokensDetails {
+                cached_tokens: Some(800),
+                ..Default::default()
+            }),
+            completion_tokens_details: Some(genai::chat::CompletionTokensDetails {
+                reasoning_tokens: Some(120),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mapped = token_usage(&usage, "deepseek-chat").unwrap();
+        assert_eq!(mapped.model, "deepseek-chat");
+        assert_eq!(
+            (
+                mapped.input_tokens,
+                mapped.output_tokens,
+                mapped.cached_input_tokens,
+                mapped.reasoning_tokens
+            ),
+            (1200, 300, 800, 120)
+        );
+    }
 
     #[test]
     fn parse_response_preserves_text_alongside_tool_calls() {

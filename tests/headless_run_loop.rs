@@ -257,6 +257,7 @@ fn delayed_llm_results_complete_without_polling() {
                 Ok(AgentExecutionOutput {
                     content: OutputContent::Text(text.into()),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }

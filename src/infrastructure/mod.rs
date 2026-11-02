@@ -8,3 +8,4 @@ pub mod experience;
 pub mod memory;
 pub mod schedules;
 pub mod skills;
+pub mod usage;
