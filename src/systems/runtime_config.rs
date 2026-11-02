@@ -280,7 +280,8 @@ impl Default for HarnessConfig {
             main_agent: DEFAULT_MAIN_AGENT.to_string(),
             memory: MemoryConfig::default(),
             loop_control: LoopControlConfig::default(),
-            agents_config_path: "agents.toml".to_string(),
+            // 指向不存在的路径：测试不得读取工作目录下的本机 agents.toml / providers.toml。
+            agents_config_path: "/nonexistent_agents.toml".to_string(),
             default_wait_tasks_timeout_secs: 300, // 5 minutes default
             shell_default_tail_lines: 200,
             shell_max_tail_lines: 500,
@@ -297,7 +298,7 @@ impl Default for HarnessConfig {
             channels: crate::channels::config::ChannelConfigs::default(),
             channels_config_path: None,
             triggers_config_path: None,
-            providers_config_path: "providers.toml".to_string(),
+            providers_config_path: "/nonexistent_providers.toml".to_string(),
         }
     }
 }
@@ -325,5 +326,14 @@ mod tests {
         let config = HarnessConfig::default();
         assert_eq!(config.active_poll_ms, 16);
         assert_eq!(config.idle_poll_ms, 150);
+    }
+
+    #[test]
+    fn test_defaults_do_not_read_local_config_files() {
+        let config = HarnessConfig::default();
+        assert!(!std::path::Path::new(&config.agents_config_path).exists());
+        assert!(!std::path::Path::new(&config.providers_config_path).exists());
+        assert!(config.channels_config_path.is_none());
+        assert!(config.triggers_config_path.is_none());
     }
 }
