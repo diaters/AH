@@ -1003,6 +1003,8 @@ fn supervisor_mode_approves_top_level_confirm_tool() {
         .find(|p| p.contains("审批者"))
         .expect("watchdog reviews the top-level request");
     assert!(!approval.contains("子任务 ") && !approval.contains("子任务「"));
+    // 顶层任务没有摘要时以任务内容首行标识，而不是 UUID。
+    assert!(approval.contains("任务「PARENT-GOAL build it」"));
     assert!(approval.contains("echo top-run"));
 }
 
