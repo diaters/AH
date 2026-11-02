@@ -1,19 +1,45 @@
 use crate::domain::LlmProviderKind;
 use crate::prelude::Component;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Instant;
 
 /// providers.toml 中的 provider 配置条目
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderEntry {
     pub name: String,
     pub kind: LlmProviderKind,
     pub api_key_env: String,
     pub api_base: Option<String>,
+    /// 按模型名配置的单价（元 / 百万 token），用于用量统计折算费用；未配置的模型只统计 token
+    #[serde(default)]
+    pub pricing: HashMap<String, ModelPrice>,
+}
+
+/// 模型单价（元 / 百万 token）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ModelPrice {
+    pub input: f64,
+    pub output: f64,
+    /// 缓存命中的输入单价；未配置时按普通输入计
+    #[serde(default)]
+    pub cached_input: Option<f64>,
+}
+
+impl ModelPrice {
+    /// 按单价折算一次调用的费用（元）。缓存命中部分按 cached_input 计价。
+    pub fn cost(&self, usage: &super::TokenUsage) -> f64 {
+        let cached = usage.cached_input_tokens.min(usage.input_tokens);
+        let uncached = usage.input_tokens - cached;
+        (uncached as f64 * self.input
+            + cached as f64 * self.cached_input.unwrap_or(self.input)
+            + usage.output_tokens as f64 * self.output)
+            / 1_000_000.0
+    }
 }
 
 /// providers.toml 顶层结构
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProvidersConfig {
     pub default_fallback_cooldown_secs: u64,
     #[serde(default)]
@@ -88,6 +114,24 @@ impl ModelChainState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn providers_example_parses_with_pricing() {
+        let config: ProvidersConfig =
+            toml::from_str(include_str!("../../providers.toml.example")).unwrap();
+        let deepseek = config
+            .provider
+            .iter()
+            .find(|p| p.name == "deepseek")
+            .unwrap();
+        let price = deepseek.pricing["deepseek-chat"];
+        assert_eq!(
+            (price.input, price.output, price.cached_input),
+            (2.0, 8.0, Some(0.5))
+        );
+        let openai = config.provider.iter().find(|p| p.name == "openai").unwrap();
+        assert!(openai.pricing.is_empty());
+    }
 
     fn make_test_chain() -> Vec<ModelChainEntry> {
         vec![

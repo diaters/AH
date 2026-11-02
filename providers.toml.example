@@ -18,6 +18,14 @@ name = "deepseek"
 kind = "DeepSeek"
 api_key_env = "DEEPSEEK_API_KEY"
 
+# 可选：按模型配置单价（元 / 百万 token），用于客户端「用量」页折算费用。
+# 未配置单价的模型只统计 token；cached_input 缺省时缓存命中部分按 input 计价。
+# 费用在记账时按当时单价写入 .harness/usage/，之后改单价不影响历史记录。
+[provider.pricing."deepseek-chat"]
+input = 2.0
+output = 8.0
+cached_input = 0.5
+
 [[provider]]
 name = "openrouter"
 kind = "OpenAiCompatible"

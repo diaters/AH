@@ -9,6 +9,37 @@ use crate::{
     llm::ExecutorRegistry,
 };
 
+/// 用量账本句柄；仅主程序注入，测试与未注入时不记账。
+#[derive(Resource, Clone)]
+pub struct UsageLedgerHandle(pub crate::contracts::SharedUsageLedger);
+
+/// 记账用的调用类型标签。
+fn usage_kind(kind: &AgentRequestKind) -> &'static str {
+    match kind {
+        AgentRequestKind::LlmCompletion | AgentRequestKind::ToolExecution { .. } => "task",
+        AgentRequestKind::Summarization => "summarization",
+        AgentRequestKind::Evaluation => "evaluation",
+        AgentRequestKind::Experience => "experience",
+        AgentRequestKind::Watchdog => "watchdog",
+    }
+}
+
+/// 沿 parent_task_id 找到任务树根；链断开时停在最后一个已知任务。
+fn root_task_id(tasks: &Query<&mut Task>, task_id: crate::domain::TaskId) -> crate::domain::TaskId {
+    let mut current = task_id;
+    for _ in 0..32 {
+        let parent = tasks
+            .iter()
+            .find(|t| t.id == current)
+            .and_then(|t| t.parent_task_id);
+        match parent {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    current
+}
+
 /// 消费执行请求并把任务提交给异步运行时。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn agent_execution_system(
@@ -19,6 +50,7 @@ pub(crate) fn agent_execution_system(
     state_update_sender: Res<ModelChainStateUpdateSender>,
     mut commands: Commands,
     mut inflight: Option<ResMut<crate::domain::InflightLlmRequests>>,
+    usage_ledger: Option<Res<UsageLedgerHandle>>,
     requests: Query<(Entity, &AgentExecutionRequestMessage)>,
     mut tasks: Query<&mut Task>,
     agents: Query<(
@@ -81,9 +113,28 @@ pub(crate) fn agent_execution_system(
         );
 
         let task_id = request.task_id;
+        let usage_target = usage_ledger.as_ref().map(|handle| {
+            let agent = agents
+                .iter()
+                .find(|(_, agent, _)| agent.id == request.agent_id)
+                .map(|(_, agent, _)| agent.profile.name.clone())
+                .unwrap_or_default();
+            let context = crate::domain::UsageContext {
+                task_id,
+                root_task_id: root_task_id(&tasks, task_id),
+                agent,
+                kind: usage_kind(&request.request_kind).to_string(),
+            };
+            (handle.0.clone(), context)
+        });
         let handle = runtime.0.spawn(async move {
             let result =
                 execute_request_guarded(&registry, chain_snapshot, &request, state_sender).await;
+            if let (Some((ledger, context)), Ok(output)) = (&usage_target, &result)
+                && let Some(usage) = &output.usage
+            {
+                ledger.record(context, usage, chrono::Utc::now());
+            }
 
             let reasoning_content = result
                 .as_ref()
@@ -131,7 +182,14 @@ async fn execute_request_guarded(
                 .get("default")
                 .or_else(|| registry.executors.values().next().cloned())
             {
-                Some(executor) => executor.execute(request.clone()).await,
+                Some(executor) => executor.execute(request.clone()).await.map(|mut output| {
+                    if let Some(usage) = output.usage.as_mut()
+                        && usage.provider.is_empty()
+                    {
+                        usage.provider = "default".to_string();
+                    }
+                    output
+                }),
                 None => Err(crate::domain::ExecutionError::Unknown(
                     "no executor available".to_string(),
                 )),
@@ -180,7 +238,10 @@ async fn execute_with_fallback_logic(
         let result = executor.execute(request.clone()).await;
 
         match result {
-            Ok(output) => {
+            Ok(mut output) => {
+                if let Some(usage) = output.usage.as_mut() {
+                    usage.provider = entry.provider.clone();
+                }
                 // 成功，若发生过降级，发送状态更新
                 if chain_state.active_index != original_index {
                     let _ = state_sender.send(crate::domain::ModelChainStateUpdate {
@@ -288,6 +349,7 @@ mod tests {
                     Ok(AgentExecutionOutput {
                         content: OutputContent::Text("ok".to_string()),
                         reasoning_content: None,
+                        usage: None,
                     })
                 }
             })

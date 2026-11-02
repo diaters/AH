@@ -458,6 +458,7 @@ fn prompt_includes_conversation_history() {
                 Ok(AgentExecutionOutput {
                     content: harness::domain::OutputContent::Text("response".to_string()),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }
@@ -724,6 +725,7 @@ fn second_dispatch_prompt_includes_correct_history() {
                 Ok(AgentExecutionOutput {
                     content: harness::domain::OutputContent::Text("response".to_string()),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }

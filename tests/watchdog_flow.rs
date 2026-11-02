@@ -70,6 +70,7 @@ impl AgentExecutor for Scripted {
             Ok(AgentExecutionOutput {
                 content: turn.content,
                 reasoning_content: None,
+                usage: None,
             })
         })
     }

@@ -142,23 +142,33 @@ fn main() -> Result<()> {
     harness::infrastructure::agents_config::validate_agent_config(&config.agents_config_path)?;
 
     // 加载 providers.toml 或从环境变量构建
-    let executor_registry = if std::path::Path::new(&config.providers_config_path).exists() {
-        let providers_toml = std::fs::read_to_string(&config.providers_config_path)
-            .with_context(|| format!("failed to read {}", config.providers_config_path))?;
-        let providers_config: harness::domain::ProvidersConfig =
-            toml::from_str(&providers_toml).with_context(|| "failed to parse providers.toml")?;
-
-        info!(
-            path = %config.providers_config_path,
-            provider_count = providers_config.provider.len(),
-            "providers config loaded"
-        );
-
-        ExecutorRegistry::from_config(&providers_config)?
-    } else {
-        info!("providers.toml not found, using global env config as single provider");
-        ExecutorRegistry::from_env()?
+    let providers_config: Option<harness::domain::ProvidersConfig> =
+        if std::path::Path::new(&config.providers_config_path).exists() {
+            let providers_toml = std::fs::read_to_string(&config.providers_config_path)
+                .with_context(|| format!("failed to read {}", config.providers_config_path))?;
+            let providers_config: harness::domain::ProvidersConfig =
+                toml::from_str(&providers_toml)
+                    .with_context(|| "failed to parse providers.toml")?;
+            info!(
+                path = %config.providers_config_path,
+                provider_count = providers_config.provider.len(),
+                "providers config loaded"
+            );
+            Some(providers_config)
+        } else {
+            None
+        };
+    let executor_registry = match &providers_config {
+        Some(providers_config) => ExecutorRegistry::from_config(providers_config)?,
+        None => {
+            info!("providers.toml not found, using global env config as single provider");
+            ExecutorRegistry::from_env()?
+        }
     };
+    // 用量账本：运行时记账，客户端通道读取汇总；单价取自 providers.toml。
+    let usage_ledger: harness::contracts::SharedUsageLedger = Arc::new(
+        harness::infrastructure::usage::FileUsageLedger::from_providers(providers_config.as_ref()),
+    );
 
     // 创建 Frontend channel
     let (event_tx, event_rx) = unbounded::<EngineEvent>();
@@ -202,6 +212,7 @@ fn main() -> Result<()> {
         let store = harness::channels::client::Store::open(client_config.state_path.clone())?;
         let client = harness::channels::client::Client::new(client_config, store, input_tx.clone())
             .with_experience_library(experience_library.clone())
+            .with_usage_ledger(usage_ledger.clone())
             .with_approval_setting(config.approval_mode.clone());
         let server = runtime.block_on(harness::channels::client::ClientServer::start(
             client.clone(),
@@ -240,6 +251,7 @@ fn main() -> Result<()> {
     );
 
     app.insert_resource(process_backend.clone());
+    app.insert_resource(harness::systems::UsageLedgerHandle(usage_ledger));
     app.insert_resource(
         harness::systems::experience_library::ExperienceLibraryHandle(experience_library),
     );

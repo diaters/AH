@@ -430,6 +430,7 @@ fn offtrack_autocorrect_injects_governance_context() {
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,
@@ -493,6 +494,7 @@ fn offtrack_askuser_waits_for_user_and_emits_system_message() {
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,
@@ -546,6 +548,7 @@ fn offtrack_fail_sets_error_and_status() {
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,
@@ -637,6 +640,7 @@ fn offtrack_askuser_injects_stm_context() {
         result: Ok(AgentExecutionOutput {
             content: harness::domain::OutputContent::Text(eval_json.to_string()),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,

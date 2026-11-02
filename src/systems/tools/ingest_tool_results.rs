@@ -247,6 +247,7 @@ pub(crate) fn spawn_tool_result_message(
                     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
                 ),
                 reasoning_content: None,
+                usage: None,
             }),
             Err(e) => Err(ExecutionError::Unknown(e.to_string())),
         },

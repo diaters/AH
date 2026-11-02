@@ -30,6 +30,7 @@ fn tool_calls_output(calls: Vec<LlmToolCall>) -> AgentExecutionOutput {
     AgentExecutionOutput {
         content: OutputContent::ToolCalls(calls),
         reasoning_content: None,
+        usage: None,
     }
 }
 

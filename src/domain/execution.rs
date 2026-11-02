@@ -39,6 +39,25 @@ pub struct AgentExecutionOutput {
     pub content: OutputContent,
     /// DeepSeek 等推理模型返回的思考内容，后续请求必须回传
     pub reasoning_content: Option<String>,
+    /// provider 返回的 token 用量；未上报时为 None
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+}
+
+/// 单次模型调用的 token 用量（provider 上报值，不做估算）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TokenUsage {
+    /// 实际处理请求的 provider 名（降级后为降级目标）；executor 不知道时由执行层补齐
+    pub provider: String,
+    /// 实际调用的模型
+    pub model: String,
+    /// 输入 token（含缓存命中部分）
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// 输入中命中缓存的部分
+    pub cached_input_tokens: u64,
+    /// 输出中的推理 token（已含在 output_tokens 内）
+    pub reasoning_tokens: u64,
 }
 
 /// 输出内容

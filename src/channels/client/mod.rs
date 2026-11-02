@@ -5,6 +5,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 mod tls;
+mod usage;
 
 use std::{
     net::SocketAddr,
@@ -117,6 +118,8 @@ pub struct Client {
     pub(super) experience: Option<crate::contracts::SharedExperienceLibrary>,
     /// 审批方式；未注入时客户端不提供审批模式切换。
     pub(super) approval: Option<crate::domain::ApprovalSetting>,
+    /// 用量账本；未注入时客户端不提供用量查询。
+    pub(super) usage: Option<crate::contracts::SharedUsageLedger>,
 }
 
 impl Client {
@@ -133,6 +136,7 @@ impl Client {
             changed,
             experience: None,
             approval: None,
+            usage: None,
         }
     }
 
@@ -142,6 +146,12 @@ impl Client {
         library: crate::contracts::SharedExperienceLibrary,
     ) -> Self {
         self.experience = Some(library);
+        self
+    }
+
+    /// 启用用量查询（与运行时共享同一账本）。
+    pub fn with_usage_ledger(mut self, ledger: crate::contracts::SharedUsageLedger) -> Self {
+        self.usage = Some(ledger);
         self
     }
 

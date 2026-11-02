@@ -25,6 +25,7 @@ impl AgentExecutor for MockExecutor {
                     request.prompt
                 )),
                 reasoning_content: None,
+                usage: None,
             })
         })
     }

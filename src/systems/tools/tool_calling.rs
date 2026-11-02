@@ -122,6 +122,7 @@ fn spawn_synthetic_result(
         result: Ok(AgentExecutionOutput {
             content: OutputContent::Text(String::new()),
             reasoning_content: None,
+            usage: None,
         }),
         prompt: String::new(),
         system_prompt: None,

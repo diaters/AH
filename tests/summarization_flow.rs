@@ -49,6 +49,7 @@ impl AgentExecutor for SummarizationMockExecutor {
                             "这是一个测试摘要。".to_string(),
                         ),
                         reasoning_content: None,
+                        usage: None,
                     })
                 }
                 AgentRequestKind::LlmCompletion => Ok(AgentExecutionOutput {
@@ -57,6 +58,7 @@ impl AgentExecutor for SummarizationMockExecutor {
                         request.prompt
                     )),
                     reasoning_content: None,
+                    usage: None,
                 }),
                 AgentRequestKind::ToolExecution { .. }
                 | AgentRequestKind::Experience
@@ -68,6 +70,7 @@ impl AgentExecutor for SummarizationMockExecutor {
                         r#"{"decision":"Continue","reasoning":"test"}"#.to_string(),
                     ),
                     reasoning_content: None,
+                    usage: None,
                 }),
             }
         })

@@ -88,6 +88,7 @@ mod tests {
                     arguments: "{}".into(),
                 }]),
                 reasoning_content: Some("reason-1".into()),
+                usage: None,
             }),
             prompt: "goal".into(),
             system_prompt: None,

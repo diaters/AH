@@ -176,6 +176,7 @@ mod tests {
                 result: Ok(crate::domain::AgentExecutionOutput {
                     content: crate::domain::OutputContent::Text("result".to_string()),
                     reasoning_content: None,
+                    usage: None,
                 }),
                 prompt: String::new(),
                 system_prompt: None,

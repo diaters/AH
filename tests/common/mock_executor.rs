@@ -19,6 +19,7 @@ pub fn text_output(text: &str) -> AgentExecutionOutput {
     AgentExecutionOutput {
         content: OutputContent::Text(text.to_string()),
         reasoning_content: None,
+        usage: None,
     }
 }
 

@@ -57,6 +57,16 @@ export interface SnapshotDto {
 }
 export interface CapabilitiesDto { protocol_version: number; instance_id: string; instance_name: string; operations: string[]; meow_enabled?: boolean; }
 export interface ApprovalModeDto { mode: string; }
+// 用量：费用单位为元，cost 只累计已配置单价的调用，unpriced_calls 为未配置单价的调用数。
+export interface UsageBucketDto {
+  key: string; calls: number; input_tokens: number; output_tokens: number; cached_input_tokens: number;
+  cost: number; unpriced_calls: number; title?: string;
+}
+export interface UsageDto {
+  range: string; from: string; to: string; currency: string; total: UsageBucketDto; by_day: UsageBucketDto[];
+  by_model: UsageBucketDto[]; by_agent: UsageBucketDto[]; by_kind: UsageBucketDto[];
+  sessions: UsageBucketDto[]; other: UsageBucketDto;
+}
 export interface PairDto { instance_id: string; token: string; }
 export interface ReceiptDto { command_id: string; session_id: string; status: string; result_code?: string; }
 export interface CommandDto {

@@ -269,6 +269,23 @@ impl Store {
         Ok(result)
     }
 
+    /// 用户各会话包含的任务 ID → (会话 ID, 标题)，供用量按会话归属。
+    pub(super) fn task_sessions(
+        &self,
+        user: &str,
+    ) -> std::collections::HashMap<String, (Uuid, String)> {
+        self.state
+            .sessions
+            .values()
+            .filter(|s| s.user_id == user)
+            .flat_map(|s| {
+                s.tasks
+                    .keys()
+                    .map(|task| (task.clone(), (s.id, s.title.clone())))
+            })
+            .collect()
+    }
+
     pub(super) fn diagnostics(&self, user: &str) -> Value {
         let sessions: Vec<_> = self
             .state

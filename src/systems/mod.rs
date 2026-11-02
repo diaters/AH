@@ -40,6 +40,7 @@ pub(crate) use dispatch::{
     subtask_dispatch_preparation_system, workitem_lifecycle_hook_system,
 };
 pub(crate) use evaluation::evaluation_trigger_system;
+pub use execution::UsageLedgerHandle;
 pub(crate) use execution::{agent_execution_system, model_chain_state_update_system};
 pub(crate) use frontend_input::frontend_input_system;
 pub(crate) use frontend_output::frontend_output_system;

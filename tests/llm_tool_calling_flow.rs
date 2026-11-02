@@ -49,6 +49,7 @@ impl AgentExecutor for ToolCallingMockExecutor {
                     "final answer based on tool results".to_string(),
                 ),
                 reasoning_content: None,
+                usage: None,
             }
         } else {
             AgentExecutionOutput {
@@ -58,6 +59,7 @@ impl AgentExecutor for ToolCallingMockExecutor {
                     arguments: r#"{"command":"echo hello"}"#.to_string(),
                 }]),
                 reasoning_content: None,
+                usage: None,
             }
         };
         Box::pin(async move { Ok(response) })
@@ -87,6 +89,7 @@ impl AgentExecutor for InfiniteToolCallExecutor {
                     arguments: r#"{"command":"echo loop"}"#.to_string(),
                 }]),
                 reasoning_content: None,
+                usage: None,
             })
         })
     }
@@ -121,6 +124,7 @@ impl AgentExecutor for BudgetAwareMockExecutor {
                         "我已达到工具调用上限，请决定是否继续。".to_string(),
                     ),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         } else {
@@ -132,6 +136,7 @@ impl AgentExecutor for BudgetAwareMockExecutor {
                         arguments: r#"{"command":"echo loop"}"#.to_string(),
                     }]),
                     reasoning_content: None,
+                    usage: None,
                 })
             })
         }

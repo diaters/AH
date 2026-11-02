@@ -577,6 +577,7 @@ mod tests {
                             }],
                         },
                         reasoning_content: Some("private".into()),
+                        usage: None,
                     }),
                     prompt: "monitor".into(),
                     system_prompt: None,

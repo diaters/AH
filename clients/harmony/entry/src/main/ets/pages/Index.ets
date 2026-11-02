@@ -6,10 +6,11 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Connection, CredentialStore, PairingLink, parseLink, trustCa } from '../services/Connection';
 import { ApprovalDto, ApprovalOptionDto, AutomationDto, ClientFileDto, CommandDto, DeviceDto, DiagnosticsDto, ExperienceDraftDto, ExperienceDto,
-  ExperienceSummaryDto, ApprovalModeChoice, APPROVAL_MODES, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, formatLocalTime, isDenyOption, observationOutcome } from '../services/Protocol';
+  ExperienceSummaryDto, ApprovalModeChoice, APPROVAL_MODES, MessageDto, NotificationDto, ObservationDto, PendingUploadDto, ProgressDto, QuestionDto, RunDto, ScheduleActionDto, ScheduleDto, ScheduleInputDto, SessionDto, TaskDto, TodoDto, UsageDto, formatLocalTime, isDenyOption, observationOutcome } from '../services/Protocol';
 import { Theme } from '../common/Theme';
 import { conversationRows, ConversationRow, ProcessEntry } from '../services/Conversation';
 import { MarkdownView } from '../components/MarkdownView';
+import { UsageView } from '../components/UsageView';
 import { ArtifactRef, ArtifactViewer, AttachmentThumb, artifactIcon, fileArtifact, linkArtifacts } from '../components/ArtifactViewer';
 
 @Extend(Button) function ghost() {
@@ -98,6 +99,11 @@ struct Index {
   @State experienceTitle: string = '';
   @State experienceBody: string = '';
   @State experienceDeleting: string = '';
+  // 用量页面
+  @State usageEnabled: boolean = false;
+  @State usage: UsageDto | undefined = undefined;
+  @State usageRange: string = '7d';
+  @State usageLoading: boolean = false;
   private conversationScroller: Scroller = new Scroller();
   private editPlanRevision: string = '';
   // 左缘右拉时记录起手坐标（vp）；不在左侧起手则忽略，避免误吞内容区的横向操作。
@@ -177,6 +183,7 @@ struct Index {
     this.automation = { available: false, schedules: [], timezone: '' }; this.devices = []; this.diagnostics = undefined; this.approvalMode = '';
     this.questionDrafts = {}; this.approvalFeedback = {}; this.processExpanded = {}; this.viewing = undefined;
     this.summaryOpen = false; this.summaryNote = ''; this.draftTitles = {}; this.draftBodies = {}; this.draftEditing = {}; this.draftAsNew = {};
+    this.usageEnabled = false; this.usage = undefined;
     this.experienceEnabled = false; this.experiences = []; this.experienceDetail = undefined; this.experienceEditing = false; this.experienceDeleting = '';
     this.lastCommandId = ''; this.view = 'chat'; this.resetPlan();
   }
@@ -376,6 +383,7 @@ struct Index {
       this.applySnapshot(snapshot.sessions, snapshot.automation, snapshot.notifications, snapshot.notifications_truncated, snapshot.notification_overflow, snapshot.files);
       this.connected = true;
       this.experienceEnabled = this.connection.supports('experiences.manage');
+      this.usageEnabled = this.connection.supports('usage.read');
       this.status = '';
       this.reconnectDelay = 1000;
       await this.connection.subscribe(snapshot.cursor, () => { this.refresh(); }, (text: string) => {
@@ -681,6 +689,14 @@ struct Index {
     if (view === 'automation' && this.connection.supports('schedules.manage')) { this.manageSchedule({ kind: 'list' }); }
     if (view === 'management') { this.loadManagement(); }
     if (view === 'experiences') { this.experienceDetail = undefined; this.experienceEditing = false; this.loadExperiences(); }
+    if (view === 'usage') { this.loadUsage(this.usageRange); }
+  }
+  private async loadUsage(range: string): Promise<void> {
+    if (!this.connected || !this.usageEnabled || this.usageLoading) { return; }
+    this.usageRange = range; this.usageLoading = true;
+    try { this.usage = await this.connection.usage(range); this.status = ''; }
+    catch (error) { this.status = `读取用量失败：${(error as Error).message}`; }
+    finally { this.usageLoading = false; }
   }
 
   // ---------- 经验总结与经验库 ----------
@@ -885,6 +901,7 @@ struct Index {
         this.navItem($r('sys.symbol.clock'), '自动化', 'automation', 0)
         this.navItem($r('sys.symbol.bell'), '通知', 'inbox', this.unread())
         if (this.canManageExperience()) { this.navItem($r('sys.symbol.book'), '经验库', 'experiences', 0) }
+        if (this.usageEnabled) { this.navItem($r('sys.symbol.data_proportion'), '用量', 'usage', 0) }
         this.navItem($r('sys.symbol.gearshape'), '设备与连接', 'management', 0)
       }.margin({ top: 8 })
       Divider().color(Theme.line).margin({ top: 10, bottom: 8 })
@@ -1487,10 +1504,14 @@ struct Index {
       this.header()
       Scroll() {
         Column({ space: 16 }) {
-          Text(this.view === 'automation' ? '自动化' : this.view === 'inbox' ? '通知' : this.view === 'experiences' ? '经验库' : '设备与连接')
+          Text(this.view === 'automation' ? '自动化' : this.view === 'inbox' ? '通知' : this.view === 'experiences' ? '经验库' :
+            this.view === 'usage' ? '用量' : '设备与连接')
             .heading(32).width('100%')
           if (this.view === 'experiences') {
             Text('总结过的试错经验。Agent 遇到类似问题时会先查这里，避开已验证走不通的路线。').fontSize(14).fontColor(Theme.secondary).width('100%')
+          }
+          if (this.view === 'usage') {
+            Text('模型调用的 token 与费用（元），按 providers.toml 中配置的单价折算。').fontSize(14).fontColor(Theme.secondary).width('100%')
           }
           if (this.view === 'automation') { Text('定时运行的任务，结果回到所选任务中。').fontSize(14).fontColor(Theme.secondary).width('100%') }
           if (this.view === 'inbox') {
@@ -1501,6 +1522,11 @@ struct Index {
           if (this.view === 'automation') { this.automationBody() }
           else if (this.view === 'inbox') { this.inboxBody() }
           else if (this.view === 'experiences') { this.experiencesBody() }
+          else if (this.view === 'usage') {
+            UsageView({ usage: this.usage, range: this.usageRange, loading: this.usageLoading,
+              onRange: (range: string) => { this.loadUsage(range); },
+              onOpenSession: (id: string) => { if (this.sessions.some((session: SessionDto) => session.id === id)) { this.select(id); } } })
+          }
           else { this.managementBody() }
         }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, bottom: 32 + this.bottom() })
       }.layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off)

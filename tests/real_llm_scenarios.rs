@@ -1256,6 +1256,7 @@ fn scenario_tool_call_loop_reaches_done() {
                 },
             ]),
             reasoning_content: None,
+            usage: None,
         },
         text_output("统计完成：当前目录共有 279 个 .rs 文件。"),
     ]));
@@ -1382,6 +1383,7 @@ fn tool_call_output(name: &str, arguments: &str) -> harness::domain::AgentExecut
             arguments: arguments.to_string(),
         }]),
         reasoning_content: None,
+        usage: None,
     }
 }
 

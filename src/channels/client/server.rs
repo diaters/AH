@@ -105,6 +105,7 @@ pub fn router(client: Client) -> Router {
         .route("/v1/notifications/:id/ack", post(notification_ack))
         .route("/v1/notifications/:id/retry", post(notification_retry))
         .route("/v1/files/:id", get(download_file))
+        .route("/v1/usage", get(super::usage::summary))
         .route("/v1/experiences", get(super::experience::list))
         .route(
             "/v1/experiences/:id",
@@ -246,6 +247,9 @@ async fn capabilities(
     }
     if client.approval.is_some() {
         operations.push("approval_mode.manage");
+    }
+    if client.usage.is_some() {
+        operations.push("usage.read");
     }
     Ok(Json(
         json!({"protocol_version":1,"instance_id":store.instance_id(),"instance_name":client.config.instance_name,
