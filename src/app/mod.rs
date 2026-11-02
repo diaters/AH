@@ -8,16 +8,12 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     contracts::{AsyncRuntime, Clock, FrontendRegistry},
     domain::{
-        AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
-        Frontend, RetryReadyMessage, Signal, Task, TaskTerminatedMessage, ToolCallingState,
-        UserInputMessage, UserOutputMessage,
+        AgentExecutionRequestMessage, AgentExecutionResultMessage, Frontend, RetryReadyMessage,
+        Signal, Task, TaskTerminatedMessage, ToolCallingState, UserInputMessage, UserOutputMessage,
     },
     llm::ExecutorRegistry,
     plugins::DefaultRuntimePluginGroup,
-    systems::{
-        HarnessSet, HarnessSettings, agent_factory_system, load_agents_system,
-        validate_required_tags_system,
-    },
+    systems::{HarnessSet, HarnessSettings, load_agents_system, validate_required_tags_system},
 };
 
 mod run_loop;
@@ -130,15 +126,11 @@ pub fn build_harness_app(
         .resource_mut::<crate::systems::MonitorDeliveries>()
         .set_wake(wake);
 
-    // agent_factory_system 在 HarnessSet::Maintenance 中运行。
     // validate_required_tags_system 通过 Local<bool> 保证仅运行一次，扫描启动期
     // 已加载的持久化 Agent 与工具 required_tag 的匹配关系（O7）。
     app.add_systems(
         Update,
-        (
-            agent_factory_system.in_set(HarnessSet::Maintenance),
-            validate_required_tags_system.in_set(HarnessSet::Maintenance),
-        ),
+        validate_required_tags_system.in_set(HarnessSet::Maintenance),
     );
 
     // index 陈旧兜底清理（双保险之一）。
@@ -184,10 +176,6 @@ pub fn app_is_idle(world: &mut World) -> bool {
         .iter(world)
         .count();
     let pending_outputs = world.query::<&UserOutputMessage>().iter(world).count();
-    let pending_spawn_requests = world
-        .query::<&AgentSpawnRequestMessage>()
-        .iter(world)
-        .count();
     let pending_terminated = world.query::<&TaskTerminatedMessage>().iter(world).count();
     let pending_tool_calling = world.query::<&ToolCallingState>().iter(world).count();
 
@@ -198,7 +186,6 @@ pub fn app_is_idle(world: &mut World) -> bool {
         && pending_requests == 0
         && pending_results == 0
         && pending_outputs == 0
-        && pending_spawn_requests == 0
         && pending_terminated == 0
         && pending_tool_calling == 0
 }

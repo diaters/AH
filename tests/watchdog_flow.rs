@@ -13,9 +13,9 @@ use harness::{
     app::build_harness_app,
     domain::{
         Agent, AgentCapabilities, AgentExecutionOutput, AgentExecutionRequest,
-        AgentExecutionRequestMessage, AgentExecutor, AgentId, AgentKind, AgentProfile,
-        AgentRequestKind, AgentToolPermissions, BackgroundJob, ChannelId, ConversationMessage,
-        ExecutorFuture, FailureReason, FrontendKind, LlmToolCall, LoopControlConfig, OutputContent,
+        AgentExecutionRequestMessage, AgentExecutor, AgentId, AgentProfile, AgentRequestKind,
+        AgentToolPermissions, BackgroundJob, ChannelId, ConversationMessage, ExecutorFuture,
+        FailureReason, FrontendKind, LlmToolCall, LoopControlConfig, OutputContent,
         ShortTermMemory, SpaceToolRegistry, Task, TaskStatus, ToolPermission,
     },
     llm::ExecutorRegistry,
@@ -97,9 +97,6 @@ fn spawn_agent(app: &mut App, name: &str, tags: &[&str]) -> AgentId {
                 tags: tags.iter().map(|t| t.to_string()).collect(),
                 description: name.into(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Allow,
                 default_permission_explicit: true,

@@ -6,9 +6,7 @@ use harness::{
         ChannelManager,
         client::{Client, ClientConfig, ClientServer, Store},
     },
-    domain::{
-        Agent, AgentCapabilities, AgentKind, AgentProfile, AgentToolPermissions, LongTermMemory,
-    },
+    domain::{Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, LongTermMemory},
     ecs::EntityIndex,
     llm::ExecutorRegistry,
     systems::HarnessConfig,
@@ -106,9 +104,6 @@ fn paired_client_drives_unmodified_runtime_and_receives_agent_reply() {
             tags: vec!["default".into(), "llm".into()],
             description: "default-llm-agent".into(),
         },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
         system_prompt: None,
     };

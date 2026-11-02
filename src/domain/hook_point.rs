@@ -49,7 +49,6 @@ define_hook_points! {
     OnWorkItemCompleted => "on_workitem_completed",
     OnWorkItemFailed => "on_workitem_failed",
     OnAgentStarted => "on_agent_started",
-    OnAgentStopped => "on_agent_stopped",
     OnToolReturned => "on_tool_returned",
     OnMessageDispatched => "on_message_dispatched",
     OnMessageReceived => "on_message_received",

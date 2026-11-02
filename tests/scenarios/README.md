@@ -21,6 +21,10 @@ tests/scenarios/
 HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx \
   cargo test --test real_llm_scenarios -- --ignored --nocapture
 
+# 只跑指定场景（逗号分隔，场景名即文件名）
+HARNESS_TEST_REAL_LLM=1 HARNESS_LLM_API_KEY=sk-xxxx HARNESS_TEST_SCENARIOS=subtask_batch \
+  cargo test --test real_llm_scenarios -- --ignored --nocapture
+
 # 框架自检（mock executor，随 CI 常规运行）
 cargo test --test real_llm_scenarios
 ```

@@ -8,12 +8,12 @@ use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
-    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentKind,
-    domain::AgentProfile, domain::AgentRequestKind, domain::AgentToolPermissions,
-    domain::ChannelId, domain::FrontendKind, domain::LlmToolCall, domain::ShortTermMemory,
-    domain::SpaceToolRegistry, domain::Task, domain::TaskStatus, domain::ToolCallingState,
-    domain::ToolDefinition, domain::ToolExecutorKind, domain::ToolPermission, domain::ToolSchema,
-    domain::WaitingReason, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
+    domain::FrontendKind, domain::LlmToolCall, domain::ShortTermMemory, domain::SpaceToolRegistry,
+    domain::Task, domain::TaskStatus, domain::ToolCallingState, domain::ToolDefinition,
+    domain::ToolExecutorKind, domain::ToolPermission, domain::ToolSchema, domain::WaitingReason,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 fn default_channel() -> ChannelId {
@@ -162,9 +162,6 @@ fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) 
             tags: vec!["test".to_string()],
             description: "test agent".to_string(),
         },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions,
         system_prompt: None,
     });

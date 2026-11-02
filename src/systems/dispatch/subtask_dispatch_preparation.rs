@@ -3,9 +3,8 @@
 //! 扫描带 `SubTaskConfig` 的 Task，执行派发前置条件检查：
 //! - DAG 依赖检查
 //! - 兄弟任务结果收集（注入到 task content）
-//! - AgentSpawnSpec 准备
 //!
-//! 准备完成后附加 `PendingDispatch` Component，由 `dispatch_system` 接管派发决策。
+//! 准备完成后附加 `PendingDispatch` Component，由 `dispatch_system` 交给主 Agent 执行。
 
 use crate::prelude::*;
 use tracing::{debug, trace};
@@ -13,8 +12,8 @@ use tracing::{debug, trace};
 use crate::{
     contracts::Clock,
     domain::{
-        AgentSpawnSpec, BatchTaskState, DispatchHint, DispatchKind, PendingDispatch,
-        SubTaskBatchState, SubTaskConfig, Task, TaskStatus,
+        BatchTaskState, DispatchHint, DispatchKind, PendingDispatch, SubTaskBatchState,
+        SubTaskConfig, Task, TaskStatus,
     },
 };
 
@@ -63,7 +62,7 @@ pub fn subtask_dispatch_preparation_system(
             trace!(
                 event = "SubTaskWaitingForDependencies",
                 task_id = %task.id,
-                child_name = %config.child_agent_name,
+                child_name = %config.name,
                 depends_on = ?config.depends_on,
                 "sub-task waiting for dependencies to complete"
             );
@@ -107,27 +106,16 @@ pub fn subtask_dispatch_preparation_system(
             );
         }
 
-        // 4. 准备 AgentSpawnSpec
-        let spawn_spec = AgentSpawnSpec {
-            name: config.child_agent_name.clone(),
-            model: config.child_agent_model.clone(),
-            allowed_tools: config.allowed_tools.clone(),
-            parent_agent_id: Some(config.parent_agent_id),
-        };
-
-        // 5. 附加 PendingDispatch（交给主 Agent；主 Agent 不存在时按 spawn_spec 生成子 Agent）
+        // 4. 附加 PendingDispatch，交给主 Agent 执行
         commands.entity(entity).insert(PendingDispatch {
             kind: DispatchKind::Task,
-            hint: DispatchHint {
-                preferred_agent_name: None,
-                agent_spawn_spec: Some(spawn_spec),
-            },
+            hint: DispatchHint::main_agent(),
         });
 
         debug!(
             event = "SubTaskDispatchPrepared",
             task_id = %task.id,
-            child_name = %config.child_agent_name,
+            child_name = %config.name,
             batch_id = %config.batch_id,
             has_sibling_results = sibling_results.is_some(),
             "sub-task prepared for dispatch"

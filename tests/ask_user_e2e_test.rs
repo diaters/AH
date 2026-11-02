@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities,
-    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentProfile,
     domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
     domain::ExternalInput, domain::FrontendKind, domain::LongTermMemory, domain::ShortTermMemory,
     domain::Task, domain::TaskStatus, domain::ToolExecutionRequestMessage, domain::ToolPermission,
@@ -111,9 +111,6 @@ fn e2e_ask_user_full_flow() {
                     tags: vec!["general".to_string()],
                     description: "parent agent".to_string(),
                 },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
                 tool_permissions: perms,
                 system_prompt: None,
             },

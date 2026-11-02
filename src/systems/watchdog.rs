@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 
 use crate::contracts::Clock;
 use crate::domain::{
-    Agent, AgentExecutionOutput, AgentExecutionResultMessage, AgentKind, ApprovalDecision,
+    Agent, AgentExecutionOutput, AgentExecutionResultMessage, ApprovalDecision,
     ApprovalResolvedHookPending, ApprovalResultMessage, ApprovalVerdict, BackgroundJob,
     BackgroundJobControl, BackgroundedToolCall, ConversationMessage, DispatchHint, DispatchKind,
     FailureReason, FinalizeRequest, GrantMode, InFlightToolCall, InboxDeliveryMessage, InboxItem,
@@ -65,10 +65,9 @@ pub struct WatchdogLedger {
 }
 
 fn watchdog_available(agents: &Query<&Agent>) -> bool {
-    agents.iter().any(|agent| {
-        agent.kind == AgentKind::Persistent
-            && agent.capabilities.tags.iter().any(|t| t == WATCHDOG_TAG)
-    })
+    agents
+        .iter()
+        .any(|agent| agent.capabilities.tags.iter().any(|t| t == WATCHDOG_TAG))
 }
 
 fn goal_of(index: &EntityIndex, tasks: &Query<&Task>, task_id: TaskId) -> String {

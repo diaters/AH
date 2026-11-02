@@ -12,7 +12,7 @@ use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities,
-    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentProfile,
     domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
     domain::FrontendKind, domain::SessionBackend, domain::ShortTermMemory, domain::Task,
     domain::ToolExecutionRequestMessage, domain::ToolExecutionResultMessage, llm::ExecutorRegistry,
@@ -149,9 +149,6 @@ fn spawn_shell_agent(world: &mut harness::prelude::World) -> harness::domain::Ag
                 tags: vec!["test".to_string()],
                 description: "shell test agent".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: harness::domain::ToolPermission::Allow,
                 default_permission_explicit: true,

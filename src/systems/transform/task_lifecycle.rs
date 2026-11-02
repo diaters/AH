@@ -210,7 +210,7 @@ pub fn task_termination_system(
         // 子任务完成时产出 SubTaskCompletedMessage
         if let Some(parent_id) = task.parent_task_id {
             let child_name = sub_task_config
-                .map(|c| c.child_agent_name.clone())
+                .map(|c| c.name.clone())
                 .unwrap_or_else(|| "unknown".to_string());
             debug!(
                 event = "SubTaskTerminated",
@@ -1283,9 +1283,6 @@ mod tests {
                 tags: vec![name.to_string()],
                 description: format!("{} agent", name),
             },
-            kind: crate::domain::AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Confirm,
                 default_permission_explicit: true,

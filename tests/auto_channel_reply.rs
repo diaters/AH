@@ -9,8 +9,8 @@ use harness::{
     channels::{Channel, ChannelManager, TelegramChannel, TelegramConfig},
     domain::FrontendKind,
     domain::{
-        Agent, AgentCapabilities, AgentExecutor, AgentKind, AgentProfile, AgentToolPermissions,
-        ChannelId, ExternalInput,
+        Agent, AgentCapabilities, AgentExecutor, AgentProfile, AgentToolPermissions, ChannelId,
+        ExternalInput,
     },
     ecs::EntityIndex,
     llm::ExecutorRegistry,
@@ -40,9 +40,6 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
             tags: vec!["llm".to_string(), "default".to_string()],
             description: "默认 Agent".to_string(),
         },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
         system_prompt: None,
     };

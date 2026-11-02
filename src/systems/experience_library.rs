@@ -9,13 +9,13 @@ use tracing::{debug, info, warn};
 use crate::contracts::{FrontendRegistry, SharedExperienceLibrary};
 use crate::domain::{
     Agent, AgentExecutionOutput, AgentExecutionResult, AgentExecutionResultMessage, AgentId,
-    AgentKind, AgentRequestKind, DispatchHint, DispatchKind, EngineEvent, EventTarget,
-    ExperienceDraftOrigin, ExperienceDraftReadyMessage, ExperienceDraftRequest, ExperienceEntry,
-    ExperienceLookupOrigin, ExperienceLookupRequest, FrontendKind, InboxDeliveryMessage, InboxItem,
-    NO_MATCHING_EXPERIENCE, OutputContent, PendingDispatch, ScheduledRun, SystemOutputMessage,
-    Task, TaskId, TaskStatus, ToolError, ToolExecutionResultMessage, ToolReturnedHookPending,
-    WaitingReason, WorkItem, WorkItemType, build_draft_prompt, build_lookup_prompt,
-    librarian_index, parse_draft, parse_lookup_decision, rank_by_overlap, render_lookup_result,
+    AgentRequestKind, DispatchHint, DispatchKind, EngineEvent, EventTarget, ExperienceDraftOrigin,
+    ExperienceDraftReadyMessage, ExperienceDraftRequest, ExperienceEntry, ExperienceLookupOrigin,
+    ExperienceLookupRequest, FrontendKind, InboxDeliveryMessage, InboxItem, NO_MATCHING_EXPERIENCE,
+    OutputContent, PendingDispatch, ScheduledRun, SystemOutputMessage, Task, TaskId, TaskStatus,
+    ToolError, ToolExecutionResultMessage, ToolReturnedHookPending, WaitingReason, WorkItem,
+    WorkItemType, build_draft_prompt, build_lookup_prompt, librarian_index, parse_draft,
+    parse_lookup_decision, rank_by_overlap, render_lookup_result,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -32,12 +32,11 @@ pub struct ExperienceLibraryHandle(pub SharedExperienceLibrary);
 
 fn librarian_available(agents: &Query<&Agent>) -> bool {
     agents.iter().any(|agent| {
-        agent.kind == AgentKind::Persistent
-            && agent
-                .capabilities
-                .tags
-                .iter()
-                .any(|tag| tag == LIBRARIAN_TAG)
+        agent
+            .capabilities
+            .tags
+            .iter()
+            .any(|tag| tag == LIBRARIAN_TAG)
     })
 }
 

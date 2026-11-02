@@ -74,17 +74,11 @@ pub fn parse_create_tasks_params(
             })
             .unwrap_or_default();
 
-        let model = task_val
-            .get("model")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
         definitions.push(SubTaskDefinition {
             name,
             content,
             tools,
             depends_on,
-            model,
         });
     }
 
@@ -335,6 +329,17 @@ mod tests {
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "minimal");
         assert!(defs[0].depends_on.is_empty());
-        assert!(defs[0].model.is_none());
+    }
+
+    /// 旧版 schema 中的 model 字段已移除；模型沿用旧习惯传入时忽略而非报错。
+    #[test]
+    fn test_parse_ignores_legacy_model_field() {
+        let input = serde_json::json!({
+            "tasks": [
+                { "name": "a", "content": "c", "tools": [], "model": "gpt-4.1" }
+            ]
+        });
+        let defs = parse_create_tasks_params(&input).expect("legacy model field is ignored");
+        assert_eq!(defs[0].name, "a");
     }
 }

@@ -131,8 +131,8 @@ pub type ExecutorFuture =
 
 // agent
 pub use agent::{
-    Agent, AgentCapabilities, AgentKind, AgentProfile, AgentStoppingHookPending,
-    AgentToolPermissions, GrantScope, PermissionSource, RuntimeGrants, resolve_tool_permission,
+    Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, GrantScope, PermissionSource,
+    RuntimeGrants, resolve_tool_permission,
 };
 
 // chat_session
@@ -193,15 +193,15 @@ pub use memory::{
 
 // message
 pub use message::{
-    AgentExecutionRequestMessage, AgentExecutionResultMessage, AgentSpawnRequestMessage,
-    ApprovalRequestMessage, ApprovalRequestedHookPending, ApprovalResolvedHookPending,
-    ApprovalResultMessage, ChatRoundReadyMessage, ChatRoundStartedMessage, ClearTaskMessage,
-    ContinueTaskMessage, CreateTaskMessage, ExecutionResultReceiver, ExternalInput,
-    FinishTaskMessage, InputReceiver, LlmResponseHookPending, MessageDispatchedHookPending,
-    MessageReceivedHookPending, ModelChainStateUpdate, ModelChainStateUpdateReceiver, OutputKind,
-    OutputMessage, PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage,
-    RetryReadyMessage, SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage,
-    Signal, SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
+    AgentExecutionRequestMessage, AgentExecutionResultMessage, ApprovalRequestMessage,
+    ApprovalRequestedHookPending, ApprovalResolvedHookPending, ApprovalResultMessage,
+    ChatRoundReadyMessage, ChatRoundStartedMessage, ClearTaskMessage, ContinueTaskMessage,
+    CreateTaskMessage, ExecutionResultReceiver, ExternalInput, FinishTaskMessage, InputReceiver,
+    LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
+    ModelChainStateUpdate, ModelChainStateUpdateReceiver, OutputKind, OutputMessage,
+    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
+    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
+    SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
     ToolExecutionResultMessage, TriggerTaskMessage, UserInputMessage, UserOutputMessage,
@@ -300,7 +300,7 @@ pub use work_item::{
 };
 
 // dispatch
-pub use dispatch::{AgentSpawnSpec, DispatchHint, DispatchKind, PendingDispatch};
+pub use dispatch::{DispatchHint, DispatchKind, PendingDispatch};
 
 // workflow
 pub use workflow::{
@@ -376,9 +376,6 @@ mod tests {
                 tags: vec![],
                 description: "test".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: perms,
             system_prompt: None,
         };
@@ -405,9 +402,6 @@ mod tests {
                 tags: vec![],
                 description: "test".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         };

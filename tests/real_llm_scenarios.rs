@@ -40,9 +40,8 @@ use harness::{
     systems::HarnessConfig,
 };
 use harness::{
-    domain::Agent, domain::AgentCapabilities, domain::AgentExecutor, domain::AgentKind,
-    domain::AgentProfile, domain::AgentToolPermissions, domain::ExecutorFuture,
-    domain::ToolPermission,
+    domain::Agent, domain::AgentCapabilities, domain::AgentExecutor, domain::AgentProfile,
+    domain::AgentToolPermissions, domain::ExecutorFuture, domain::ToolPermission,
 };
 use serde::Deserialize;
 use tokio::runtime::Runtime;
@@ -367,9 +366,6 @@ fn spawn_scenario_agent(app: &mut bevy_app::App) {
             ],
             description: "Scenario runner default agent".to_string(),
         },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         // 显式 Allow：场景 runner 无人值守，不能让 Confirm 权限的工具等待用户确认
         // （否则卡死在 Waiting(User)，见 scenario_tool_call_loop_reaches_done 注释）。
         // 同时 default_permission_explicit=true 让 implicit_confirm 回落不生效，
@@ -665,7 +661,11 @@ fn execute_scenario(
     };
     let world = app.world_mut();
     let mut task_query = world.query::<&Task>();
-    for task in task_query.iter(world) {
+    // 只看用户输入产生的根任务：create_tasks 场景中子任务也是 Task，不能取其结果代替最终回复。
+    for task in task_query
+        .iter(world)
+        .filter(|task| task.parent_task_id.is_none())
+    {
         if trace.task_status.is_none() {
             trace.task_status = Some(format!("{:?}", task.status()));
             // 多轮：/finish 的 mark_done 会把 result_summary 覆盖为
@@ -1154,6 +1154,11 @@ fn list_scenario_files() -> Vec<String> {
                 names.push(stem.to_string());
             }
         }
+    }
+    // HARNESS_TEST_SCENARIOS=a,b 只跑指定场景，便于针对单项改动做真实验证。
+    if let Ok(filter) = std::env::var("HARNESS_TEST_SCENARIOS") {
+        let wanted: Vec<&str> = filter.split(',').map(str::trim).collect();
+        names.retain(|name| wanted.contains(&name.as_str()));
     }
     names.sort();
     names

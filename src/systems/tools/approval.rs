@@ -91,7 +91,7 @@ pub fn approval_dispatch_system(
                 lines[skip..].to_vec()
             })
             .unwrap_or_default();
-        let declared: Vec<String> = config.map(|c| c.allowed_tools.clone()).unwrap_or_default();
+        let declared: Vec<String> = config.map(|c| c.declared_tools.clone()).unwrap_or_default();
         let tool_input = truncate_chars(&request.tool_input.to_string(), 1500);
         let subtask_goal = truncate_chars(&task.content, 600);
         let prompt = build_approval_prompt(&ApprovalReviewInput {

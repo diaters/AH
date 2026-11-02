@@ -9,11 +9,10 @@ use crossbeam_channel::unbounded;
 use harness::prelude::*;
 use harness::{
     NativeProcessBackend, app::build_harness_app, domain::Agent, domain::AgentCapabilities,
-    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentKind,
-    domain::AgentProfile, domain::AgentRequestKind, domain::AgentToolPermissions,
-    domain::ChannelId, domain::EntryRole, domain::FrontendKind, domain::ShortTermMemory,
-    domain::SpaceToolRegistry, domain::Task, domain::TaskStatus,
-    domain::ToolConfirmationResponseMessage, domain::ToolDefinition,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentId, domain::AgentProfile,
+    domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId, domain::EntryRole,
+    domain::FrontendKind, domain::ShortTermMemory, domain::SpaceToolRegistry, domain::Task,
+    domain::TaskStatus, domain::ToolConfirmationResponseMessage, domain::ToolDefinition,
     domain::ToolExecutionRequestMessage, domain::ToolExecutionResultMessage,
     domain::ToolExecutorKind, domain::ToolPermission, domain::ToolSchema, domain::WaitingReason,
     llm::ExecutorRegistry, systems::HarnessConfig,
@@ -46,9 +45,6 @@ fn create_test_agent(world: &mut World, tool_permissions: AgentToolPermissions) 
                 tags: vec!["test".to_string()],
                 description: "test agent".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions,
             system_prompt: None,
         })
@@ -828,9 +824,6 @@ fn child_agent_confirm_routes_to_parent() {
             tags: vec![],
             description: "child".to_string(),
         },
-        kind: AgentKind::TaskScoped,
-        parent_id: Some(parent_id),
-        bound_task_id: Some(task_id),
         tool_permissions: AgentToolPermissions {
             default_permission: ToolPermission::Deny,
             default_permission_explicit: true,
@@ -962,9 +955,6 @@ fn confirmation_denied_rejects_tool() {
             tags: vec![],
             description: "child".to_string(),
         },
-        kind: AgentKind::TaskScoped,
-        parent_id: Some(parent_id),
-        bound_task_id: Some(task_id),
         tool_permissions: AgentToolPermissions {
             default_permission: ToolPermission::Deny,
             default_permission_explicit: true,
@@ -1051,8 +1041,8 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
 
     app.update();
 
-    // 创建父 Agent（没有 echo 权限）
-    let parent_id = create_test_agent(
+    // 另一个 Agent（没有 echo 权限）：不再存在父子 Agent 关系，不影响路由
+    create_test_agent(
         app.world_mut(),
         AgentToolPermissions {
             default_permission: ToolPermission::Deny,
@@ -1088,9 +1078,6 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
                 tags: vec![],
                 description: "child".to_string(),
             },
-            kind: AgentKind::TaskScoped,
-            parent_id: Some(parent_id),
-            bound_task_id: Some(task_id),
             tool_permissions: AgentToolPermissions {
                 default_permission: ToolPermission::Deny,
                 default_permission_explicit: true,

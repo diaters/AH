@@ -38,9 +38,7 @@ impl Plugin for MemoryPlugin {
                     .in_set(HarnessSet::Maintenance)
                     .after(long_term_memory_decay_system),
                 // 摘要派发
-                summarization_dispatch_system
-                    .in_set(HarnessSet::Maintenance)
-                    .after(crate::systems::agent_factory_system),
+                summarization_dispatch_system.in_set(HarnessSet::Maintenance),
             ),
         );
     }

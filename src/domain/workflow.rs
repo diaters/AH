@@ -7,32 +7,30 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use super::{AgentId, TaskId};
+use super::TaskId;
 
 /// 单个子任务的定义（从 create_tasks 工具输入解析）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubTaskDefinition {
-    /// 子 Agent 名称
+    /// 子任务名称（批次内唯一）
     pub name: String,
     /// 任务描述/prompt
     pub content: String,
-    /// 需要的工具列表
+    /// 主 Agent 声明的预计使用工具，作为 watchdog 审批子任务工具调用时的授权范围
     pub tools: Vec<String>,
     /// 依赖的任务 name 列表（在本批次内）
     pub depends_on: Vec<String>,
-    /// 可选模型覆盖
-    pub model: Option<String>,
 }
 
 /// 附加在每个子 Task 实体上，供调度系统读取
 #[derive(Debug, Clone, Component)]
 pub struct SubTaskConfig {
     pub batch_id: Uuid,
-    pub child_agent_name: String,
-    pub child_agent_model: Option<String>,
-    pub allowed_tools: Vec<String>,
-    /// 创建子任务的父 Agent ID，用于 spawn 请求和权限继承
-    pub parent_agent_id: AgentId,
+    /// 子任务名称（批次内唯一，也是批次状态的键）
+    pub name: String,
+    /// 主 Agent 声明的授权范围（create_tasks 的 tools），供 watchdog 审批参考；
+    /// 子任务由主 Agent 执行，可用工具仍以主 Agent 权限为准
+    pub declared_tools: Vec<String>,
     /// 本任务依赖的其他子任务 name 列表（在 batch 内）
     pub depends_on: Vec<String>,
     /// 依赖本任务完成的子任务 name 列表（反向索引）

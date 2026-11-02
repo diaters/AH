@@ -130,7 +130,6 @@ description = "Search documentation from plugin"  # 可选描述
 | `on_workitem_completed` | 观察 | WorkItem 完成 |
 | `on_workitem_failed` | 观察 | WorkItem 失败 |
 | `on_agent_started` | 观察 | Agent 启动 |
-| `on_agent_stopped` | 观察 | Agent 停止 |
 | `on_message_dispatched` | 观察 | 消息派发 |
 | `on_message_received` | 观察 | 消息接收 |
 | `on_llm_response` | 观察 | LLM 响应返回 |

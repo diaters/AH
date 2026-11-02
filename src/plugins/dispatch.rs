@@ -5,11 +5,11 @@
 use crate::prelude::*;
 
 use crate::systems::{
-    HarnessSet, agent_started_hook_system, agent_stopped_hook_system, approval_dispatch_system,
-    approval_result_system, dispatch_system, evaluation_trigger_system,
-    on_approval_requested_hook_system, on_approval_resolved_hook_system,
-    on_message_dispatched_hook_system, subtask_dispatch_preparation_system,
-    tool_confirmation_result_system, workitem_lifecycle_hook_system,
+    HarnessSet, agent_started_hook_system, approval_dispatch_system, approval_result_system,
+    dispatch_system, evaluation_trigger_system, on_approval_requested_hook_system,
+    on_approval_resolved_hook_system, on_message_dispatched_hook_system,
+    subtask_dispatch_preparation_system, tool_confirmation_result_system,
+    workitem_lifecycle_hook_system,
 };
 
 /// 派发 Plugin
@@ -32,14 +32,8 @@ impl Plugin for DispatchPlugin {
                 workitem_lifecycle_hook_system.in_set(HarnessSet::Dispatch),
                 // on_message_dispatched 观察 hook companion 系统
                 on_message_dispatched_hook_system.in_set(HarnessSet::Dispatch),
-                // Agent 生命周期 hook companion 系统
-                // 两者均放在 Maintenance 集合中：
-                // - agent_started_hook_system 使用 Added<Agent>，与 agent_factory_system 在同一帧即可触发
-                // - agent_stopped_hook_system 必须在 agent_factory_system（handle_termination 插入标记）之后运行
+                // Agent 生命周期 hook companion 系统（Added<Agent> 变更检测）
                 agent_started_hook_system.in_set(HarnessSet::Maintenance),
-                agent_stopped_hook_system
-                    .in_set(HarnessSet::Maintenance)
-                    .after(crate::systems::agent_factory_system),
                 // 评估系统
                 evaluation_trigger_system.in_set(HarnessSet::Dispatch),
                 // 审批系统

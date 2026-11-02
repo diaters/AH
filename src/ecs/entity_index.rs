@@ -73,13 +73,6 @@ pub fn despawn_task(commands: &mut Commands, index: &mut EntityIndex, id: TaskId
     }
 }
 
-/// 中心 Agent 销毁封装（双保险之二）。
-pub fn despawn_agent(commands: &mut Commands, index: &mut EntityIndex, id: AgentId) {
-    if let Some(entity) = index.agents.remove(&id) {
-        commands.entity(entity).despawn();
-    }
-}
-
 /// 兜底清理（双保险之一）：`Task` 组件被移除后，下一帧自动摘除索引映射。
 ///
 /// 即使有路径绕过中心 `despawn_task` 封装直接 `commands.entity(e).despawn()`，

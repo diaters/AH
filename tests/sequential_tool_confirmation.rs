@@ -14,11 +14,11 @@ use common::mock_executor::CannedExecutor;
 use harness::prelude::*;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
-    domain::AgentKind, domain::AgentProfile, domain::AgentToolPermissions, domain::ApprovalOption,
-    domain::ChannelId, domain::EngineEvent, domain::EventTarget, domain::ExternalInput,
-    domain::Frontend, domain::FrontendKind, domain::LlmToolCall, domain::LongTermMemory,
-    domain::OutputContent, domain::ToolConfirmationResponseMessage,
-    domain::ToolExecutionResultMessage, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::AgentProfile, domain::AgentToolPermissions, domain::ApprovalOption, domain::ChannelId,
+    domain::EngineEvent, domain::EventTarget, domain::ExternalInput, domain::Frontend,
+    domain::FrontendKind, domain::LlmToolCall, domain::LongTermMemory, domain::OutputContent,
+    domain::ToolConfirmationResponseMessage, domain::ToolExecutionResultMessage,
+    llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -113,9 +113,6 @@ fn spawn_default_agent(app: &mut App) {
                     tags: vec!["llm".to_string(), "default".to_string()],
                     description: "Default LLM Agent".to_string(),
                 },
-                kind: AgentKind::Persistent,
-                parent_id: None,
-                bound_task_id: None,
                 tool_permissions: AgentToolPermissions::default(),
                 system_prompt: None,
             },

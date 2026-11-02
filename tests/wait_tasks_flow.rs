@@ -2,9 +2,9 @@
 
 use harness::prelude::*;
 use harness::{
-    domain::Agent, domain::AgentCapabilities, domain::AgentId, domain::AgentKind,
-    domain::AgentProfile, domain::AgentToolPermissions, domain::ChannelId, domain::FrontendKind,
-    domain::ToolContext, domain::WaitingForTasksInfo, systems::HarnessConfig,
+    domain::Agent, domain::AgentCapabilities, domain::AgentId, domain::AgentProfile,
+    domain::AgentToolPermissions, domain::ChannelId, domain::FrontendKind, domain::ToolContext,
+    domain::WaitingForTasksInfo, systems::HarnessConfig,
 };
 
 #[allow(dead_code)]
@@ -35,9 +35,6 @@ fn create_test_agent(world: &mut World) -> AgentId {
             tags: vec!["test".to_string()],
             description: "test agent".to_string(),
         },
-        kind: AgentKind::Persistent,
-        parent_id: None,
-        bound_task_id: None,
         tool_permissions: AgentToolPermissions::default(),
         system_prompt: None,
     });

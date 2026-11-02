@@ -7,7 +7,7 @@ use std::{sync::Arc, thread, time::Duration};
 use crossbeam_channel::unbounded;
 use harness::{
     app::build_harness_app, domain::Agent, domain::AgentCapabilities, domain::AgentExecutionOutput,
-    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentKind, domain::AgentProfile,
+    domain::AgentExecutionRequest, domain::AgentExecutor, domain::AgentProfile,
     domain::AgentRequestKind, domain::AgentToolPermissions, domain::ChannelId,
     domain::DispatchHint, domain::DispatchKind, domain::ExecutorFuture, domain::FrontendKind,
     domain::LongTermMemory, domain::PendingDispatch, domain::ShortTermMemory, domain::Task,
@@ -127,9 +127,6 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
                 tags: vec!["llm".to_string(), "default".to_string()],
                 description: "Default LLM Agent".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         },
@@ -148,9 +145,6 @@ fn spawn_default_agent(app: &mut bevy_app::App) {
                 tags: vec!["summarization".to_string(), "memory".to_string()],
                 description: "Summarizer Agent".to_string(),
             },
-            kind: AgentKind::Persistent,
-            parent_id: None,
-            bound_task_id: None,
             tool_permissions: AgentToolPermissions::default(),
             system_prompt: None,
         },

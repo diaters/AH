@@ -21,11 +21,10 @@ use crate::{
     contracts::Clock,
     domain::HookPoint,
     domain::{
-        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentKind, AgentRequestKind,
-        AgentSpawnRequestMessage, ConversationMessage, DispatchKind, ExecutionError,
-        LongTermMemory, MessageDispatchedHookPending, PendingDispatch, ShortTermMemory,
-        SpaceToolRegistry, Task, TaskStatus, ToolPermission, WaitingReason, WorkItem,
-        WorkItemLifecycleHookPending, WorkItemType,
+        Agent, AgentExecutionRequest, AgentExecutionRequestMessage, AgentRequestKind,
+        ConversationMessage, DispatchKind, ExecutionError, LongTermMemory,
+        MessageDispatchedHookPending, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
+        TaskStatus, ToolPermission, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
     infrastructure::skills::{LoadedSkill, PluginSkillContributions, SkillLoader},
     systems::HarnessSettings,
@@ -115,10 +114,10 @@ pub fn dispatch_system(
         let required_tag = work_type.required_tag();
 
         // 通过 tag 查找匹配的 Persistent Agent
-        let agent = agent_refs.iter().copied().find(|agent| {
-            agent.kind == AgentKind::Persistent
-                && agent.capabilities.tags.contains(&required_tag.to_string())
-        });
+        let agent = agent_refs
+            .iter()
+            .copied()
+            .find(|agent| agent.capabilities.tags.contains(&required_tag.to_string()));
 
         let Some(agent) = agent else {
             // 找不到 Agent → fail + 派发 OnWorkItemFailed hook
@@ -222,14 +221,12 @@ pub fn dispatch_system(
             continue;
         }
 
-        // 按 preferred_agent_name（未指定时为主 Agent）查找 Persistent Agent，同时取出 LongTermMemory
+        // 按 preferred_agent_name（未指定时为主 Agent）查找 Agent，同时取出 LongTermMemory
         let target_name = hint
             .preferred_agent_name
             .as_deref()
             .unwrap_or(main_agent_name);
-        let agent_with_ltm = agents
-            .iter()
-            .find(|(a, _)| a.kind == AgentKind::Persistent && a.profile.name == target_name);
+        let agent_with_ltm = agents.iter().find(|(a, _)| a.profile.name == target_name);
 
         if let Some((agent, long_term)) = agent_with_ltm {
             // 构建 tools 列表：从 registry 中筛选 Agent 有权限的工具（非 Deny）
@@ -325,38 +322,7 @@ pub fn dispatch_system(
             continue;
         }
 
-        // 找不到 Agent → 检查 spawn_spec
-        if let Some(spec) = &hint.agent_spawn_spec {
-            // spawn 新 Agent
-            let parent_agent_id = spec
-                .parent_agent_id
-                .unwrap_or(crate::domain::AgentId::nil());
-            commands.spawn(AgentSpawnRequestMessage {
-                parent_agent_id,
-                task_id: task.id,
-                name: spec.name.clone(),
-                model: spec.model.clone(),
-                description: spec.name.clone(),
-                tools: spec.allowed_tools.clone(),
-                task_prompt: task.content.clone(),
-                task_system_prompt: None,
-            });
-
-            // Agent 尚未生成，无法设置 delegate；仅切到 Waiting(Agent)
-            task.mark_waiting(WaitingReason::Agent, clock.0);
-
-            commands.entity(task_entity).remove::<PendingDispatch>();
-
-            debug!(
-                event = "DispatchTaskSpawnAgent",
-                task_id = %task.id,
-                spawn_name = %spec.name,
-                "task waiting for spawned agent"
-            );
-            continue;
-        }
-
-        // 既找不到 Agent 也无 spawn_spec → Task Failed
+        // 找不到目标 Agent → Task Failed
         let error = ExecutionError::Unknown(format!(
             "no persistent agent named '{target_name}' found for task dispatch"
         ));
@@ -367,7 +333,7 @@ pub fn dispatch_system(
             event = "DispatchTaskNoAgent",
             task_id = %task.id,
             agent_name = %target_name,
-            "no agent and no spawn_spec for task dispatch, marking task as failed"
+            "no agent for task dispatch, marking task as failed"
         );
     }
 }
