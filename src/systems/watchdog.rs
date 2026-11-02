@@ -623,9 +623,9 @@ fn apply_approval(
                 ApprovalResolvedHookPending,
             ));
             if approved {
-                format!("已批准{label}调用 {tool}：{reason}")
+                watchdog_notice(&format!("已批准{label}调用 {tool}"), "依据", &reason)
             } else {
-                format!("已拒绝{label}调用 {tool}：{reason}")
+                watchdog_notice(&format!("已拒绝{label}调用 {tool}"), "依据", &reason)
             }
         }
         ApprovalVerdict::Escalate => {
@@ -653,14 +653,24 @@ fn apply_approval(
             {
                 task.pending_confirmation_id = None;
             }
-            format!("{label}调用 {tool} 需要你确认：{reason}")
+            watchdog_notice(&format!("{label}调用 {tool} 需要你确认"), "依据", &reason)
         }
     };
     if let Some(owner) = approval.owner_task_id {
         commands.spawn(SystemOutputMessage {
             task_id: owner,
-            content: format!("🐕 Watchdog {notice}"),
+            content: notice,
         });
+    }
+}
+
+/// 看门狗通知：首行是结论，依据另起一行，客户端据此默认只显示首行、按需展开。
+fn watchdog_notice(headline: &str, detail_label: &str, detail: &str) -> String {
+    let detail = detail.trim();
+    if detail.is_empty() {
+        format!("🐕 Watchdog {headline}")
+    } else {
+        format!("🐕 Watchdog {headline}\n{detail_label}：{detail}")
     }
 }
 
@@ -697,7 +707,7 @@ fn apply_decision(
                     reason: reason.to_string(),
                 },
             });
-            format!("已取消{label}：{reason}")
+            watchdog_notice(&format!("已取消{label}"), "依据", reason)
         }
         (WatchdogAction::Retry, WatchdogSubjectKey::ToolJob(job_id)) => {
             commands.spawn(BackgroundJobControl {
@@ -707,7 +717,7 @@ fn apply_decision(
                     reason: reason.to_string(),
                 },
             });
-            format!("已重试{label}：{reason}")
+            watchdog_notice(&format!("已重试{label}"), "依据", reason)
         }
         (WatchdogAction::NotifyOwner, WatchdogSubjectKey::ToolJob(job_id)) => {
             let guidance = guidance.unwrap_or(reason);
@@ -723,7 +733,7 @@ fn apply_decision(
                     received_at: now,
                 },
             });
-            format!("提醒处理{label}：{reason}")
+            watchdog_notice(&format!("提醒处理{label}"), "依据", reason)
         }
         (WatchdogAction::Adjust, WatchdogSubjectKey::SubTask(task_id)) => {
             let guidance = guidance.unwrap_or(reason);
@@ -734,7 +744,7 @@ fn apply_decision(
                     received_at: now,
                 },
             });
-            format!("已调整{label}的执行策略：{guidance}")
+            watchdog_notice(&format!("已调整{label}的执行策略"), "建议", guidance)
         }
         (WatchdogAction::Finalize, WatchdogSubjectKey::SubTask(task_id)) => {
             let finalize_reason = guidance.unwrap_or(reason);
@@ -756,7 +766,7 @@ fn apply_decision(
                     received_at: now,
                 },
             });
-            format!("已要求{label}收尾交付：{finalize_reason}")
+            watchdog_notice(&format!("已要求{label}收尾交付"), "原因", finalize_reason)
         }
         (WatchdogAction::NotifyOwner, WatchdogSubjectKey::SubTask(task_id)) => {
             let guidance = guidance.unwrap_or(reason);
@@ -785,7 +795,7 @@ fn apply_decision(
                     received_at: now,
                 },
             });
-            format!("已请所属任务决定{label}的去留：{reason}")
+            watchdog_notice(&format!("已请所属任务决定{label}的去留"), "依据", reason)
         }
         (WatchdogAction::Cancel, WatchdogSubjectKey::SubTask(task_id)) => {
             if let Some(mut child) = index.get_task(&task_id).and_then(|e| tasks.get_mut(e).ok())
@@ -797,7 +807,7 @@ fn apply_decision(
                     now,
                 );
             }
-            format!("已取消{label}：{reason}")
+            watchdog_notice(&format!("已取消{label}"), "依据", reason)
         }
         (action, key) => {
             warn!(
@@ -811,6 +821,36 @@ fn apply_decision(
     };
     commands.spawn(SystemOutputMessage {
         task_id: subject.owner_task_id,
-        content: format!("🐕 Watchdog {notice}"),
+        content: notice,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::watchdog_notice;
+
+    #[test]
+    fn notice_puts_headline_first_and_reason_on_next_line() {
+        let notice = watchdog_notice(
+            "已批准子任务「a」调用 shell_exec",
+            "依据",
+            "  在授权范围内\n且无副作用 ",
+        );
+        assert_eq!(
+            notice,
+            "🐕 Watchdog 已批准子任务「a」调用 shell_exec\n依据：在授权范围内\n且无副作用"
+        );
+        assert_eq!(
+            notice.lines().next(),
+            Some("🐕 Watchdog 已批准子任务「a」调用 shell_exec")
+        );
+    }
+
+    #[test]
+    fn notice_without_detail_is_single_line() {
+        assert_eq!(
+            watchdog_notice("已重试后台作业", "依据", " "),
+            "🐕 Watchdog 已重试后台作业"
+        );
+    }
 }

@@ -546,6 +546,11 @@ struct Index {
       if (this.wide() && this.sidebarOpen && this.windowWidth - 272 - this.panelWidth() < 560) { this.sidebarOpen = false; }
     });
   }
+  // Markdown 中的链接复用链接产物的打开方式（本机地址按当前连接地址改写）。
+  private openLink(url: string): void {
+    const refs = linkArtifacts([url], this.preferred);
+    if (refs.length > 0) { this.openArtifact(refs[0]); }
+  }
   private closeArtifact(): void {
     this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.viewing = undefined; });
   }
@@ -590,6 +595,12 @@ struct Index {
     const next: Record<string, string> = {};
     for (const existing of Object.keys(this.approvalFeedback)) { next[existing] = this.approvalFeedback[existing]; }
     next[key] = value; this.approvalFeedback = next; this.save(key, value);
+  }
+  // 审批卡片的说明与参数默认折叠到 3 行；粗略按换行与长度判断是否需要展开入口。
+  private approvalDetailLong(request: ApprovalDto): boolean {
+    const long = (text: string | undefined, width: number): boolean =>
+      !!text && (text.split('\n').length > 3 || text.length > width * 3);
+    return long(request.context, 24) || long(request.input_json, 36);
   }
   private hasDenyOption(request: ApprovalDto): boolean {
     return request.options.some((option: ApprovalOptionDto) => isDenyOption(option.id));
@@ -982,19 +993,45 @@ struct Index {
             }
           } else {
             if (message.phase === 'response') { Text('回复').caption() }
-            MarkdownView({ source: message.content })
+            MarkdownView({ source: message.content, onLink: (url: string) => { this.openLink(url); } })
           }
           this.messageAttachments(message)
         }.layoutWeight(1).alignItems(HorizontalAlign.Start).margin({ top: 3 })
       }.width('100%').alignItems(VerticalAlign.Top)
     } else {
-      Column({ space: 8 }) {
+      Column({ space: 4 }) {
         if (this.visibleText(message.content)) {
-          Text(this.visibleText(message.content)).caption().width('100%').copyOption(CopyOptions.LocalDevice)
+          if (this.isLongNote(message) && !this.isExpanded(this.noteKey(message))) {
+            Text(this.visibleText(message.content).split('\n')[0]).caption().width('100%').maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          } else {
+            Text(this.visibleText(message.content)).caption().width('100%').copyOption(CopyOptions.LocalDevice)
+          }
+          if (this.isLongNote(message)) { this.expandToggle(this.noteKey(message), '展开依据') }
         }
         this.messageAttachments(message)
       }.width('100%').padding({ left: 46 }).alignItems(HorizontalAlign.Start)
     }
+  }
+  // 系统消息（看门狗决定、后台通知等）首行是结论；多行或过长时默认只显示首行。
+  private isLongNote(message: MessageDto): boolean {
+    const text = this.visibleText(message.content);
+    return text.includes('\n') || text.length > 80;
+  }
+  private noteKey(message: MessageDto): string {
+    return `note:${message.sequence ?? ''}:${message.task_id ?? ''}:${message.content.length}:${message.content.substring(0, 32)}`;
+  }
+  // 折叠状态与执行过程共用 processExpanded，键带前缀区分。
+  private isExpanded(key: string): boolean { return this.processExpanded[key] ?? false; }
+  private toggleExpanded(key: string): void {
+    const next: Record<string, boolean> = {};
+    for (const existing of Object.keys(this.processExpanded)) { next[existing] = this.processExpanded[existing]; }
+    next[key] = !this.isExpanded(key);
+    this.processExpanded = next;
+  }
+  @Builder private expandToggle(key: string, label: string) {
+    Text(this.isExpanded(key) ? '收起' : label).fontSize(12).fontColor(Theme.accent)
+      .padding({ top: 2, bottom: 2 }).onClick(() => { this.toggleExpanded(key); })
   }
   private isProcessExpanded(row: ConversationRow): boolean {
     return this.processExpanded[row.key] ?? !row.complete;
@@ -1032,7 +1069,7 @@ struct Index {
       if (this.isProcessExpanded(row)) {
         ForEach(row.entries ?? [], (entry: ProcessEntry) => {
           if (entry.message) {
-            Column() { MarkdownView({ source: entry.message.content }) }
+            Column() { MarkdownView({ source: entry.message.content, onLink: (url: string) => { this.openLink(url); } }) }
               .width('100%').alignItems(HorizontalAlign.Start)
           } else if (entry.observation) {
             Column({ space: 4 }) {
@@ -1084,12 +1121,18 @@ struct Index {
           Circle().width(8).height(8).fill(Theme.warn)
           Text(`${request.agent_name} 请求使用 ${request.tool_name}`).fontSize(15).fontColor(Theme.text).fontWeight(FontWeight.Medium)
         }
-        if (request.context) { Text(request.context).fontSize(13).fontColor(Theme.secondary) }
+        if (request.context) {
+          Text(request.context).fontSize(13).fontColor(Theme.secondary).width('100%')
+            .maxLines(this.isExpanded(`approval:${request.request_id}`) ? 10000 : 3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
         if (request.input_json) {
-          Text(request.input_json).fontSize(12).fontFamily('monospace').fontColor('#4A4840').maxLines(8)
+          Text(request.input_json).fontSize(12).fontFamily('monospace').fontColor('#4A4840')
+            .maxLines(this.isExpanded(`approval:${request.request_id}`) ? 10000 : 3)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).copyOption(CopyOptions.LocalDevice)
             .width('100%').padding(10).backgroundColor(Theme.page).borderRadius(8)
         }
+        if (this.approvalDetailLong(request)) { this.expandToggle(`approval:${request.request_id}`, '展开全部') }
         if (request.claimed) { Text('已提交，等待运行时校验').caption() }
         else {
           Flex({ wrap: FlexWrap.Wrap }) {
@@ -1220,7 +1263,7 @@ struct Index {
         } else {
           Text(this.experienceDetail.title).heading(24).width('100%')
           Text(`更新于 ${this.experienceDetail.updated_at.substring(0, 10)}`).caption()
-          MarkdownView({ source: this.experienceDetail.body })
+          MarkdownView({ source: this.experienceDetail.body, onLink: (url: string) => { this.openLink(url); } })
           Row({ space: 16 }) {
             Text('编辑').fontSize(13).fontColor(Theme.accent).enabled(!this.busy).onClick(() => { this.editExperience(); })
             if (this.experienceDeleting === this.experienceDetail.id) {

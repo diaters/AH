@@ -63,10 +63,20 @@ pub fn approval_dispatch_system(
         } else {
             "任务"
         };
-        let subject_label = if task.input_summary.is_empty() {
+        // 顶层用户任务通常没有 input_summary：用任务内容首行代替 UUID，通知里才读得懂。
+        let title = if task.input_summary.is_empty() {
+            task.content
+                .lines()
+                .next()
+                .map(str::trim)
+                .unwrap_or_default()
+        } else {
+            task.input_summary.as_str()
+        };
+        let subject_label = if title.is_empty() {
             format!("{kind} {}", task.id)
         } else {
-            format!("{kind}「{}」", task.input_summary)
+            format!("{kind}「{}」", truncate_chars(title, 24))
         };
         let recent: Vec<String> = calling
             .iter()

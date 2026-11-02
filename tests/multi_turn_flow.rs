@@ -509,7 +509,14 @@ fn prompt_includes_conversation_history() {
         ))
         .id();
 
-    app.update();
+    // 执行器在 tokio 运行时的后台任务中被调用：推进帧直到收到请求，避免单帧检查的时序竞争。
+    for _ in 0..200 {
+        app.update();
+        if captured.lock().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 
     // 验证 prompt 包含历史对话
     let captured_prompt = captured.lock().unwrap().clone();
