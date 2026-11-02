@@ -608,9 +608,7 @@ pub fn tool_calling_orchestrator_system(
                 matches!(
                     t.status,
                     TaskStatus::Waiting(
-                        WaitingReason::ToolExecution
-                            | WaitingReason::Session { .. }
-                            | WaitingReason::SubTaskBatch { .. }
+                        WaitingReason::ToolExecution | WaitingReason::SubTaskBatch { .. }
                     )
                 )
             })
@@ -800,9 +798,7 @@ pub fn tool_calling_orchestrator_system(
             && matches!(
                 task.status,
                 TaskStatus::Waiting(
-                    WaitingReason::ToolExecution
-                        | WaitingReason::Session { .. }
-                        | WaitingReason::SubTaskBatch { .. }
+                    WaitingReason::ToolExecution | WaitingReason::SubTaskBatch { .. }
                 )
             )
         {

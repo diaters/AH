@@ -56,26 +56,6 @@ impl LongTermMemoryService {
         self.flush(memory)
     }
 
-    /// 向指定 Agent 的长期记忆吸收来自子 Agent 的条目，并立即落盘。
-    pub fn absorb_entries(
-        &mut self,
-        memory: &mut LongTermMemory,
-        entries: Vec<LongTermMemoryEntry>,
-    ) -> Result<()> {
-        memory.absorb(entries);
-        self.flush(memory)
-    }
-
-    /// 替换指定 Agent 的全部长期记忆条目，并立即落盘。
-    pub fn replace_entries(
-        &mut self,
-        memory: &mut LongTermMemory,
-        entries: Vec<LongTermMemoryEntry>,
-    ) -> Result<()> {
-        memory.entries = entries;
-        self.flush(memory)
-    }
-
     /// 清空指定 Agent 的全部长期记忆条目，并立即落盘。
     pub fn clear(&mut self, memory: &mut LongTermMemory) -> Result<()> {
         memory.entries.clear();
@@ -165,20 +145,6 @@ mod tests {
         let loaded = service2.load_entries("test-agent");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].content, "persisted fact");
-    }
-
-    #[test]
-    fn absorb_entries_persists_to_disk() {
-        let (mut service, _dir) = make_service();
-        let mut memory = LongTermMemory::with_name("absorb-agent");
-        let entries = vec![
-            LongTermMemoryEntry::new("strategy 1"),
-            LongTermMemoryEntry::new("strategy 2"),
-        ];
-
-        service.absorb_entries(&mut memory, entries).unwrap();
-
-        assert_eq!(memory.entries.len(), 2);
     }
 
     #[test]

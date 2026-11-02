@@ -999,32 +999,4 @@ impl LongTermMemory {
         }
         self.entries.push(entry);
     }
-
-    /// 添加兼容旧调用点的归档条目。
-    pub fn add_archive(&mut self, content: impl Into<String>) {
-        let content = content.into();
-        debug!(
-            event = "LtmArchiveAdded",
-            content = %content,
-            content_len = content.len(),
-            total_entries = self.entries.len(),
-            "long term memory archive added"
-        );
-        self.entries.push(LongTermMemoryEntry::new(content));
-    }
-
-    /// 吸收来自子 Agent 的长期记忆条目。
-    pub fn absorb(&mut self, entries: Vec<LongTermMemoryEntry>) {
-        let absorbing_count = entries.len();
-        let total_before = self.entries.len();
-        debug!(
-            event = "LtmAbsorb",
-            absorbing_count = absorbing_count,
-            total_entries_before = total_before,
-            total_entries_after = total_before + absorbing_count,
-            absorbing_entries = ?entries.iter().map(|entry| &entry.content).collect::<Vec<_>>(),
-            "long term memory absorbed entries"
-        );
-        self.entries.extend(entries);
-    }
 }

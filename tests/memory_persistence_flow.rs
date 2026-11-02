@@ -79,52 +79,6 @@ fn multiple_entries_persist_and_restore_correctly() {
     }
 }
 
-/// 验证贡献吸收后的记忆被持久化到磁盘。
-#[test]
-fn contribution_absorption_persists_to_disk() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let parent_agent_name = "parent-agent";
-
-    {
-        let store = JsonFileMemoryStore::new(dir.path().join("agents"));
-        let repo = MemoryRepository::new(Box::new(store));
-        let mut service = LongTermMemoryService::new(repo);
-
-        let mut parent_memory = LongTermMemory::with_name(parent_agent_name);
-        service
-            .add_entry(
-                &mut parent_memory,
-                LongTermMemoryEntry::new("parent's own fact"),
-            )
-            .unwrap();
-
-        // 模拟子 Agent 贡献的记忆
-        let child_memories = vec![
-            LongTermMemoryEntry::new("child learned fact"),
-            LongTermMemoryEntry::new("child learned strategy"),
-        ];
-
-        service
-            .absorb_entries(&mut parent_memory, child_memories)
-            .unwrap();
-
-        assert_eq!(parent_memory.entries.len(), 3);
-    }
-
-    // 重启后验证
-    {
-        let store = JsonFileMemoryStore::new(dir.path().join("agents"));
-        let repo = MemoryRepository::new(Box::new(store));
-        let service = LongTermMemoryService::new(repo);
-        let entries = service.load_entries(parent_agent_name);
-
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].content, "parent's own fact");
-        assert_eq!(entries[1].content, "child learned fact");
-        assert_eq!(entries[2].content, "child learned strategy");
-    }
-}
-
 /// 验证不存在持久化文件时 service 返回空记忆。
 #[test]
 fn load_from_nonexistent_dir_returns_empty() {

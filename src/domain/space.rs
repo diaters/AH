@@ -81,10 +81,6 @@ impl Default for ToolSchema {
 pub enum ToolExecutorKind {
     /// 内置执行器，由系统内注册函数实现
     Builtin(String),
-    /// 外部进程执行（后续扩展）
-    External { command: String, args: Vec<String> },
-    /// HTTP 调用（后续扩展）
-    Http { endpoint: String },
 }
 
 /// Tool 权限级别
@@ -102,8 +98,6 @@ pub enum ToolPermission {
 /// Tool 执行动作
 #[derive(Debug, Clone)]
 pub enum ToolAction {
-    /// 直接返回结果
-    Direct(serde_json::Value),
     /// 创建子任务批次
     CreateBatch(Vec<SubTaskDefinition>),
     /// 等待子任务完成
@@ -111,8 +105,6 @@ pub enum ToolAction {
         task_ids: Vec<TaskId>,
         timeout_secs: u64,
     },
-    /// 阻塞执行 shell 命令
-    ExecSession(SessionStartRequest),
     /// 启动后台 shell 会话
     StartSession(SessionStartRequest),
     /// 读取 shell 会话状态和最新输出快照
@@ -271,10 +263,8 @@ pub trait BuiltinTool: Send + Sync + 'static {
     /// 执行工具并返回动作（双轨期：仅供未迁移 sync 工具使用）。
     ///
     /// `kind() == Async` 的工具走 `run_async`，dispatch 不会调用本方法。
-    /// 已上桥工具（`schedule_task` / `list_scheduled_tasks` /
-    /// `delete_scheduled_task` / `shell_exec` / `list_experience_candidates` /
-    /// rhai_plugin 包裹器 `RhaiPluginAsyncWrapper`）的 `execute` 应返回
-    /// `ToolError::InternalState` 防御错误。新工具应实现 `run_async` 而非本方法。
+    /// Async 工具的 `execute` 应返回 `ToolError::InternalState` 防御错误。
+    /// 直接产出结果的新工具应实现 `run_async` 而非本方法。
     fn execute(
         &self,
         input: &serde_json::Value,

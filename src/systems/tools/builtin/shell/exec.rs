@@ -1,9 +1,6 @@
-//! shell_exec 工具——上桥到异步 worker。
+//! shell_exec 工具——走异步 worker，避免阻塞主线程。
 //!
-//! 历史路径：sync `execute` 返回 `ToolAction::ExecSession`，由 orchestrator
-//! 调 `backend.exec_blocking` 阻塞主线程 3s+ 拉长帧。
-//!
-//! 现路径：`kind() == Async`，dispatch 把请求改造为挂起实体 + spawn worker；
+//! `kind() == Async`，dispatch 把请求改造为挂起实体 + spawn worker；
 //! worker 在 `run_async` 内 `spawn_blocking` 包裹 `backend.exec_with_cancel`，
 //! backend 监听 `ctx.cancel`，清理进程和输出 reader 后返回
 //! `Err(ToolError::ExecutionFailed("cancelled"))`。

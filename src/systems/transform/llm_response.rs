@@ -483,6 +483,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_task_status_failure_reason() {
+        let task = Task {
+            status: TaskStatus::Failed(FailureReason::AgentError),
+            ..Task::from_user_input(
+                "test".to_string(),
+                3,
+                crate::domain::ChannelId {
+                    frontend: crate::domain::FrontendKind::Tui,
+                    user_id: "test".to_string(),
+                    thread_id: None,
+                },
+            )
+        };
+        assert_eq!(
+            task_status_failure_reason(&task),
+            Some(FailureReason::AgentError)
+        );
+    }
+
+    #[test]
+    fn test_task_status_failure_reason_not_failed() {
+        let task = Task {
+            status: TaskStatus::Done,
+            ..Task::from_user_input(
+                "test".to_string(),
+                3,
+                crate::domain::ChannelId {
+                    frontend: crate::domain::FrontendKind::Tui,
+                    user_id: "test".to_string(),
+                    thread_id: None,
+                },
+            )
+        };
+        assert_eq!(task_status_failure_reason(&task), None);
+    }
+
+    #[test]
     fn mixed_tool_progress_respects_internal_chat_visibility() {
         use crate::domain::{
             AgentExecutionResult, AgentId, ChannelId, FrontendKind, LlmToolCall, TaskId,

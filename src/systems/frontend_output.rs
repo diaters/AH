@@ -367,7 +367,6 @@ fn waiting_reason_to_kind(reason: &WaitingReason) -> WaitingReasonKind {
     match reason {
         WaitingReason::Agent => WaitingReasonKind::Agent,
         WaitingReason::ToolExecution
-        | WaitingReason::Session { .. }
         | WaitingReason::SubTaskBatch { .. }
         | WaitingReason::BackgroundJobs => WaitingReasonKind::Tool,
         WaitingReason::User | WaitingReason::Approval | WaitingReason::AskUser => {
@@ -1245,12 +1244,6 @@ mod tests {
             (WaitingReason::AskUser, WaitingReasonKind::User),
             (WaitingReason::RetryBackoff, WaitingReasonKind::Retry),
             (WaitingReason::Evaluator, WaitingReasonKind::Other),
-            (
-                WaitingReason::Session {
-                    handle_id: Uuid::new_v4(),
-                },
-                WaitingReasonKind::Tool,
-            ),
             (
                 WaitingReason::SubTaskBatch {
                     batch_id: Uuid::new_v4(),

@@ -153,9 +153,8 @@ pub use error::{ExecutionError, FailureReason, ToolError};
 
 // evaluation
 pub use evaluation::{
-    EvaluationDecision, EvaluationResult, EvaluationTrigger, JudgeDimension, JudgeOutcome,
-    JudgeRubric, JudgeVerdict, JudgeVote, OffTrackPolicy, TaskEvaluationConfig,
-    parse_evaluation_result, parse_judge_verdict,
+    EvaluationDecision, EvaluationResult, EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
+    parse_evaluation_result,
 };
 
 // execution
@@ -200,8 +199,7 @@ pub use message::{
     CreateTaskMessage, ExecutionResultReceiver, ExternalInput, FinishTaskMessage, InputReceiver,
     LlmResponseHookPending, MessageDispatchedHookPending, MessageReceivedHookPending,
     ModelChainStateUpdate, ModelChainStateUpdateReceiver, OutputKind, OutputMessage,
-    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage,
-    SessionExitedMessage, SessionOutputAppendedMessage, SessionStartedMessage, Signal,
+    PendingChannelSend, ReloadPluginsMessage, ReloadTriggersMessage, RetryReadyMessage, Signal,
     SignalPayload, SubTaskBatchCreatedMessage, SubTaskCompletedMessage,
     SummarizationRequestMessage, SystemOutputMessage, TaskTerminatedMessage,
     ToolConfirmationRequestMessage, ToolConfirmationResponseMessage, ToolExecutionRequestMessage,
@@ -266,8 +264,7 @@ pub use summarization::SummarizationTrigger;
 // task
 pub use task::{
     AskUserPending, NewlyCreatedTask, PreviousTaskStatus, Task, TaskInitiator, TaskRoutingPolicy,
-    TaskStatus, ToolCalledHookPending, ToolReturnedHookPending, WaitingForSessionInfo,
-    WaitingForTasksInfo,
+    TaskStatus, ToolCalledHookPending, ToolReturnedHookPending, WaitingForTasksInfo,
 };
 
 // experience_library
@@ -300,9 +297,8 @@ pub use watchdog::{
 
 // work_item
 pub use work_item::{
-    WorkItem, WorkItemCompletedMessage, WorkItemContext, WorkItemCreatedMessage, WorkItemInput,
-    WorkItemLifecycleHookPending, WorkItemOrigin, WorkItemStatus, WorkItemType,
-    WorkItemWritebackTarget,
+    WorkItem, WorkItemContext, WorkItemInput, WorkItemLifecycleHookPending, WorkItemStatus,
+    WorkItemType,
 };
 
 // dispatch

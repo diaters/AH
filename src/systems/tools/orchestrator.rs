@@ -5,10 +5,8 @@
 //! # 流水线协议约定（单一权威）
 //!
 //! - **sync 路径边界**：`handle_tool_action`（sync 路径）只处理会话型/任务编排/
-//!   提交类 `ToolAction`。`shell_exec` 等已上桥
-//!   async worker（kind==Async）；`Direct` / `ExecSession` 是退役动作，sync 路径
-//!   误用即报错（见 [`handle_retired_action`]），防止静默构造结果消息绕过异步桥
-//!   的 hook 与通道单点落地。
+//!   提交类 `ToolAction`。直接返回结果或阻塞执行 shell 的工具（如 `shell_exec`）
+//!   走 async worker（kind==Async），经异步桥的 hook 与通道单点落地。
 //! - **InFlightToolCall claim 语义**：摘除 `InFlightToolCall` 后，cancel sweeper
 //!   不再扫该实体（防重复发 error）。
 //! - **工具结果落地 + 请求 despawn 协议**：结果消息统一经 `spawn_tool_error` /
@@ -417,12 +415,6 @@ pub(crate) struct ToolResources<'a, B: SessionBackend> {
     pub(crate) clock: &'a Clock,
 }
 
-/// 已退役的 sync 路径动作，仅用于区分误用报错文案。
-enum RetiredAction {
-    Direct,
-    ExecSession,
-}
-
 /// 统一处理 Tool 执行动作：只做分派，各 ToolAction 分支逻辑见对应 `handle_*` 函数。
 ///
 /// 流水线协议约定见模块级 rustdoc。
@@ -438,9 +430,6 @@ pub fn handle_tool_action<B: SessionBackend>(
     index: &mut EntityIndex,
 ) {
     match action {
-        Ok(ToolAction::Direct(_value)) => {
-            handle_retired_action(commands, request_entity, request, RetiredAction::Direct);
-        }
         Ok(ToolAction::CreateBatch(definitions)) => {
             handle_create_batch(
                 commands,
@@ -464,14 +453,6 @@ pub fn handle_tool_action<B: SessionBackend>(
                 world.tasks,
                 task_ids,
                 timeout_secs,
-            );
-        }
-        Ok(ToolAction::ExecSession(_session_request)) => {
-            handle_retired_action(
-                commands,
-                request_entity,
-                request,
-                RetiredAction::ExecSession,
             );
         }
         Ok(
@@ -625,36 +606,6 @@ fn dispatch_session_action<B: SessionBackend>(
         // 主分派经 or-pattern 保证只传入上述 5 类动作。
         _ => unreachable!("dispatch_session_action received non-session action"),
     }
-}
-
-/// 退役动作兜底：Direct / ExecSession 已上桥 async worker，sync 路径误用即报错。
-///
-/// 保留分支防止未来误用——若 Sync 工具误返回退役动作，立即报错而非
-/// 静默构造结果消息绕过异步桥的 hook / 通道单点落地（Direct）、
-/// 或静默调阻塞 backend 拉长帧（ExecSession）。
-fn handle_retired_action(
-    commands: &mut Commands,
-    request_entity: Entity,
-    request: &ToolExecutionRequestMessage,
-    kind: RetiredAction,
-) {
-    let error = match kind {
-        // list_experience_candidates 已上桥到 async worker（kind==Async），
-        // 不再走 sync 路径产生 `ToolAction::Direct`。
-        RetiredAction::Direct => ToolError::InternalState(
-            "Direct action is retired (list_experience_candidates is async-only); \
-             BuiltinTool must not return Direct on sync path"
-                .to_string(),
-        ),
-        // shell_exec 已上桥到 async worker（kind==Async），不再走 sync 路径
-        // 产生 `ToolAction::ExecSession`。
-        RetiredAction::ExecSession => ToolError::InternalState(
-            "ExecSession action is retired (shell_exec is async-only); \
-             BuiltinTool must not return ExecSession on sync path"
-                .to_string(),
-        ),
-    };
-    spawn_tool_error(commands, request_entity, request, error);
 }
 
 /// CreateBatch 分支：读取父任务 origin_channel 后生成子任务批次消息。

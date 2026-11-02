@@ -279,8 +279,7 @@ mod tests {
     use super::*;
     use crate::domain::{
         ChannelId, FinishTaskMessage, FrontendKind, SystemOutputMessage, TaskRoutingPolicy,
-        TaskStatus, WaitingReason, WorkItemInput, WorkItemOrigin, WorkItemType,
-        WorkItemWritebackTarget,
+        TaskStatus, WaitingReason, WorkItemInput, WorkItemType,
     };
     use crate::systems::HarnessConfig;
 
@@ -398,8 +397,6 @@ mod tests {
             root,
             WorkItemType::Evaluation,
             WorkItemInput::new("eval".to_string()),
-            WorkItemOrigin::Evaluation,
-            WorkItemWritebackTarget::TaskResult,
         ));
 
         run(&mut world);

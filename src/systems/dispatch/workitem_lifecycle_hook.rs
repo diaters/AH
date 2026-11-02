@@ -168,9 +168,7 @@ fn dispatch_workitem_lifecycle_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        WorkItemInput, WorkItemOrigin, WorkItemStatus, WorkItemType, WorkItemWritebackTarget,
-    };
+    use crate::domain::{WorkItemInput, WorkItemStatus, WorkItemType};
 
     /// 构造一个占位 WorkItem 用于测试派发路径。
     fn make_work_item(status: WorkItemStatus) -> WorkItem {
@@ -178,8 +176,6 @@ mod tests {
             crate::domain::TaskId::nil(),
             WorkItemType::Evaluation,
             WorkItemInput::new("test".to_string()),
-            WorkItemOrigin::Evaluation,
-            WorkItemWritebackTarget::TaskResult,
         );
         wi.status = status;
         wi

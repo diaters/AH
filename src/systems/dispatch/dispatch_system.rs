@@ -185,12 +185,7 @@ pub fn dispatch_system(
                     agent_id: agent.id,
                     request_kind,
                     prompt: work_item.input.prompt.clone(),
-                    system_prompt: work_item
-                        .input
-                        .context
-                        .system_prompt
-                        .clone()
-                        .or_else(|| agent.system_prompt.clone()),
+                    system_prompt: agent.system_prompt.clone(),
                     tools: work_item.input.context.tools.clone(),
                     conversation: work_item.input.context.conversation.clone(),
                     work_item_id: Some(work_item.id),

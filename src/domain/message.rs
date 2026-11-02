@@ -28,10 +28,6 @@ pub enum WaitingReason {
     SubTaskBatch {
         batch_id: Uuid,
     },
-    /// 等待 shell 会话完成
-    Session {
-        handle_id: Uuid,
-    },
     /// chat_with_agent 子任务等待父 Agent 下一轮调用
     ChatAgent,
     /// ask_user 工具等待用户开放文本回复
@@ -368,27 +364,6 @@ pub struct ToolExecutionResultMessage {
     /// 审计字段：插件通过 `tool_set_result` 替换 `tool_output` 时，
     /// 原始输出值保留在此。仅当 `on_tool_returned` hook 触发过替换时为 `Some`。
     pub original_tool_output: Option<serde_json::Value>,
-}
-
-// ============ Session 生命周期 ============
-
-/// Session 启动消息
-#[derive(Debug, Clone, Component)]
-pub struct SessionStartedMessage {
-    pub handle_id: Uuid,
-}
-
-/// Session 退出消息
-#[derive(Debug, Clone, Component)]
-pub struct SessionExitedMessage {
-    pub handle_id: Uuid,
-}
-
-/// Session 输出追加消息
-#[derive(Debug, Clone, Component)]
-pub struct SessionOutputAppendedMessage {
-    pub handle_id: Uuid,
-    pub content: String,
 }
 
 // ============ 审批与确认 ============
