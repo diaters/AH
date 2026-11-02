@@ -41,7 +41,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 记忆治理：ShortTermMemory、LongTermMemory 两层收敛，支持衰退淘汰与 JSON 文件持久化
 - 试错经验库：经验文件存于 `.harness/experience/`，由用户在客户端发起“总结经验”，
   经验管理员（`experience-librarian`）负责检索与撰写，`search_experience` 与开局预查逐字回填经验原文
-- Skill：Agent 名下 `.harness/assets/agents/<agent>/skills/*/SKILL.md` 派发时注入系统提示
+- Skill：全局目录 `.harness/assets/skills/*/SKILL.md`（frontmatter 可选 `agents: [..]`，缺省仅主 Agent 可用），
+  系统提示只列技能清单，完整说明由 `load_skill` 按需读取
 - 插件系统：Rhai 脚本扩展，17 个 hook 点，支持贡献工具、技能和 Agent
 - 定时任务：Webhook / cron 信号触发；`schedule_task` 动态定时任务持久化保存，重启后恢复，
   错过的运行在 7 天内补跑最近一次，支持暂停、修改与立即运行；运行账本、真实通知回执、
