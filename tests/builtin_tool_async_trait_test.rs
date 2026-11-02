@@ -19,7 +19,7 @@ impl BuiltinTool for PlainSyncTool {
         "plain_sync"
     }
     fn execute(&self, _: &serde_json::Value, _: &ToolContext) -> Result<ToolAction, ToolError> {
-        Ok(ToolAction::Direct(serde_json::json!({})))
+        Ok(ToolAction::ListSessions)
     }
 }
 

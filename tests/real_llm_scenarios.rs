@@ -18,6 +18,8 @@
 //! | `human_review` | 人工 | 强制待审队列 |
 
 mod common;
+#[path = "real_llm_scenarios/judge.rs"]
+mod judge;
 
 use std::{
     path::{Path, PathBuf},
@@ -32,16 +34,17 @@ use harness::prelude::*;
 use harness::{
     app::build_harness_app, domain::AgentExecutionRequest, domain::AgentRequestKind,
     domain::ChannelId, domain::DispatchHint, domain::DispatchKind, domain::ExternalInput,
-    domain::FrontendKind, domain::JudgeOutcome, domain::JudgeRubric, domain::JudgeVerdict,
-    domain::JudgeVote, domain::LongTermMemory, domain::MemoryConfig, domain::PendingDispatch,
+    domain::FrontendKind, domain::LongTermMemory, domain::MemoryConfig, domain::PendingDispatch,
     domain::ShortTermMemory, domain::Task, domain::TaskStatus, domain::WaitingReason,
-    domain::WorkItem, domain::WorkItemType, domain::parse_judge_verdict, llm::ExecutorRegistry,
-    llm::JudgePromptData, llm::build_judge_user_prompt, llm::judge_system_prompt,
-    systems::HarnessConfig,
+    domain::WorkItem, domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 use harness::{
     domain::Agent, domain::AgentCapabilities, domain::AgentExecutor, domain::AgentProfile,
     domain::AgentToolPermissions, domain::ExecutorFuture, domain::ToolPermission,
+};
+use judge::{
+    JudgeOutcome, JudgePromptData, JudgeRubric, JudgeVerdict, JudgeVote, build_judge_user_prompt,
+    judge_system_prompt, parse_judge_verdict,
 };
 use serde::Deserialize;
 use tokio::runtime::Runtime;

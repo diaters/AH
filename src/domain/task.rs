@@ -178,22 +178,6 @@ pub struct WaitingForTasksInfo {
     pub agent_id: AgentId,
 }
 
-/// Task 等待 shell 会话完成的状态信息
-/// 此组件添加到发起等待的 Task Entity 上
-#[derive(Component, Debug, Clone)]
-pub struct WaitingForSessionInfo {
-    /// 等待的会话句柄 ID
-    pub handle_id: super::SessionHandleId,
-    /// 超时时刻
-    pub timeout_at: DateTime<Utc>,
-    /// Tool call ID（用于返回结果给 LLM）
-    pub tool_call_id: String,
-    /// 发起等待的 Agent ID
-    pub agent_id: AgentId,
-    /// 返回的输出行数
-    pub return_tail_lines: usize,
-}
-
 /// Task 等待用户回复 ask_user 问题的状态信息
 /// 此组件添加到发起 ask_user 的 Task Entity 上
 #[derive(Component, Debug, Clone)]

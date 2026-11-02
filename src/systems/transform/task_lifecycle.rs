@@ -25,14 +25,6 @@ type TaskTerminationQuery<'a> = (
     Option<&'a SubTaskConfig>,
 );
 
-#[allow(dead_code)]
-fn task_status_failure_reason(task: &Task) -> Option<FailureReason> {
-    match &task.status {
-        TaskStatus::Failed(reason) => Some(reason.clone()),
-        _ => None,
-    }
-}
-
 /// 重试就绪 System
 ///
 /// 将到期重试的任务标记为 Ready，并重新附加 PendingDispatch
@@ -518,43 +510,6 @@ pub fn tool_calling_turn_reset_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_task_status_failure_reason() {
-        let task = Task {
-            status: TaskStatus::Failed(FailureReason::AgentError),
-            ..Task::from_user_input(
-                "test".to_string(),
-                3,
-                crate::domain::ChannelId {
-                    frontend: crate::domain::FrontendKind::Tui,
-                    user_id: "test".to_string(),
-                    thread_id: None,
-                },
-            )
-        };
-        assert_eq!(
-            task_status_failure_reason(&task),
-            Some(FailureReason::AgentError)
-        );
-    }
-
-    #[test]
-    fn test_task_status_failure_reason_not_failed() {
-        let task = Task {
-            status: TaskStatus::Done,
-            ..Task::from_user_input(
-                "test".to_string(),
-                3,
-                crate::domain::ChannelId {
-                    frontend: crate::domain::FrontendKind::Tui,
-                    user_id: "test".to_string(),
-                    thread_id: None,
-                },
-            )
-        };
-        assert_eq!(task_status_failure_reason(&task), None);
-    }
 
     /// 为 task_termination_system 测试构造最小 Bevy App。
     ///

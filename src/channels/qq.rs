@@ -23,7 +23,6 @@ const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
 const QQ_AUTH_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
 
 /// 修复 QQ CDN URL 缺失协议前缀的问题（//cdn.example.com → https://cdn.example.com）
-#[allow(dead_code)]
 fn fix_qq_url(url: &str) -> String {
     let trimmed = url.trim();
     if trimmed.starts_with("//") {
@@ -34,7 +33,6 @@ fn fix_qq_url(url: &str) -> String {
 }
 
 /// 根据 content_type 或文件扩展名推断附件 marker 类型。
-#[allow(dead_code)]
 fn infer_attachment_marker(content_type: &str, filename: &str) -> &'static str {
     let ct = content_type.to_ascii_lowercase();
     if ct.starts_with("image/") {
@@ -92,11 +90,8 @@ enum QqMediaFileType {
 
 /// 待处理的审批请求记录。
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 struct PendingApproval {
     request_id: Uuid,
-    #[allow(dead_code)]
-    recipient: String,
     options: Vec<crate::domain::ApprovalOption>,
     created_at: u64,
 }
@@ -105,15 +100,12 @@ struct PendingApproval {
 #[derive(Clone, Debug)]
 struct PendingFeedback {
     request_id: Uuid,
-    #[allow(dead_code)]
-    recipient: String,
 }
 
 const PENDING_APPROVAL_TTL_SECS: u64 = 300;
 
 /// 根据 marker 字符串与目标路径扩展名映射到 QQMediaFileType。
 /// AUDIO/VOICE 非原生格式（非 wav/mp3/silk）降级为 File。
-#[allow(dead_code)]
 fn marker_kind_to_qq_file_type(marker: &str, target: &str) -> Option<QqMediaFileType> {
     match marker.trim().to_ascii_uppercase().as_str() {
         "IMAGE" | "PHOTO" => Some(QqMediaFileType::Image),
@@ -233,8 +225,6 @@ fn next_msg_seq() -> u32 {
 #[derive(Debug, serde::Deserialize)]
 struct QqUploadResponse {
     file_info: String,
-    #[allow(dead_code)]
-    file_uuid: Option<String>,
     ttl: Option<u64>,
 }
 
@@ -261,10 +251,6 @@ fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, Channe
             message: format!("QQ upload response missing file_info; body={raw_body}"),
         })?
         .to_string();
-    let file_uuid = data
-        .get("file_uuid")
-        .and_then(serde_json::Value::as_str)
-        .map(std::string::ToString::to_string);
     let ttl = data
         .get("ttl")
         .and_then(serde_json::Value::as_u64)
@@ -273,11 +259,7 @@ fn parse_upload_response_body(raw_body: &str) -> Result<QqUploadResponse, Channe
                 .and_then(serde_json::Value::as_str)
                 .and_then(|s| s.parse::<u64>().ok())
         });
-    Ok(QqUploadResponse {
-        file_info,
-        file_uuid,
-        ttl,
-    })
+    Ok(QqUploadResponse { file_info, ttl })
 }
 
 /// 从 ReplyMarkup::InlineKeyboard 的 callback_data 中提取 request_id 与选项列表。
@@ -315,7 +297,6 @@ fn extract_approval_info(
 }
 
 /// QQ 通道实现
-#[allow(dead_code)]
 pub struct QqChannel {
     config: QqConfig,
     config_path: Option<PathBuf>,
@@ -418,7 +399,6 @@ impl QqChannel {
     }
 
     /// 下载附件到本地工作目录，文件名加 UUID 后缀避免冲突。
-    #[allow(dead_code)]
     async fn download_attachment(
         &self,
         url: &str,
@@ -684,7 +664,6 @@ impl QqChannel {
             recipient.to_string(),
             PendingApproval {
                 request_id,
-                recipient: recipient.to_string(),
                 options,
                 created_at: now,
             },
@@ -794,7 +773,6 @@ impl QqChannel {
 
     /// 测试用：覆盖 API base URL。
     #[cfg(test)]
-    #[allow(dead_code)]
     fn with_api_base(mut self, base: String) -> Self {
         self.api_base = base;
         self
@@ -809,7 +787,6 @@ impl QqChannel {
 
     /// 测试用：预置 token 避免真实 OAuth2 调用。
     #[cfg(test)]
-    #[allow(dead_code)]
     async fn set_token_for_test(&self, token: &str) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1337,13 +1314,10 @@ impl QqChannel {
         // 无锁区：reject_with_feedback 两步交互 或 普通 Confirmation
         if opt.id == "reject_with_feedback" {
             // 两步交互：插入 pending_feedback，提示输入，不发 Confirmation
-            self.pending_feedback.write().await.insert(
-                recipient.clone(),
-                PendingFeedback {
-                    request_id,
-                    recipient: recipient.clone(),
-                },
-            );
+            self.pending_feedback
+                .write()
+                .await
+                .insert(recipient.clone(), PendingFeedback { request_id });
             let _ = self
                 .send_text_markdown(&recipient, "请输入评审建议（发送 /cancel 取消）：")
                 .await;
@@ -1886,7 +1860,6 @@ impl Channel for QqChannel {
                                         recipient.clone(),
                                         PendingFeedback {
                                             request_id: confirmation.request_id,
-                                            recipient: recipient.clone(),
                                         },
                                     );
                                     let _ = self

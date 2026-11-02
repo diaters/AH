@@ -46,7 +46,6 @@ impl std::ops::Deref for SessionHandleId {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionBackendKind {
     Native,
-    Herdr,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

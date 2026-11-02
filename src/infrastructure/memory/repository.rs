@@ -39,11 +39,6 @@ impl MemoryRepository {
         self.store.get_entries(agent_name)
     }
 
-    /// 加载指定 Agent 的完整快照。
-    pub fn load_snapshot(&self, agent_name: &str) -> Option<MemorySnapshot> {
-        self.store.get_snapshot(agent_name)
-    }
-
     /// 将指定 Agent 的长期记忆条目持久化。
     ///
     /// 每次调用都会覆盖该 Agent 的完整快照。

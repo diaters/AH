@@ -12,7 +12,7 @@ use crate::domain::{
     AskUserPending, EngineEvent, EntryMetadata, EntryRole, EventTarget, FailureReason,
     InflightLlmRequests, ShortTermMemory, StopRequested, StopTaskMessage, SubTaskBatchState,
     SystemOutputMessage, Task, TaskId, TaskStatus, ToolExecutionRequestMessage, TurnGeneration,
-    WaitingForSessionInfo, WaitingForTasksInfo, WaitingReason,
+    WaitingForTasksInfo, WaitingReason,
 };
 use crate::ecs::EntityIndex;
 use crate::prelude::*;
@@ -122,7 +122,7 @@ pub(crate) fn stop_task_system(
         commands
             .entity(task_entity)
             .insert(StopRequested)
-            .remove::<(AskUserPending, WaitingForTasksInfo, WaitingForSessionInfo)>();
+            .remove::<(AskUserPending, WaitingForTasksInfo)>();
 
         if let Some(mut stm) = short_term {
             stm.add_entry(EntryRole::User, STOP_MARKER, EntryMetadata::default());

@@ -60,12 +60,8 @@ pub struct BatchTaskStatus {
 /// 批次任务执行状态
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchTaskState {
-    /// 等待依赖满足
+    /// 未结束（等待依赖或执行中）
     Pending,
-    /// 已分发给 Agent
-    Dispatched,
-    /// Agent 正在执行
-    Running,
     /// 已完成
     Done,
     /// 执行失败
@@ -73,23 +69,6 @@ pub enum BatchTaskState {
 }
 
 impl SubTaskBatchState {
-    /// 返回当前可以分发的任务（所有依赖已满足）的 name 列表
-    pub fn ready_tasks(&self) -> Vec<String> {
-        self.tasks
-            .iter()
-            .filter(|(_, status)| {
-                status.state == BatchTaskState::Pending && self.dependencies_satisfied(status)
-            })
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
-    fn dependencies_satisfied(&self, _status: &BatchTaskStatus) -> bool {
-        // 需要从 SubTaskConfig 获取 depends_on，这里使用 tasks map 的状态来判断
-        // 实际使用时由调用方传入 depends_on 列表
-        true
-    }
-
     /// 检查是否全部完成
     pub fn all_done(&self) -> bool {
         self.completed_count >= self.total_count

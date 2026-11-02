@@ -67,34 +67,6 @@ pub enum WorkItemStatus {
 #[derive(Component, Debug, Clone)]
 pub struct WorkItemLifecycleHookPending(pub HookPoint);
 
-/// 工作项来源
-#[derive(Debug, Clone, PartialEq)]
-pub enum WorkItemOrigin {
-    /// 用户任务
-    UserTask,
-    /// 记忆压缩
-    MemoryCompaction,
-    /// 评估
-    Evaluation,
-    /// 经验库（检索 / 起草）
-    ExperienceLibrary,
-    /// Watchdog 巡检
-    Watchdog,
-}
-
-/// 工作项写回目标
-#[derive(Debug, Clone, PartialEq)]
-pub enum WorkItemWritebackTarget {
-    /// 任务结果
-    TaskResult,
-    /// 短期上下文
-    ShortTermContext,
-    /// 长期记忆
-    LongTermMemory,
-    /// 回送发起方（工具调用、任务收件箱或客户端草稿）
-    Requester,
-}
-
 /// 工作项上下文
 #[derive(Debug, Clone, Default)]
 pub struct WorkItemContext {
@@ -102,8 +74,6 @@ pub struct WorkItemContext {
     pub conversation: Option<Vec<ConversationMessage>>,
     /// 可用工具
     pub tools: Vec<ToolDefinition>,
-    /// 系统提示词
-    pub system_prompt: Option<String>,
 }
 
 /// 工作项输入
@@ -132,11 +102,6 @@ impl WorkItemInput {
         self.context.tools = tools;
         self
     }
-
-    pub fn with_system_prompt(mut self, system_prompt: String) -> Self {
-        self.context.system_prompt = Some(system_prompt);
-        self
-    }
 }
 
 /// 统一工作单元
@@ -156,21 +121,11 @@ pub struct WorkItem {
     pub(crate) status: WorkItemStatus,
     /// 分配的 Agent（收窄为 crate 内可见：读取经 `assigned_agent()`，写入经 `assign`）
     pub(crate) assigned_agent: Option<AgentId>,
-    /// 来源
-    pub origin: WorkItemOrigin,
-    /// 写回目标
-    pub writeback_target: WorkItemWritebackTarget,
 }
 
 impl WorkItem {
     /// 创建新的工作项
-    pub fn new(
-        task_id: TaskId,
-        work_type: WorkItemType,
-        input: WorkItemInput,
-        origin: WorkItemOrigin,
-        writeback_target: WorkItemWritebackTarget,
-    ) -> Self {
+    pub fn new(task_id: TaskId, work_type: WorkItemType, input: WorkItemInput) -> Self {
         Self {
             id: Uuid::new_v4(),
             task_id,
@@ -178,20 +133,12 @@ impl WorkItem {
             input,
             status: WorkItemStatus::Pending,
             assigned_agent: None,
-            origin,
-            writeback_target,
         }
     }
 
     /// 创建执行工作项
     pub fn execution(task_id: TaskId, prompt: String) -> Self {
-        Self::new(
-            task_id,
-            WorkItemType::Execution,
-            WorkItemInput::new(prompt),
-            WorkItemOrigin::UserTask,
-            WorkItemWritebackTarget::TaskResult,
-        )
+        Self::new(task_id, WorkItemType::Execution, WorkItemInput::new(prompt))
     }
 
     /// 创建摘要工作项
@@ -205,13 +152,7 @@ impl WorkItem {
             "请对以下内容进行摘要，目标约 {} tokens:\n\n{}",
             target_tokens, content
         ));
-        Self::new(
-            task_id,
-            WorkItemType::Summarization,
-            input,
-            WorkItemOrigin::MemoryCompaction,
-            WorkItemWritebackTarget::ShortTermContext,
-        )
+        Self::new(task_id, WorkItemType::Summarization, input)
     }
 
     /// 创建评估工作项
@@ -222,13 +163,7 @@ impl WorkItem {
             prompt
         };
         let input = WorkItemInput::new(full_prompt);
-        Self::new(
-            task_id,
-            WorkItemType::Evaluation,
-            input,
-            WorkItemOrigin::Evaluation,
-            WorkItemWritebackTarget::TaskResult,
-        )
+        Self::new(task_id, WorkItemType::Evaluation, input)
     }
 
     /// 创建经验管理员工作项（检索或起草），单轮无工具。
@@ -237,13 +172,7 @@ impl WorkItem {
             work_type,
             WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft
         ));
-        Self::new(
-            task_id,
-            work_type,
-            WorkItemInput::new(prompt),
-            WorkItemOrigin::ExperienceLibrary,
-            WorkItemWritebackTarget::Requester,
-        )
+        Self::new(task_id, work_type, WorkItemInput::new(prompt))
     }
 
     /// 创建 watchdog 巡检工作项，单轮无工具。
@@ -252,8 +181,6 @@ impl WorkItem {
             task_id,
             WorkItemType::WatchdogReview,
             WorkItemInput::new(prompt),
-            WorkItemOrigin::Watchdog,
-            WorkItemWritebackTarget::Requester,
         )
     }
 
@@ -312,24 +239,6 @@ impl WorkItem {
     }
 }
 
-/// 工作项创建消息
-#[derive(Debug, Clone, Event)]
-pub struct WorkItemCreatedMessage {
-    pub work_item_id: Uuid,
-    pub task_id: TaskId,
-    pub work_type: WorkItemType,
-}
-
-/// 工作项完成消息
-#[derive(Debug, Clone, Event)]
-pub struct WorkItemCompletedMessage {
-    pub work_item_id: Uuid,
-    pub task_id: TaskId,
-    pub work_type: WorkItemType,
-    pub success: bool,
-    pub result: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,8 +278,6 @@ mod tests {
         );
         assert_eq!(work_item.work_type, WorkItemType::Summarization);
         assert_eq!(work_item.work_type.required_tag(), "summarization");
-        // System prompt is now provided by agents.toml, not WorkItem
-        assert!(work_item.input.context.system_prompt.is_none());
         // Verify prompt contains target_tokens value
         assert!(work_item.input.prompt.contains("500"));
     }
@@ -385,20 +292,12 @@ mod tests {
         );
 
         assert_eq!(work_item.work_type, WorkItemType::Evaluation);
-        assert_eq!(work_item.origin, WorkItemOrigin::Evaluation);
-        assert_eq!(
-            work_item.writeback_target,
-            WorkItemWritebackTarget::TaskResult
-        );
         assert_eq!(work_item.work_type.required_tag(), "evaluation");
 
         // Verify the prompt contains reasoning hint
         assert!(work_item.input.prompt.contains("请评估当前任务状态"));
         assert!(work_item.input.prompt.contains("检查任务是否偏离目标"));
         assert!(work_item.input.prompt.contains("评估提示"));
-
-        // Verify the system prompt is now provided by agents.toml
-        assert!(work_item.input.context.system_prompt.is_none());
     }
 
     #[test]
@@ -408,9 +307,6 @@ mod tests {
 
         // Verify the prompt is unchanged when no reasoning hint is provided
         assert_eq!(work_item.input.prompt, "请评估当前任务状态");
-
-        // Verify the system prompt is now provided by agents.toml (not WorkItem)
-        assert!(work_item.input.context.system_prompt.is_none());
     }
 
     #[test]

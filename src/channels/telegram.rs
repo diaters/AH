@@ -474,7 +474,6 @@ impl TelegramChannel {
         Some(IncomingAttachment {
             kind,
             path: local_path,
-            name: file_name.map(|s| s.to_string()),
         })
     }
 }
@@ -483,8 +482,6 @@ impl TelegramChannel {
 struct IncomingAttachment {
     kind: AttachmentKind,
     path: PathBuf,
-    #[allow(dead_code)]
-    name: Option<String>,
 }
 
 impl IncomingAttachment {
@@ -1476,7 +1473,6 @@ struct TelegramCallbackQuery {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct TelegramCallbackMessage {
     message_id: i64,
     chat: TelegramChat,

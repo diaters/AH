@@ -22,8 +22,7 @@ use harness::domain::HookPoint;
 use harness::{
     app::build_harness_app, domain::AgentExecutor, domain::ChannelId, domain::FrontendKind,
     domain::WorkItem, domain::WorkItemInput, domain::WorkItemLifecycleHookPending,
-    domain::WorkItemOrigin, domain::WorkItemStatus, domain::WorkItemType,
-    domain::WorkItemWritebackTarget, llm::ExecutorRegistry, systems::HarnessConfig,
+    domain::WorkItemStatus, domain::WorkItemType, llm::ExecutorRegistry, systems::HarnessConfig,
 };
 
 mod common;
@@ -43,8 +42,6 @@ fn make_work_item(status: WorkItemStatus) -> WorkItem {
         harness::domain::TaskId::nil(),
         WorkItemType::Evaluation,
         WorkItemInput::new("test".to_string()),
-        WorkItemOrigin::Evaluation,
-        WorkItemWritebackTarget::TaskResult,
     );
     match status {
         WorkItemStatus::Pending => {}
