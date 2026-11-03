@@ -143,8 +143,7 @@ pub use command::{ShutdownState, UserCommand};
 
 // confirmation
 pub use confirmation::{
-    ApprovalDecision, ApprovalMode, ApprovalSetting, ConfirmationOption, ConfirmationSource,
-    GrantMode,
+    ApprovalDecision, ApprovalMode, ApprovalSetting, ConfirmationOption, GrantMode,
 };
 
 // error

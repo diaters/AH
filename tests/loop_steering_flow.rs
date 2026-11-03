@@ -191,7 +191,6 @@ fn start_blocked_task_with(tool_call: LlmToolCall, multi_turn: bool) -> Harness 
                     parameters: ToolSchema::default(),
                     default_permission: ToolPermission::Allow,
                     executor: ToolExecutorKind::Builtin(name.to_string()),
-                    required_tag: None,
                 });
             }
         }
