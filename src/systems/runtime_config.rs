@@ -75,18 +75,12 @@ pub struct HarnessConfig {
     /// 可后台化工具调用的前台预算（秒）：超过仍未返回则自动转后台，结果稍后以
     /// `<task-notification>` 送达；`wait_tasks` 的单次等待也不超过该值。0 表示关闭。
     pub tool_background_after_secs: u64,
-    /// 每个 session stream 的最大缓存字节数
-    pub shell_max_buffer_bytes_per_stream: usize,
     /// 终态任务树保留时长（秒），超过后整树回收，避免长期运行时实体无限增长
     pub terminal_task_retention_secs: u64,
     /// 顶层多轮会话等待用户输入的空闲上限（秒），超过后自动结束；0 表示关闭
     pub conversation_idle_secs: u64,
     /// 连续失败达到该次数时首次告警，默认3。
     pub schedule_failure_alert_threshold: u32,
-    /// 已废弃的兼容字段；按需驱动不使用该值。
-    pub active_poll_ms: u64,
-    /// 已废弃的兼容字段；按需驱动不使用该值。
-    pub idle_poll_ms: u64,
     pub channels: crate::channels::config::ChannelConfigs,
     /// IM 通道配置文件路径（用于 Telegram /bind 回写）
     pub channels_config_path: Option<String>,
@@ -98,15 +92,6 @@ pub struct HarnessConfig {
 
 impl HarnessConfig {
     pub fn from_env() -> Result<Self> {
-        for name in ["HARNESS_ACTIVE_POLL_MS", "HARNESS_IDLE_POLL_MS"] {
-            if std::env::var_os(name).is_some() {
-                tracing::warn!(
-                    event = "DeprecatedPollingConfig",
-                    variable = name,
-                    "polling setting is ignored; runtime now waits for input, results and deadlines"
-                );
-            }
-        }
         let llm = LlmProviderConfig::from_env("gpt-4.1-mini")?;
 
         let main_agent = std::env::var("HARNESS_MAIN_AGENT")
@@ -218,12 +203,6 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_TOOL_BACKGROUND_AFTER_SECS),
-            shell_max_buffer_bytes_per_stream: std::env::var(
-                "HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM",
-            )
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(64 * 1024),
             terminal_task_retention_secs: std::env::var("HARNESS_TERMINAL_TASK_RETENTION_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -232,14 +211,6 @@ impl HarnessConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(86400),
-            active_poll_ms: std::env::var("HARNESS_ACTIVE_POLL_MS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(16),
-            idle_poll_ms: std::env::var("HARNESS_IDLE_POLL_MS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(150),
             channels: {
                 let path = std::env::var("HARNESS_CHANNELS_CONFIG").ok();
                 match path {
@@ -289,12 +260,9 @@ impl Default for HarnessConfig {
             shell_default_stop_timeout_secs: 10,
             tool_inflight_timeout_secs: 300,
             tool_background_after_secs: DEFAULT_TOOL_BACKGROUND_AFTER_SECS,
-            shell_max_buffer_bytes_per_stream: 64 * 1024,
             terminal_task_retention_secs: 3600,
             conversation_idle_secs: 86400,
             schedule_failure_alert_threshold: 3,
-            active_poll_ms: 16,
-            idle_poll_ms: 150,
             channels: crate::channels::config::ChannelConfigs::default(),
             channels_config_path: None,
             triggers_config_path: None,
@@ -320,13 +288,6 @@ impl HarnessSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn config_defaults_for_poll_intervals() {
-        let config = HarnessConfig::default();
-        assert_eq!(config.active_poll_ms, 16);
-        assert_eq!(config.idle_poll_ms, 150);
-    }
 
     #[test]
     fn test_defaults_do_not_read_local_config_files() {

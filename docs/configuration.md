@@ -147,13 +147,6 @@ TUI 与 `--headless` 共用同一主循环（`harness::app::run_loop`）。`--he
 维护周期为 30 秒，旧式拉取前端的兼容检查为 150 ms；后台 shell 检查继续使用
 `HARNESS_BACKGROUND_POLL_MS`。TUI 输入由独立线程读取，绘制最大约每 16 ms 一次且要求存在可见变化。
 
-以下两个旧参数保留兼容读取，显式设置时记录 `DeprecatedPollingConfig`，不再影响 ECS 驱动。
-
-| 环境变量 | 默认值 | 说明 |
-|----------|--------|------|
-| `HARNESS_ACTIVE_POLL_MS` | `16` | 已废弃，仅保留兼容字段，设置不生效 |
-| `HARNESS_IDLE_POLL_MS` | `150` | 已废弃，仅保留兼容字段，设置不生效 |
-
 ### 记忆压缩
 
 | 环境变量 | 默认值 | 说明 |
@@ -169,7 +162,8 @@ TUI 与 `--headless` 共用同一主循环（`harness::app::run_loop`）。`--he
 | `HARNESS_SHELL_MAX_TAIL_LINES` | `500` | 单次允许返回的最大输出行数 |
 | `HARNESS_SHELL_DEFAULT_EXEC_TIMEOUT_SECS` | `300` | `shell_exec` 默认超时时间 |
 | `HARNESS_SHELL_DEFAULT_STOP_TIMEOUT_SECS` | `10` | `shell_stop` 内部停止等待的默认超时时间 |
-| `HARNESS_SHELL_MAX_BUFFER_BYTES_PER_STREAM` | `65536` | 每个 stdout 或 stderr stream 的最大缓存字节数 |
+
+输出缓存上限固定、不可配置：每个会话的合并输出最多保留 1 MiB，单次返回给模型的快照最多 64 KiB。
 
 ## Agent 配置
 
