@@ -1,8 +1,8 @@
 //! Timer scheduler 集成测试
 //!
 //! 不测试真实 cron 等待（太慢），改为通过 watch 通道与 tracing 事件捕获
-//! 验证热加载行为：scheduler 必须在收到新配置后实际重建 schedules 并发出
-//! `TimerSchedulerReloaded` / `TimerSchedulerReloadFailed` 事件。
+//! 验证热加载行为：scheduler 必须在收到新的动态任务定义后实际重建 schedules
+//! 并发出 `TimerSchedulerReloaded` 事件。
 //!
 //! 事件捕获使用进程级全局 subscriber（每个测试开头经 [`init_capture`] 安装一次），
 //! 再按线程转发到各测试自己的缓冲区。不用 thread-local `set_default`：并行测试中
@@ -17,14 +17,8 @@ use std::sync::Once;
 use std::time::Duration;
 
 use crossbeam_channel::unbounded;
-use harness::domain::ChannelId;
 use harness::domain::ExternalInput;
-use harness::domain::FrontendKind;
-use harness::triggers::SchedulerRoutes;
 use harness::triggers::SchedulerState;
-use harness::triggers::TimerConfig;
-use harness::triggers::TimerRouteConfig;
-use harness::triggers::WebhookConfig;
 use harness::triggers::run_timer_scheduler;
 use tokio::sync::watch;
 use tracing::field::Field;
@@ -94,33 +88,6 @@ impl<S: tracing::Subscriber> Layer<S> for ForwardingLayer {
     }
 }
 
-fn route(kind: &str, cron: &str) -> TimerRouteConfig {
-    TimerRouteConfig {
-        kind: kind.to_string(),
-        cron: cron.to_string(),
-        approval_channel: ChannelId {
-            frontend: FrontendKind::Telegram,
-            user_id: "r".to_string(),
-            thread_id: None,
-        },
-        approval_context: "x".to_string(),
-        prompt_template: "x".to_string(),
-    }
-}
-
-/// 构造带单个 timer 路由的 `SchedulerState`（static_routes 非 None）。
-fn state_with_timer_route(kind: &str, cron: &str) -> SchedulerState {
-    let mut state = SchedulerState::default();
-    state.set_static_routes(SchedulerRoutes {
-        timer: TimerConfig {
-            enabled: true,
-            routes: vec![route(kind, cron)],
-        },
-        webhook: WebhookConfig::default(),
-    });
-    state
-}
-
 /// 构造一条动态定时任务定义，返回 (定义, kind)。
 fn dynamic_definition(
     schedule: harness::domain::ScheduleExpr,
@@ -135,6 +102,16 @@ fn dynamic_definition(
     );
     let kind = def.kind();
     (def, kind)
+}
+
+/// 构造带单个动态 cron 任务的 `SchedulerState`。
+fn state_with_cron(cron: &str) -> SchedulerState {
+    let (def, _) = dynamic_definition(
+        harness::domain::ScheduleExpr::parse(&format!("cron:{cron}")).expect("valid cron"),
+    );
+    let mut state = SchedulerState::default();
+    state.dynamic_tasks_mut().push(def);
+    state
 }
 
 fn assert_contains(events: &CapturingLayer, name: &str) {
@@ -187,25 +164,12 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
     // 等 scheduler 启动事件（poll 模式，避免固定 sleep 在 CI 上的 flaky）
     wait_for_event(&capturing, "TimerSchedulerStarted").await;
 
-    // 发送有效配置（一条路由），应触发 TimerSchedulerReloaded
-    config_tx
-        .send(state_with_timer_route("daily", "0 9 * * 1-5"))
-        .unwrap();
+    // 发送一条动态 cron 任务，应触发 TimerSchedulerReloaded
+    config_tx.send(state_with_cron("0 9 * * 1-5")).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_contains(&capturing, "TimerSchedulerReloaded");
 
-    // 发送无效 cron 配置，应触发 TimerSchedulerReloadFailed，且 scheduler 不退出
-    config_tx
-        .send(state_with_timer_route("bad", "not a cron"))
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_contains(&capturing, "TimerSchedulerReloadFailed");
-    assert!(
-        !handle.is_finished(),
-        "scheduler must survive a failed reload"
-    );
-
-    // 再发送一个有效但空配置，应再次触发 TimerSchedulerReloaded
+    // 再发送空状态，应再次触发 TimerSchedulerReloaded
     config_tx.send(SchedulerState::default()).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     let got = capturing.events.lock().unwrap().clone();
@@ -223,19 +187,8 @@ async fn scheduler_starts_with_empty_config_and_handles_reload() {
 }
 
 #[tokio::test]
-async fn scheduler_initial_config_with_invalid_cron_returns_error() {
-    init_capture();
-    let (input_tx, _input_rx) = unbounded::<ExternalInput>();
-    let bad_state = state_with_timer_route("bad", "not a cron");
-    let (_config_tx, config_rx) = watch::channel(bad_state);
-
-    let result = run_timer_scheduler(input_tx, config_rx).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn scheduler_starts_with_empty_state_when_no_static_routes() {
-    // 无 triggers.toml 时，SchedulerState.static_routes = None，scheduler 仍正常启动。
+async fn scheduler_starts_with_empty_state() {
+    // 没有任何动态定时任务时，scheduler 仍正常启动并等待定义变更。
     let (input_tx, _input_rx) = unbounded::<ExternalInput>();
     let (_config_tx, config_rx) = watch::channel(SchedulerState::default());
 
@@ -255,9 +208,8 @@ async fn scheduler_starts_with_empty_state_when_no_static_routes() {
     handle.abort();
 }
 
-/// 验证 reload（发送新的 static config）保留 `dynamic_tasks`：
-/// 先通过 `SchedulerState` 添加一个已过期的一次性动态任务，再发送空
-/// static config 的 reload，验证 scheduler 仍然运行且收到了 Timer 信号。
+/// 验证 reload 后立即触发已过期的一次性动态任务：先通过 `SchedulerState`
+/// 添加一个已过期的一次性任务，再发送空状态，验证 scheduler 仍然运行且收到了 Timer 信号。
 #[tokio::test]
 async fn reload_preserves_dynamic_tasks() {
     init_capture();
@@ -283,7 +235,7 @@ async fn reload_preserves_dynamic_tasks() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // 发送一个空 static config 的 reload，dynamic_tasks 应被保留
+    // 再发送空状态，scheduler 应继续运行
     state_tx.send(SchedulerState::default()).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -298,7 +250,7 @@ async fn reload_preserves_dynamic_tasks() {
 
 /// 验证 cron 调度使用 `Local` 时区。
 ///
-/// 用户在 `triggers.toml` 中书写 5 字段标准 cron（分 时 日 月 周），
+/// 用户在 `schedule_task` 中书写 5 字段标准 cron（分 时 日 月 周），
 /// 内部加载时通过 `format!("0 {} *", user_cron)` 补齐为 7 字段
 /// （秒=0，年=*）。`schedule.upcoming(Local)` 必须返回本地时区的
 /// 下一次触发时间，因此工作日 9:00 的 cron 在本地时区下 hour==9。

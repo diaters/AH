@@ -111,8 +111,10 @@ fn registered_webhook_creates_task_and_routes_approval() {
     )));
 }
 
+/// 静态 timer 路由已移除：非 `scheduled:` 前缀的定时信号（如旧 `[timer]` 配置的 kind）
+/// 不再创建任务。
 #[test]
-fn registered_timer_creates_task_without_output_channel() {
+fn non_scheduled_timer_signal_is_dropped_without_creating_task() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (_input_tx, input_rx) = unbounded();
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("runtime"));
@@ -127,34 +129,17 @@ fn registered_timer_creates_task_without_output_channel() {
         vec![Box::new(MockFrontend { events })],
         channel_manager,
     );
-    let mut registry = SignalTriggerRegistry::default();
-    registry.register_timer(
-        "daily_summary",
-        EventTaskRoute {
-            prompt_template: "执行每日摘要".to_string(),
-            approval_channel: Some(ChannelId {
-                frontend: FrontendKind::Telegram,
-                user_id: "reviewer".to_string(),
-                thread_id: None,
-            }),
-            approval_context: "daily summary timer".to_string(),
-        },
-    );
-    app.world_mut().insert_resource(registry);
+    app.world_mut()
+        .insert_resource(SignalTriggerRegistry::default());
     app.world_mut().spawn(Signal::timer(
-        SignalSource("scheduler:daily".to_string()),
+        SignalSource("timer".to_string()),
         "daily_summary",
     ));
     app.update();
     app.update();
 
     let mut query = app.world_mut().query::<&Task>();
-    let task = query
-        .iter(app.world())
-        .find(|task| task.content == "执行每日摘要")
-        .expect("timer should create task");
-    assert_eq!(task.origin_channel, None);
-    assert_eq!(task.routing_policy.output_channel(), None);
+    assert_eq!(query.iter(app.world()).count(), 0);
 }
 
 #[test]

@@ -1,11 +1,10 @@
-//! Webhook 与 Timer 信号注入模块
+//! Webhook 与定时信号注入模块
 //!
 //! 提供：
-//! - `triggers.toml` 配置加载与校验
+//! - `triggers.toml` webhook 配置加载与校验
 //! - HTTP webhook server（axum）
-//! - cron timer scheduler
-//! - 路由热加载（`/reload-triggers`）
-//! - 统一的 `SchedulerState`（静态路由 + 动态任务）
+//! - 动态定时任务（`schedule_task`）的 timer scheduler 与 `SchedulerState`
+//! - webhook 路由热加载（`/reload-triggers`）
 
 pub mod config;
 pub mod scheduled_task;
@@ -14,11 +13,11 @@ pub mod webhook_server;
 
 pub use crate::domain::ScheduleSpec;
 pub use config::{
-    TimerConfig, TimerRouteConfig, TriggerConfig, WebhookConfig, WebhookRouteConfig,
-    build_registry_from_config, build_schedules, load_triggers_config, validate_templates,
+    TriggerConfig, WebhookConfig, WebhookRouteConfig, build_registry_from_config,
+    load_triggers_config, validate_templates,
 };
 pub use scheduled_task::{
-    ScheduledItem, SchedulerRoutes, SchedulerState, SchedulerStateWatcher, update_scheduler_state,
+    ScheduledItem, SchedulerState, SchedulerStateWatcher, update_scheduler_state,
     update_scheduler_state_with_watcher,
 };
 pub use timer_scheduler::run_timer_scheduler;
@@ -31,10 +30,11 @@ use crate::domain::TriggersConfigPath;
 
 /// `/reload-triggers` 系统。
 ///
-/// 遵循原子提交约束（spec L87-104）：解析 → 模板校验 → registry 构建 → cron 校验 → 一次性提交。
+/// 原子提交：解析 → 模板校验 → registry 构建 → 一次性替换 `SignalTriggerRegistry`。
 /// 任一步骤失败则保留旧值，记日志，不更新任何资源。
 ///
-/// 通过 `update_scheduler_state` 提交静态路由，保留 `SchedulerState.dynamic_tasks` 不变。
+/// 只刷新 webhook 路由；webhook server 的监听地址与 token 在启动时确定，
+/// 动态定时任务（`SchedulerState`）不受影响。
 pub fn reload_triggers_system(world: &mut World) {
     let path = world
         .get_resource::<TriggersConfigPath>()
@@ -89,33 +89,12 @@ pub fn reload_triggers_system(world: &mut World) {
         }
     };
 
-    // 步骤 5: 预校验 cron 表达式
-    if let Err(e) = build_schedules(&new_config.timer) {
-        error!(
-            event = "TriggersReloadFailed",
-            error = %e,
-            path = %path.display(),
-            "cron validation failed, keeping old config"
-        );
-        return;
-    }
-
-    // 步骤 6: 原子提交
+    // 步骤 5: 原子提交
     let webhook_count = new_config.webhook.routes.len();
-    let timer_count = new_config.timer.routes.len();
-
-    update_scheduler_state(world, |state| {
-        state.set_static_routes(SchedulerRoutes {
-            timer: new_config.timer.clone(),
-            webhook: new_config.webhook.clone(),
-        });
-        // dynamic_tasks 保持不变（静态路由热加载不写动态任务表）
-    });
-
     world.insert_resource(new_registry);
 
     info!(
         event = "TriggersReloaded",
-        webhook_count, timer_count, "triggers reloaded successfully"
+        webhook_count, "triggers reloaded successfully"
     );
 }

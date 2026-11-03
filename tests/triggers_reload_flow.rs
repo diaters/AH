@@ -2,7 +2,9 @@
 
 use std::io::Write;
 
-use harness::domain::{SignalTriggerRegistry, TriggersConfigPath};
+use harness::domain::{
+    ScheduleDefinition, ScheduleExpr, SignalTriggerRegistry, TriggersConfigPath,
+};
 use harness::prelude::*;
 use harness::triggers::{SchedulerState, SchedulerStateWatcher, reload_triggers_system};
 use tempfile::NamedTempFile;
@@ -25,7 +27,7 @@ fn build_app(path: &str) -> App {
 }
 
 #[test]
-fn reload_loads_initial_config_into_registry_and_state() {
+fn reload_loads_initial_config_into_registry() {
     let f = write_config(
         r#"
 [webhook]
@@ -42,8 +44,6 @@ prompt_template = "{{kind}}"
     app.update();
     let registry = app.world().resource::<SignalTriggerRegistry>();
     assert_eq!(registry.webhook_route_count(), 1);
-    let state = app.world().resource::<SchedulerState>();
-    assert!(state.static_routes().is_some());
 }
 
 #[test]
@@ -94,9 +94,10 @@ prompt_template = "{{body_json.a.b}}"
     assert!(registry.webhook_route("bad").is_none());
 }
 
+/// 旧配置残留的 `[timer]` 段（即使 cron 非法）不阻止 webhook 路由热加载。
 #[test]
-fn reload_with_invalid_cron_keeps_old_config() {
-    let good = write_config(
+fn reload_ignores_legacy_timer_section() {
+    let f = write_config(
         r#"
 [webhook]
 enabled = true
@@ -112,46 +113,23 @@ enabled = true
 
 [[timer.routes]]
 kind = "t"
-cron = "0 9 * * 1-5"
-approval_channel = { frontend = "telegram", user_id = "r" }
-approval_context = "c"
-prompt_template = "x"
-"#,
-    );
-    let mut app = build_app(good.path().to_str().unwrap());
-    app.update();
-    assert_eq!(
-        app.world()
-            .resource::<SignalTriggerRegistry>()
-            .timer_route_count(),
-        1
-    );
-
-    // 改写为坏 cron
-    let bad = write_config(
-        r#"
-[timer]
-enabled = true
-
-[[timer.routes]]
-kind = "t"
 cron = "not a cron"
 approval_channel = { frontend = "telegram", user_id = "r" }
 approval_context = "c"
 prompt_template = "x"
 "#,
     );
-    let mut path_res = app.world_mut().resource_mut::<TriggersConfigPath>();
-    path_res.0 = Some(bad.path().to_str().unwrap().to_string());
+    let mut app = build_app(f.path().to_str().unwrap());
     app.update();
-
-    // 旧配置保留：timer 仍是 1 个
     let registry = app.world().resource::<SignalTriggerRegistry>();
-    assert_eq!(registry.timer_route_count(), 1);
+    assert_eq!(registry.webhook_route_count(), 1);
+    assert!(registry.webhook_route("k").is_some());
+    assert!(registry.webhook_route("t").is_none());
 }
 
+/// reload 只替换 webhook 路由表，不改动动态定时任务，也不通知 timer scheduler。
 #[test]
-fn reload_notifies_watcher_when_set() {
+fn reload_leaves_scheduler_state_untouched() {
     let f = write_config(
         r#"
 [webhook]
@@ -164,12 +142,35 @@ approval_context = "c"
 prompt_template = "{{kind}}"
 "#,
     );
-    let (tx, mut rx) = watch::channel(harness::triggers::SchedulerState::default());
+    let def = ScheduleDefinition::new(
+        uuid::Uuid::new_v4(),
+        None,
+        "x".to_string(),
+        ScheduleExpr::parse("cron:0 8 * * *").unwrap(),
+        None,
+        chrono::Utc::now(),
+    );
+    let (tx, rx) = watch::channel(SchedulerState::default());
     let mut app = build_app(f.path().to_str().unwrap());
+    app.world_mut()
+        .resource_mut::<SchedulerState>()
+        .dynamic_tasks_mut()
+        .push(def);
     app.world_mut()
         .insert_resource(SchedulerStateWatcher(Some(tx)));
     app.update();
-    assert!(rx.has_changed().unwrap());
-    let updated = rx.borrow_and_update().clone();
-    assert_eq!(updated.static_routes().unwrap().webhook.routes.len(), 1);
+    assert_eq!(
+        app.world()
+            .resource::<SignalTriggerRegistry>()
+            .webhook_route_count(),
+        1
+    );
+    assert_eq!(
+        app.world()
+            .resource::<SchedulerState>()
+            .dynamic_tasks()
+            .len(),
+        1
+    );
+    assert!(!rx.has_changed().unwrap());
 }
