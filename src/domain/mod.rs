@@ -336,9 +336,6 @@ pub struct AgentEntry {
     pub description: String,
     /// Tool 权限配置
     pub tools: Option<AgentToolsConfig>,
-    /// Skill 路径列表
-    #[serde(default)]
-    pub skills: Option<Vec<String>>,
     /// Agent 级 system prompt：加载时注入 Agent 组件，WorkItem 执行时作为 system_prompt 传递给 LLM。
     /// 留空（None）时由 WorkItem 自身的 system_prompt 决定（保持向后兼容）。
     #[serde(default)]
@@ -483,5 +480,26 @@ model = "deepseek-chat"
         assert_eq!(config.agent[0].models.len(), 2);
         assert_eq!(config.agent[0].models[0].provider, "openai");
         assert_eq!(config.agent[0].models[1].provider, "deepseek");
+    }
+
+    /// Skill 已改为全局目录按需加载；旧 agents.toml 中残留的 `skills` 字段应被忽略而非导致加载失败。
+    #[test]
+    fn agent_config_ignores_legacy_skills_field() {
+        let config: AgentConfig = toml::from_str(
+            r#"
+[[agent]]
+name = "main"
+model = "gpt-4.1-mini"
+tags = ["general"]
+description = "legacy entry"
+skills = ["skills/legacy.md"]
+"#,
+        )
+        .expect("legacy skills field must not break agents.toml loading");
+
+        let entry = &config.agent[0];
+        assert_eq!(entry.name, "main");
+        assert_eq!(entry.model.as_deref(), Some("gpt-4.1-mini"));
+        assert_eq!(entry.tags, vec!["general".to_string()]);
     }
 }

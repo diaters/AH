@@ -18,11 +18,7 @@ fn app_with_input() -> (bevy_app::App, crossbeam_channel::Sender<ExternalInput>)
     let executor: Arc<dyn AgentExecutor> = Arc::new(common::mock_executor::EchoExecutor);
     let registry = ExecutorRegistry::from_single_executor(executor, "default");
     let (input_tx, input_rx) = unbounded();
-    let config = HarnessConfig {
-        idle_poll_ms: 5,
-        active_poll_ms: 1,
-        ..HarnessConfig::default()
-    };
+    let config = HarnessConfig::default();
     let app = build_harness_app(
         config,
         runtime,
