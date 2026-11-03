@@ -1,11 +1,12 @@
 //! 事件触发任务路由 System
 //!
-//! 消费 `TriggerTaskMessage`，根据 `SignalTriggerRegistry` 中注册的路由，
-//! 把事件触发转换为 `CreateTaskMessage`，使事件任务进入与普通用户输入相同的任务创建链路。
+//! 消费 `TriggerTaskMessage`：Webhook 触发按 `SignalTriggerRegistry` 中注册的路由
+//! 转换为 `CreateTaskMessage`，使事件任务进入与普通用户输入相同的任务创建链路。
 //!
-//! 对 `scheduled:` 前缀的 Timer 触发，从 `SchedulerState` 查找动态定时任务定义
-//! 并生成 `CreateTaskMessage`（见 [`route_scheduled_trigger`]）：暂停与重叠时跳过，
-//! 补跑时在任务内容前标注原定时间并通知用户，触发后记录 `last_fired_at`；
+//! Timer 触发只服务动态定时任务：对 `scheduled:` 前缀的 Timer 触发，
+//! 从 `SchedulerState` 查找动态定时任务定义并生成 `CreateTaskMessage`
+//! （见 [`route_scheduled_trigger`]）：暂停与重叠时跳过，补跑时在任务内容前
+//! 标注原定时间并通知用户，触发后记录 `last_fired_at`；
 //! 一次性任务在运行及真实通知回执完成并持久记账后清理，cron 定义保留。
 
 use std::collections::HashSet;
@@ -29,14 +30,12 @@ const ONCE_CATCH_UP_GRACE: Duration = Duration::seconds(60);
 
 /// 将事件触发消息路由为 `CreateTaskMessage`。
 ///
-/// - Webhook 触发走 `registry.route`，Timer 触发走 `registry.timer_route`
-/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支（Webhook 不进入该分支）
-/// - 未注册的触发器会被丢弃并记录结构化日志
-/// - `build_task_input` 失败的触发器会被丢弃
-/// - 静态路由成功后产出 `CreateTaskMessage`，`origin_channel` 为 `None`，
-///   `routing_policy` 使用 `TaskRoutingPolicy::event`，由路由配置提供审批通道与上下文
-/// - 动态 scheduled task 成功后产出 `CreateTaskMessage`，`routing_policy`
-///   使用 `TaskRoutingPolicy::scheduled_task`，由 `ScheduleDefinition` 构造
+/// - Webhook 触发按 kind 查 `registry.webhook_route`，成功后产出 `CreateTaskMessage`，
+///   `origin_channel` 为 `None`，`routing_policy` 使用 `TaskRoutingPolicy::event`，
+///   由路由配置提供审批通道与上下文
+/// - `scheduled:` 前缀的 Timer 触发走 `SchedulerState` 动态定义分支，成功后产出
+///   `CreateTaskMessage`，`routing_policy` 使用 `TaskRoutingPolicy::scheduled_task`
+/// - 未注册的 webhook 与非 `scheduled:` 的 Timer 触发被丢弃并记录结构化日志
 /// - 动态定时任务的状态写入（`last_fired_at`、过期一次性任务清理）经
 ///   `update_scheduler_state_with_watcher` 共享入口，让 `SchedulerStateWatcher` 收到通知
 #[allow(clippy::too_many_arguments)]
@@ -66,22 +65,10 @@ pub fn trigger_task_routing_system(
             .map(|(_, run, _)| run.schedule_id),
     );
     for (entity, message, fire) in &messages {
-        let trigger = &message.trigger;
-        let kind = match trigger {
-            TaskTrigger::Timer { kind } => kind.clone(),
-            TaskTrigger::Webhook { kind, .. } => kind.clone(),
-        };
-
-        // Webhook 仍走 registry.route；Timer 改用 timer_route，让 scheduled: 动态任务分支生效
-        let static_route = match trigger {
-            TaskTrigger::Webhook { .. } => registry.route(trigger),
-            TaskTrigger::Timer { .. } => registry.timer_route(&kind),
-        };
-
-        if let Some(route) = static_route {
-            match route.build_task_input(trigger) {
-                Ok(content) => {
-                    let approval_context = route.build_approval_context(trigger);
+        match &message.trigger {
+            TaskTrigger::Webhook { kind, body } => {
+                if let Some(route) = registry.webhook_route(kind) {
+                    let content = route.build_task_input(kind, body);
                     debug!(
                         event = "SignalTriggerMatched",
                         source = %message.source.0,
@@ -94,44 +81,42 @@ pub fn trigger_task_routing_system(
                         origin_channel: None,
                         routing_policy: TaskRoutingPolicy::event(
                             route.approval_channel.clone(),
-                            Some(approval_context),
+                            Some(route.approval_context.clone()),
                         ),
                         initiator: None,
                     });
-                }
-                Err(_) => {
-                    warn!(
-                        event = "SignalTriggerPromptBuildFailed",
-                        source = %message.source.0,
-                        kind = %kind,
-                        "dropping signal trigger after prompt build failure"
-                    );
+                } else {
+                    warn_route_missing(message);
                 }
             }
-        } else if matches!(trigger, TaskTrigger::Timer { .. }) && kind.starts_with("scheduled:") {
             // 动态定时任务只接受 timer 触发；webhook 路径不能借 kind 前缀触发定时任务
-            route_scheduled_trigger(
-                &mut commands,
-                &kind,
-                fire.copied(),
-                &mut scheduler_state,
-                &watcher,
-                frontends.as_deref(),
-                &mut active_runs,
-                store.as_deref(),
-                index.as_deref_mut(),
-            );
-        } else {
-            warn!(
-                event = "SignalTriggerRouteMissing",
-                source = %message.source.0,
-                trigger = ?message.trigger,
-                "dropping unregistered signal trigger"
-            );
+            TaskTrigger::Timer { kind } if kind.starts_with("scheduled:") => {
+                route_scheduled_trigger(
+                    &mut commands,
+                    kind,
+                    fire.copied(),
+                    &mut scheduler_state,
+                    &watcher,
+                    frontends.as_deref(),
+                    &mut active_runs,
+                    store.as_deref(),
+                    index.as_deref_mut(),
+                );
+            }
+            TaskTrigger::Timer { .. } => warn_route_missing(message),
         }
 
         commands.entity(entity).despawn();
     }
+}
+
+fn warn_route_missing(message: &TriggerTaskMessage) {
+    warn!(
+        event = "SignalTriggerRouteMissing",
+        source = %message.source.0,
+        trigger = ?message.trigger,
+        "dropping unregistered signal trigger"
+    );
 }
 
 /// 路由一次动态定时任务触发。
@@ -509,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn unregistered_timer_route_is_dropped() {
+    fn non_scheduled_timer_trigger_is_dropped() {
         let mut app = App::new();
         app.insert_resource(SignalTriggerRegistry::default());
         insert_scheduler_resources(&mut app);

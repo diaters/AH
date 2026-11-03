@@ -1,7 +1,7 @@
 //! cron timer scheduler
 //!
-//! 通过 `watch::Receiver<SchedulerState>` 接收热加载信号。无论是否配置
-//! `triggers.toml`，scheduler 都会启动，以支持仅动态任务模式。
+//! 只调度 `schedule_task` 创建的动态定时任务，通过 `watch::Receiver<SchedulerState>`
+//! 接收定义变更。scheduler 始终启动，与是否配置 `triggers.toml` 无关。
 //!
 //! 时区策略：
 //! - cron 调度使用 `Local` 时区计算下一次触发时间（用户书写本地时间）
@@ -13,17 +13,16 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use crossbeam_channel::Sender;
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::domain::{ExternalInput, SignalSource};
 use crate::triggers::ScheduleSpec;
-use crate::triggers::config::build_schedules;
 use crate::triggers::scheduled_task::{ScheduledItem, SchedulerState};
 
 /// 启动 timer scheduler。
 ///
-/// 阻塞当前 tokio task。配置变更通过 `state_rx` 接收，重建 schedules。
-/// 当 `state_rx` 的发送端关闭时返回 `Ok(())`。
+/// 阻塞当前 tokio task。定义变更通过 `state_rx` 接收，重建 schedules。
+/// 当 `state_rx` 的发送端关闭时返回。
 ///
 /// cron 使用 `Local` 时区，一次性任务使用 `Utc` 比较；两者统一到
 /// `DateTime<Utc>` 后取最早 deadline；唤醒后触发所有已到期的 cron（同刻
@@ -32,12 +31,11 @@ use crate::triggers::scheduled_task::{ScheduledItem, SchedulerState};
 pub async fn run_timer_scheduler(
     input_tx: Sender<ExternalInput>,
     mut state_rx: watch::Receiver<SchedulerState>,
-) -> anyhow::Result<()> {
+) {
     let initial = state_rx.borrow().clone();
-    let mut schedules = build_all_schedules(&initial)?;
+    let mut schedules = build_all_schedules(&initial);
     info!(
         event = "TimerSchedulerStarted",
-        static_routes = initial.static_routes().is_some() as usize,
         dynamic_tasks = initial.dynamic_tasks().len(),
         count = schedules.len(),
         "timer scheduler started"
@@ -143,7 +141,7 @@ pub async fn run_timer_scheduler(
                 // `changed()` 已将当前值标记为 seen，因此这里直接用
                 // `borrow_and_update` 取最新配置即可。发送端关闭时退出。
                 if res.is_err() {
-                    return Ok(());
+                    return;
                 }
                 reload_state(&mut state_rx, &mut schedules);
             }
@@ -151,23 +149,12 @@ pub async fn run_timer_scheduler(
     }
 }
 
-/// 合并静态路由与动态任务，构建统一调度列表。
+/// 由动态任务构建调度列表。
 ///
-/// - 静态路由仅在 `timer.enabled = true` 时纳入（保留 a37b859 的 gate 语义）
-/// - 动态任务（`schedule_task` 工具创建）仅纳入启用中的定义；暂停的定义不调度，
-///   手动运行（`run_now`）不经 timer；已触发（`last_fired_at` 已设置）的一次性任务不调度
-fn build_all_schedules(state: &SchedulerState) -> anyhow::Result<Vec<ScheduledItem>> {
+/// 仅纳入启用中的定义；暂停的定义不调度，手动运行（`run_now`）不经 timer；
+/// 已触发（`last_fired_at` 已设置）的一次性任务不调度。
+fn build_all_schedules(state: &SchedulerState) -> Vec<ScheduledItem> {
     let mut items = Vec::new();
-    if let Some(routes) = state.static_routes()
-        && routes.timer.enabled
-    {
-        for (schedule, kind) in build_schedules(&routes.timer)? {
-            items.push(ScheduledItem::Cron {
-                schedule: Box::new(schedule),
-                kind,
-            });
-        }
-    }
     for def in state.dynamic_tasks().iter().filter(|def| def.enabled) {
         match def.schedule.spec() {
             // 已触发的一次性任务在运行结束前保留定义，但不能再次调度
@@ -187,33 +174,21 @@ fn build_all_schedules(state: &SchedulerState) -> anyhow::Result<Vec<ScheduledIt
             }
         }
     }
-    Ok(items)
+    items
 }
 
-/// 重建 schedules。失败时保留旧值并记 warning（spec L87-111）。
+/// 用最新的 `SchedulerState` 重建 schedules。
 fn reload_state(
     state_rx: &mut watch::Receiver<SchedulerState>,
     schedules: &mut Vec<ScheduledItem>,
 ) {
-    state_rx.borrow_and_update();
-    let new_state = state_rx.borrow().clone();
-    match build_all_schedules(&new_state) {
-        Ok(new_schedules) => {
-            *schedules = new_schedules;
-            info!(
-                event = "TimerSchedulerReloaded",
-                count = schedules.len(),
-                "reloaded timer schedules"
-            );
-        }
-        Err(e) => {
-            warn!(
-                event = "TimerSchedulerReloadFailed",
-                error = %e,
-                "keeping old schedules"
-            );
-        }
-    }
+    let new_state = state_rx.borrow_and_update().clone();
+    *schedules = build_all_schedules(&new_state);
+    info!(
+        event = "TimerSchedulerReloaded",
+        count = schedules.len(),
+        "reloaded timer schedules"
+    );
 }
 
 #[cfg(test)]
@@ -245,7 +220,6 @@ mod tests {
         *state.dynamic_tasks_mut() = vec![active, paused_cron, paused_once];
 
         let kinds: Vec<String> = build_all_schedules(&state)
-            .unwrap()
             .into_iter()
             .map(|item| match item {
                 ScheduledItem::Cron { kind, .. } | ScheduledItem::Once { kind, .. } => kind,
@@ -265,7 +239,6 @@ mod tests {
         *state.dynamic_tasks_mut() = vec![pending, fired];
 
         let kinds: Vec<String> = build_all_schedules(&state)
-            .unwrap()
             .into_iter()
             .map(|item| match item {
                 ScheduledItem::Cron { kind, .. } | ScheduledItem::Once { kind, .. } => kind,
