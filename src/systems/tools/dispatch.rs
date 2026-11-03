@@ -700,7 +700,6 @@ mod tests {
                 batch_id: None,
                 origin_channel: Some(channel.clone()),
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
-                last_evaluated_turn: None,
             })
             .id();
         // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex

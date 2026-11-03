@@ -1,6 +1,6 @@
 //! WorkItem 统一工作单元
 //!
-//! 定义统一的工作单元类型，支持执行、摘要、评估等多种工作类型。
+//! 定义统一的工作单元类型，支持执行、摘要、经验检索、巡检等多种工作类型。
 
 use crate::prelude::*;
 use uuid::Uuid;
@@ -15,8 +15,6 @@ pub enum WorkItemType {
     Execution,
     /// 摘要工作项
     Summarization,
-    /// 评估工作项
-    Evaluation,
     /// 经验检索工作项：由经验管理员判断经验库中哪些条目适用
     ExperienceLookup,
     /// 经验起草工作项：由经验管理员把会话试错过程整理为经验草稿
@@ -32,7 +30,6 @@ impl WorkItemType {
     /// 集中管理 tag 映射，避免散落硬编码。
     pub fn required_tag(&self) -> &'static str {
         match self {
-            WorkItemType::Evaluation => "evaluation",
             WorkItemType::Summarization => "summarization",
             WorkItemType::Execution => "execution",
             WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {
@@ -155,17 +152,6 @@ impl WorkItem {
         Self::new(task_id, WorkItemType::Summarization, input)
     }
 
-    /// 创建评估工作项
-    pub fn evaluation(task_id: TaskId, prompt: String, reasoning_hint: Option<String>) -> Self {
-        let full_prompt = if let Some(hint) = reasoning_hint {
-            format!("{}\n\n评估提示: {}", prompt, hint)
-        } else {
-            prompt
-        };
-        let input = WorkItemInput::new(full_prompt);
-        Self::new(task_id, WorkItemType::Evaluation, input)
-    }
-
     /// 创建经验管理员工作项（检索或起草），单轮无工具。
     pub fn experience_librarian(task_id: TaskId, work_type: WorkItemType, prompt: String) -> Self {
         debug_assert!(matches!(
@@ -280,38 +266,6 @@ mod tests {
         assert_eq!(work_item.work_type.required_tag(), "summarization");
         // Verify prompt contains target_tokens value
         assert!(work_item.input.prompt.contains("500"));
-    }
-
-    #[test]
-    fn work_item_evaluation_creation() {
-        let task_id = crate::domain::TaskId::nil();
-        let work_item = WorkItem::evaluation(
-            task_id,
-            "请评估当前任务状态".to_string(),
-            Some("检查任务是否偏离目标".to_string()),
-        );
-
-        assert_eq!(work_item.work_type, WorkItemType::Evaluation);
-        assert_eq!(work_item.work_type.required_tag(), "evaluation");
-
-        // Verify the prompt contains reasoning hint
-        assert!(work_item.input.prompt.contains("请评估当前任务状态"));
-        assert!(work_item.input.prompt.contains("检查任务是否偏离目标"));
-        assert!(work_item.input.prompt.contains("评估提示"));
-    }
-
-    #[test]
-    fn work_item_evaluation_without_reasoning_hint() {
-        let task_id = crate::domain::TaskId::nil();
-        let work_item = WorkItem::evaluation(task_id, "请评估当前任务状态".to_string(), None);
-
-        // Verify the prompt is unchanged when no reasoning hint is provided
-        assert_eq!(work_item.input.prompt, "请评估当前任务状态");
-    }
-
-    #[test]
-    fn required_tag_evaluation() {
-        assert_eq!(WorkItemType::Evaluation.required_tag(), "evaluation");
     }
 
     #[test]

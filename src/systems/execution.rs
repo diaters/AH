@@ -18,7 +18,6 @@ fn usage_kind(kind: &AgentRequestKind) -> &'static str {
     match kind {
         AgentRequestKind::LlmCompletion | AgentRequestKind::ToolExecution { .. } => "task",
         AgentRequestKind::Summarization => "summarization",
-        AgentRequestKind::Evaluation => "evaluation",
         AgentRequestKind::Experience => "experience",
         AgentRequestKind::Watchdog => "watchdog",
     }

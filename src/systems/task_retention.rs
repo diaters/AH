@@ -310,7 +310,6 @@ mod tests {
             batch_id: None,
             origin_channel: Some(channel.clone()),
             routing_policy: TaskRoutingPolicy::conversational(channel),
-            last_evaluated_turn: None,
         }
     }
 
@@ -395,8 +394,8 @@ mod tests {
         );
         world.spawn(WorkItem::new(
             root,
-            WorkItemType::Evaluation,
-            WorkItemInput::new("eval".to_string()),
+            WorkItemType::Summarization,
+            WorkItemInput::new("summarize".to_string()),
         ));
 
         run(&mut world);

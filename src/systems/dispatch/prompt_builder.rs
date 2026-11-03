@@ -129,26 +129,17 @@ mod tests {
             "assistant response",
             EntryMetadata::default(),
         );
-        // 模拟 AutoCorrect 注入的纠偏上下文
-        let metadata = EntryMetadata {
-            keywords: vec![
-                "evaluation".to_string(),
-                "offtrack".to_string(),
-                "autocorrect".to_string(),
-            ],
-            ..Default::default()
-        };
         stm.add_entry(
             EntryRole::Summary,
-            "[Evaluation AutoCorrect] refocus on original goal",
-            metadata,
+            "[Summary] earlier turns compressed",
+            EntryMetadata::default(),
         );
 
         let prompt =
             build_prompt_with_context("do the task", Some(&stm), None, Some(&make_channel()));
 
         assert!(
-            prompt.contains("System note: [Evaluation AutoCorrect] refocus on original goal"),
+            prompt.contains("System note: [Summary] earlier turns compressed"),
             "prompt should include Summary entry as System note, got: {}",
             prompt
         );

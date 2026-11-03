@@ -373,9 +373,7 @@ fn waiting_reason_to_kind(reason: &WaitingReason) -> WaitingReasonKind {
             WaitingReasonKind::User
         }
         WaitingReason::RetryBackoff => WaitingReasonKind::Retry,
-        WaitingReason::Evaluator | WaitingReason::Summarization | WaitingReason::ChatAgent => {
-            WaitingReasonKind::Other
-        }
+        WaitingReason::Summarization | WaitingReason::ChatAgent => WaitingReasonKind::Other,
     }
 }
 
@@ -1243,7 +1241,7 @@ mod tests {
             (WaitingReason::Approval, WaitingReasonKind::User),
             (WaitingReason::AskUser, WaitingReasonKind::User),
             (WaitingReason::RetryBackoff, WaitingReasonKind::Retry),
-            (WaitingReason::Evaluator, WaitingReasonKind::Other),
+            (WaitingReason::Summarization, WaitingReasonKind::Other),
             (
                 WaitingReason::SubTaskBatch {
                     batch_id: Uuid::new_v4(),
