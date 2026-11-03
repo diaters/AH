@@ -166,32 +166,6 @@ pub trait Channel: Send + Sync + 'static {
     async fn send(&self, message: &ChannelOutboundMessage) -> Result<Option<String>, ChannelError>;
 
     async fn listen(&self, tx: Sender<ChannelInboundMessage>) -> Result<(), ChannelError>;
-
-    /// 撤回消息。不支持撤回的通道返回 ChannelError::NotSupported。
-    async fn recall_message(&self, _recipient: &str, _msg_id: &str) -> Result<(), ChannelError> {
-        Err(ChannelError::NotSupported)
-    }
-
-    /// 发送输入状态指示器。不支持的通道静默跳过（默认 Ok(())）。
-    async fn send_typing(&self, _recipient: &str) -> Result<(), ChannelError> {
-        Ok(())
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-
-    fn supported_attachment_kinds(&self) -> Vec<AttachmentKind> {
-        vec![]
-    }
-
-    fn supports_html(&self) -> bool {
-        false
-    }
-
-    fn supports_inline_keyboard(&self) -> bool {
-        false
-    }
 }
 
 #[cfg(test)]
