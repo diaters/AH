@@ -16,5 +16,9 @@ export class Theme {
   static readonly serif: string = 'serif';
   // 宽于该值（vp）时侧栏内嵌、可展开右侧面板；更窄时侧栏改为抽屉。
   static readonly wide: number = 840;
+  // 窗口矮于该值（vp）视为矮屏：侧栏导航收为图标行；宽屏也不再内嵌侧栏（如 Pura X 系列内外屏）。
+  static readonly short: number = 720;
+  // 右侧面板内嵌时，对话区至少保留的宽度（vp）；不足时先收起侧栏，仍不足则面板改为覆盖。
+  static readonly minChat: number = 480;
   static readonly contentMax: number = 760;
 }

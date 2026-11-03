@@ -22,6 +22,9 @@ export default class EntryAbility extends UIAbility {
         if (type === window.AvoidAreaType.TYPE_SYSTEM) { AppStorage.setOrCreate('safeTop', area.topRect.height); }
         if (type === window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR) { AppStorage.setOrCreate('safeBottom', area.bottomRect.height); }
       };
+      // 窗口高度（px）单独记录：页面在 RESIZE 模式下会随键盘变矮，不能据此判断屏幕形态。
+      AppStorage.setOrCreate('windowHeight', main.getWindowProperties().windowRect.height);
+      main.on('windowSizeChange', (size: window.Size) => { AppStorage.setOrCreate('windowHeight', size.height); });
       update(window.AvoidAreaType.TYPE_SYSTEM, main.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM));
       update(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR, main.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR));
       main.on('avoidAreaChange', (data: window.AvoidAreaOptions) => { update(data.type, data.area); });

@@ -53,6 +53,11 @@ struct Index {
   @State selected: string = '';
   @State draft: string = '';
   @State windowWidth: number = 390;
+  // 窗口高度（px），由 EntryAbility 按窗口尺寸更新；页面高度会随键盘变化，不用于判断形态。
+  @StorageProp('windowHeight') @Watch('layoutChanged') windowHeightPx: number = 0;
+  private lastEmbed: boolean = false;
+  // 对话不在底部时到达新内容，显示「新消息」入口而不是强行跳走。
+  @State newBelow: boolean = false;
   @State paired: boolean = false;
   @State connected: boolean = false;
   @State busy: boolean = false;
@@ -135,6 +140,17 @@ struct Index {
     if (this.paired) { this.connect(''); }
   }
   aboutToDisappear(): void { this.cancelReconnect(); this.connection.close(); }
+  // 返回手势按层级逐层收起，全部收起后才交给系统退出。
+  onBackPress(): boolean {
+    if (!this.paired) { return false; }
+    if (this.instanceMenu) { this.instanceMenu = false; return true; }
+    if (this.panelOpen && this.viewing) { this.closeArtifact(); return true; }
+    if (this.panelOpen && this.view === 'chat' && this.current()) { this.setPanel(false); return true; }
+    if (this.sidebarOpen && !this.embedSidebar()) { this.setSidebar(false); return true; }
+    if (this.view === 'experiences' && this.experienceDetail) { this.experienceDetail = undefined; this.experienceEditing = false; return true; }
+    if (this.view !== 'chat') { this.view = 'chat'; return true; }
+    return false;
+  }
 
   // 旧版的单个配对记录作为首个实例保留，旧状态按原实例惰性读取。
   private loadPairing(): void {
@@ -201,7 +217,10 @@ struct Index {
     this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.sidebarOpen = open; });
   }
   private setPanel(open: boolean): void {
-    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.panelOpen = open; });
+    // 内嵌面板会改变对话宽度并重新排版；原本停在底部的保持在底部。
+    const follow = this.view === 'chat' && this.conversationScroller.isAtEnd();
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => { this.panelOpen = open; if (open) { this.fitPanel(); } });
+    if (follow) { this.scrollToLatest(); }
   }
   // 左滑收起的共用判定：侧栏自身与遮罩都走这里。
   // 要求水平位移 ≥48vp 且横向明显占优，避免与列表纵向滚动、按钮点击冲突。
@@ -221,6 +240,24 @@ struct Index {
     }
   }
   private wide(): boolean { return this.windowWidth >= Theme.wide; }
+  // 矮屏按窗口高度判断，不受键盘压缩页面影响；尚未取到窗口尺寸时按常规屏处理。
+  private short(): boolean {
+    const height = this.getUIContext().px2vp(this.windowHeightPx);
+    return height > 0 && height < Theme.short;
+  }
+  // 侧栏只在宽且足够高的窗口内嵌；矮的宽屏（如折叠屏内屏）内嵌会把对话挤得过窄。
+  private embedSidebar(): boolean { return this.wide() && !this.short(); }
+  private sidebarWidth(): number { return this.embedSidebar() ? 272 : Math.min(300, Math.floor(this.windowWidth * 0.86)); }
+  private panelInline(): boolean { return this.wide() && this.windowWidth - this.panelWidth() >= Theme.minChat; }
+  // 跨越形态时按新形态重置侧栏：可内嵌时默认展开，否则默认收起。
+  private layoutChanged(): void {
+    const embed = this.embedSidebar();
+    if (embed !== this.lastEmbed) { this.lastEmbed = embed; this.sidebarOpen = embed; }
+  }
+  // 内嵌面板挤占对话区时先收起内嵌侧栏，保证对话区最小宽度。
+  private fitPanel(): void {
+    if (this.embedSidebar() && this.sidebarOpen && this.windowWidth - 272 - this.panelWidth() < Theme.minChat) { this.sidebarOpen = false; }
+  }
   private cancelReconnect(): void { if (this.reconnectTimer >= 0) { clearTimeout(this.reconnectTimer); this.reconnectTimer = -1; } }
   private scheduleReconnect(): void {
     if (!this.paired || !this.foreground || this.reconnectTimer >= 0) { return; }
@@ -242,11 +279,19 @@ struct Index {
   private select(id: string): void {
     this.viewing = undefined;
     this.selected = id; this.save('selected', id); this.view = 'chat';
-    if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
+    if (!this.embedSidebar() && this.sidebarOpen) { this.setSidebar(false); }
     try { this.draft = this.localRead(`draft:${id}`, ''); }
     catch (_) { this.status = '无法读取草稿'; this.draft = ''; }
     try { this.attachments = JSON.parse(this.localRead(`attachments:${id}`, '[]')) as string[]; }
     catch (_) { this.attachments = []; }
+    this.scrollToLatest();
+  }
+  // 等本帧布局完成后再滚动；长会话的 Markdown 排版较慢，补一次兜底。
+  private scrollToLatest(): void {
+    this.newBelow = false;
+    const scroll = () => { try { this.conversationScroller.scrollEdge(Edge.Bottom); } catch (_) { } };
+    setTimeout(scroll, 50);
+    setTimeout(scroll, 350);
   }
   private current(): SessionDto | undefined { return this.sessions.find((session: SessionDto) => session.id === this.selected); }
   private tasks(): TaskDto[] { const session = this.current(); return session ? Object.values(session.tasks) : []; }
@@ -327,7 +372,7 @@ struct Index {
       preferred: this.preferred, name: this.connection.capabilities?.instance_name ?? '' };
     this.instances = this.instances.filter((item: SavedInstance) => item.instance !== link.instance).concat([saved]);
     this.save('instances', JSON.stringify(this.instances)); this.save('active-instance', link.instance);
-    this.paired = true; this.linkText = ''; this.sidebarOpen = this.wide();
+    this.paired = true; this.linkText = ''; this.sidebarOpen = this.embedSidebar();
   }
   private unpair(): void {
     if (this.busy || this.refreshing) { this.status = '正在同步，请稍后再操作'; return; }
@@ -401,6 +446,11 @@ struct Index {
     // 新回复到达时收起过程，即使用户此前曾手动展开运行中的过程。
     const previous = this.sessions.find((session: SessionDto) => session.id === this.selected);
     const updated = sessions.find((session: SessionDto) => session.id === this.selected);
+    // 只有新增消息或执行记录才算新内容；停在底部时跟随，否则提示。
+    if (this.view === 'chat' && updated && (!previous || previous.messages.length !== updated.messages.length ||
+      previous.observations.length !== updated.observations.length)) {
+      if (!previous || this.conversationScroller.isAtEnd()) { this.scrollToLatest(); } else { this.newBelow = true; }
+    }
     if (previous && updated) {
       const oldRows = conversationRows(previous);
       const next: Record<string, boolean> = {};
@@ -475,7 +525,7 @@ struct Index {
     }
     const command: CommandDto = { operation: 'send_text', command_id: util.generateRandomUUID(), session_id: this.selected, content: text, attachment_ids: this.attachments };
     await this.submit(command);
-    setTimeout(() => { try { this.conversationScroller.scrollEdge(Edge.Bottom); } catch (_) { } }, 50);
+    this.scrollToLatest();
   }
   private newTask(): void { this.select(''); if (this.panelOpen) { this.setPanel(false); } }
   private attachFile(file: ClientFileDto): void {
@@ -550,8 +600,7 @@ struct Index {
   private openArtifact(ref: ArtifactRef): void {
     this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, () => {
       this.viewing = ref; this.panelTab = 'artifacts'; this.panelOpen = true;
-      // 查看器加宽后若对话区过窄，收起内嵌侧栏让出空间。
-      if (this.wide() && this.sidebarOpen && this.windowWidth - 272 - this.panelWidth() < 560) { this.sidebarOpen = false; }
+      this.fitPanel();
     });
   }
   // Markdown 中的链接复用链接产物的打开方式（本机地址按当前连接地址改写）。
@@ -685,7 +734,7 @@ struct Index {
   }
   private openView(view: string): void {
     this.view = view;
-    if (!this.wide() && this.sidebarOpen) { this.setSidebar(false); }
+    if (!this.embedSidebar() && this.sidebarOpen) { this.setSidebar(false); }
     if (view === 'automation' && this.connection.supports('schedules.manage')) { this.manageSchedule({ kind: 'list' }); }
     if (view === 'management') { this.loadManagement(); }
     if (view === 'experiences') { this.experienceDetail = undefined; this.experienceEditing = false; this.loadExperiences(); }
@@ -831,13 +880,30 @@ struct Index {
   }
 
   // ---------- 侧栏 ----------
-  @Builder private navItem(symbol: Resource, label: string, view: string, badge: number) {
+  // 角标在 Builder 内按状态读取：按值传入的参数不会随通知、审批变化而刷新。
+  private navBadge(view: string): number {
+    if (view === 'chat') { return this.approvals().length + this.questions().length; }
+    return view === 'inbox' ? this.unread() : 0;
+  }
+  @Builder private navItem(symbol: Resource, label: string, view: string) {
     Row({ space: 12 }) {
       SymbolGlyph(symbol).fontSize(18).fontColor([this.view === view ? Theme.text : Theme.secondary])
       Text(label).fontSize(14).fontColor(Theme.text).layoutWeight(1)
-      if (badge > 0) { Text(`${badge}`).fontSize(11).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(8).padding({ left: 6, right: 6, top: 1, bottom: 1 }) }
+      if (this.navBadge(view) > 0) { Text(`${this.navBadge(view)}`).fontSize(11).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(8).padding({ left: 6, right: 6, top: 1, bottom: 1 }) }
     }.width('100%').height(38).padding({ left: 12, right: 12 }).borderRadius(9)
       .backgroundColor(this.view === view ? Theme.selected : Color.Transparent)
+      .onClick(() => { this.openView(view); })
+  }
+  // 矮屏下导航收为一行图标，把高度留给任务列表；名称交给无障碍朗读。
+  @Builder private navIcon(symbol: Resource, label: string, view: string) {
+    Stack() {
+      Badge({ count: this.navBadge(view), maxCount: 99, position: BadgePosition.RightTop,
+        style: { badgeSize: 14, fontSize: 10, badgeColor: Theme.accent, color: Color.White } }) {
+        SymbolGlyph(symbol).fontSize(20).fontColor([this.view === view ? Theme.text : Theme.secondary])
+      }
+    }.width(44).height(40).borderRadius(10)
+      .backgroundColor(this.view === view ? Theme.selected : Color.Transparent)
+      .accessibilityText(label)
       .onClick(() => { this.openView(view); })
   }
   // 实例下拉改为浮层：它曾撑在流里，实例一多就把「最近任务」挤到没有高度。
@@ -871,9 +937,13 @@ struct Index {
     Column() {
       Row() {
         Text('Harness').heading(22).layoutWeight(1)
+        if (this.short()) {
+          Button() { SymbolGlyph($r('sys.symbol.plus')).fontSize(20).fontColor([Theme.text]) }
+            .icon().accessibilityText('新任务').onClick(() => { this.newTask(); })
+        }
         Button() { SymbolGlyph($r('sys.symbol.close_sidebar')).fontSize(20).fontColor([Theme.secondary]) }
           .icon().onClick(() => { this.setSidebar(false); })
-      }.width('100%').margin({ top: 6, bottom: 12 })
+      }.width('100%').margin({ top: this.short() ? 0 : 6, bottom: this.short() ? 8 : 12 })
       Row({ space: 8 }) {
         Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
         Text(this.instances.find((item: SavedInstance) => item.instance === this.instance)?.name || this.instance.substring(0, 8))
@@ -890,21 +960,32 @@ struct Index {
           radius: 12,
           onStateChange: (event) => { if (!event.isVisible) { this.instanceMenu = false; } }
         })
-      Button() {
-        Row({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.plus')).fontSize(16).fontColor([Theme.text])
-          Text('新任务').fontSize(15).fontColor(Theme.text)
-        }
-      }.ghost().height(40).width('100%').margin({ top: 8 }).border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
-      Column({ space: 2 }) {
-        this.navItem($r('sys.symbol.house'), '工作台', 'chat', this.approvals().length + this.questions().length)
-        this.navItem($r('sys.symbol.clock'), '自动化', 'automation', 0)
-        this.navItem($r('sys.symbol.bell'), '通知', 'inbox', this.unread())
-        if (this.canManageExperience()) { this.navItem($r('sys.symbol.book'), '经验库', 'experiences', 0) }
-        if (this.usageEnabled) { this.navItem($r('sys.symbol.data_proportion'), '用量', 'usage', 0) }
-        this.navItem($r('sys.symbol.gearshape'), '设备与连接', 'management', 0)
-      }.margin({ top: 8 })
-      Divider().color(Theme.line).margin({ top: 10, bottom: 8 })
+      if (this.short()) {
+        Row() {
+          this.navIcon($r('sys.symbol.house'), '工作台', 'chat')
+          this.navIcon($r('sys.symbol.clock'), '自动化', 'automation')
+          this.navIcon($r('sys.symbol.bell'), '通知', 'inbox')
+          if (this.canManageExperience()) { this.navIcon($r('sys.symbol.book'), '经验库', 'experiences') }
+          if (this.usageEnabled) { this.navIcon($r('sys.symbol.data_proportion'), '用量', 'usage') }
+          this.navIcon($r('sys.symbol.gearshape'), '设备与连接', 'management')
+        }.width('100%').justifyContent(FlexAlign.SpaceBetween).margin({ top: 8 })
+      } else {
+        Button() {
+          Row({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.plus')).fontSize(16).fontColor([Theme.text])
+            Text('新任务').fontSize(15).fontColor(Theme.text)
+          }
+        }.ghost().height(40).width('100%').margin({ top: 8 }).border({ width: 1, color: Theme.line, radius: 10 }).onClick(() => { this.newTask(); })
+        Column({ space: 2 }) {
+          this.navItem($r('sys.symbol.house'), '工作台', 'chat')
+          this.navItem($r('sys.symbol.clock'), '自动化', 'automation')
+          this.navItem($r('sys.symbol.bell'), '通知', 'inbox')
+          if (this.canManageExperience()) { this.navItem($r('sys.symbol.book'), '经验库', 'experiences') }
+          if (this.usageEnabled) { this.navItem($r('sys.symbol.data_proportion'), '用量', 'usage') }
+          this.navItem($r('sys.symbol.gearshape'), '设备与连接', 'management')
+        }.margin({ top: 8 })
+      }
+      Divider().color(Theme.line).margin({ top: this.short() ? 8 : 10, bottom: this.short() ? 4 : 8 })
       // 搜索占用「最近任务」这一行本身，不再另起一行把列表往下推。
       Row({ space: 6 }) {
         if (this.searching) {
@@ -939,14 +1020,16 @@ struct Index {
             .caption().width('100%').padding({ left: 10, right: 10, top: 10 }).textAlign(TextAlign.Start)
         }
       }.layoutWeight(1).width('100%').margin({ top: 4 })
-      Row({ space: 8 }) {
-        Circle().width(8).height(8).fill(this.connected ? Theme.accent : Theme.faint)
-        Text(this.connected ? (this.connection.capabilities?.instance_name ?? '已连接') : (this.busy ? '正在连接…' : '未连接'))
-          .caption().layoutWeight(1).maxLines(1)
-        if (!this.connected && !this.busy) {
-          Text('重连').fontSize(12).fontColor(Theme.accent).onClick(() => { this.connect(''); })
-        }
-      }.width('100%').padding({ left: 6, top: 8 })
+      // 已连接时实例行的圆点已表明状态，底部只在未连接时出现并提供重连。
+      if (!this.connected) {
+        Row({ space: 8 }) {
+          Circle().width(8).height(8).fill(Theme.faint)
+          Text(this.busy ? '正在连接…' : '未连接').caption().layoutWeight(1).maxLines(1)
+          if (!this.busy) {
+            Button('重连').ghost().onClick(() => { this.connect(''); })
+          }
+        }.width('100%').height(40).padding({ left: 6 })
+      }
     }.height('100%').width('100%').padding({ left: 16, right: 16, top: 12 + this.top(), bottom: 12 + this.bottom() }).backgroundColor(Theme.sidebar)
       // 在侧栏内向左滑即可收起，与右拉唤出对称。
       .onTouch((event: TouchEvent) => { this.swipeClose(event); })
@@ -955,7 +1038,7 @@ struct Index {
   // ---------- 对话 ----------
   @Builder private header() {
     Row({ space: 4 }) {
-      if (!this.sidebarOpen || !this.wide()) {
+      if (!this.sidebarOpen || !this.embedSidebar()) {
         Button() { SymbolGlyph($r('sys.symbol.open_sidebar')).fontSize(20).fontColor([Theme.secondary]) }
           .icon().onClick(() => { this.setSidebar(true); })
       }
@@ -1335,34 +1418,54 @@ struct Index {
   @Builder private conversation() {
     Column() {
       this.header()
-      Scroll(this.conversationScroller) {
-        Column({ space: 26 }) {
-          if (!this.selected || !this.current()) { this.emptyChat() }
-          else {
-            Text(this.current()?.title ?? '').heading(28).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').margin({ top: 4 })
-            if (this.current()?.history_truncated) { Text('更早的消息已超出保留范围').caption() }
-            if (this.current()?.observations_truncated) { Text('更早的执行记录已超出保留范围').caption() }
-            ForEach(this.current() ? conversationRows(this.current() as SessionDto) : [], (row: ConversationRow) => {
-              if (row.message) { this.message(row.message) }
-              else { this.process(row) }
-            }, (row: ConversationRow) => `${row.key}:${row.complete}:${row.entries?.length ?? 0}`)
-            if (this.todos().length > 0) {
-              Column({ space: 14 }) {
-                Divider().color(Theme.line)
-                Text('执行计划').heading(22).margin({ top: 6, bottom: 4 })
-                ForEach(this.todos(), (todo: TodoDto, index: number) => { this.planStep(todo, index, index === this.todos().length - 1) },
-                  (todo: TodoDto, index: number) => `${index}:${todo.status}:${todo.content}`)
-              }.width('100%').alignItems(HorizontalAlign.Start)
+      Stack({ alignContent: Alignment.Bottom }) {
+        Scroll(this.conversationScroller) {
+          Column({ space: 26 }) {
+            if (!this.selected || !this.current()) { this.emptyChat() }
+            else {
+              Text(this.current()?.title ?? '').heading(28).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').margin({ top: 4 })
+              if (this.current()?.history_truncated) { Text('更早的消息已超出保留范围').caption() }
+              if (this.current()?.observations_truncated) { Text('更早的执行记录已超出保留范围').caption() }
+              ForEach(this.current() ? conversationRows(this.current() as SessionDto) : [], (row: ConversationRow) => {
+                if (row.message) { this.message(row.message) }
+                else { this.process(row) }
+              }, (row: ConversationRow) => `${row.key}:${row.complete}:${row.entries?.length ?? 0}`)
+              if (this.todos().length > 0) {
+                Column({ space: 14 }) {
+                  Divider().color(Theme.line)
+                  Text('执行计划').heading(22).margin({ top: 6, bottom: 4 })
+                  ForEach(this.todos(), (todo: TodoDto, index: number) => { this.planStep(todo, index, index === this.todos().length - 1) },
+                    (todo: TodoDto, index: number) => `${index}:${todo.status}:${todo.content}`)
+                }.width('100%').alignItems(HorizontalAlign.Start)
+              }
+              this.experienceDrafts()
+              this.taskControls()
+              this.summaryEntry()
             }
-            this.interactions()
-            this.experienceDrafts()
-            this.taskControls()
-            this.summaryEntry()
-          }
-        }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, top: 8, bottom: 24 })
-      }.layoutWeight(1).width('100%').align(Alignment.Top).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
+          }.width('100%').constraintSize({ maxWidth: Theme.contentMax }).padding({ left: 24, right: 24, top: 8, bottom: 24 })
+        }.width('100%').height('100%').align(Alignment.Top).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
+          .onReachEnd(() => { this.newBelow = false; })
+        if (this.newBelow) {
+          Row({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.arrow_down')).fontSize(14).fontColor([Color.White])
+            Text('新消息').fontSize(13).fontColor(Color.White)
+          }.height(32).padding({ left: 14, right: 14 }).borderRadius(16).backgroundColor(Theme.accent).margin({ bottom: 8 })
+            .shadow({ radius: 8, color: '#1A000000', offsetY: 2 })
+            .onClick(() => { this.scrollToLatest(); })
+        }
+      }.layoutWeight(1).width('100%')
+      this.pinnedInteractions()
       this.composer()
     }.width('100%').height('100%')
+  }
+  // 待处理的审批与问答固定在输入框上方，不必滚过整段对话；过多时限高并可滚动。
+  @Builder private pinnedInteractions() {
+    if (this.current() && this.approvals().length + this.questions().length > 0) {
+      Scroll() {
+        Column({ space: 10 }) { this.interactions() }.width('100%')
+      }.width('100%').constraintSize({ maxWidth: Theme.contentMax + 48, maxHeight: Math.floor(this.getUIContext().px2vp(this.windowHeightPx) * 0.45) || 320 })
+        .padding({ left: 24, right: 24, top: 6 }).scrollBar(BarState.Auto).edgeEffect(EdgeEffect.None)
+    }
   }
   @Builder private composer() {
     Column({ space: 8 }) {
@@ -1681,7 +1784,7 @@ struct Index {
         Column() {
           if (this.view === 'chat') { this.conversation() } else { this.otherPage() }
         }.layoutWeight(1).height('100%')
-        if (this.panelOpen && this.view === 'chat' && this.current() && this.wide()) { Column() { this.panel() }.width(this.panelWidth()).height('100%').clip(true)
+        if (this.panelOpen && this.view === 'chat' && this.current() && this.panelInline()) { Column() { this.panel() }.width(this.panelWidth()).height('100%').clip(true)
           .transition(TransitionEffect.move(TransitionEdge.END).combine(TransitionEffect.OPACITY)) }
       }.width('100%').height('100%').backgroundColor(Theme.page)
         // 从左侧向右拉打开侧栏。用 touch 而非 PanGesture：PanGesture 的
@@ -1705,9 +1808,9 @@ struct Index {
             this.setSidebar(true);
           }
         })
-      if (this.panelOpen && this.view === 'chat' && this.current() && !this.wide()) { Column() { this.panel() }.width('100%').height('100%')
+      if (this.panelOpen && this.view === 'chat' && this.current() && !this.panelInline()) { Column() { this.panel() }.width('100%').height('100%')
         .transition(TransitionEffect.move(TransitionEdge.END)) }
-      if (this.sidebarOpen && !this.wide()) {
+      if (this.sidebarOpen && !this.embedSidebar()) {
         Column().width('100%').height('100%').backgroundColor('#33000000').onClick(() => { this.setSidebar(false); })
           // 遮罩上左滑同样收起，和侧栏内的手势保持一致。
           .onTouch((event: TouchEvent) => { this.swipeClose(event); })
@@ -1720,11 +1823,11 @@ struct Index {
     Column() {
       if (!this.paired) { this.onboarding() }
       else {
-        SideBarContainer(this.wide() ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
+        SideBarContainer(this.embedSidebar() ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
           this.sidebar()
           this.main()
         }.showSideBar(this.sidebarOpen).showControlButton(false).autoHide(false)
-          .sideBarWidth(this.wide() ? 272 : 300).minSideBarWidth(this.wide() ? 272 : 300).maxSideBarWidth(this.wide() ? 272 : 300)
+          .sideBarWidth(this.sidebarWidth()).minSideBarWidth(this.sidebarWidth()).maxSideBarWidth(this.sidebarWidth())
           .divider({ strokeWidth: 1, color: Theme.line })
           .onChange((value: boolean) => { this.sidebarOpen = value; })
       }
@@ -1732,10 +1835,8 @@ struct Index {
       .onAreaChange((_old, area) => {
         const width = Number(area.width);
         if (width === this.windowWidth) { return; }
-        const wasWide = this.wide();
         this.windowWidth = width;
-        // 跨越断点时按新形态重置侧栏：平板默认展开，手机默认收起。
-        if (wasWide !== this.wide()) { this.sidebarOpen = this.wide(); }
+        this.layoutChanged();
       })
   }
 }
