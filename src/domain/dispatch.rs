@@ -60,16 +60,16 @@ mod tests {
     #[test]
     fn agent_hint_pins_name() {
         let pending = PendingDispatch {
-            kind: DispatchKind::WorkItem(WorkItemType::Evaluation),
-            hint: DispatchHint::agent("evaluator"),
+            kind: DispatchKind::WorkItem(WorkItemType::Summarization),
+            hint: DispatchHint::agent("summarizer"),
         };
         assert_eq!(
             pending.hint.preferred_agent_name.as_deref(),
-            Some("evaluator")
+            Some("summarizer")
         );
         assert!(matches!(
             pending.kind,
-            DispatchKind::WorkItem(WorkItemType::Evaluation)
+            DispatchKind::WorkItem(WorkItemType::Summarization)
         ));
     }
 }

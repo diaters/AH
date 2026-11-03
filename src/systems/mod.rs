@@ -7,7 +7,6 @@ pub(crate) use client_schedules::{
 pub(crate) use conversation::conversation_input_order_system;
 pub mod demand;
 mod dispatch;
-mod evaluation;
 mod execution;
 pub mod experience_library;
 mod frontend_input;
@@ -39,7 +38,6 @@ pub(crate) use dispatch::{
     agent_started_hook_system, dispatch_system, on_message_dispatched_hook_system,
     subtask_dispatch_preparation_system, workitem_lifecycle_hook_system,
 };
-pub(crate) use evaluation::evaluation_trigger_system;
 pub use execution::UsageLedgerHandle;
 pub(crate) use execution::{agent_execution_system, model_chain_state_update_system};
 pub(crate) use frontend_input::frontend_input_system;

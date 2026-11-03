@@ -70,59 +70,6 @@ fn test_config() -> HarnessConfig {
     }
 }
 
-/// Test: Pending Evaluation WorkItem is dispatched to execution request
-#[test]
-fn pending_evaluation_workitem_is_dispatched_to_execution_request() {
-    let runtime = Arc::new(Runtime::new().unwrap());
-    let executor: Arc<dyn AgentExecutor> = Arc::new(MockExecutor);
-    let executor_registry = ExecutorRegistry::from_single_executor(executor, "default");
-    let (_input_tx, input_rx) = unbounded();
-    let mut app = build_harness_app(
-        test_config(),
-        runtime,
-        executor_registry,
-        input_rx,
-        vec![],
-        harness::channels::ChannelManager::empty().0,
-    );
-
-    // Initialize and load agents from agents.toml (includes "evaluator" agent)
-    app.update();
-
-    // Create an evaluation work item
-    let task_id = harness::domain::TaskId::new();
-    let work_item = WorkItem::evaluation(task_id, "评估任务状态".to_string(), None);
-    let work_item_id = work_item.id;
-    app.world_mut().spawn((
-        work_item,
-        PendingDispatch {
-            kind: DispatchKind::WorkItem(WorkItemType::Evaluation),
-            hint: DispatchHint::default(),
-        },
-    ));
-
-    // Run systems - the workitem should be dispatched
-    app.update();
-
-    // Verify work item status changed to Running (dispatched successfully)
-    let states: Vec<_> = app
-        .world_mut()
-        .query::<&WorkItem>()
-        .iter(app.world())
-        .collect();
-    assert_eq!(states.len(), 1, "Should have one work item");
-    assert_eq!(
-        states[0].status(),
-        WorkItemStatus::Running,
-        "Work item should be in Running status after dispatch"
-    );
-    assert_eq!(states[0].id, work_item_id);
-    assert!(
-        states[0].assigned_agent().is_some(),
-        "Work item should have assigned agent"
-    );
-}
-
 /// Test: Pending Summarization WorkItem is dispatched to execution request
 #[test]
 fn pending_summarization_workitem_is_dispatched_to_execution_request() {
@@ -183,8 +130,8 @@ fn pending_summarization_workitem_is_dispatched_to_execution_request() {
 
 /// Test: WorkItem with no matching agent is marked as Failed
 ///
-/// Uses an `Execution` work item, which the current narrow dispatcher
-/// (Evaluation/Summarization only) intentionally ignores.
+/// Uses an `Execution` work item, for which no agent carries the
+/// `execution` tag.
 #[test]
 fn workitem_without_matching_agent_is_marked_failed() {
     let runtime = Arc::new(Runtime::new().unwrap());
@@ -204,7 +151,6 @@ fn workitem_without_matching_agent_is_marked_failed() {
     app.update();
 
     // Create an Execution work item
-    // (The narrow dispatcher only handles Evaluation/Summarization, so this is not dispatched)
     let task_id = harness::domain::TaskId::new();
     let work_item = WorkItem::execution(task_id, "Execute this task".to_string());
     app.world_mut().spawn((

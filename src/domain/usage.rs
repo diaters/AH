@@ -16,7 +16,7 @@ pub struct UsageRecord {
     /// 任务树根任务（用户发起的顶层任务），用于归属到客户端会话
     pub root_task_id: TaskId,
     pub agent: String,
-    /// 调用类型：task / summarization / evaluation / experience / watchdog
+    /// 调用类型：task / summarization / experience / watchdog
     pub kind: String,
     pub provider: String,
     pub model: String,

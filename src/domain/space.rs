@@ -53,7 +53,7 @@ pub struct ToolDefinition {
     pub default_permission: ToolPermission,
     /// 执行器类型
     pub executor: ToolExecutorKind,
-    /// 执行所需的最小 tag（如 "evaluation"）
+    /// 执行所需的最小 tag（如 "summarization"）
     #[serde(default)]
     pub required_tag: Option<String>,
 }

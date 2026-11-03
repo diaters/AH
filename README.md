@@ -13,7 +13,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
   [HarmonyOS API 26 工作台](docs/client-channel.md) 已提供原生工程，真机验证与后续管理能力仍待完成
 - `Task` 作为用户目标载体，`WorkItem` 作为内部执行单元
 - 多 Agent 按职责分工：用户任务直接交给主 Agent（`HARNESS_MAIN_AGENT`，默认 `default-llm-agent`），
-  摘要员、evaluator、经验管理员、watchdog 与子任务执行为主 Agent 服务
+  摘要员、经验管理员、watchdog 与子任务执行为主 Agent 服务
 - `create_tasks` + `wait_tasks` 驱动的任务分解能力；子任务在后台执行，批次完成后通知父任务
 - 异步工具调用：`shell_exec` 与插件工具超过前台预算（`HARNESS_TOOL_BACKGROUND_AFTER_SECS`，默认 30 秒）
   自动转后台，模型立即收到 `running_in_background` 与 `job_id` 并可继续推理或结束本轮；
@@ -30,7 +30,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 模型文字可与工具调用同时返回：即时输出进度并保留对话上下文，不提前结束任务；
   steer 回执展示真实任务等待状态、在飞工具及运行时长
 - `chat_with_agent` 工具：支持父任务与 Persistent Agent 多轮同步对话
-- Summarization 与 Evaluation 收敛到 `WorkItem` 闭环
+- Summarization、经验检索与 watchdog 巡检收敛到 `WorkItem` 闭环
 - 工具权限、审批 UI、顺序确认与工具执行链路
 - 群聊审批绑定任务发起人（可配置 `approvers` 代审）；多轮会话空闲超时自动结束
 - 精简后的 shell 工具集：
@@ -69,7 +69,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 ### 已收敛
 
 - `Plan` 已收敛为任务分解能力，不再作为独立运行时模块存在
-- `Evaluation` 保留独立语义层，但执行链路统一走 `WorkItem`
+- `Evaluation` 评估子系统已移除（无配置入口、生产不可开启），任务进展监督由 watchdog 承担
 - `spawn_agent` 工具已废弃并从 LLM 可调工具集中移除
 - `AgentExperience` 已删除，不再作为独立运行时概念保留
 - Brain 路由、自动经验收集/治理/孵化、`/remember` 共享知识库与 `/skill` 技能生成已移除

@@ -441,7 +441,6 @@ mod tests {
             batch_id: None,
             origin_channel: Some(channel.clone()),
             routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
-            last_evaluated_turn: None,
         }
     }
 

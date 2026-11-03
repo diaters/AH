@@ -9,7 +9,7 @@
 //! ## 当前状态
 //!
 //! 所有派发请求统一通过 `PendingDispatch` 流入本 system 处理：
-//! - WorkItem 按 `required_tag` 交给对应服务角色（摘要员 / evaluator / 经验管理员）；
+//! - WorkItem 按 `required_tag` 交给对应服务角色（摘要员 / 经验管理员 / watchdog）；
 //! - Task 交给 `preferred_agent_name` 指定的 Agent，未指定时交给主 Agent
 //!   （`HarnessConfig::main_agent`）。Task 派发复用 `prompt_builder::build_prompt_with_context`，
 //!   构建 LTM/STM/通道上下文 + skills 系统提示。
@@ -165,9 +165,8 @@ pub fn dispatch_system(
             .entity(entity)
             .insert(WorkItemLifecycleHookPending(HookPoint::OnWorkItemStarted));
 
-        // request_kind 映射：Evaluation/Summarization 专用，其他走 LlmCompletion
+        // request_kind 映射：服务角色 WorkItem 各有专用请求类型，其他走 LlmCompletion
         let request_kind = match work_type {
-            WorkItemType::Evaluation => AgentRequestKind::Evaluation,
             WorkItemType::Summarization => AgentRequestKind::Summarization,
             // 管理员请求不得把所属任务标记为 Running（检索期间父任务仍在等待工具结果）。
             WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => {

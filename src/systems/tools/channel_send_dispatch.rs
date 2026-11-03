@@ -197,7 +197,6 @@ mod tests {
             batch_id: None,
             origin_channel: None,
             routing_policy: TaskRoutingPolicy::scheduled_task(Some(output), "scheduled task"),
-            last_evaluated_turn: None,
         }
     }
 

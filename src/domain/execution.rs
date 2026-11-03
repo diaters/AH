@@ -15,7 +15,6 @@ pub enum AgentRequestKind {
         tool_name: String,
     },
     Summarization,
-    Evaluation,
     /// 经验管理员请求（检索 / 起草）：不改变所属任务状态。
     Experience,
     /// Watchdog 巡检请求：不改变被监督任务的状态。
