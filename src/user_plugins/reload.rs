@@ -1,7 +1,7 @@
 //! /reload-plugins 实现
 //!
-//! 清除所有插件贡献（工具、技能、Agent 实体），重新扫描插件目录，
-//! 重新集成所有贡献。
+//! 清除所有插件贡献（工具、技能、Agent 实体），重新扫描插件目录并集成技能贡献。
+//! 插件工具与 Agent 由 systems 侧在本函数之后按新 registry 重新注册与生成。
 
 use crate::prelude::World;
 

@@ -307,9 +307,10 @@ pub(crate) fn reload_plugins_system(world: &mut World) {
     }
 
     // 执行重载（user_plugins 侧完成 registry 与技能贡献的重扫），
-    // 随后由 tools 系统主动拉取 registry 注册插件工具（方向反转）。
+    // 随后由 systems 侧主动拉取 registry 注册插件工具、重新生成插件 Agent（方向反转）。
     crate::user_plugins::reload::reload_plugins(world);
     crate::systems::tools::register_plugin_tools_in_world(world);
+    crate::systems::respawn_plugin_agents(world);
 
     // despawn 消息实体
     for entity in messages {

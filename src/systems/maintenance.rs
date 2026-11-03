@@ -1,5 +1,7 @@
 use std::fs;
 
+use bevy_ecs::system::SystemState;
+
 use crate::ecs::{EntityIndex, spawn_agent};
 use crate::prelude::*;
 use tracing::{debug, error, warn};
@@ -130,6 +132,47 @@ fn load_persistent_agents(
             "plugin agents merged into persistent agent spawn"
         );
     }
+}
+
+/// `respawn_plugin_agents` 所需的系统参数。
+type RespawnPluginAgentsParams = (
+    Commands<'static, 'static>,
+    ResMut<'static, EntityIndex>,
+    Res<'static, crate::llm::ExecutorRegistry>,
+    Option<Res<'static, crate::user_plugins::registry::PluginRegistry>>,
+    Query<'static, 'static, &'static Agent>,
+);
+
+/// `/reload-plugins` 后按当前 `PluginRegistry` 重新生成插件贡献的 Agent。
+///
+/// 重载已 despawn 旧插件 Agent；本函数读取重扫后的 registry 与最新 profile 重新生成。
+/// 运行期不因名称冲突 panic：与现存 Agent 或同批条目重名时 warn 并跳过。
+pub(crate) fn respawn_plugin_agents(world: &mut World) {
+    let mut state: SystemState<RespawnPluginAgentsParams> = SystemState::new(world);
+    let (mut commands, mut index, registry, plugin_registry, agents) = state.get_mut(world);
+
+    let mut names: std::collections::HashSet<String> =
+        agents.iter().map(|a| a.profile.name.clone()).collect();
+    let mut spawned = 0usize;
+    for (namespaced_name, entry) in collect_plugin_agent_entries(plugin_registry.as_deref()) {
+        if !names.insert(namespaced_name.clone()) {
+            warn!(
+                event = "PluginAgentNameConflict",
+                agent_name = %namespaced_name,
+                "plugin agent name already exists, skipping respawn"
+            );
+            continue;
+        }
+        spawn_persistent_agent_from_entry(&mut commands, &mut index, &entry, &registry);
+        spawned += 1;
+    }
+    state.apply(world);
+
+    debug!(
+        event = "PluginAgentsRespawned",
+        count = spawned,
+        "plugin agents respawned after reload"
+    );
 }
 
 /// 从配置条目生成持久化 Agent

@@ -104,7 +104,11 @@ pub fn build_harness_app(
         crate::systems::tools::register_plugin_tools_startup_system
             .after(crate::user_plugins::plugin_load_startup_system),
     );
-    app.add_systems(Startup, load_agents_system);
+    // 插件贡献的 Agent 需要读取 PluginRegistry，必须在插件加载之后生成。
+    app.add_systems(
+        Startup,
+        load_agents_system.after(crate::user_plugins::plugin_load_startup_system),
+    );
 
     // Configure SystemSets
     app.configure_sets(
