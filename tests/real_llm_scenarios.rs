@@ -252,7 +252,7 @@ struct ScenarioReport {
 // ============ 场景自检 mock executor（本文件专用，不进共享库） ============
 
 /// mock 模式专用执行器：
-/// - `Evaluation`（Judge 请求）→ 高置信 canned verdict
+/// - Judge 请求（system prompt 为 Judge 语境）→ 高置信 canned verdict
 /// - 其他 → 固定汇报文本（满足 echo_report 的确定性断言）
 struct ScenarioSelfcheckExecutor {
     final_text: &'static str,
@@ -260,14 +260,15 @@ struct ScenarioSelfcheckExecutor {
 
 impl AgentExecutor for ScenarioSelfcheckExecutor {
     fn execute(&self, request: AgentExecutionRequest) -> ExecutorFuture {
-        match request.request_kind {
-            AgentRequestKind::Evaluation => Box::pin(async {
+        if request.system_prompt.as_deref() == Some(judge_system_prompt().as_str()) {
+            Box::pin(async {
                 // canned Judge verdict：高置信通过，验证投票链路
                 Ok(text_output(
                     r#"{"scores":[{"name":"correctness","score":0.95,"rationale":"canned verdict（框架自检）"}],"pass":true,"reasoning":"框架自检 canned 裁决","confidence":0.95}"#,
                 ))
-            }),
-            _ => Box::pin(async { Ok(text_output(self.final_text)) }),
+            })
+        } else {
+            Box::pin(async { Ok(text_output(self.final_text)) })
         }
     }
 }
@@ -698,13 +699,13 @@ fn execute_scenario(
     trace
 }
 
-// ============ Judge 集成（复用 AgentRequestKind::Evaluation 通道，设计 §6.2） ============
+// ============ Judge 集成（单轮 LlmCompletion 请求，经 system_prompt 注入 Judge 语境） ============
 
 fn build_judge_request(data: &JudgePromptData) -> AgentExecutionRequest {
     AgentExecutionRequest {
         task_id: harness::domain::TaskId::nil(),
         agent_id: harness::domain::AgentId::nil(),
-        request_kind: AgentRequestKind::Evaluation,
+        request_kind: AgentRequestKind::LlmCompletion,
         prompt: build_judge_user_prompt(data),
         system_prompt: Some(judge_system_prompt()),
         tools: vec![],
@@ -1307,7 +1308,7 @@ fn scenario_framework_mock_smoke_multi_turn() {
         text_output("好的，已记住。"),
         text_output("本次会话的项目代号是 Falcon。"),
     ]));
-    // Judge 只收 Evaluation 请求，final_text 不会被读取；独立 executor 保证
+    // Judge 只收 Judge 请求，final_text 不会被读取；独立 executor 保证
     // llm_judge 确定性走 canned 高置信 verdict（避免与 CannedExecutor 队列互斥）。
     let judge: Arc<dyn AgentExecutor> = Arc::new(ScenarioSelfcheckExecutor {
         final_text: "unused",

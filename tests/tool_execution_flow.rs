@@ -67,7 +67,6 @@ fn create_test_tool_registry(world: &mut World) {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("test_allowed".to_string()),
-        required_tag: None,
     });
 
     // 注册一个需要确认的测试工具
@@ -77,7 +76,6 @@ fn create_test_tool_registry(world: &mut World) {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("test_confirm".to_string()),
-        required_tag: None,
     });
 
     // 注册一个拒绝的测试工具
@@ -87,7 +85,6 @@ fn create_test_tool_registry(world: &mut World) {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Deny,
         executor: ToolExecutorKind::Builtin("test_deny".to_string()),
-        required_tag: None,
     });
 
     // 注册 echo 工具（需要确认，用于测试 allow_once 和 allow_always）
@@ -97,7 +94,6 @@ fn create_test_tool_registry(world: &mut World) {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-        required_tag: None,
     });
 
     world.insert_resource(registry);
@@ -844,7 +840,6 @@ fn child_agent_confirm_routes_to_parent() {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-        required_tag: None,
     });
     app.world_mut().insert_resource(registry);
 
@@ -975,7 +970,6 @@ fn confirmation_denied_rejects_tool() {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-        required_tag: None,
     });
     app.world_mut().insert_resource(registry);
 
@@ -1103,7 +1097,6 @@ fn child_agent_confirm_no_parent_permission_routes_to_user() {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-        required_tag: None,
     });
     app.world_mut().insert_resource(registry);
 

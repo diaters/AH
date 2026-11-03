@@ -113,7 +113,6 @@ pub fn spawn_create_tasks_messages(
                 || crate::domain::TaskRoutingPolicy::event(None, None),
                 |ch| crate::domain::TaskRoutingPolicy::conversational(ch.clone()),
             ),
-            last_evaluated_turn: None,
         };
 
         let depended_by = depended_by_map.get(&def.name).cloned().unwrap_or_default();
@@ -1436,7 +1435,6 @@ mod tests {
             routing_policy: crate::domain::TaskRoutingPolicy::conversational(
                 telegram_channel.clone(),
             ),
-            last_evaluated_turn: None,
         };
         app.world_mut()
             .spawn((parent_task, ShortTermMemory::default()));
@@ -1583,7 +1581,6 @@ mod tests {
             batch_id: None,
             origin_channel: Some(channel.clone()),
             routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
-            last_evaluated_turn: None,
         }
     }
 
@@ -1811,7 +1808,6 @@ mod tests {
             batch_id: None,
             origin_channel: None,
             routing_policy: crate::domain::TaskRoutingPolicy::event(None, None),
-            last_evaluated_turn: None,
         };
         let task_entity = world.spawn(task).id();
 

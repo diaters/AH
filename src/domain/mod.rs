@@ -9,7 +9,6 @@ mod command;
 mod confirmation;
 mod dispatch;
 mod error;
-mod evaluation;
 mod execution;
 mod experience_library;
 mod frontend;
@@ -144,18 +143,11 @@ pub use command::{ShutdownState, UserCommand};
 
 // confirmation
 pub use confirmation::{
-    ApprovalDecision, ApprovalMode, ApprovalSetting, ConfirmationOption, ConfirmationSource,
-    GrantMode,
+    ApprovalDecision, ApprovalMode, ApprovalSetting, ConfirmationOption, GrantMode,
 };
 
 // error
 pub use error::{ExecutionError, FailureReason, ToolError};
-
-// evaluation
-pub use evaluation::{
-    EvaluationDecision, EvaluationResult, EvaluationTrigger, OffTrackPolicy, TaskEvaluationConfig,
-    parse_evaluation_result,
-};
 
 // execution
 pub use execution::{
@@ -350,13 +342,6 @@ pub use message::{InputBlocked, InputSequence};
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn waiting_reason_has_user_and_evaluator() {
-        use WaitingReason::*;
-        let _ = User;
-        let _ = Evaluator;
-    }
 
     #[test]
     fn agent_has_permission_returns_true_for_allow() {

@@ -1,6 +1,6 @@
 //! Tool 分发 System
 //!
-//! 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批。
+//! 检查 Tool 权限并决定直接执行、用户确认或 watchdog 审批。
 
 use crate::prelude::*;
 use tracing::{debug, info, warn};
@@ -10,9 +10,9 @@ use crate::{
     contracts::{Clock, FrontendRegistry},
     domain::{
         Agent, ApprovalRequestMessage, ApprovalRequestedHookPending, BuiltinToolExecutors,
-        ChannelId, ChatSession, ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget,
-        PermissionAction, PermissionAuditContext, PermissionSource, RuntimeGrants, ScheduledRun,
-        ShortTermMemory, SpaceToolRegistry, SupervisorEscalated, Task, TaskInitiator,
+        ChannelId, ChatSession, ConfirmationOption, EngineEvent, EventTarget, PermissionAction,
+        PermissionAuditContext, PermissionSource, RuntimeGrants, ScheduledRun, ShortTermMemory,
+        SpaceToolRegistry, SupervisorEscalated, Task, TaskInitiator,
         ToolConfirmationRequestMessage, ToolContext, ToolError, ToolExecutionRequestMessage,
         ToolPermission, WATCHDOG_TAG, WaitingReason, resolve_tool_permission,
     },
@@ -28,7 +28,7 @@ use super::tool_calling::is_supervised_subtask;
 
 /// Tool 分发 System
 ///
-/// 检查 Tool 权限并决定直接执行、用户确认或父 Agent 审批
+/// 检查 Tool 权限并决定直接执行、用户确认或 watchdog 审批
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tool_dispatch_system(
     mut commands: Commands,
@@ -83,7 +83,7 @@ pub fn tool_dispatch_system(
         let tool_name = request.tool_name.clone();
 
         // 查找 Tool 定义
-        let Some(tool_def) = registry.get(&tool_name) else {
+        if registry.get(&tool_name).is_none() {
             warn!(
                 event = "ToolNotFound",
                 tool_name = %tool_name,
@@ -98,7 +98,7 @@ pub fn tool_dispatch_system(
                 ToolError::NotFound(tool_name.clone()),
             );
             continue;
-        };
+        }
 
         // 获取 Agent 权限
         // 经 EntityIndex O(1) 解析 AgentId → Entity（替代全量线性扫描）
@@ -120,45 +120,6 @@ pub fn tool_dispatch_system(
             );
             continue;
         };
-
-        // 检查 required_tag
-        if let Some(required_tag) = &tool_def.required_tag
-            && !agent.capabilities.tags.iter().any(|t| t == required_tag)
-        {
-            warn!(
-                event = "ToolTagDenied",
-                tool_name = %tool_name,
-                agent_id = %agent.id,
-                agent_name = %agent.profile.name,
-                required_tag = %required_tag,
-                "agent lacks required tag for tool"
-            );
-            // 权限审计：tag 拒绝路径。source 取 ToolDefault（tag 要求来自 ToolDefinition）。
-            let output_channel = index
-                .get_task(&request.request.task_id)
-                .and_then(|e| tasks.get(e).ok())
-                .and_then(|(_, t)| t.routing_policy.output_channel().cloned());
-            emit_permission_audit(
-                frontend_registry,
-                output_channel.as_ref(),
-                agent.id,
-                &agent.profile.name,
-                &tool_name,
-                PermissionAction::Deny,
-                PermissionSource::ToolDefault,
-                PermissionAuditContext::TagDenied,
-            );
-            spawn_tool_error(
-                &mut commands,
-                entity,
-                &request,
-                ToolError::PermissionDenied(format!(
-                    "tool '{}' requires tag '{}'",
-                    tool_name, required_tag
-                )),
-            );
-            continue;
-        }
 
         let scope = task_grant_scope(
             request.request.task_id,
@@ -383,7 +344,7 @@ pub fn tool_dispatch_system(
                 let supervised = supervised
                     || (settings.0.approval_mode.get() == ApprovalMode::Supervisor
                         && request.request.work_item_id.is_none());
-                let parent_approval = (supervised && escalated.is_none())
+                let watchdog_approval = (supervised && escalated.is_none())
                     .then(|| {
                         agents
                             .iter()
@@ -392,12 +353,12 @@ pub fn tool_dispatch_system(
                     })
                     .flatten();
 
-                if let Some(parent_agent_id) = parent_approval {
+                if let Some(watchdog_agent_id) = watchdog_approval {
                     debug!(
-                        event = "ToolRequiresParentApproval",
+                        event = "ToolRequiresWatchdogApproval",
                         tool_name = %tool_name,
                         agent_id = %agent.id,
-                        parent_agent_id = %parent_agent_id,
+                        watchdog_agent_id = %watchdog_agent_id,
                         reason = "supervised sub-task",
                         "tool requires supervisor approval"
                     );
@@ -415,11 +376,9 @@ pub fn tool_dispatch_system(
                             request_id,
                             tool_name: tool_name.clone(),
                             source_task_id: request.request.task_id,
-                            parent_agent_id,
+                            watchdog_agent_id,
                             child_agent_id: agent.id,
                             tool_input: request.tool_input.clone(),
-                            approval_task_id: crate::domain::TaskId::new(),
-                            context: String::new(),
                         },
                         ApprovalRequestedHookPending,
                     ));
@@ -503,8 +462,6 @@ pub fn tool_dispatch_system(
                     tool_name: tool_name.clone(),
                     tool_input: request.tool_input.clone(),
                     options: options.clone(),
-                    source: ConfirmationSource::User,
-                    parent_agent_id: None,
                     approval_context: if tool_name == "shell_start" {
                         let enabled = request.tool_input.get("notify_on_output").and_then(|value| value.as_bool()).unwrap_or(false);
                         let target = index.get_task(&request.request.task_id).and_then(|entity| tasks.get(entity).ok())
@@ -663,7 +620,6 @@ mod tests {
             parameters: ToolSchema::default(),
             default_permission: ToolPermission::Confirm,
             executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-            required_tag: None,
         });
         world.insert_resource(registry);
 
@@ -700,7 +656,6 @@ mod tests {
                 batch_id: None,
                 origin_channel: Some(channel.clone()),
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
-                last_evaluated_turn: None,
             })
             .id();
         // 测试夹具绕过 spawn_task 封装直接 spawn，需手动写入 EntityIndex
@@ -944,7 +899,7 @@ mod tests {
                 .iter(&world)
                 .count(),
             0,
-            "parent auto-approval must ignore runtime grants"
+            "parent agent runtime grants must not auto-approve child calls"
         );
         assert_eq!(
             world
@@ -1026,12 +981,14 @@ mod tests {
         schedule.add_systems(tool_dispatch_system);
         schedule.run(&mut world);
 
+        let requests: Vec<_> = world
+            .query::<&crate::domain::ApprovalRequestMessage>()
+            .iter(&world)
+            .map(|r| (r.watchdog_agent_id, r.child_agent_id))
+            .collect();
         assert_eq!(
-            world
-                .query::<&crate::domain::ApprovalRequestMessage>()
-                .iter(&world)
-                .count(),
-            1,
+            requests,
+            vec![(watchdog, agent_id)],
             "scheduled run must be reviewed by the watchdog"
         );
         assert_eq!(

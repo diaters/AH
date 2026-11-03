@@ -89,7 +89,10 @@ fn loads_persistent_agents_from_config() {
         names.contains(&"default-llm-agent"),
         "should have default agent"
     );
-    assert!(names.contains(&"evaluator"), "should have evaluator agent");
+    assert!(
+        names.contains(&"summarizer"),
+        "should have summarizer agent"
+    );
 }
 
 /// 验证 tags 匹配选择 Agent。

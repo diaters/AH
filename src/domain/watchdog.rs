@@ -84,7 +84,6 @@ pub struct SupervisorEscalated;
 pub struct SupervisorApprovalOrigin {
     pub request_id: Uuid,
     pub source_task_id: TaskId,
-    pub approval_task_id: TaskId,
     /// 子任务所属（父）任务：审批结论的提示发往这里。
     pub owner_task_id: Option<TaskId>,
     pub tool_name: String,

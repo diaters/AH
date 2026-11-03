@@ -260,7 +260,6 @@ mod tests {
             parameters: ToolSchema::default(),
             default_permission: perm,
             executor: ToolExecutorKind::Builtin(name.to_string()),
-            required_tag: None,
         }
     }
 

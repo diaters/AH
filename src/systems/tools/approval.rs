@@ -1,6 +1,6 @@
 //! 审批 System
 //!
-//! 处理父 Agent 审批请求和结果。
+//! 处理 watchdog 监督审批请求和结果。
 
 use crate::prelude::*;
 use tracing::{debug, info, warn};
@@ -109,7 +109,7 @@ pub fn approval_dispatch_system(
             request_id = %request.request_id,
             tool_name = %request.tool_name,
             source_task_id = %request.source_task_id,
-            supervisor_agent_id = %request.parent_agent_id,
+            watchdog_agent_id = %request.watchdog_agent_id,
             child_agent_id = %request.child_agent_id,
             "审批请求：{} 请求调用 {}，交监督者审批",
             subject_label,
@@ -121,7 +121,6 @@ pub fn approval_dispatch_system(
             SupervisorApprovalOrigin {
                 request_id: request.request_id,
                 source_task_id: request.source_task_id,
-                approval_task_id: request.approval_task_id,
                 owner_task_id: task.parent_task_id.or(Some(task.id)),
                 tool_name: request.tool_name.clone(),
                 subject_label,
@@ -136,7 +135,7 @@ pub fn approval_dispatch_system(
 
 /// 审批结果处理 System
 ///
-/// 处理父 Agent 审批结果，更新权限，恢复任务
+/// 处理 watchdog 审批结果，更新权限，恢复任务
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn approval_result_system(
     mut commands: Commands,
@@ -441,7 +440,6 @@ mod tests {
             batch_id: None,
             origin_channel: Some(channel.clone()),
             routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel),
-            last_evaluated_turn: None,
         }
     }
 
@@ -495,7 +493,6 @@ mod tests {
         world.spawn(ApprovalResultMessage {
             request_id,
             source_task_id: task_id,
-            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Rejected,
             reasoning: "no".to_string(),
             grant_mode: GrantMode::Once,
@@ -506,7 +503,7 @@ mod tests {
         let task = world.query::<&Task>().get(&world, task_entity).unwrap();
         assert!(
             task.pending_confirmation_id.is_none(),
-            "pending_confirmation_id should be cleared after parent agent rejection"
+            "pending_confirmation_id should be cleared after watchdog rejection"
         );
     }
 
@@ -529,7 +526,6 @@ mod tests {
         world.spawn(ApprovalResultMessage {
             request_id,
             source_task_id: task_id,
-            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Approved,
             reasoning: "yes".to_string(),
             grant_mode: GrantMode::Once,
