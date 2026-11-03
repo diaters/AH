@@ -19,8 +19,6 @@ pub struct PluginManifest {
     #[serde(default)]
     pub tools: Vec<ToolContribution>,
     #[serde(default)]
-    pub skills: Vec<SkillContribution>,
-    #[serde(default)]
     pub agents: Vec<AgentContribution>,
     #[serde(default)]
     pub commands: Vec<CommandContribution>,
@@ -44,12 +42,6 @@ pub struct ToolContribution {
     /// 缺省 `None` 时由 `RhaiPluginAsyncWrapper` 走全局 `tool_inflight_timeout_secs`（D14）。
     #[serde(default)]
     pub timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillContribution {
-    pub id: String,
-    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,17 +121,6 @@ impl PluginManifest {
                 return Err(format!(
                     "tool.timeout_secs must be > 0 when set: {}",
                     tool.id
-                ));
-            }
-        }
-        for skill in &self.skills {
-            if skill.id.contains(':') {
-                return Err(format!("skill.id must not contain ':': {}", skill.id));
-            }
-            if skill.path.is_absolute() {
-                return Err(format!(
-                    "skill.path must be relative: {}",
-                    skill.path.display()
                 ));
             }
         }

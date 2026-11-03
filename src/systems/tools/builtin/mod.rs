@@ -3,7 +3,6 @@
 mod ask_user;
 mod chat_with_agent;
 mod create_tasks;
-mod load_skill;
 mod schedule_task;
 pub mod scheduled;
 mod search_experience;
@@ -16,7 +15,6 @@ mod wait_tasks;
 pub use ask_user::AskUserTool;
 pub use chat_with_agent::ChatWithAgentTool;
 pub use create_tasks::CreateTasksTool;
-pub use load_skill::LoadSkillTool;
 pub use schedule_task::ScheduleTaskTool;
 pub use scheduled::DeleteScheduledTaskTool;
 pub use scheduled::ListScheduledTasksTool;

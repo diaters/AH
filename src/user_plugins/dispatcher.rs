@@ -22,7 +22,6 @@ use crate::user_plugins::host_api::entity_query::WorldSnapshot;
 use crate::user_plugins::host_api::entity_write::{WorldCommand, WorldWriter};
 use crate::user_plugins::host_api::message::MessageContext;
 use crate::user_plugins::host_api::plugin_resource::PluginRoots;
-use crate::user_plugins::host_api::skills_meta::SkillsSnapshot;
 use crate::user_plugins::host_api::temp_resource::TempResourceSlot;
 use crate::user_plugins::host_api::tool_control::ToolCallContext;
 use crate::user_plugins::registry::{LoadedPlugin, PluginRegistry};
@@ -48,7 +47,6 @@ pub struct PluginContext {
     pub outcome: SharedHookOutcome,
     pub plugin_roots: PluginRoots,
     pub approval: ApprovalContext,
-    pub skills: SkillsSnapshot,
     pub message: MessageContext,
     pub temp_resource: TempResourceSlot,
     /// 当前工具调用上下文：仅 `on_tool_called` 前置 hook 派发时由调用方填充，
@@ -330,7 +328,6 @@ mod tests {
                 approval: ApprovalContext {
                     current_request_id: None,
                 },
-                skills: SkillsSnapshot::empty(),
                 message: MessageContext {
                     plugin_id: plugin.manifest.id.clone(),
                     tx: message_tx.clone(),

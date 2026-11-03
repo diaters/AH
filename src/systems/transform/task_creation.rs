@@ -27,7 +27,6 @@ use crate::{
             entity_write::{WorldCommand, WorldWriter},
             message::MessageContext,
             plugin_resource::PluginRoots,
-            skills_meta::SkillsSnapshot,
             temp_resource::TempResourceSlot,
             tool_control::ToolCallContext,
         },
@@ -264,7 +263,6 @@ fn dispatch_on_task_created(world: &mut World, registry: &mut PluginRegistry, ta
                 approval: ApprovalContext {
                     current_request_id: None,
                 },
-                skills: SkillsSnapshot::empty(),
                 message: MessageContext {
                     plugin_id: plugin.manifest.id.clone(),
                     tx: message_tx.clone(),

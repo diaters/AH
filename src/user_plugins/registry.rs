@@ -33,10 +33,6 @@ impl LoadedPlugin {
     pub fn namespaced_agent_id(&self, local_id: &str) -> String {
         format!("{}:{}", self.manifest.id, local_id)
     }
-
-    pub fn namespaced_skill_id(&self, local_id: &str) -> String {
-        format!("{}:{}", self.manifest.id, local_id)
-    }
 }
 
 /// 全局插件注册表。
@@ -158,7 +154,6 @@ mod tests {
                 description: None,
                 hooks: vec![],
                 tools: vec![],
-                skills: vec![],
                 agents: vec![],
                 commands: vec![],
             },

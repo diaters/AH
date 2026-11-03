@@ -54,18 +54,16 @@ use crate::domain::{
 
 use self::builtin::{
     AskUserTool, ChatWithAgentTool, CreateTasksTool, DeleteScheduledTaskTool,
-    ListScheduledTasksTool, LoadSkillTool, ScheduleTaskTool, SearchExperienceTool, ShellExecTool,
-    ShellInputTool, ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool,
-    StopBackgroundJobTool, UpdateScheduledTaskTool, UpdateTodosTool, ViewImageTool, WaitTasksTool,
+    ListScheduledTasksTool, ScheduleTaskTool, SearchExperienceTool, ShellExecTool, ShellInputTool,
+    ShellListTool, ShellReadTool, ShellStartTool, ShellStopTool, StopBackgroundJobTool,
+    UpdateScheduledTaskTool, UpdateTodosTool, ViewImageTool, WaitTasksTool,
 };
 use crate::channels::send_tool::ChannelSendTool;
-use crate::infrastructure::skills::SkillCatalog;
 
 /// 注册内置 Tool
 pub fn register_builtin_tools(
     registry: &mut SpaceToolRegistry,
     executors: &mut BuiltinToolExecutors,
-    skill_catalog: SkillCatalog,
 ) {
     registry.register(ToolDefinition {
         name: "create_tasks".to_string(),
@@ -280,24 +278,6 @@ pub fn register_builtin_tools(
         executor: ToolExecutorKind::Builtin("view_image".to_string()),
     });
     executors.register(Box::new(ViewImageTool));
-
-    // 技能说明按需读取：系统提示只列技能清单，完整 SKILL.md 由本工具返回
-    registry.register(ToolDefinition {
-        name: "load_skill".to_string(),
-        description: "读取系统提示「可用技能」清单中某个技能的完整说明（步骤、脚本与模板位置）。任务与某个技能相关时，先调用本工具再按说明执行；说明中的相对路径基于返回的 skill_dir。".to_string(),
-        parameters: ToolSchema {
-            schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "技能清单中的技能名" }
-                },
-                "required": ["name"]
-            }),
-        },
-        default_permission: ToolPermission::Allow,
-        executor: ToolExecutorKind::Builtin("load_skill".to_string()),
-    });
-    executors.register(Box::new(LoadSkillTool::new(skill_catalog)));
 
     // 经验库检索：判断交给经验管理员，主 Agent 只拿到相关经验原文
     registry.register(ToolDefinition {

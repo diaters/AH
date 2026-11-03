@@ -25,12 +25,7 @@ impl Plugin for ToolRuntimePlugin {
         // 注册 Tool 相关 Resource
         let mut tool_registry = SpaceToolRegistry::default();
         let mut tool_executors = BuiltinToolExecutors::default();
-        // SkillCatalog 由 app 构建时创建；单独装配插件（测试）时补一份默认值。
-        let skill_catalog = app
-            .world_mut()
-            .get_resource_or_insert_with(crate::infrastructure::skills::SkillCatalog::default)
-            .clone();
-        register_builtin_tools(&mut tool_registry, &mut tool_executors, skill_catalog);
+        register_builtin_tools(&mut tool_registry, &mut tool_executors);
         app.insert_resource(tool_registry);
         app.insert_resource(tool_executors);
         app.insert_resource(NativeProcessBackend::default());

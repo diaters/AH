@@ -109,7 +109,7 @@ pub enum ToolError {
     /// 框架内部状态不一致——非 LLM 输入错误。
     ///
     /// 当 orchestrator 在处理工具调用时发现必备的运行时上下文缺失
-    /// （如 `work_item_id` 缺失、`SkillUpdateContext` 未注册等）时使用。
+    /// （如 `work_item_id` 缺失、所需 Resource 未注册等）时使用。
     /// 与 `InvalidInput` 区分：`InvalidInput` 表示 LLM 提交的参数有问题，
     /// 而 `InternalState` 表示框架自身的状态机不一致，LLM 重试同样参数
     /// 也无法解决。

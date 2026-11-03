@@ -12,11 +12,7 @@ fn agents_example_parses_and_references_only_existing_tools() {
 
     let mut registry = SpaceToolRegistry::default();
     let mut executors = BuiltinToolExecutors::default();
-    register_builtin_tools(
-        &mut registry,
-        &mut executors,
-        harness::infrastructure::skills::SkillCatalog::default(),
-    );
+    register_builtin_tools(&mut registry, &mut executors);
 
     for agent in &config.agent {
         let Some(tools) = &agent.tools else { continue };
@@ -37,11 +33,7 @@ fn schedule_write_tools_default_to_confirm() {
 
     let mut registry = SpaceToolRegistry::default();
     let mut executors = BuiltinToolExecutors::default();
-    register_builtin_tools(
-        &mut registry,
-        &mut executors,
-        harness::infrastructure::skills::SkillCatalog::default(),
-    );
+    register_builtin_tools(&mut registry, &mut executors);
     let permission = |name: &str| registry.get(name).unwrap().default_permission;
 
     assert_eq!(permission("schedule_task"), ToolPermission::Confirm);

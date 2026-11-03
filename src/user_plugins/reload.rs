@@ -1,13 +1,11 @@
 //! /reload-plugins 实现
 //!
-//! 清除所有插件贡献（工具、技能、Agent 实体），重新扫描插件目录并集成技能贡献。
+//! 清除所有插件贡献（工具、Agent 实体）并重新扫描插件目录。
 //! 插件工具与 Agent 由 systems 侧在本函数之后按新 registry 重新注册与生成。
 
 use crate::prelude::World;
 
 use crate::domain::{Agent, BuiltinToolExecutors, SpaceToolRegistry};
-use crate::infrastructure::skills::PluginSkillContributions;
-use crate::user_plugins::integrate::integrate_plugin_contributions;
 use crate::user_plugins::loader::{load_plugins_from_dir, plugins_dir_from_env};
 use crate::user_plugins::registry::PluginRegistry;
 
@@ -59,12 +57,7 @@ pub fn reload_plugins(world: &mut World) {
         }
     }
 
-    // 4) 清空插件技能贡献
-    if let Some(mut skills) = world.get_resource_mut::<PluginSkillContributions>() {
-        skills.entries.clear();
-    }
-
-    // 5) Despawn 插件贡献的 Agent 实体（profile.name 以 "plugin_id:" 开头）
+    // 4) Despawn 插件贡献的 Agent 实体（profile.name 以 "plugin_id:" 开头）
     let mut agents_to_despawn: Vec<crate::prelude::Entity> = Vec::new();
     {
         let mut query = world.query::<(crate::prelude::Entity, &Agent)>();
@@ -81,12 +74,9 @@ pub fn reload_plugins(world: &mut World) {
         world.despawn(entity);
     }
 
-    // 6) 重新扫描磁盘
+    // 5) 重新扫描磁盘
     let plugins_dir = plugins_dir_from_env();
     let new_registry = load_plugins_from_dir(&plugins_dir);
-
-    // 7) 重新集成贡献
-    integrate_plugin_contributions(world, &new_registry);
 
     world.insert_resource(new_registry);
     tracing::info!(event = "PluginsReloaded", "reload-plugins complete");
