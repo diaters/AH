@@ -324,7 +324,6 @@ impl Client {
                 "approval_result",
                 json!({"request_id":request_id,"decision":decision}),
             ),
-            _ => return Ok(()),
         };
         let mut store = self.store.lock().expect("client state mutex poisoned");
         let mut seen = std::collections::HashSet::new();
@@ -427,9 +426,5 @@ impl Channel for Client {
     ) -> Result<(), ChannelError> {
         // HTTPS 服务持有统一 ExternalInput 发送端，无额外监听/桥接线程。
         Ok(())
-    }
-    fn supported_attachment_kinds(&self) -> Vec<crate::domain::AttachmentKind> {
-        use crate::domain::AttachmentKind::*;
-        vec![Image, Document, Video, Audio, Voice]
     }
 }

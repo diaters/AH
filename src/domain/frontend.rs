@@ -94,15 +94,6 @@ pub enum MessageRole {
     System,
 }
 
-/// Agent 状态种类（用于前端展示）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentStatusKind {
-    Idle,
-    Running,
-    WaitingApproval,
-    WaitingTool,
-}
-
 /// Task 状态种类（用于前端展示）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatusKind {
@@ -226,13 +217,6 @@ pub enum EngineEvent {
         target: EventTarget,
         request_id: Uuid,
         decision: String,
-    },
-    /// Agent 状态变化
-    AgentStatusChanged {
-        target: EventTarget,
-        agent_id: AgentId,
-        name: String,
-        status: AgentStatusKind,
     },
     /// Task 状态变化
     TaskStatusChanged {
@@ -408,7 +392,6 @@ impl EngineEvent {
             Self::Text { target, .. } | Self::AgentOutput { target, .. } => target,
             Self::ApprovalRequest { target, .. } => target,
             Self::ApprovalResult { target, .. } => target,
-            Self::AgentStatusChanged { target, .. } => target,
             Self::TaskStatusChanged { target, .. } => target,
             Self::BatchProgress { target, .. } => target,
             Self::ToolCallStarted { target, .. } => target,

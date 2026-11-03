@@ -170,6 +170,16 @@ impl TelegramChannel {
         .map_err(|message| ChannelError::Api { code: 0, message })
     }
 
+    /// 撤回消息，供 `send()` 处理 `MessageKind::Recall` 时调用。
+    async fn recall_message(&self, recipient: &str, msg_id: &str) -> Result<(), ChannelError> {
+        let payload = json!({
+            "chat_id": recipient,
+            "message_id": msg_id.parse::<i64>().unwrap_or(0),
+        });
+        self.post("deleteMessage", &payload).await?;
+        Ok(())
+    }
+
     fn supported_attachment_kinds(&self) -> Vec<AttachmentKind> {
         vec![
             AttachmentKind::Image,
@@ -628,24 +638,6 @@ impl Channel for TelegramChannel {
         }
 
         Ok(last_msg_id)
-    }
-
-    async fn recall_message(&self, recipient: &str, msg_id: &str) -> Result<(), ChannelError> {
-        let payload = json!({
-            "chat_id": recipient,
-            "message_id": msg_id.parse::<i64>().unwrap_or(0),
-        });
-        self.post("deleteMessage", &payload).await?;
-        Ok(())
-    }
-
-    async fn send_typing(&self, recipient: &str) -> Result<(), ChannelError> {
-        let payload = json!({
-            "chat_id": recipient,
-            "action": "typing",
-        });
-        self.post("sendChatAction", &payload).await?;
-        Ok(())
     }
 
     async fn listen(&self, tx: Sender<ChannelInboundMessage>) -> Result<(), ChannelError> {
@@ -2401,34 +2393,6 @@ allowed_users = ["qq_user"]
         };
         let ch = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
         ch.recall_message("123456", "789").await.expect("recall");
-    }
-
-    #[tokio::test]
-    async fn send_typing_calls_send_chat_action() {
-        use wiremock::matchers::{body_string_contains, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/botTOKEN/sendChatAction"))
-            .and(body_string_contains("\"action\":\"typing\""))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"ok": true, "result": true})),
-            )
-            .expect(1)
-            .mount(&mock_server)
-            .await;
-
-        let cfg = TelegramConfig {
-            approvers: Vec::new(),
-            bot_token: "TOKEN".to_string(),
-            allowed_users: vec![],
-            pairing_enabled: false,
-            pairing_code: None,
-        };
-        let ch = TelegramChannel::new(cfg).with_base_url(mock_server.uri());
-        ch.send_typing("123456").await.expect("typing");
     }
 
     #[tokio::test]
