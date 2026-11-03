@@ -313,10 +313,6 @@ name = "hello"           # 工具名（注册为 my-plugin:hello）
 script = "tools/hello.rhai" # Rhai 脚本相对路径
 schema = "tools/hello.schema.json" # JSON Schema 相对路径
 
-[[skills]]               # 贡献的技能（可选，可多条）
-id = "my-skill"          # 技能标识（注册为 my-plugin:my-skill）
-path = "skills/my-skill.md" # 技能文件相对路径
-
 [[agents]]               # 贡献的 Agent（可选，可多条）
 name = "my-agent"        # Agent 名称
 model = "gpt-4.1-mini"  # Agent 使用的模型

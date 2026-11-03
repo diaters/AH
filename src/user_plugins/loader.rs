@@ -243,9 +243,6 @@ fn manifest_files(manifest: &PluginManifest) -> Vec<PathBuf> {
         out.push(t.schema.clone());
         out.push(t.handler.clone());
     }
-    for s in &manifest.skills {
-        out.push(s.path.clone());
-    }
     for a in &manifest.agents {
         out.push(a.profile.clone());
     }

@@ -9,7 +9,6 @@ pub mod entity_write;
 pub mod log;
 pub mod message;
 pub mod plugin_resource;
-pub mod skills_meta;
 pub mod state;
 pub mod temp_resource;
 pub mod tool_control;
@@ -29,7 +28,6 @@ pub fn register_all(engine: &mut Engine, ctx: &PluginContext) {
     tool_control::register(engine, ctx.outcome.clone(), ctx.tool.clone());
     plugin_resource::register(engine, ctx.plugin_roots.clone());
     approval::register(engine, ctx.approval.clone());
-    skills_meta::register(engine, ctx.skills.clone());
     message::register(engine, ctx.message.clone());
     temp_resource::register(engine, ctx.temp_resource.clone());
 
