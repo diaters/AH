@@ -29,15 +29,3 @@ model = "gpt-4.1-mini"
 
 [agent.tools]
 default_permission = "Deny"
-
-[[agent]]
-name = "evaluator"
-tags = ["evaluation"]
-description = "任务评估专家，负责评估任务执行状态"
-
-[[agent.models]]
-provider = "default"
-model = "gpt-4.1-mini"
-
-[agent.tools]
-default_permission = "Deny"

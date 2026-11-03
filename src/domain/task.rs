@@ -115,8 +115,6 @@ pub struct Task {
     pub origin_channel: Option<ChannelId>,
     /// 任务输出与审批路由策略
     pub routing_policy: TaskRoutingPolicy,
-    /// 最近一次由 TurnLimitReached 触发评估时的轮数（用于同进度去重）
-    pub last_evaluated_turn: Option<u32>,
 }
 
 /// 发起任务的用户在平台上的 ID（IM 群聊中区分群成员）。
@@ -241,7 +239,6 @@ impl Task {
             batch_id: None,
             origin_channel: Some(channel.clone()),
             routing_policy: TaskRoutingPolicy::conversational(channel),
-            last_evaluated_turn: None,
         }
     }
 
@@ -275,7 +272,6 @@ impl Task {
             batch_id: None,
             origin_channel: Some(channel.clone()),
             routing_policy: TaskRoutingPolicy::conversational(channel),
-            last_evaluated_turn: None,
         }
     }
 
@@ -308,13 +304,12 @@ impl Task {
             batch_id: None,
             origin_channel: None,
             routing_policy,
-            last_evaluated_turn: None,
         }
     }
 
     /// 将任务标记为等待指定原因的通用转换。
     ///
-    /// 适用于 ToolExecution/User/AskUser/Evaluator/Summarization 等等待场景；
+    /// 适用于 ToolExecution/User/AskUser/Summarization 等等待场景；
     /// 等待 Agent 分发请优先使用 `mark_waiting_for_agent`。
     pub fn mark_waiting(&mut self, reason: WaitingReason, now: DateTime<Utc>) {
         let old_status = self.status.clone();
@@ -508,48 +503,11 @@ impl Task {
             "task ready for retry"
         );
     }
-
-    /// 记录最近一次评估对应的轮数，用于 TurnLimitReached 去重。
-    pub fn record_evaluation_at_turn(&mut self, turn: u32) {
-        self.last_evaluated_turn = Some(turn);
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn record_evaluation_at_turn_sets_last_evaluated_turn() {
-        let mut task = Task::from_user_input(
-            "test",
-            3,
-            ChannelId {
-                frontend: crate::domain::FrontendKind::Tui,
-                user_id: "test".to_string(),
-                thread_id: None,
-            },
-        );
-        assert!(task.last_evaluated_turn.is_none());
-        task.record_evaluation_at_turn(5);
-        assert_eq!(task.last_evaluated_turn, Some(5));
-        // 再次调用应覆盖
-        task.record_evaluation_at_turn(10);
-        assert_eq!(task.last_evaluated_turn, Some(10));
-    }
-
-    #[test]
-    fn task_constructors_initialize_last_evaluated_turn_to_none() {
-        let ch = ChannelId {
-            frontend: crate::domain::FrontendKind::Tui,
-            user_id: "test".to_string(),
-            thread_id: None,
-        };
-        let t1 = Task::from_user_input("a", 0, ch.clone());
-        assert!(t1.last_evaluated_turn.is_none());
-        let t2 = Task::from_user_input_ready("b", 0, ch);
-        assert!(t2.last_evaluated_turn.is_none());
-    }
 
     #[test]
     fn conversational_routing_policy_targets_same_channel() {

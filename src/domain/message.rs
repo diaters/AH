@@ -18,8 +18,7 @@ use super::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WaitingReason {
     Agent,
-    User,      // 等待用户输入
-    Evaluator, // 等待评估器判定
+    User, // 等待用户输入
     RetryBackoff,
     Approval,      // 等待审批
     Summarization, // 等待摘要完成

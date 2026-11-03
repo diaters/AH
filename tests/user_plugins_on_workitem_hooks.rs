@@ -40,7 +40,7 @@ fn default_channel() -> ChannelId {
 fn make_work_item(status: WorkItemStatus) -> WorkItem {
     let mut wi = WorkItem::new(
         harness::domain::TaskId::nil(),
-        WorkItemType::Evaluation,
+        WorkItemType::Summarization,
         WorkItemInput::new("test".to_string()),
     );
     match status {

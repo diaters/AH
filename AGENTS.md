@@ -28,7 +28,7 @@ AI Harness 是基于 Rust + Bevy ECS 的 AI Agent 运行时，提供 TUI 与无�
 
 - 按需唤醒的 ECS 运行时，支持 TUI、headless、结构化日志及 CI。
 - `Task` / `WorkItem` 执行模型，Brain 派发、任务分解与 DAG 协作，
-  Summarization / Evaluation 等内部工作进入统一执行闭环。
+  Summarization、经验检索与 watchdog 巡检等内部工作进入统一执行闭环。
 - 单通道用户顶层任务、运行中输入 steer、回合中断与会话结束、后台通知和迟到结果保护。
 - 工具权限与顺序审批、异步工具桥、六个 shell 工具，以及具有 Task / Agent 归属的进程守护与退出清理。
 - 持续监控输出、平台发送回执、重试与背压；动态定时任务持久化、运行账本及失败告警恢复。

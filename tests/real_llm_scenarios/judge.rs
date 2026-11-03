@@ -1,6 +1,6 @@
 //! LLM-as-Judge：场景测试的 AI 断言（采样投票），仅供 `real_llm_scenarios` 使用。
 //!
-//! Judge 复用 `AgentRequestKind::Evaluation` 请求通道，通过 `system_prompt`
+//! Judge 以单轮 `AgentRequestKind::LlmCompletion` 请求直接调用执行器，通过 `system_prompt`
 //! 注入 Judge 语境；输出要求 JSON 格式的 `JudgeVerdict`，由 `parse_judge_verdict` 鲁棒解析。
 
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ impl JudgeVote {
     }
 }
 
-/// 解析 Judge 输出（与 parse_evaluation_result 同构的鲁棒解析）
+/// 解析 Judge 输出（容忍 markdown 代码块包裹的鲁棒解析）
 pub fn parse_judge_verdict(content: &str) -> Result<JudgeVerdict, String> {
     let json_slice = extract_json_slice(content);
     let verdict: JudgeVerdict = serde_json::from_str(json_slice).map_err(|e| e.to_string())?;
@@ -290,8 +290,8 @@ mod tests {
     }
 
     #[test]
-    fn prompt_composes_into_evaluation_request_fields() {
-        // Judge 请求通道复用 AgentRequestKind::Evaluation：system + user 两段
+    fn prompt_composes_into_judge_request_fields() {
+        // Judge 请求由 system + user 两段组成：
         // 拼装后应可直接作为 AgentExecutionRequest 的 system_prompt/prompt。
         let rubric = JudgeRubric::default();
         let tools = sample_tool_summary();

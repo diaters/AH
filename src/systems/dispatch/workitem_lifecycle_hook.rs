@@ -80,7 +80,6 @@ pub fn workitem_lifecycle_hook_system(world: &mut World) {
 
 /// WorkItem 失败时恢复 Task 状态：
 ///
-/// - Evaluation: `Task Waiting(Evaluator)` → `Ready`
 /// - Summarization: `Task Waiting(Summarization)` → `Waiting(User)`
 /// - 其余工作项（如经验库检索 / 起草）不回滚 Task。
 fn restore_task_after_workitem_failure(world: &mut World, work_item: &WorkItem) {
@@ -89,28 +88,18 @@ fn restore_task_after_workitem_failure(world: &mut World, work_item: &WorkItem) 
     if let Some(mut task) = task_query
         .iter_mut(world)
         .find(|t| t.id == work_item.task_id)
+        && matches!(
+            task.status,
+            TaskStatus::Waiting(WaitingReason::Summarization)
+        )
     {
-        match task.status {
-            TaskStatus::Waiting(WaitingReason::Evaluator) => {
-                task.mark_ready(clock);
-                debug!(
-                    event = "TaskStatusRestoredAfterWorkItemFailed",
-                    task_id = %task.id,
-                    work_type = ?work_item.work_type,
-                    "task restored to Ready after work item failed"
-                );
-            }
-            TaskStatus::Waiting(WaitingReason::Summarization) => {
-                task.mark_waiting(WaitingReason::User, clock);
-                debug!(
-                    event = "TaskStatusRestoredAfterWorkItemFailed",
-                    task_id = %task.id,
-                    work_type = ?work_item.work_type,
-                    "task restored to Waiting(User) after work item failed"
-                );
-            }
-            _ => {}
-        }
+        task.mark_waiting(WaitingReason::User, clock);
+        debug!(
+            event = "TaskStatusRestoredAfterWorkItemFailed",
+            task_id = %task.id,
+            work_type = ?work_item.work_type,
+            "task restored to Waiting(User) after work item failed"
+        );
     }
 }
 
@@ -174,7 +163,7 @@ mod tests {
     fn make_work_item(status: WorkItemStatus) -> WorkItem {
         let mut wi = WorkItem::new(
             crate::domain::TaskId::nil(),
-            WorkItemType::Evaluation,
+            WorkItemType::Summarization,
             WorkItemInput::new("test".to_string()),
         );
         wi.status = status;

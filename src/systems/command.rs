@@ -523,7 +523,6 @@ mod tests {
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(
                     qq_channel.clone(),
                 ),
-                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ));
@@ -596,7 +595,6 @@ mod tests {
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(
                     qq_channel.clone(),
                 ),
-                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ));
@@ -666,7 +664,6 @@ mod tests {
                 batch_id: None,
                 origin_channel: Some(qq_channel.clone()),
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(qq_channel),
-                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ));
@@ -736,7 +733,6 @@ mod tests {
                 batch_id: None,
                 origin_channel: Some(qq_channel.clone()),
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(qq_channel),
-                last_evaluated_turn: None,
             },
             stm,
         ));
@@ -804,7 +800,6 @@ mod tests {
                 batch_id: None,
                 origin_channel: Some(channel.clone()),
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(channel.clone()),
-                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ));
@@ -863,7 +858,6 @@ mod tests {
                 batch_id: None,
                 origin_channel: Some(qq_channel.clone()),
                 routing_policy: crate::domain::TaskRoutingPolicy::conversational(qq_channel),
-                last_evaluated_turn: None,
             },
             ShortTermMemory::default(),
         ));

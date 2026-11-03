@@ -4,7 +4,7 @@
 #
 # 多 Agent 按职责分工：用户任务直接交给主 Agent（默认 default-llm-agent，
 # 可用 HARNESS_MAIN_AGENT 指定），其余 Agent 按 tags 承担服务角色：
-# summarization（摘要）、evaluation（完成度评估）、experience-librarian（经验库）、
+# summarization（摘要）、experience-librarian（经验库）、
 # watchdog（监督后台工具调用与子任务进展）。
 
 [[agent]]
@@ -38,18 +38,6 @@ search_experience = "Allow"  # 查经验库，由经验管理员判断，只读
 name = "summarizer"
 tags = ["summarization", "memory"]
 description = "记忆摘要专家，负责压缩对话历史"
-
-[[agent.models]]
-provider = "openai"
-model = "gpt-4.1-mini"
-
-[agent.tools]
-default_permission = "Deny"
-
-[[agent]]
-name = "evaluator"
-tags = ["evaluation"]
-description = "任务评估专家，负责评估任务执行状态"
 
 [[agent.models]]
 provider = "openai"

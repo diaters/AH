@@ -6,7 +6,6 @@ use crate::prelude::*;
 
 use crate::{
     domain::MemoryConfig,
-    domain::TaskEvaluationConfig,
     systems::{
         HarnessSet, chat_round_block_system, chat_round_completion_system,
         chat_session_cleanup_system, init_previous_task_status_system, llm_response_system,
@@ -25,7 +24,6 @@ impl Plugin for TaskRuntimePlugin {
     fn build(&self, app: &mut App) {
         // 注册 Task 相关 Resource
         app.init_resource::<MemoryConfig>();
-        app.init_resource::<TaskEvaluationConfig>();
         // 终态 hook 派发去重集合（Task 17/18）
         app.init_resource::<crate::systems::TaskTerminalDispatched>();
 

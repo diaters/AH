@@ -1,8 +1,8 @@
 //! LLM 响应处理 System
 //!
 //! 纯路由 + Task 级通用 LLM 响应处理：
-//! - WorkItem 结果按知识域分派到各领域模块（评估 → `evaluation`、摘要 →
-//!   `summarization`；经验库管理员回复由 `experience_library` 处理）
+//! - WorkItem 结果按知识域分派到各领域模块（摘要 → `summarization`；
+//!   经验库管理员回复由 `experience_library` 处理）
 //! - Task 级通用路径（文本 / 错误重试）在本模块处理
 //! - 工具调用循环编排（ToolCalls 分支）见 `systems/tools/tool_calling.rs`
 
@@ -19,7 +19,6 @@ use crate::{
     },
     ecs::EntityIndex,
     systems::HarnessSettings,
-    systems::evaluation::handle_evaluation_work_item_result,
     systems::summarization::handle_summarization_work_item_result,
     systems::tools::{CallingStateInfo, find_calling_state},
 };
@@ -60,7 +59,6 @@ pub fn llm_response_system(
     clock: Res<Clock>,
     settings: Res<HarnessSettings>,
     _config: Res<MemoryConfig>,
-    eval_config: Res<crate::domain::TaskEvaluationConfig>,
     mut commands: Commands,
     index: Res<EntityIndex>,
     mut tasks: Query<(
@@ -95,7 +93,7 @@ pub fn llm_response_system(
     for (entity, result_message) in &results {
         let result = &result_message.result;
 
-        // 处理 WorkItem 结果（Evaluation、Summarization 等）
+        // 处理 WorkItem 结果（Summarization 等）
         // 按 work_item_id 严格路由：声明属于 WorkItem 的响应必须由 WorkItem 分支处理；
         // 找不到对应 WorkItem（已 despawn / 异步错配）时显式丢弃，不 fall through 到
         // task 级 mark_done。这避免"无主响应误触发 Task 完成"类的循环 bug。
@@ -107,20 +105,6 @@ pub fn llm_response_system(
 
             if let Some((work_item_entity, work_item)) = work_item_lookup {
                 match work_item.work_type {
-                    WorkItemType::Evaluation => {
-                        handle_evaluation_work_item_result(
-                            &mut commands,
-                            &index,
-                            &mut tasks,
-                            entity,
-                            work_item_entity,
-                            &work_item,
-                            result,
-                            clock.0,
-                            &eval_config,
-                        );
-                        continue;
-                    }
                     // 经验管理员回复由 experience_librarian_response_system 处理。
                     WorkItemType::ExperienceLookup | WorkItemType::ExperienceDraft => continue,
                     // watchdog 回复由 watchdog_response_system 处理。
@@ -529,7 +513,6 @@ mod tests {
             let mut app = App::new();
             app.init_resource::<Clock>();
             app.init_resource::<MemoryConfig>();
-            app.init_resource::<crate::domain::TaskEvaluationConfig>();
             app.insert_resource(HarnessSettings::default_test());
             app.init_resource::<EntityIndex>();
             app.add_systems(Update, llm_response_system);
