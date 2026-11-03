@@ -1935,25 +1935,6 @@ impl Channel for QqChannel {
             message: "WebSocket disconnected".to_string(),
         })
     }
-
-    async fn health_check(&self) -> bool {
-        self.fetch_access_token().await.is_ok()
-    }
-
-    fn supported_attachment_kinds(&self) -> Vec<crate::channels::traits::AttachmentKind> {
-        use crate::channels::traits::AttachmentKind;
-        vec![
-            AttachmentKind::Image,
-            AttachmentKind::Document,
-            AttachmentKind::Video,
-            AttachmentKind::Audio,
-            AttachmentKind::Voice,
-        ]
-    }
-
-    fn supports_inline_keyboard(&self) -> bool {
-        true
-    }
 }
 
 #[cfg(test)]

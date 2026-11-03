@@ -427,8 +427,4 @@ impl Channel for Client {
         // HTTPS 服务持有统一 ExternalInput 发送端，无额外监听/桥接线程。
         Ok(())
     }
-    fn supported_attachment_kinds(&self) -> Vec<crate::domain::AttachmentKind> {
-        use crate::domain::AttachmentKind::*;
-        vec![Image, Document, Video, Audio, Voice]
-    }
 }
