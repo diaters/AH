@@ -14,8 +14,8 @@ use crate::user_plugins::registry::PluginRegistry;
 
 /// 将 `PluginRegistry` 中的插件技能贡献注册到 World 的 Resource。
 ///
-/// 插件贡献的 Agent 不在此处处理——Agent 需要 model 配置，
-/// 仅在启动阶段通过 `load_agents_system` 加载。
+/// 插件贡献的 Agent 不在此处处理——Agent 需要 model 配置，由 systems 侧生成：
+/// 启动阶段经 `load_agents_system`，重载后经 `respawn_plugin_agents`。
 pub fn integrate_plugin_contributions(world: &mut World, registry: &PluginRegistry) {
     // 注册插件贡献的技能
     let skill_contributions = PluginSkillContributions {

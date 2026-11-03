@@ -51,7 +51,9 @@ pub(crate) use loop_control::{
     clear_stop_requested_system, context_attachment_system, inbox_ingest_system,
     inbox_status_sync_system, inbox_wake_system, monitor_output_system, stop_task_system,
 };
-pub(crate) use maintenance::{load_agents_system, validate_required_tags_system};
+pub(crate) use maintenance::{
+    load_agents_system, respawn_plugin_agents, validate_required_tags_system,
+};
 pub(crate) use memory::{
     init_agent_memory_system, long_term_memory_decay_system, memory_compression_system,
 };
