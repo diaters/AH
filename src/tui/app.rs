@@ -7,8 +7,8 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::domain::{
-    AgentId, AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, FrontendKind, MessageRole,
-    TaskId, TaskStatusKind, UserAction,
+    ApprovalOption, ChannelId, EngineEvent, FrontendKind, MessageRole, TaskId, TaskStatusKind,
+    UserAction,
 };
 
 use super::chat::{ApprovalCardState, ChatMessage, ChatPanel};
@@ -32,14 +32,6 @@ pub enum AppMode {
         feedback_buffer: String,
         cursor_position: usize,
     },
-}
-
-/// Agent 前端状态
-#[derive(Debug, Clone)]
-pub struct AgentState {
-    pub id: AgentId,
-    pub name: String,
-    pub status: AgentStatusKind,
 }
 
 /// Task 前端状态
@@ -80,7 +72,6 @@ pub struct PendingApproval {
 pub struct App {
     pub mode: AppMode,
     pub messages: Vec<ChatMessage>,
-    pub agents: Vec<AgentState>,
     pub tasks: Vec<TaskState>,
     pub pending_approvals: Vec<PendingApproval>,
     pub input_buffer: String,
@@ -95,7 +86,6 @@ impl App {
         Self {
             mode: AppMode::Chat,
             messages: Vec::new(),
-            agents: Vec::new(),
             tasks: Vec::new(),
             pending_approvals: Vec::new(),
             input_buffer: String::new(),
@@ -677,22 +667,6 @@ impl App {
                 self.pending_approvals
                     .retain(|a| a.request_id != request_id);
             }
-            EngineEvent::AgentStatusChanged {
-                agent_id,
-                name,
-                status,
-                ..
-            } => {
-                if let Some(agent) = self.agents.iter_mut().find(|a| a.id == agent_id) {
-                    agent.status = status;
-                } else {
-                    self.agents.push(AgentState {
-                        id: agent_id,
-                        name,
-                        status,
-                    });
-                }
-            }
             EngineEvent::TaskStatusChanged {
                 task_id,
                 name,
@@ -857,8 +831,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::domain::{
-        AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, FrontendKind,
-        MessageRole, TaskStatusKind, WaitingReasonKind,
+        ApprovalOption, ChannelId, EngineEvent, EventTarget, FrontendKind, MessageRole,
+        TaskStatusKind, WaitingReasonKind,
     };
     use crate::tui::chat::{ApprovalCardState, ChatMessage};
 
@@ -904,20 +878,6 @@ mod tests {
         });
         assert!(matches!(app.mode, AppMode::Approval { .. }));
         assert_eq!(app.pending_approvals.len(), 1);
-    }
-
-    #[test]
-    fn handle_agent_status_adds_agent() {
-        let mut app = test_app();
-        let agent_id = crate::domain::AgentId::new();
-        app.handle_engine_event(EngineEvent::AgentStatusChanged {
-            target: EventTarget::Broadcast,
-            agent_id,
-            name: "brain".to_string(),
-            status: AgentStatusKind::Idle,
-        });
-        assert_eq!(app.agents.len(), 1);
-        assert_eq!(app.agents[0].name, "brain");
     }
 
     #[test]

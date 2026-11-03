@@ -5,9 +5,9 @@ use tracing::{debug, warn};
 
 use crate::contracts::FrontendRegistry;
 use crate::domain::{
-    Agent, AgentStatusKind, EngineEvent, EventTarget, FailureReason, MessageRole,
-    SystemOutputMessage, Task, TaskId, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
-    UserOutputMessage, WaitingReason, WaitingReasonKind,
+    Agent, EngineEvent, EventTarget, FailureReason, MessageRole, SystemOutputMessage, Task, TaskId,
+    TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage, UserOutputMessage, WaitingReason,
+    WaitingReasonKind,
 };
 use crate::ecs::EntityIndex;
 
@@ -21,7 +21,6 @@ pub(crate) fn frontend_output_system(
     system_outputs: Query<(Entity, &SystemOutputMessage)>,
     all_tasks: Query<(Entity, &Task)>,
     tasks: Query<&Task, Changed<Task>>,
-    agents: Query<&Agent, Changed<Agent>>,
     all_agents: Query<&Agent>,
     confirmations: Query<
         (Entity, &ToolConfirmationRequestMessage),
@@ -230,19 +229,6 @@ pub(crate) fn frontend_output_system(
             if !scheduled || frontend.kind() == crate::domain::FrontendKind::Tui {
                 frontend.push_event(event.clone());
             }
-        }
-    }
-
-    // Agent 状态变化
-    for agent in &agents {
-        let event = EngineEvent::AgentStatusChanged {
-            target: EventTarget::Broadcast,
-            agent_id: agent.id,
-            name: agent.profile.name.clone(),
-            status: AgentStatusKind::Idle,
-        };
-        for frontend in &registry.frontends {
-            frontend.push_event(event.clone());
         }
     }
 
@@ -1231,6 +1217,48 @@ mod tests {
             })
             .expect("should emit TaskStatusChanged");
         assert_eq!(agent_name, None);
+    }
+
+    /// Agent 是静态配置实体，没有运行时状态；其 spawn/变更不应向前端推送伪造的状态，
+    /// 运行与等待信息只经 `TaskStatusChanged`（含 agent_name / waiting_reason）如实给出。
+    #[test]
+    fn agent_spawn_and_change_emit_no_frontend_events() {
+        let mut app = App::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.insert_resource(FrontendRegistry {
+            frontends: vec![Box::new(MockFrontend {
+                kind: FrontendKind::Tui,
+                events: events.clone(),
+            })],
+        });
+        app.insert_resource(EntityIndex::default());
+        app.add_systems(Update, frontend_output_system);
+
+        let agent_entity = app
+            .world_mut()
+            .spawn(Agent {
+                id: crate::domain::AgentId::new(),
+                profile: AgentProfile {
+                    name: "brain".to_string(),
+                    model: "test-model".to_string(),
+                },
+                capabilities: AgentCapabilities {
+                    tags: vec![],
+                    description: String::new(),
+                },
+                tool_permissions: AgentToolPermissions::default(),
+                system_prompt: None,
+            })
+            .id();
+        app.update();
+        app.world_mut()
+            .get_mut::<Agent>(agent_entity)
+            .unwrap()
+            .profile
+            .model = "other-model".to_string();
+        app.update();
+
+        assert!(events.lock().unwrap().is_empty());
     }
 
     #[test]

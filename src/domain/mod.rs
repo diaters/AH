@@ -172,9 +172,9 @@ pub use attachment::{
 
 // frontend
 pub use frontend::{
-    AgentStatusKind, ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind,
-    MessageRole, PermissionAction, PermissionAuditContext, TaskStatusKind, UserAction,
-    WaitingReasonKind, summarize_tool_input,
+    ApprovalOption, ChannelId, EngineEvent, EventTarget, Frontend, FrontendKind, MessageRole,
+    PermissionAction, PermissionAuditContext, TaskStatusKind, UserAction, WaitingReasonKind,
+    summarize_tool_input,
 };
 
 // hook_point

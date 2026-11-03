@@ -324,7 +324,6 @@ impl Client {
                 "approval_result",
                 json!({"request_id":request_id,"decision":decision}),
             ),
-            _ => return Ok(()),
         };
         let mut store = self.store.lock().expect("client state mutex poisoned");
         let mut seen = std::collections::HashSet::new();
