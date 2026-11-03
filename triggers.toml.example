@@ -1,5 +1,6 @@
-# Webhook 与 Timer 信号注入配置
+# Webhook 信号注入配置
 # 通过 HARNESS_TRIGGERS_CONFIG 指向此文件启用
+# 定时任务请使用 schedule_task 工具创建；旧版 [timer] 段已不再支持，加载时会被忽略并告警
 
 [webhook]
 enabled = true
@@ -12,12 +13,3 @@ approval_channel = { frontend = "telegram", user_id = "reviewer" }
 approval_context = "GitHub issue opened"
 prompt_template = "请分析新 issue:\n{{body_json.title}}"
 
-[timer]
-enabled = true
-
-[[timer.routes]]
-kind = "daily_summary"
-cron = "0 9 * * 1-5"
-approval_channel = { frontend = "telegram", user_id = "reviewer" }
-approval_context = "daily summary"
-prompt_template = "执行每日摘要"

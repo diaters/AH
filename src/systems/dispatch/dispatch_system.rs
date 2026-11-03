@@ -12,7 +12,7 @@
 //! - WorkItem 按 `required_tag` 交给对应服务角色（摘要员 / 经验管理员 / watchdog）；
 //! - Task 交给 `preferred_agent_name` 指定的 Agent，未指定时交给主 Agent
 //!   （`HarnessConfig::main_agent`）。Task 派发复用 `prompt_builder::build_prompt_with_context`，
-//!   构建 LTM/STM/通道上下文 + skills 系统提示。
+//!   构建 LTM/STM/通道上下文，系统提示取 Agent 自身配置。
 
 use crate::prelude::*;
 use tracing::{debug, warn};
@@ -26,7 +26,6 @@ use crate::{
         MessageDispatchedHookPending, PendingDispatch, ShortTermMemory, SpaceToolRegistry, Task,
         TaskStatus, ToolPermission, WorkItem, WorkItemLifecycleHookPending, WorkItemType,
     },
-    infrastructure::skills::{LoadedSkill, PluginSkillContributions, SkillCatalog, SkillLoader},
     systems::HarnessSettings,
 };
 
@@ -60,35 +59,6 @@ fn truncate_conversation_by_budget(messages: &mut Vec<ConversationMessage>, budg
     messages.drain(..end);
 }
 
-/// 构建派发时的技能清单：加载全局与插件 skill 并刷新 `SkillCatalog`，
-/// 返回对该 Agent 可见的部分（未声明 agents 的 skill 仅主 Agent 可见）。
-fn visible_skills(
-    skill_loader: &SkillLoader,
-    catalog: &SkillCatalog,
-    plugin_skills: &PluginSkillContributions,
-    agent_name: &str,
-    main_agent: &str,
-) -> Vec<LoadedSkill> {
-    let all = skill_loader.load_all(plugin_skills);
-    let visible = all
-        .iter()
-        .filter(|s| s.visible_to(agent_name, main_agent))
-        .cloned()
-        .collect();
-    catalog.replace(all);
-    visible
-}
-
-/// Agent 自身的系统提示与技能清单拼接，两者都可能为空。
-fn compose_system_prompt(agent_prompt: Option<&str>, skills_catalog: &str) -> Option<String> {
-    let parts: Vec<&str> = [agent_prompt.unwrap_or_default(), skills_catalog]
-        .into_iter()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
-    (!parts.is_empty()).then(|| parts.join("\n\n"))
-}
-
 /// 统一派发 System
 ///
 /// 扫描带 `PendingDispatch` 的 Task / WorkItem Entity，按 `DispatchHint`
@@ -100,9 +70,6 @@ pub fn dispatch_system(
     agents: Query<(&Agent, Option<&LongTermMemory>)>,
     registry: Res<SpaceToolRegistry>,
     settings: Option<Res<HarnessSettings>>,
-    skill_loader: Res<SkillLoader>,
-    skill_catalog: Res<SkillCatalog>,
-    plugin_skills: Res<PluginSkillContributions>,
     mut tasks: Query<(
         Entity,
         &mut Task,
@@ -286,18 +253,7 @@ pub fn dispatch_system(
                 (prompt, None)
             };
 
-            // 系统提示 = Agent 自身提示 + 技能清单（完整说明由 load_skill 按需读取）
-            let skills = visible_skills(
-                &skill_loader,
-                &skill_catalog,
-                &plugin_skills,
-                &agent.profile.name,
-                main_agent_name,
-            );
-            let system_prompt = compose_system_prompt(
-                agent.system_prompt.as_deref(),
-                &SkillLoader::format_skills_catalog(&skills),
-            );
+            let system_prompt = agent.system_prompt.clone();
 
             let stm_entries = short_term.map(|s| s.entries.len()).unwrap_or(0);
             let stm_tokens = short_term.map(|s| s.estimated_tokens).unwrap_or(0);
@@ -358,7 +314,6 @@ pub fn dispatch_system(
 mod tests {
     use super::*;
     use crate::domain::{EntryMetadata, EntryRole, ToolCall};
-    use tempfile::TempDir;
 
     #[test]
     fn build_structured_conversation_from_stm() {
@@ -409,53 +364,5 @@ mod tests {
                 content: "now".into()
             }]
         );
-    }
-
-    // ---------- skills ----------
-
-    #[test]
-    fn visible_skills_filters_by_agent_and_refreshes_catalog() {
-        let tmp = TempDir::new().unwrap();
-        let skills_dir = tmp.path().join("skills");
-        for (dir, front) in [
-            ("main-only", "name: main-only"),
-            ("shared", "name: shared\nagents: [summarizer, main]"),
-        ] {
-            std::fs::create_dir_all(skills_dir.join(dir)).unwrap();
-            std::fs::write(
-                skills_dir.join(dir).join("SKILL.md"),
-                format!("---\n{front}\ndescription: d\n---\nBody.\n"),
-            )
-            .unwrap();
-        }
-        let loader = SkillLoader::new(skills_dir);
-        let catalog = SkillCatalog::default();
-        let plugins = PluginSkillContributions::default();
-
-        let names = |skills: Vec<LoadedSkill>| -> Vec<String> {
-            skills.into_iter().map(|s| s.name).collect()
-        };
-        let main = visible_skills(&loader, &catalog, &plugins, "main", "main");
-        assert_eq!(names(main), ["main-only", "shared"]);
-        let summarizer = visible_skills(&loader, &catalog, &plugins, "summarizer", "main");
-        assert_eq!(names(summarizer), ["shared"]);
-        // 目录不包含的 Agent 不可见，但 catalog 仍保存全部 skill 供 load_skill 查找
-        assert!(visible_skills(&loader, &catalog, &plugins, "watchdog", "main").is_empty());
-        assert!(catalog.find("main-only").is_some());
-    }
-
-    #[test]
-    fn compose_system_prompt_keeps_agent_prompt_and_appends_catalog() {
-        assert_eq!(
-            compose_system_prompt(Some("你是助手"), "## 可用技能\n- `a`：d\n"),
-            Some("你是助手\n\n## 可用技能\n- `a`：d".to_string())
-        );
-        assert_eq!(
-            compose_system_prompt(Some("你是助手"), ""),
-            Some("你是助手".into())
-        );
-        assert_eq!(compose_system_prompt(None, "清单"), Some("清单".into()));
-        assert_eq!(compose_system_prompt(None, ""), None);
-        assert_eq!(compose_system_prompt(Some("  "), ""), None);
     }
 }

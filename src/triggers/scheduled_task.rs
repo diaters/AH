@@ -1,9 +1,8 @@
 //! schedule_task 与 scheduler 共享类型
 //!
-//! `SchedulerState` 统一持有静态路由（来自 `triggers.toml`）与动态定时任务定义
-//! （由 `schedule_task` 工具创建，见 [`ScheduleDefinition`]）。`SchedulerStateWatcher`
-//! 持有通往 timer scheduler task 的 `watch::Sender`，热加载与动态任务提交都通过
-//! `update_scheduler_state` 同步发送。
+//! `SchedulerState` 持有动态定时任务定义（由 `schedule_task` 工具创建，见
+//! [`ScheduleDefinition`]）。`SchedulerStateWatcher` 持有通往 timer scheduler task 的
+//! `watch::Sender`，动态任务提交都通过 `update_scheduler_state` 同步发送。
 //!
 //! 动态定时任务只有 `SchedulerState.dynamic_tasks` 这一份账本：触发路由、工具快照与
 //! 持久化都直接读取它。
@@ -15,7 +14,6 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::domain::ScheduleDefinition;
-use crate::triggers::config::{TimerConfig, WebhookConfig};
 
 /// 持有通往 timer_scheduler 的 watch sender。
 ///
@@ -23,32 +21,15 @@ use crate::triggers::config::{TimerConfig, WebhookConfig};
 #[derive(Resource, Default)]
 pub struct SchedulerStateWatcher(pub Option<watch::Sender<SchedulerState>>);
 
-/// 统一的调度器状态：静态路由 + 动态定时任务定义。
+/// 调度器状态：动态定时任务定义。
 ///
 /// 字段私有，通过 `update_scheduler_state` 统一修改，避免遗漏 watch 通知。
 #[derive(Resource, Clone, Default)]
 pub struct SchedulerState {
-    static_routes: Option<SchedulerRoutes>,
     dynamic_tasks: Vec<ScheduleDefinition>,
 }
 
-/// 静态路由配置（来自 `triggers.toml`）。
-#[derive(Debug, Clone)]
-pub struct SchedulerRoutes {
-    pub timer: TimerConfig,
-    pub webhook: WebhookConfig,
-}
-
 impl SchedulerState {
-    pub fn static_routes(&self) -> Option<&SchedulerRoutes> {
-        self.static_routes.as_ref()
-    }
-
-    /// 设置静态路由。`reload_triggers_system` 在原子提交阶段调用。
-    pub fn set_static_routes(&mut self, routes: SchedulerRoutes) {
-        self.static_routes = Some(routes);
-    }
-
     pub fn dynamic_tasks(&self) -> &[ScheduleDefinition] {
         &self.dynamic_tasks
     }
@@ -182,27 +163,6 @@ mod tests {
         });
 
         assert_eq!(world.resource::<SchedulerState>().dynamic_tasks().len(), 1);
-    }
-
-    #[test]
-    fn update_scheduler_state_preserves_dynamic_tasks_across_calls() {
-        let mut world = World::new();
-        world.insert_resource(SchedulerState::default());
-
-        update_scheduler_state(&mut world, |state| {
-            state.dynamic_tasks_mut().push(sample_definition("a"));
-        });
-        // 第二次调用只设置 static_routes，dynamic_tasks 必须保留
-        update_scheduler_state(&mut world, |state| {
-            state.set_static_routes(SchedulerRoutes {
-                timer: TimerConfig::default(),
-                webhook: WebhookConfig::default(),
-            });
-        });
-
-        let state = world.resource::<SchedulerState>();
-        assert_eq!(state.dynamic_tasks().len(), 1);
-        assert!(state.static_routes().is_some());
     }
 
     #[test]

@@ -265,11 +265,8 @@ fn main() -> Result<()> {
         .0
         .triggers_config_path
         .clone();
-    let loaded_trigger_config: Option<harness::triggers::TriggerConfig> = if let Some(ref path) =
-        triggers_config_path
-    {
-        use std::path::PathBuf;
-        let path = PathBuf::from(path);
+    if let Some(path) = triggers_config_path {
+        let path = std::path::PathBuf::from(path);
         match harness::triggers::load_triggers_config(&path) {
             Ok(trigger_config) => {
                 // 校验模板
@@ -279,35 +276,32 @@ fn main() -> Result<()> {
                         error = %e,
                         "trigger template validation failed, skipping triggers"
                     );
-                    None
                 } else {
                     // 构建 registry
                     match harness::triggers::build_registry_from_config(&trigger_config) {
                         Ok(registry) => {
                             let webhook_count = trigger_config.webhook.routes.len();
-                            let timer_count = trigger_config.timer.routes.len();
                             info!(
                                 event = "TriggersLoaded",
-                                webhook_count, timer_count, "triggers config loaded"
+                                webhook_count, "triggers config loaded"
                             );
                             app.world_mut().insert_resource(registry);
 
                             // 启动 webhook server
                             if trigger_config.webhook.enabled {
                                 let input_tx_for_webhook = input_tx.clone();
-                                let webhook_config = trigger_config.webhook.clone();
+                                let webhook_config = trigger_config.webhook;
                                 let _webhook_guard = runtime.spawn(async move {
-                                        if let Err(e) = harness::triggers::run_webhook_server(
-                                            input_tx_for_webhook,
-                                            webhook_config,
-                                        )
-                                        .await
-                                        {
-                                            warn!(event = "WebhookServerError", error = %e, "webhook server exited with error");
-                                        }
-                                    });
+                                    if let Err(e) = harness::triggers::run_webhook_server(
+                                        input_tx_for_webhook,
+                                        webhook_config,
+                                    )
+                                    .await
+                                    {
+                                        warn!(event = "WebhookServerError", error = %e, "webhook server exited with error");
+                                    }
+                                });
                             }
-                            Some(trigger_config)
                         }
                         Err(e) => {
                             warn!(
@@ -315,7 +309,6 @@ fn main() -> Result<()> {
                                 error = %e,
                                 "failed to build trigger registry"
                             );
-                            None
                         }
                     }
                 }
@@ -326,22 +319,12 @@ fn main() -> Result<()> {
                     error = %e,
                     "failed to load triggers config, continuing without triggers"
                 );
-                None
             }
         }
-    } else {
-        None
-    };
-
-    // 始终启动 timer scheduler：无论是否配置了 triggers.toml，以支持动态任务模式。
-    // 有配置时 SchedulerState.static_routes = Some(...)；无配置时为 None。
-    let mut initial_state = harness::triggers::SchedulerState::default();
-    if let Some(config) = &loaded_trigger_config {
-        initial_state.set_static_routes(harness::triggers::SchedulerRoutes {
-            timer: config.timer.clone(),
-            webhook: config.webhook.clone(),
-        });
     }
+
+    // 始终启动 timer scheduler：它只调度 schedule_task 动态定时任务，与 triggers.toml 无关。
+    let mut initial_state = harness::triggers::SchedulerState::default();
     // 恢复持久化的动态定时任务；补跑判定由 Startup 系统完成。
     let schedule_store = harness::infrastructure::schedules::ScheduleStore::default_path();
     // 读取失败（非损坏，如权限问题）时本次会话不启用持久化，避免空状态覆盖磁盘上的定义。
@@ -362,13 +345,10 @@ fn main() -> Result<()> {
         .insert_resource(harness::triggers::SchedulerStateWatcher(Some(scheduler_tx)));
 
     let input_tx_for_timer = input_tx.clone();
-    let _timer_guard = runtime.spawn(async move {
-        if let Err(e) =
-            harness::triggers::run_timer_scheduler(input_tx_for_timer, scheduler_rx).await
-        {
-            warn!(event = "TimerSchedulerError", error = %e, "timer scheduler exited with error");
-        }
-    });
+    let _timer_guard = runtime.spawn(harness::triggers::run_timer_scheduler(
+        input_tx_for_timer,
+        scheduler_rx,
+    ));
 
     info!(
         event = "EcsAppBuilt",

@@ -5,7 +5,6 @@
 
 pub mod dispatcher;
 pub mod host_api;
-pub mod integrate;
 pub mod loader;
 pub mod manifest;
 pub mod registry;
@@ -57,31 +56,5 @@ pub fn plugin_load_startup_system(world: &mut World) {
         }
     }
 
-    // 从已加载插件的 manifest.skills 中提取 skill 条目
-    let skill_contributions = crate::infrastructure::skills::PluginSkillContributions {
-        entries: registry
-            .plugins()
-            .iter()
-            .flat_map(|plugin| {
-                plugin.manifest.skills.iter().map(|skill| {
-                    crate::infrastructure::skills::PluginSkillEntry {
-                        plugin_id: plugin.manifest.id.clone(),
-                        skill_id: skill.id.clone(),
-                        path: plugin.root_dir.join(&skill.path),
-                    }
-                })
-            })
-            .collect(),
-    };
-
-    if !skill_contributions.entries.is_empty() {
-        tracing::info!(
-            event = "PluginSkillsRegistered",
-            count = skill_contributions.entries.len(),
-            "plugin skill contributions registered"
-        );
-    }
-
     world.insert_resource(registry);
-    world.insert_resource(skill_contributions);
 }

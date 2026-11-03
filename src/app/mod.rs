@@ -78,13 +78,6 @@ pub fn build_harness_app(
         std::sync::Arc::new(crate::infrastructure::experience::FileExperienceLibrary::default()),
     ));
 
-    // Skill：派发时扫描 .harness/assets/skills/<name>/SKILL.md，系统提示只列技能清单，
-    // 完整说明由 load_skill 工具经 SkillCatalog 按需读取。旧版按 Agent 分目录的 skill 只提示迁移。
-    let skill_loader = crate::infrastructure::skills::SkillLoader::default_path();
-    skill_loader.warn_legacy_layout();
-    app.insert_resource(skill_loader);
-    app.init_resource::<crate::infrastructure::skills::SkillCatalog>();
-
     // Signal 触发路由（默认空，由 main.rs 根据 triggers.toml 配置覆盖）
     app.insert_resource(crate::domain::SignalTriggerRegistry::default());
     app.insert_resource(crate::triggers::SchedulerState::default());

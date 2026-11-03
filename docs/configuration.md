@@ -307,10 +307,6 @@ name = "hello"           # 工具名（注册为 my-plugin:hello）
 script = "tools/hello.rhai" # Rhai 脚本相对路径
 schema = "tools/hello.schema.json" # JSON Schema 相对路径
 
-[[skills]]               # 贡献的技能（可选，可多条）
-id = "my-skill"          # 技能标识（注册为 my-plugin:my-skill）
-path = "skills/my-skill.md" # 技能文件相对路径
-
 [[agents]]               # 贡献的 Agent（可选，可多条）
 name = "my-agent"        # Agent 名称
 model = "gpt-4.1-mini"  # Agent 使用的模型
@@ -484,17 +480,10 @@ kind = "github.issue_opened"
 approval_channel = { frontend = "telegram", user_id = "reviewer" }
 approval_context = "GitHub issue opened"
 prompt_template = "请分析新 issue:\n{{body_json.title}}"
-
-[timer]
-enabled = true
-
-[[timer.routes]]
-kind = "daily_summary"
-cron = "0 9 * * 1-5"
-approval_channel = { frontend = "telegram", user_id = "reviewer" }
-approval_context = "daily summary"
-prompt_template = "执行每日摘要"
 ```
+
+定时任务统一由下文的 `schedule_task` 工具创建。旧版 `[timer]` 静态 cron 路由已移除：
+配置中残留的 `[timer]` 段会被忽略，并在加载时输出 `TriggersTimerSectionIgnored` 警告。
 
 ### Webhook 配置字段
 
@@ -508,17 +497,6 @@ prompt_template = "执行每日摘要"
 | `webhook.routes[].approval_context` | string | 否 | 审批上下文描述 |
 | `webhook.routes[].prompt_template` | string | 是 | 任务提示模板，支持 `{{body_json.field}}` 插值 |
 
-### Timer 配置字段
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `timer.enabled` | bool | 否 | 是否启用 timer 调度器，默认 `false` |
-| `timer.routes[].kind` | string | 是 | 触发 kind 标识 |
-| `timer.routes[].cron` | string | 是 | cron 表达式（5 字段：分 时 日 月 周） |
-| `timer.routes[].approval_channel` | table | 否 | 审批通道 |
-| `timer.routes[].approval_context` | string | 否 | 审批上下文描述 |
-| `timer.routes[].prompt_template` | string | 是 | 任务提示模板 |
-
 ### Prompt 模板插值
 
 模板中使用 `{{body_json.field}}` 语法从 webhook 请求的 JSON body 中提取字段值。
@@ -527,8 +505,8 @@ prompt_template = "执行每日摘要"
 ### 热重载
 
 运行时执行 `/reload-triggers` 命令可重新加载 `triggers.toml`，无需重启应用。
-重载会刷新 `SignalTriggerRegistry`、重启 webhook 服务器与 timer 调度器。
-重载仅替换 `static_routes`，`schedule_task` 工具动态添加的任务（`dynamic_tasks`）原样保留。
+重载只刷新 webhook 路由（`SignalTriggerRegistry`）；webhook 服务器的 `enabled`、
+`listen_addr` 与 `auth_token` 在启动时确定，修改后需重启。`schedule_task` 创建的定时任务不受影响。
 
 ### schedule_task 工具
 

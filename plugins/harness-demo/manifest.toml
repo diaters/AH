@@ -3,7 +3,7 @@ name = "Harness Demo Plugin"
 version = "0.1.0"
 api_version = 1
 author = "Harness Team"
-description = "示例插件：演示插件系统全部功能，包括 17 个 hook 点、工具、技能、Agent 与命令"
+description = "示例插件：演示插件系统全部功能，包括 17 个 hook 点、工具、Agent 与命令"
 
 # ── Hooks ──────────────────────────────────────────────────────────────
 
@@ -84,12 +84,6 @@ id = "query_tasks"
 description = "Query current tasks from the world snapshot"
 schema = "tools/query_tasks.schema.json"
 handler = "tools/query_tasks.rhai"
-
-# ── Skills ─────────────────────────────────────────────────────────────
-
-[[skills]]
-id = "demo-skill"
-path = "skills/demo-skill.md"
 
 # ── Agents ─────────────────────────────────────────────────────────────
 

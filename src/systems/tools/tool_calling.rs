@@ -85,8 +85,8 @@ pub(crate) fn is_supervised_subtask(task: &Task, work_item_id: Option<uuid::Uuid
 /// 在 `state_info` 中按 `(task_id, work_item_id)` 严格匹配查找 ToolCallingState。
 ///
 /// 设计原则：WorkItem 是执行单位，Task 是组织单位。同一 Task 下不同 WorkItem
-/// 的工具循环互不复用 State。这避免了"collector 残留 State 被 skill-updater
-/// 误复用"类的循环 bug。
+/// 的工具循环互不复用 State。这避免了"前一个 WorkItem 残留的 State
+/// 被后一个 WorkItem 误复用"类的循环 bug。
 ///
 /// `work_item_id = None` 表示 Task 级调用，仅匹配 `work_item_id = None` 的 State；
 /// `work_item_id = Some(x)` 表示 WorkItem 级调用，仅匹配 `work_item_id = Some(x)`
@@ -905,36 +905,34 @@ mod tests {
     }
 
     /// 同 Task 下不同 WorkItem 的 ToolCallingState 不应互相复用。
-    /// 这是本次 bug 修复的核心：skill-updater 不应误用 collector 残留的 State。
     #[test]
     fn find_calling_state_strict_matches_work_item_id() {
         let task_id = crate::domain::TaskId::new();
-        let collector_wi = uuid::Uuid::new_v4();
-        let skill_updater_wi = uuid::Uuid::new_v4();
+        let first_wi = uuid::Uuid::new_v4();
+        let second_wi = uuid::Uuid::new_v4();
 
-        // 模拟 collector 残留 State（work_item_id = collector_wi）
-        // 与 skill-updater 当前响应（work_item_id = skill_updater_wi）
+        // 模拟前一个 WorkItem 残留的 State 与后一个 WorkItem 的当前响应
         let state_info = vec![
-            make_state_info(task_id, Some(collector_wi)),
-            make_state_info(task_id, Some(skill_updater_wi)),
+            make_state_info(task_id, Some(first_wi)),
+            make_state_info(task_id, Some(second_wi)),
         ];
 
-        // 查找 skill-updater 的 State：必须严格匹配 work_item_id
-        let found = find_calling_state(&state_info, task_id, Some(skill_updater_wi));
+        // 查找后一个 WorkItem 的 State：必须严格匹配 work_item_id
+        let found = find_calling_state(&state_info, task_id, Some(second_wi));
         assert!(
             found.is_some(),
             "should find state for matching work_item_id"
         );
         assert_eq!(
             found.unwrap().work_item_id,
-            Some(skill_updater_wi),
+            Some(second_wi),
             "must not reuse state from a different work item"
         );
 
-        // 查找 collector 的 State：仍能找到
-        let found_collector = find_calling_state(&state_info, task_id, Some(collector_wi));
-        assert!(found_collector.is_some());
-        assert_eq!(found_collector.unwrap().work_item_id, Some(collector_wi));
+        // 前一个 WorkItem 的 State 仍能找到
+        let found_first = find_calling_state(&state_info, task_id, Some(first_wi));
+        assert!(found_first.is_some());
+        assert_eq!(found_first.unwrap().work_item_id, Some(first_wi));
 
         // 查找不存在的 work_item_id：返回 None
         let other_wi = uuid::Uuid::new_v4();

@@ -6,8 +6,6 @@
 use anyhow::Result;
 use tracing::warn;
 
-use crate::domain::TaskTrigger;
-
 /// 校验模板语法。
 ///
 /// 合法变量：`{{kind}}`、`{{body}}`、`{{body_json.<field>}}`
@@ -53,10 +51,10 @@ fn is_valid_var(var: &str) -> bool {
     false
 }
 
-/// 渲染模板。
+/// 用 webhook 的 kind 与请求 body 渲染模板。
 ///
-/// 字段不存在时输出空字符串。timer 触发器的 `{{body}}` / `{{body_json.*}}` 输出空字符串。
-pub fn render_template(template: &str, trigger: &TaskTrigger) -> String {
+/// 字段不存在时输出空字符串。
+pub fn render_template(template: &str, kind: &str, body: &serde_json::Value) -> String {
     let mut result = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -74,35 +72,25 @@ pub fn render_template(template: &str, trigger: &TaskTrigger) -> String {
             break;
         };
         let var = after_start[..end_offset].trim();
-        result.push_str(&resolve_var(var, trigger));
+        result.push_str(&resolve_var(var, kind, body));
         rest = &after_start[end_offset + 2..];
     }
     result.push_str(rest);
     result
 }
 
-fn resolve_var(var: &str, trigger: &TaskTrigger) -> String {
-    match trigger {
-        TaskTrigger::Webhook { kind, body } => match var {
-            "kind" => kind.clone(),
-            "body" => body.to_string(),
-            other => {
-                if let Some(field) = other.strip_prefix("body_json.") {
-                    body.get(field)
-                        .map(|v| match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        })
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-        },
-        TaskTrigger::Timer { kind } => match var {
-            "kind" => kind.clone(),
-            _ => String::new(),
-        },
+fn resolve_var(var: &str, kind: &str, body: &serde_json::Value) -> String {
+    match var {
+        "kind" => kind.to_string(),
+        "body" => body.to_string(),
+        other => other
+            .strip_prefix("body_json.")
+            .and_then(|field| body.get(field))
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -151,14 +139,12 @@ mod tests {
 
     #[test]
     fn render_webhook_template() {
-        let trigger = TaskTrigger::Webhook {
-            kind: "github.issue_opened".to_string(),
-            body: serde_json::json!({"title": "bug", "number": 42}),
-        };
+        let body = serde_json::json!({"title": "bug", "number": 42});
         assert_eq!(
             render_template(
                 "分析 {{kind}}: {{body_json.title}} #{{body_json.number}}",
-                &trigger
+                "github.issue_opened",
+                &body
             ),
             "分析 github.issue_opened: bug #42"
         );
@@ -166,21 +152,10 @@ mod tests {
 
     #[test]
     fn render_missing_field_returns_empty() {
-        let trigger = TaskTrigger::Webhook {
-            kind: "test".to_string(),
-            body: serde_json::json!({"title": "x"}),
-        };
-        assert_eq!(render_template("[{{body_json.missing}}]", &trigger), "[]");
-    }
-
-    #[test]
-    fn render_timer_template_body_is_empty() {
-        let trigger = TaskTrigger::Timer {
-            kind: "daily".to_string(),
-        };
+        let body = serde_json::json!({"title": "x"});
         assert_eq!(
-            render_template("{{kind}}: {{body}} {{body_json.x}}", &trigger),
-            "daily:  "
+            render_template("[{{body_json.missing}}]", "test", &body),
+            "[]"
         );
     }
 }

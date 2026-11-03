@@ -22,8 +22,8 @@ use crate::user_plugins::dispatcher::{
 };
 use crate::user_plugins::host_api::{
     approval::ApprovalContext, entity_query::WorldSnapshot, entity_write::WorldWriter,
-    message::MessageContext, plugin_resource::PluginRoots, skills_meta::SkillsSnapshot,
-    temp_resource::TempResourceSlot, tool_control::ToolCallContext,
+    message::MessageContext, plugin_resource::PluginRoots, temp_resource::TempResourceSlot,
+    tool_control::ToolCallContext,
 };
 use crate::user_plugins::registry::PluginRegistry;
 
@@ -135,7 +135,6 @@ fn dispatch_approval_hook(
                 outcome: local_outcome,
                 plugin_roots: PluginRoots::single(plugin.root_dir.clone()),
                 approval: ApprovalContext { current_request_id },
-                skills: SkillsSnapshot::empty(),
                 message: MessageContext {
                     plugin_id: plugin.manifest.id.clone(),
                     tx: message_tx.clone(),

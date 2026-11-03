@@ -41,9 +41,7 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - 记忆治理：ShortTermMemory、LongTermMemory 两层收敛，支持衰退淘汰与 JSON 文件持久化
 - 试错经验库：经验文件存于 `.harness/experience/`，由用户在客户端发起“总结经验”，
   经验管理员（`experience-librarian`）负责检索与撰写，`search_experience` 与开局预查逐字回填经验原文
-- Skill：全局目录 `.harness/assets/skills/*/SKILL.md`（frontmatter 可选 `agents: [..]`，缺省仅主 Agent 可用），
-  系统提示只列技能清单，完整说明由 `load_skill` 按需读取
-- 插件系统：Rhai 脚本扩展，17 个 hook 点，支持贡献工具、技能和 Agent
+- 插件系统：Rhai 脚本扩展，17 个 hook 点，支持贡献工具、Agent 和命令
 - 定时任务：Webhook / cron 信号触发；`schedule_task` 动态定时任务持久化保存，重启后恢复，
   错过的运行在 7 天内补跑最近一次，支持暂停、修改与立即运行；运行账本、真实通知回执、
   `reply` / `explicit` 策略、连续失败告警与恢复、`report_of` 健康上下文已实现
@@ -73,6 +71,8 @@ Harness 是一个基于 Rust + Bevy ECS 的 AI Harness 框架，聚焦于任务�
 - `spawn_agent` 工具已废弃并从 LLM 可调工具集中移除
 - `AgentExperience` 已删除，不再作为独立运行时概念保留
 - Brain 路由、自动经验收集/治理/孵化、`/remember` 共享知识库与 `/skill` 技能生成已移除
+- Skill 机制（全局 `SKILL.md`、`load_skill`、插件 `[[skills]]` 贡献与 Rhai `list_skills()`）已移除，
+  按需补充的任务知识统一由试错经验库承载
 - 旧 shell 工具 `shell_status`、`shell_read_output`、`shell_wait`、
   `shell_send_signal` 已退役
 
