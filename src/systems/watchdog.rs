@@ -611,7 +611,6 @@ fn apply_approval(
                 ApprovalResultMessage {
                     request_id: approval.request_id,
                     source_task_id: approval.source_task_id,
-                    approval_task_id: approval.approval_task_id,
                     decision: if approved {
                         ApprovalDecision::Approved
                     } else {

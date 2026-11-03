@@ -165,12 +165,10 @@ mod tests {
         ApprovalRequestMessage {
             request_id: uuid::Uuid::new_v4(),
             source_task_id: crate::domain::TaskId::nil(),
-            approval_task_id: crate::domain::TaskId::new(),
-            parent_agent_id: crate::domain::AgentId::nil(),
+            watchdog_agent_id: crate::domain::AgentId::nil(),
             child_agent_id: crate::domain::AgentId::nil(),
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "ls"}),
-            context: String::new(),
         }
     }
 
@@ -178,7 +176,6 @@ mod tests {
         ApprovalResultMessage {
             request_id: uuid::Uuid::new_v4(),
             source_task_id: crate::domain::TaskId::nil(),
-            approval_task_id: crate::domain::TaskId::new(),
             decision: ApprovalDecision::Approved,
             reasoning: "test".to_string(),
             grant_mode: GrantMode::Once,

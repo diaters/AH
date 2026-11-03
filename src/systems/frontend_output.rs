@@ -373,9 +373,9 @@ mod tests {
     use crate::contracts::FrontendRegistry;
     use crate::domain::{
         Agent, AgentCapabilities, AgentProfile, AgentToolPermissions, ChannelId,
-        ConfirmationOption, ConfirmationSource, EngineEvent, EventTarget, Frontend, FrontendKind,
-        Task, TaskRoutingPolicy, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage,
-        UserAction, UserOutputMessage, WaitingReason, WaitingReasonKind,
+        ConfirmationOption, EngineEvent, EventTarget, Frontend, FrontendKind, Task,
+        TaskRoutingPolicy, TaskStatus, TaskStatusKind, ToolConfirmationRequestMessage, UserAction,
+        UserOutputMessage, WaitingReason, WaitingReasonKind,
     };
     use crate::ecs::EntityIndex;
 
@@ -434,8 +434,6 @@ mod tests {
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::Value::Null,
             options: ConfirmationOption::default_options(),
-            source: ConfirmationSource::User,
-            parent_agent_id: None,
             approval_context: None,
         });
 
@@ -499,8 +497,6 @@ mod tests {
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "date"}),
             options: ConfirmationOption::default_options(),
-            source: ConfirmationSource::User,
-            parent_agent_id: None,
             approval_context: Some("nightly summary timer".to_string()),
         });
 
@@ -675,8 +671,6 @@ mod tests {
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "date"}),
             options: ConfirmationOption::default_options(),
-            source: ConfirmationSource::User,
-            parent_agent_id: None,
             approval_context: Some("nightly summary timer".to_string()),
         });
 
@@ -739,8 +733,6 @@ mod tests {
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::json!({"command": "date"}),
             options: ConfirmationOption::default_options(),
-            source: ConfirmationSource::User,
-            parent_agent_id: None,
             approval_context: Some("nightly summary timer".to_string()),
         });
 
@@ -807,8 +799,6 @@ mod tests {
             tool_name: "shell_exec".to_string(),
             tool_input: serde_json::Value::Null,
             options: ConfirmationOption::default_options(),
-            source: ConfirmationSource::User,
-            parent_agent_id: None,
             approval_context: Some("scheduled task".to_string()),
         });
 

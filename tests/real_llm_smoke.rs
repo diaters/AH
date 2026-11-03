@@ -113,7 +113,6 @@ fn sample_tool(name: &str, description: &str, param: &str) -> ToolDefinition {
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin(name.to_string()),
-        required_tag: None,
     }
 }
 

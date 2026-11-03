@@ -53,9 +53,6 @@ pub struct ToolDefinition {
     pub default_permission: ToolPermission,
     /// 执行器类型
     pub executor: ToolExecutorKind,
-    /// 执行所需的最小 tag（如 "summarization"）
-    #[serde(default)]
-    pub required_tag: Option<String>,
 }
 
 /// Tool 参数 Schema
@@ -312,6 +309,21 @@ pub struct AgentToolsConfig {
 mod tests {
     use super::*;
 
+    /// 旧数据可能带已删除的 `required_tag` 字段，反序列化须忽略而非报错。
+    #[test]
+    fn tool_definition_deserializes_legacy_required_tag() {
+        let legacy = serde_json::json!({
+            "name": "legacy_tool",
+            "description": "legacy",
+            "parameters": { "schema": { "type": "object" } },
+            "default_permission": "Allow",
+            "executor": { "Builtin": "legacy_tool" },
+            "required_tag": "skill",
+        });
+        let tool: ToolDefinition = serde_json::from_value(legacy).unwrap();
+        assert_eq!(tool.name, "legacy_tool");
+    }
+
     #[test]
     fn space_tool_registry_add_then_remove() {
         let mut registry = SpaceToolRegistry::default();
@@ -321,7 +333,6 @@ mod tests {
             parameters: ToolSchema::default(),
             default_permission: ToolPermission::Allow,
             executor: ToolExecutorKind::Builtin("test_tool".to_string()),
-            required_tag: None,
         };
         registry.register(tool.clone());
         assert!(registry.get("test_tool").is_some());

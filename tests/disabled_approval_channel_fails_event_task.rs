@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use common::mock_executor::PanickingExecutor;
 use crossbeam_channel::unbounded;
 use harness::domain::{
-    ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, FailureReason, Frontend,
-    FrontendKind, Task, TaskRoutingPolicy, TaskStatus, ToolConfirmationRequestMessage, UserAction,
+    ChannelId, ConfirmationOption, EngineEvent, FailureReason, Frontend, FrontendKind, Task,
+    TaskRoutingPolicy, TaskStatus, ToolConfirmationRequestMessage, UserAction,
 };
 use harness::{
     app::build_harness_app, domain::AgentExecutor, llm::ExecutorRegistry, systems::HarnessConfig,
@@ -84,8 +84,6 @@ fn disabled_approval_channel_marks_event_task_failed() {
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({"command": "date"}),
         options: ConfirmationOption::default_options(),
-        source: ConfirmationSource::User,
-        parent_agent_id: None,
         approval_context: Some("test".to_string()),
     });
 
