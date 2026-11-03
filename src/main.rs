@@ -555,7 +555,6 @@ impl LoopHooks for TuiLoop {
             event = "TuiLoopHeartbeat",
             tick,
             messages = self.app_state.messages.len(),
-            agents = self.app_state.agents.len(),
             tasks = self.app_state.tasks.len(),
             pending_approvals = self.app_state.pending_approvals.len(),
             "TUI main loop heartbeat"
