@@ -518,7 +518,6 @@ mod tests {
             },
             default_permission: ToolPermission::Allow,
             executor: ToolExecutorKind::Builtin(name.to_string()),
-            required_tag: None,
         }
     }
 

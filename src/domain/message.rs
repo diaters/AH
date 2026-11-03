@@ -376,10 +376,6 @@ pub struct ToolConfirmationRequestMessage {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub options: Vec<super::ConfirmationOption>,
-    /// 审批来源
-    pub source: super::ConfirmationSource,
-    /// 父 Agent ID（当 source == ParentAgent 时）
-    pub parent_agent_id: Option<AgentId>,
     /// 事件任务审批上下文（来自 TaskRoutingPolicy.approval_context）
     pub approval_context: Option<String>,
 }
@@ -395,17 +391,15 @@ pub struct ToolConfirmationResponseMessage {
     pub sender: Option<String>,
 }
 
-/// 审批请求消息
+/// 监督审批请求消息：受监督任务的确认请求交给 watchdog Agent 审批
 #[derive(Debug, Clone, Component)]
 pub struct ApprovalRequestMessage {
     pub request_id: Uuid,
     pub source_task_id: TaskId,
-    pub approval_task_id: TaskId,
-    pub parent_agent_id: AgentId,
+    pub watchdog_agent_id: AgentId,
     pub child_agent_id: AgentId,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    pub context: String,
 }
 
 /// 审批结果消息
@@ -413,7 +407,6 @@ pub struct ApprovalRequestMessage {
 pub struct ApprovalResultMessage {
     pub request_id: Uuid,
     pub source_task_id: TaskId,
-    pub approval_task_id: TaskId,
     pub decision: super::ApprovalDecision,
     pub reasoning: String,
     /// 授权模式

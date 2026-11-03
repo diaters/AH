@@ -13,7 +13,7 @@ use crate::{
     },
     llm::ExecutorRegistry,
     plugins::DefaultRuntimePluginGroup,
-    systems::{HarnessSet, HarnessSettings, load_agents_system, validate_required_tags_system},
+    systems::{HarnessSet, HarnessSettings, load_agents_system},
 };
 
 mod run_loop;
@@ -133,13 +133,6 @@ pub fn build_harness_app(
     app.world_mut()
         .resource_mut::<crate::systems::MonitorDeliveries>()
         .set_wake(wake);
-
-    // validate_required_tags_system 通过 Local<bool> 保证仅运行一次，扫描启动期
-    // 已加载的持久化 Agent 与工具 required_tag 的匹配关系（O7）。
-    app.add_systems(
-        Update,
-        validate_required_tags_system.in_set(HarnessSet::Maintenance),
-    );
 
     // index 陈旧兜底清理（双保险之一）。
     // 即使绕过中心 despawn 封装直接 despawn，下一帧也能自动摘除映射。

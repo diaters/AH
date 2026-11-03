@@ -1,24 +1,16 @@
 //! 确认与审批相关类型定义
 //!
-//! 定义用户确认、父 Agent 审批等类型。
+//! 定义用户确认与 watchdog 审批共用的类型。
 
 use serde::{Deserialize, Serialize};
 
-/// 授权模式（用户确认和父 Agent 审批共用）
+/// 授权模式（用户确认和 watchdog 审批共用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrantMode {
     /// 单次授权，仅本次执行
     Once,
     /// 永久授权，更新 Agent 权限配置
     Permanent,
-}
-
-/// 审批来源
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum ConfirmationSource {
-    #[default]
-    User,
-    ParentAgent,
 }
 
 /// 确认选项

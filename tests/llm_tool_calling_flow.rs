@@ -182,7 +182,6 @@ fn create_test_tool_registry(world: &mut World) {
         parameters: ToolSchema::default(),
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-        required_tag: None,
     });
 
     world.insert_resource(registry);

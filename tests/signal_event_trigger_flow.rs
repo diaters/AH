@@ -6,8 +6,8 @@ use common::mock_executor::PanickingExecutor;
 use crossbeam_channel::unbounded;
 use harness::channels::ChannelManager;
 use harness::domain::{
-    ChannelId, ConfirmationOption, ConfirmationSource, EngineEvent, EventTaskRoute, ExternalInput,
-    Frontend, FrontendKind, Signal, SignalSource, SignalTriggerRegistry, Task,
+    ChannelId, ConfirmationOption, EngineEvent, EventTaskRoute, ExternalInput, Frontend,
+    FrontendKind, Signal, SignalSource, SignalTriggerRegistry, Task,
     ToolConfirmationRequestMessage, UserAction, UserOutputMessage,
 };
 use harness::{
@@ -95,8 +95,6 @@ fn registered_webhook_creates_task_and_routes_approval() {
         tool_name: "shell_exec".to_string(),
         tool_input: serde_json::json!({"command": "date"}),
         options: ConfirmationOption::default_options(),
-        source: ConfirmationSource::User,
-        parent_agent_id: None,
         approval_context: Some("GitHub issue opened".to_string()),
     });
     app.update();

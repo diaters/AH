@@ -108,7 +108,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("create_tasks".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(CreateTasksTool));
 
@@ -134,7 +133,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("wait_tasks".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(WaitTasksTool));
 
@@ -152,7 +150,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("stop_background_job".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(StopBackgroundJobTool));
 
@@ -174,7 +171,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("shell_exec".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ShellExecTool));
 
@@ -195,7 +191,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("shell_start".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ShellStartTool));
 
@@ -214,7 +209,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("shell_read".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ShellReadTool));
 
@@ -230,7 +224,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("shell_list".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ShellListTool));
 
@@ -250,7 +243,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("shell_input".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ShellInputTool));
 
@@ -268,7 +260,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("shell_stop".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ShellStopTool));
 
@@ -287,7 +278,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("view_image".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ViewImageTool));
 
@@ -306,7 +296,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("load_skill".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(LoadSkillTool::new(skill_catalog)));
 
@@ -328,7 +317,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("search_experience".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(SearchExperienceTool));
 
@@ -352,7 +340,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("ask_user".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(AskUserTool));
 
@@ -391,7 +378,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("chat_with_agent".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ChatWithAgentTool));
 
@@ -442,7 +428,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("schedule_task".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ScheduleTaskTool));
 
@@ -458,7 +443,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("list_scheduled_tasks".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(ListScheduledTasksTool));
 
@@ -483,7 +467,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("delete_scheduled_task".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(DeleteScheduledTaskTool));
 
@@ -532,7 +515,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Confirm,
         executor: ToolExecutorKind::Builtin("update_scheduled_task".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(UpdateScheduledTaskTool));
 
@@ -564,7 +546,6 @@ pub fn register_builtin_tools(
         },
         default_permission: ToolPermission::Allow,
         executor: ToolExecutorKind::Builtin("update_todos".to_string()),
-        required_tag: None,
     });
     executors.register(Box::new(UpdateTodosTool));
 }
@@ -640,7 +621,6 @@ pub fn register_plugin_tools(
                 },
                 default_permission,
                 executor: ToolExecutorKind::Builtin(namespaced.clone()),
-                required_tag: None,
             });
 
             // loader 阶段已预编译 AST 并存入 tool_asts；此处取回用于执行器。

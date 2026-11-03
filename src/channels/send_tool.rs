@@ -49,7 +49,6 @@ impl ChannelSendTool {
             },
             default_permission: ToolPermission::Confirm,
             executor: crate::domain::ToolExecutorKind::Builtin("channel_send".to_string()),
-            required_tag: None,
         }
     }
 }

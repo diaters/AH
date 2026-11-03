@@ -147,8 +147,6 @@ pub enum PermissionAuditContext {
     Dispatch,
     AsyncDispatch,
     UserConfirmation,
-    ParentApproval,
-    TagDenied,
 }
 
 /// 引擎 → 前端事件
@@ -587,12 +585,10 @@ mod tests {
     }
 
     #[test]
-    fn permission_audit_context_has_five_variants() {
+    fn permission_audit_context_has_three_variants() {
         let _dispatch = PermissionAuditContext::Dispatch;
         let _async_dispatch = PermissionAuditContext::AsyncDispatch;
         let _user_confirmation = PermissionAuditContext::UserConfirmation;
-        let _parent_approval = PermissionAuditContext::ParentApproval;
-        let _tag_denied = PermissionAuditContext::TagDenied;
     }
 
     #[test]
