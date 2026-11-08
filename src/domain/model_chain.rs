@@ -45,6 +45,22 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub default_provider: Option<String>,
     pub provider: Vec<ProviderEntry>,
+    /// 语音转写服务；未配置时语音消息只以 `[VOICE:path]` 标记进入任务
+    #[serde(default)]
+    pub transcription: Option<TranscriptionConfig>,
+}
+
+/// providers.toml 中的 `[transcription]` 段：OpenAI 兼容的 `/audio/transcriptions` 接口。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranscriptionConfig {
+    pub api_key_env: String,
+    /// 接口根地址（不含 `/audio/transcriptions`），缺省为 OpenAI 官方地址
+    #[serde(default)]
+    pub api_base: Option<String>,
+    pub model: String,
+    /// ISO-639-1 语言代码提示（如 `zh`）；缺省由服务自动识别
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// agents.toml 中 [[agent.models]] 的条目
@@ -131,6 +147,15 @@ mod tests {
         );
         let openai = config.provider.iter().find(|p| p.name == "openai").unwrap();
         assert!(openai.pricing.is_empty());
+        let transcription = config.transcription.unwrap();
+        assert_eq!(
+            (
+                transcription.api_key_env.as_str(),
+                transcription.model.as_str()
+            ),
+            ("OPENAI_API_KEY", "whisper-1")
+        );
+        assert_eq!(transcription.api_base, None);
     }
 
     fn make_test_chain() -> Vec<ModelChainEntry> {

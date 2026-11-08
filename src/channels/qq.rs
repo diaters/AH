@@ -317,6 +317,8 @@ pub struct QqChannel {
     pending_images: Arc<RwLock<PendingImages>>,
     /// 平台明确报告不支持 typing 后，本实例不再重复探测；网络等暂时错误不缓存。
     typing_unsupported: AtomicBool,
+    /// 平台未给出识别文本时的语音转写服务
+    transcriber: Option<crate::contracts::SharedVoiceTranscriber>,
 }
 
 impl QqChannel {
@@ -340,7 +342,16 @@ impl QqChannel {
             pending_images: Arc::new(RwLock::new(PendingImages::default())),
             typing_unsupported: AtomicBool::new(false),
             pending_approval_msg_ids: Arc::new(RwLock::new(HashMap::new())),
+            transcriber: None,
         }
+    }
+
+    pub fn with_transcriber(
+        mut self,
+        transcriber: Option<crate::contracts::SharedVoiceTranscriber>,
+    ) -> Self {
+        self.transcriber = transcriber;
+        self
     }
 
     pub fn with_workspace_dir(mut self, dir: PathBuf) -> Self {
@@ -451,7 +462,7 @@ impl QqChannel {
             .unwrap_or("")
             .trim();
         let mut markers: Vec<String> = Vec::new();
-        let mut voice_transcripts: Vec<String> = Vec::new();
+        let mut voice_outcomes = Vec::new();
 
         if let Some(attachments) = payload.get("attachments").and_then(|a| a.as_array()) {
             for att in attachments {
@@ -493,51 +504,50 @@ impl QqChannel {
                     (url.clone(), filename.to_string())
                 };
 
-                let location = if let Some(ref ws) = self.workspace_dir {
+                let local_path = if let Some(ref ws) = self.workspace_dir {
                     let dir = ws.join("qq_files");
                     match self
                         .download_attachment(&download_url, &dir, &save_filename)
                         .await
                     {
-                        Ok(local_path) => local_path.display().to_string(),
+                        Ok(local_path) => Some(local_path),
                         Err(e) => {
                             tracing::warn!(event = "QqDownloadFailed", url = %download_url, error = %e, "failed to download attachment");
-                            download_url.clone()
+                            None
                         }
                     }
                 } else {
-                    download_url.clone()
+                    None
                 };
+                let location = local_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| download_url.clone());
+                markers.push(format!("[{marker_type}:{location}]"));
 
                 if is_voice {
-                    markers.push(format!("[{marker_type}:{location}]"));
-                    if let Some(asr_text) = att
+                    let asr_text = att
                         .get("asr_refer_text")
                         .and_then(|t| t.as_str())
                         .map(|t| t.trim())
-                        .filter(|t| !t.is_empty())
-                    {
-                        voice_transcripts.push(asr_text.to_string());
+                        .filter(|t| !t.is_empty());
+                    // 平台识别优先；只转写本通道下载到本地的文件
+                    match (asr_text, &self.transcriber, &local_path) {
+                        (Some(text), _, _) => voice_outcomes.push(Ok(text.to_string())),
+                        (None, Some(transcriber), Some(path)) => {
+                            let outcome = transcriber.transcribe(path).await;
+                            if let Err(e) = &outcome {
+                                tracing::warn!(event = "QqVoiceTranscriptionFailed", path = %path.display(), error = %e, "voice transcription failed; forwarding marker only");
+                            }
+                            voice_outcomes.push(outcome);
+                        }
+                        _ => {}
                     }
-                } else {
-                    markers.push(format!("[{marker_type}:{location}]"));
                 }
             }
         }
 
-        let voice_text = match voice_transcripts.len() {
-            0 => String::new(),
-            1 => format!(
-                "<VOICE_TRANSCRIPTION>{}</VOICE_TRANSCRIPTION>",
-                voice_transcripts[0]
-            ),
-            _ => voice_transcripts
-                .iter()
-                .enumerate()
-                .map(|(i, t)| format!("<VOICE_TRANSCRIPTION_{i}>{t}</VOICE_TRANSCRIPTION_{i}>"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        };
+        let voice_text = crate::contracts::render_transcription_outcomes(&voice_outcomes);
 
         let mut parts: Vec<&str> = Vec::new();
         if !text.is_empty() {
@@ -2324,6 +2334,79 @@ mod tests {
         let result = ch.compose_message_content(&payload).await.unwrap();
         assert!(result.contains("<VOICE_TRANSCRIPTION_0>第一段</VOICE_TRANSCRIPTION_0>"));
         assert!(result.contains("<VOICE_TRANSCRIPTION_1>第二段</VOICE_TRANSCRIPTION_1>"));
+    }
+
+    async fn voice_fixture() -> (
+        wiremock::MockServer,
+        tempfile::TempDir,
+        Arc<crate::contracts::FakeTranscriber>,
+        QqChannel,
+    ) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v.wav"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"RIFF fake".to_vec()))
+            .mount(&server)
+            .await;
+        let workspace = tempfile::tempdir().unwrap();
+        let fake = Arc::new(crate::contracts::FakeTranscriber::default());
+        let ch = QqChannel::new(make_config())
+            .with_workspace_dir(workspace.path().to_path_buf())
+            .with_transcriber(Some(fake.clone()));
+        (server, workspace, fake, ch)
+    }
+
+    #[tokio::test]
+    async fn compose_voice_without_asr_uses_transcriber_on_downloaded_file() {
+        let (server, workspace, fake, ch) = voice_fixture().await;
+        let payload = serde_json::json!({
+            "content": "",
+            "attachments": [{
+                "content_type": "voice",
+                "url": format!("{}/v.silk", server.uri()),
+                "voice_wav_url": format!("{}/v.wav", server.uri())
+            }]
+        });
+        let result = ch.compose_message_content(&payload).await.unwrap();
+        assert!(
+            result.starts_with("<VOICE_TRANSCRIPTION>转写:v_"),
+            "{result}"
+        );
+        assert!(result.contains(&format!(
+            "[VOICE:{}",
+            workspace.path().join("qq_files").display()
+        )));
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn compose_voice_prefers_platform_asr_over_transcriber() {
+        let (server, _workspace, fake, ch) = voice_fixture().await;
+        let payload = serde_json::json!({
+            "content": "",
+            "attachments": [{
+                "content_type": "voice",
+                "url": format!("{}/v.wav", server.uri()),
+                "asr_refer_text": "平台识别"
+            }]
+        });
+        let result = ch.compose_message_content(&payload).await.unwrap();
+        assert!(result.contains("<VOICE_TRANSCRIPTION>平台识别</VOICE_TRANSCRIPTION>"));
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn compose_voice_not_transcribed_when_download_failed() {
+        let (server, _workspace, fake, ch) = voice_fixture().await;
+        let payload = serde_json::json!({
+            "content": "",
+            "attachments": [{ "content_type": "voice", "url": format!("{}/missing.wav", server.uri()) }]
+        });
+        let result = ch.compose_message_content(&payload).await.unwrap();
+        assert!(!result.contains("VOICE_TRANSCRIPTION"));
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
     }
 
     // --- Allowlist matching tests ---
