@@ -31,3 +31,12 @@ name = "openrouter"
 kind = "OpenAiCompatible"
 api_key_env = "OPENROUTER_API_KEY"
 api_base = "https://openrouter.ai/api/v1"
+# 可选：语音转写（OpenAI 兼容的 /audio/transcriptions 接口）。
+# 配置后 Telegram 语音、以及 QQ 平台未给出识别文本的语音会先转写为文本再进入任务；
+# 未配置时语音只以 [VOICE:path] 标记进入任务。api_base 缺省为 OpenAI 官方地址，
+# 也可指向 Groq、SiliconFlow 或本地 whisper 服务。支持 wav/mp3/m4a/ogg/webm/flac。
+[transcription]
+api_key_env = "OPENAI_API_KEY"
+model = "whisper-1"
+# api_base = "https://api.openai.com/v1"
+# language = "zh"

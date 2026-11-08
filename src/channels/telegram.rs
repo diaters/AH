@@ -14,6 +14,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::channels::config::TelegramConfig;
+use crate::contracts::{SharedVoiceTranscriber, render_transcription_outcomes};
 
 use super::traits::{
     AttachmentKind, Channel, ChannelAttachment, ChannelError, ChannelInboundMessage,
@@ -39,6 +40,8 @@ pub struct TelegramChannel {
     last_update_id: AtomicI64,
     /// 待处理反馈：用户点击 reject_with_feedback 后等待文本输入
     pending_feedback: Arc<RwLock<HashMap<String, PendingFeedback>>>,
+    /// 语音转写服务；未配置时语音只以 `[VOICE:path]` 标记进入任务
+    transcriber: Option<SharedVoiceTranscriber>,
 }
 
 impl TelegramChannel {
@@ -55,7 +58,35 @@ impl TelegramChannel {
             base_url: "https://api.telegram.org".to_string(),
             last_update_id: AtomicI64::new(0),
             pending_feedback: Arc::new(RwLock::new(HashMap::new())),
+            transcriber: None,
         }
+    }
+
+    pub fn with_transcriber(mut self, transcriber: Option<SharedVoiceTranscriber>) -> Self {
+        self.transcriber = transcriber;
+        self
+    }
+
+    /// 入站附件的任务文本：语音在配置转写服务时先转写，转写块放在标记之前。
+    async fn incoming_content(&self, attachment: &IncomingAttachment) -> String {
+        let marker = attachment.to_agent_text();
+        let Some(transcriber) = self
+            .transcriber
+            .as_ref()
+            .filter(|_| attachment.kind == AttachmentKind::Voice)
+        else {
+            return marker;
+        };
+        let outcome = transcriber.transcribe(&attachment.path).await;
+        if let Err(e) = &outcome {
+            warn!(
+                event = "TelegramVoiceTranscriptionFailed",
+                path = %attachment.path.display(),
+                error = %e,
+                "voice transcription failed; forwarding marker only"
+            );
+        }
+        format!("{}\n{marker}", render_transcription_outcomes(&[outcome]))
     }
 
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
@@ -861,7 +892,7 @@ impl Channel for TelegramChannel {
                             sender_id: msg.from.id.to_string(),
                             chat_id: msg.chat.id.to_string(),
                             thread_id: msg.message_thread_id.map(|id| id.to_string()),
-                            content: attachment.to_agent_text(),
+                            content: self.incoming_content(&attachment).await,
                             timestamp_secs: msg.date as u64,
                             confirmation: None,
                         };
@@ -1517,6 +1548,50 @@ mod tests {
             username: None,
         };
         assert!(ch.is_allowed(&user));
+    }
+
+    #[tokio::test]
+    async fn incoming_voice_is_transcribed_before_marker_and_failure_is_noted() {
+        let fake = Arc::new(crate::contracts::FakeTranscriber::default());
+        let ch = TelegramChannel::new(cfg(vec![])).with_transcriber(Some(fake.clone()));
+        let dir = tempfile::tempdir().unwrap();
+        let voice = |name: &str| IncomingAttachment {
+            kind: AttachmentKind::Voice,
+            path: dir.path().join(name),
+        };
+
+        let ok = voice("file_0.oga");
+        assert_eq!(
+            ch.incoming_content(&ok).await,
+            format!(
+                "<VOICE_TRANSCRIPTION>转写:file_0.oga</VOICE_TRANSCRIPTION>\n[VOICE:{}]",
+                ok.path.display()
+            )
+        );
+        let failed = voice("fail.oga");
+        assert_eq!(
+            ch.incoming_content(&failed).await,
+            format!(
+                "（语音转写失败：转写服务不可用）\n[VOICE:{}]",
+                failed.path.display()
+            )
+        );
+
+        let photo = IncomingAttachment {
+            kind: AttachmentKind::Image,
+            path: dir.path().join("p.jpg"),
+        };
+        assert_eq!(
+            ch.incoming_content(&photo).await,
+            format!("[IMAGE:{}]", photo.path.display())
+        );
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 2);
+
+        let plain = TelegramChannel::new(cfg(vec![]));
+        assert_eq!(
+            plain.incoming_content(&ok).await,
+            format!("[VOICE:{}]", ok.path.display())
+        );
     }
 
     #[test]

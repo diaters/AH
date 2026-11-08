@@ -174,6 +174,16 @@ fn main() -> Result<()> {
     let (event_tx, event_rx) = unbounded::<EngineEvent>();
     let (action_tx, action_rx) = unbounded::<UserAction>();
 
+    // 语音转写：Telegram / QQ 下载语音后调用，未配置时语音只以标记进入任务
+    let transcriber = providers_config
+        .as_ref()
+        .and_then(|c| c.transcription.as_ref())
+        .map(|c| {
+            info!(event = "TranscriptionEnabled", model = %c.model, "voice transcription enabled");
+            Arc::new(harness::llm::Transcriber::from_config(c))
+                as harness::contracts::SharedVoiceTranscriber
+        });
+
     // 构建通道列表
     let mut channel_list: Vec<Arc<dyn Channel>> = vec![];
     if let Some(tg_cfg) = config.channels.telegram.clone() {
@@ -182,10 +192,10 @@ fn main() -> Result<()> {
             "enabling Telegram channel"
         );
         let config_path = config.channels_config_path.as_ref().map(PathBuf::from);
-        channel_list.push(Arc::new(TelegramChannel::new_with_path(
-            tg_cfg,
-            config_path,
-        )));
+        channel_list.push(Arc::new(
+            TelegramChannel::new_with_path(tg_cfg, config_path)
+                .with_transcriber(transcriber.clone()),
+        ));
     }
     if let Some(qq_cfg) = config.channels.qq.clone() {
         info!(event = "QqChannelEnabled", "enabling QQ channel");
@@ -194,7 +204,8 @@ fn main() -> Result<()> {
             .as_ref()
             .and_then(|p| p.parent().map(PathBuf::from))
             .or_else(|| std::env::current_dir().ok());
-        let mut qq = QqChannel::new_with_path(qq_cfg, config_path);
+        let mut qq =
+            QqChannel::new_with_path(qq_cfg, config_path).with_transcriber(transcriber.clone());
         if let Some(ws) = workspace_dir {
             qq = qq.with_workspace_dir(ws);
         }

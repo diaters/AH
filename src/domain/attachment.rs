@@ -60,6 +60,22 @@ pub fn image_mime_type(target: &str) -> Option<&'static str> {
     }
 }
 
+/// 把语音转写结果渲染为 `<VOICE_TRANSCRIPTION>` 文本块；多段时按出现顺序编号。
+///
+/// 各通道（平台自带识别或 Harness 转写服务）共用同一格式，模型只需理解一种写法。
+pub fn voice_transcription_text(transcripts: &[String]) -> String {
+    match transcripts {
+        [] => String::new(),
+        [one] => format!("<VOICE_TRANSCRIPTION>{one}</VOICE_TRANSCRIPTION>"),
+        many => many
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("<VOICE_TRANSCRIPTION_{i}>{t}</VOICE_TRANSCRIPTION_{i}>"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
 /// 内容中的一处附件标记及其字节范围（含方括号）。
 #[derive(Clone, Debug)]
 pub struct AttachmentSpan {

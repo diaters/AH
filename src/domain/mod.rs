@@ -159,7 +159,7 @@ pub use execution::{
 pub use attachment::{
     ATTACHMENT_MARKER_SYNTAX_HINT, AttachmentKind, AttachmentSpan, ChannelAttachment,
     MAX_IMAGE_BYTES, TrustedImages, extract_attachments, find_attachment_spans, image_mime_type,
-    image_targets,
+    image_targets, voice_transcription_text,
 };
 
 // frontend
@@ -202,6 +202,7 @@ pub use message::{
 // model_chain
 pub use model_chain::{
     ModelChainEntry, ModelChainState, ModelPrice, ProviderEntry, ProvidersConfig,
+    TranscriptionConfig,
 };
 pub use usage::{
     UsageBucket, UsageContext, UsageRange, UsageRecord, UsageSummary, summarize as summarize_usage,
